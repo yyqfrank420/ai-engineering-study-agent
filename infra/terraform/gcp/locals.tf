@@ -6,6 +6,9 @@ locals {
     "secretmanager.googleapis.com",
     "iam.googleapis.com",
     "cloudresourcemanager.googleapis.com",
+    # Required for Workload Identity Federation token exchange
+    "iamcredentials.googleapis.com",
+    "sts.googleapis.com",
   ])
 
   secret_bindings = {

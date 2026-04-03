@@ -14,7 +14,8 @@ resource "google_cloud_run_v2_service" "backend" {
     }
 
     containers {
-      image = local.backend_image
+      # Use explicit override if set (e.g. bootstrap placeholder), else derived Artifact Registry path.
+      image = var.container_image != "" ? var.container_image : local.backend_image
 
       resources {
         limits = {

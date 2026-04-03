@@ -20,5 +20,10 @@ output "artifact_registry_repository" {
 
 output "ci_service_account_email" {
   value       = google_service_account.ci.email
-  description = "GitHub Actions CI service account. Create and download a JSON key for this SA, then set it as the GCP_SA_KEY secret in GitHub."
+  description = "Service account email for GitHub Actions. Use as GCP_SERVICE_ACCOUNT secret."
+}
+
+output "wif_provider" {
+  value       = google_iam_workload_identity_pool_provider.github.name
+  description = "Full WIF provider resource name. Use as GCP_WORKLOAD_IDENTITY_PROVIDER secret in GitHub."
 }

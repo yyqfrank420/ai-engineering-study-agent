@@ -105,6 +105,12 @@ variable "enabled_secret_names" {
   default     = []
 }
 
+variable "container_image" {
+  description = "Full container image path override. Defaults to derived Artifact Registry path. Set to a public placeholder image on first apply before the real image is built."
+  type        = string
+  default     = ""
+}
+
 variable "billing_account_id" {
   description = "Optional billing account ID for budget alerts."
   type        = string
