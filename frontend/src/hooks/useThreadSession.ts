@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AuthSession, GraphData, Message } from '../types';
 import { createThread, fetchLatestThread, fetchThread } from '../services/api';
 import { mapThreadMessages, storageKeyForThread } from '../utils/threadState';
@@ -27,8 +27,13 @@ export function useThreadSession({
     messages: [],
     graphData: null,
   });
+  // Track which user's thread is already loaded so that token refresh events
+  // (which change the authSession object reference without changing the user)
+  // do not trigger a full reload and wipe live streamed state.
+  const loadedUserIdRef = useRef<string | null>(null);
 
   const resetThreadState = useCallback(() => {
+    loadedUserIdRef.current = null;
     setActiveThreadId(null);
     setThreadTitle('New chat');
     setThreadError(null);
@@ -70,6 +75,13 @@ export function useThreadSession({
       resetThreadState();
       return;
     }
+
+    // Guard against token refresh events: Supabase fires onAuthStateChange
+    // with a new session object when the token is refreshed (same user, different
+    // object reference). Re-fetching the thread would wipe live streamed state
+    // that the backend hasn't persisted yet.
+    if (loadedUserIdRef.current === authSession.user.id) return;
+    loadedUserIdRef.current = authSession.user.id;
 
     const rememberedThreadId = localStorage.getItem(storageKeyForThread(authSession.user.id));
     const initialLoad = rememberedThreadId

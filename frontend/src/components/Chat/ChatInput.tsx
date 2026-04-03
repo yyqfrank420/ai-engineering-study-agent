@@ -22,10 +22,7 @@ interface ChatInputProps {
   disabled?:     boolean;   // locks textarea (loading, no thread)
   sendDisabled?: boolean;   // blocks send while backend is not ready
   isGenerating?: boolean;   // LLM actively streaming — show Stop instead of Send
-  showPrepare?:  boolean;
-  isPreparing?:  boolean;
-  prepareMessage?: string | null;
-  onPrepare?:    () => void;
+  prepareMessage?: string | null; // non-null while backend is warming up (auto-triggered)
   // Mode control state — passed from App.tsx
   complexity:         ComplexityLevel;
   graphMode:          GraphMode;
@@ -181,7 +178,7 @@ function ModePopover({
 
 export function ChatInput({
   onSend, onStop, disabled, isGenerating,
-  sendDisabled, showPrepare, isPreparing, prepareMessage, onPrepare,
+  sendDisabled, prepareMessage,
   complexity, graphMode, researchEnabled,
   onComplexityChange, onGraphModeChange, onResearchChange,
   selectionSuggestion, selectionReferenceActive, onUseSelection, onDismissSelection, onClearSelectionReference,
@@ -387,7 +384,7 @@ export function ChatInput({
           }}
         />
 
-        {/* Send / Stop — Stop only when LLM is actually generating */}
+        {/* Send / Stop — Stop only when LLM is actively generating */}
         {isGenerating ? (
           <button
             onClick={onStop}
@@ -397,15 +394,6 @@ export function ChatInput({
             onMouseLeave={e => { e.currentTarget.style.background = 'rgba(248, 81, 73, 0.1)'; }}
           >
             Stop
-          </button>
-        ) : showPrepare ? (
-          <button
-            onClick={onPrepare}
-            disabled={disabled || isPreparing}
-            aria-label="Prepare backend"
-            style={prepareButtonStyle(!(disabled || isPreparing))}
-          >
-            {isPreparing ? 'Preparing…' : 'Prepare'}
           </button>
         ) : (
           <button
@@ -611,25 +599,3 @@ function sendButtonStyle(isReady: boolean): CSSProperties {
   };
 }
 
-function prepareButtonStyle(isReady: boolean): CSSProperties {
-  return {
-    padding:              '0.5rem 1rem',
-    borderRadius:         '10px',
-    background:           isReady
-      ? 'linear-gradient(135deg, rgba(59,130,246,0.9), rgba(16,185,129,0.86))'
-      : 'rgba(255,255,255,0.04)',
-    backdropFilter:       'blur(8px)',
-    WebkitBackdropFilter: 'blur(8px)',
-    boxShadow:            isReady
-      ? 'inset 0 1px 0 rgba(255,255,255,0.2), 0 4px 12px rgba(37,99,235,0.2)'
-      : 'inset 0 1px 0 rgba(255,255,255,0.04)',
-    color:                isReady ? '#fff' : '#6e7681',
-    border:               isReady ? '1px solid rgba(96,165,250,0.26)' : '1px solid rgba(255,255,255,0.06)',
-    cursor:               isReady ? 'pointer' : 'not-allowed',
-    fontSize:             '0.875rem',
-    fontWeight:           500,
-    whiteSpace:           'nowrap',
-    minHeight:            '38px',
-    opacity:              isReady ? 1 : 0.65,
-  };
-}

@@ -42,7 +42,6 @@ export default function App() {
     backendReadiness,
     prepareMessage,
     isBackendReady,
-    handlePrepare,
     clearPreparedCache,
   } = useBackendReadiness(authSession);
 
@@ -274,10 +273,7 @@ export default function App() {
                 isGenerating={isGenerating}
                 disabled={composerLocked}
                 sendDisabled={sendLocked}
-                showPrepare={!isBackendReady && !isGenerating}
-                isPreparing={backendReadiness === 'preparing'}
                 prepareMessage={prepareMessage}
-                onPrepare={handlePrepare}
                 complexity={complexity}
                 graphMode={graphMode}
                 researchEnabled={researchEnabled}
