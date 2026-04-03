@@ -313,3 +313,37 @@ def test_chat_agent_error_emits_error_and_skips_persistence(temp_data_dir, monke
     assert any(event["type"] == "error" and "agent exploded" in event["content"] for event in events)
     assert message_store.get_messages("user-1", thread["id"]) == []
     assert get_graph("user-1", thread["id"]) is None
+
+
+def test_chat_stream_appends_done_when_agent_omits_it(temp_data_dir, monkeypatch):
+    init_db()
+    upsert_profile("user-1", "friend@example.com")
+    thread = create_thread("user-1")
+    app = _authed_app()
+
+    async def fake_run_agent(state, rag_tools, graph_tools, node_detail_tools):
+        await state["send"]({"type": "worker_status", "worker": "orchestrator", "status": "Writing the explanation…"})
+        await state["send"]({"type": "response_delta", "content": "Partial but valid"})
+        return {
+            **state,
+            "response_text": "Partial but valid",
+            "graph_data": None,
+        }
+
+    import api.sse_handler as sse_handler
+    monkeypatch.setattr(sse_handler, "run_agent", fake_run_agent)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/chat",
+            json={"thread_id": thread["id"], "content": "Teach me RAG"},
+        )
+
+    assert response.status_code == 200
+    events = _parse_sse_events(response.text)
+    assert any(event["type"] == "response_delta" for event in events)
+    assert events[-1]["type"] == "done"
+
+    saved_messages = message_store.get_messages("user-1", thread["id"])
+    assert [message["role"] for message in saved_messages] == ["user", "assistant"]
+    assert saved_messages[1]["content"] == "Partial but valid"

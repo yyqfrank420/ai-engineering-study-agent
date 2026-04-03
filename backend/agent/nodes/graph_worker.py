@@ -346,36 +346,37 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
         ),
     }]
 
-    raw = await _generate_raw_graph_response(system, messages, send)
+    try:
+        raw = await _generate_raw_graph_response(system, messages, send)
 
-    # Model decided no graph change needed
-    if "NO_GRAPH" in raw.strip().upper()[:120] and not raw.strip().startswith("{"):
-        if existing is None:
-            raw = await _generate_raw_graph_response(
-                f"{system}\n{_FORCE_GRAPH_APPEND}",
-                messages,
-                send,
-            )
-            if "NO_GRAPH" in raw.strip().upper()[:120] and not raw.strip().startswith("{"):
+        # Model decided no graph change needed
+        if "NO_GRAPH" in raw.strip().upper()[:120] and not raw.strip().startswith("{"):
+            if existing is None:
+                raw = await _generate_raw_graph_response(
+                    f"{system}\n{_FORCE_GRAPH_APPEND}",
+                    messages,
+                    send,
+                )
+                if "NO_GRAPH" in raw.strip().upper()[:120] and not raw.strip().startswith("{"):
+                    return {**state, "graph_data": None}
+            else:
                 return {**state, "graph_data": None}
-        else:
+
+        parsed = _parse_json(raw)
+        if parsed is None:
+            print(f"[graph_worker] Parse failed. Raw:\n{raw[:500]}")
             return {**state, "graph_data": None}
 
-    # Parse the JSON response
-    parsed = _parse_json(raw)
-    if parsed is None:
-        print(f"[graph_worker] Parse failed. Raw:\n{raw[:500]}")
-        return {**state, "graph_data": None}
+        action = parsed.get("action", "replace")
+        if action == "update" and existing:
+            merged = _merge_graphs(existing, parsed, generate_graph)
+            return {**state, "graph_data": _attach_graph_version(merged)}
 
-    action = parsed.get("action", "replace")
-
-    if action == "update" and existing:
-        merged = _merge_graphs(existing, parsed, generate_graph)
-        return {**state, "graph_data": _attach_graph_version(merged)}
-    else:
-        # "replace" or no existing graph — validate and return new graph
         validated = _validate(parsed, generate_graph)
         return {**state, "graph_data": _attach_graph_version(validated)}
+    except Exception as exc:
+        print(f"[graph_worker] Unhandled error: {type(exc).__name__}: {exc}")
+        return {**state, "graph_data": None}
 
 
 def _parse_json(text: str) -> dict | None:
@@ -393,7 +394,7 @@ def _parse_json(text: str) -> dict | None:
             break
         try:
             data, _ = decoder.raw_decode(cleaned, start)
-            if data.get("nodes") or data.get("action") == "update":
+            if isinstance(data, dict) and (data.get("nodes") or data.get("action") == "update"):
                 return data
             idx = start + 1
         except json.JSONDecodeError:

@@ -6,7 +6,8 @@
 #          settings version-controlled instead of managed via dashboard.
 # Language: Python
 # Connects to: Supabase Management API (api.supabase.com)
-# Inputs:  SUPABASE_PROJECT_REF, SUPABASE_MANAGEMENT_TOKEN env vars
+# Inputs:  SUPABASE_PROJECT_REF, SUPABASE_MANAGEMENT_TOKEN, APP_SITE_URL env vars
+#          APP_REDIRECT_URLS env var (optional, comma-separated)
 #          docs/supabase/email_templates/magic_link.html
 # Outputs: Updates project auth config in-place
 # ─────────────────────────────────────────────────────────────────────────────
@@ -19,12 +20,20 @@ import httpx
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-PROJECT_REF = os.environ.get("SUPABASE_PROJECT_REF", "lrqjfwvhcuguwdveryof")
+PROJECT_REF = os.environ.get("SUPABASE_PROJECT_REF", "").strip()
 MANAGEMENT_TOKEN = os.environ.get("SUPABASE_MANAGEMENT_TOKEN", "")
+SITE_URL = os.environ.get("APP_SITE_URL", "").strip()
+REDIRECT_URLS_RAW = os.environ.get("APP_REDIRECT_URLS", "").strip()
 
+if not PROJECT_REF:
+    print("ERROR: SUPABASE_PROJECT_REF is not set.")
+    sys.exit(1)
 if not MANAGEMENT_TOKEN:
     print("ERROR: SUPABASE_MANAGEMENT_TOKEN is not set.")
     print("Get one at: https://supabase.com/dashboard/account/tokens")
+    sys.exit(1)
+if not SITE_URL:
+    print("ERROR: APP_SITE_URL is not set.")
     sys.exit(1)
 
 TEMPLATES_DIR = Path(__file__).parent.parent / "docs" / "supabase" / "email_templates"
@@ -35,12 +44,16 @@ API_BASE = "https://api.supabase.com/v1"
 magic_link_html = (TEMPLATES_DIR / "magic_link.html").read_text()
 
 # ── Redirect URLs ─────────────────────────────────────────────────────────────
-# Add new entries here as needed (e.g. staging domains).
+# APP_REDIRECT_URLS is comma-separated. If omitted, default to site URL + local dev.
 
-SITE_URL = "https://ai-engineering-study-agent.vercel.app"
-ADDITIONAL_REDIRECT_URLS = [
+default_redirect_urls = [
     "http://localhost:5173/**",
-    "https://ai-engineering-study-agent.vercel.app/**",
+    f"{SITE_URL.rstrip('/')}/**",
+]
+redirect_urls = [
+    value.strip()
+    for value in (REDIRECT_URLS_RAW.split(",") if REDIRECT_URLS_RAW else default_redirect_urls)
+    if value.strip()
 ]
 
 # ── Apply ─────────────────────────────────────────────────────────────────────
@@ -48,7 +61,7 @@ ADDITIONAL_REDIRECT_URLS = [
 payload = {
     # Redirect URLs
     "site_url": SITE_URL,
-    "uri_allow_list": ",".join(ADDITIONAL_REDIRECT_URLS),
+    "uri_allow_list": ",".join(redirect_urls),
     # Magic link / OTP email template
     "mailer_templates_magic_link_content": magic_link_html,
 }

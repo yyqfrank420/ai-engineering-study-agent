@@ -105,6 +105,46 @@ async def test_graph_worker_retries_when_no_graph_exists_and_model_returns_no_gr
 
 
 @pytest.mark.asyncio
+async def test_graph_worker_ignores_non_object_json_before_valid_object(monkeypatch):
+    import agent.nodes.graph_worker as graph_worker
+
+    async def fake_stream_response(*, model, system, messages, thinking_budget, temperature=None, top_p=None, top_k=None):
+        yield (
+            "text",
+            '[{"noise": true}] {"action":"replace","graph_type":"concept","title":"RAG Flow","nodes":[{"id":"retriever","label":"Retriever","type":"service","technology":"FAISS","description":"Finds relevant chunks","tier":null}],"edges":[],"sequence":[]}',
+        )
+
+    monkeypatch.setattr(graph_worker, "stream_response", fake_stream_response)
+
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    state = {
+        "send": send,
+        "user_message": "Explain retrieval-augmented generation",
+        "graph_data": None,
+        "complexity": "auto",
+        "research_context": "",
+        "rag_chunks": [
+            {
+                "chapter": 10,
+                "page_number": 473,
+                "chapter_title": "Agents",
+                "section": "RAG",
+                "text": "RAG retrieves relevant information and passes it to the model before generation.",
+            }
+        ],
+    }
+
+    result = await graph_worker.graph_worker_node(state, tools=[])
+
+    assert result["graph_data"]["title"] == "RAG Flow"
+    assert result["graph_data"]["version"]
+
+
+@pytest.mark.asyncio
 async def test_node_detail_prompt_forbids_bullets_and_equations(monkeypatch):
     import agent.nodes.node_detail_worker as node_detail_worker
 

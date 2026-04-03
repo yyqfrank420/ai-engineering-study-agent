@@ -151,10 +151,14 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
         # Queue bridges the agent (which calls send()) and the SSE generator (which yields).
         # run_agent is launched as a task; we drain the queue while it runs.
         queue: asyncio.Queue[dict] = asyncio.Queue()
+        done_sent = False
 
         request_id = str(uuid.uuid4())
 
         async def send(event: dict) -> None:
+            nonlocal done_sent
+            if event.get("type") == "done":
+                done_sent = True
             await queue.put(event)
 
         async def await_search_tool_request(request_id: str, timeout_s: float) -> bool:
@@ -236,22 +240,29 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
                 return
 
             final_state = agent_task.result()
-            title = thread["title"]
-            if title == "New chat":
-                title = content[:60]
-            thread_store.touch_thread(user_id, thread_id, title=title)
-            message_store.append(user_id, thread_id, "user", content)
-            message_store.append(user_id, thread_id, "assistant", final_state["response_text"])
-            if final_state.get("graph_data"):
-                saved = thread_store.save_graph(user_id, thread_id, final_state["graph_data"])
-                if not saved:
-                    yield sse({
-                        "type": "error",
-                        "content": (
-                            "Graph is large — it's displayed above but won't be saved. "
-                            "Start a new chat to reset."
-                        ),
-                    })
+            try:
+                title = thread["title"]
+                if title == "New chat":
+                    title = content[:60]
+                thread_store.touch_thread(user_id, thread_id, title=title)
+                message_store.append(user_id, thread_id, "user", content)
+                message_store.append(user_id, thread_id, "assistant", final_state["response_text"])
+                if final_state.get("graph_data"):
+                    saved = thread_store.save_graph(user_id, thread_id, final_state["graph_data"])
+                    if not saved:
+                        yield sse({
+                            "type": "error",
+                            "content": (
+                                "Graph is large — it's displayed above but won't be saved. "
+                                "Start a new chat to reset."
+                            ),
+                        })
+            except Exception as exc:
+                yield sse({"type": "error", "content": f"Persistence error: {str(exc)}"})
+                return
+
+            if not done_sent:
+                yield sse({"type": "done"})
 
     return streaming_response(stream())
 
