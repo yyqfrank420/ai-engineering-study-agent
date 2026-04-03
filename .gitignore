@@ -20,7 +20,7 @@ dist/
 frontend/.vercel/
 
 # ── Data / Vector store ───────────────────────────────────────────────────────
-data/faiss/
+# data/faiss/ intentionally NOT ignored — bundled into Docker image (7MB static index)
 data/*.db
 *.db
 
