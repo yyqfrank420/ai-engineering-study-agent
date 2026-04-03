@@ -46,6 +46,23 @@ export async function verifyOtp(email: string, token: string, captchaToken?: str
   };
 }
 
+export async function signInWithGoogle(): Promise<void> {
+  const redirectTo = window.location.origin;
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: { redirectTo },
+  });
+
+  if (error) {
+    throw error;
+  }
+  if (!data.url) {
+    throw new Error('Failed to start Google sign-in');
+  }
+
+  window.location.assign(data.url);
+}
+
 function toAuthSession(session: NonNullable<Awaited<ReturnType<typeof supabase.auth.getSession>>['data']['session']>): AuthSession {
   return {
     access_token:  session.access_token,

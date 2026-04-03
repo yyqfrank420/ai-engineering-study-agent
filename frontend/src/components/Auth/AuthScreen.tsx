@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
-import { requestOtp, verifyOtp } from '../../services/auth';
+import { requestOtp, signInWithGoogle, verifyOtp } from '../../services/auth';
 import type { AuthSession } from '../../types';
 import { TurnstileWidget } from './TurnstileWidget';
 
@@ -58,6 +58,17 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
     }
   };
 
+  const submitGoogle = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await signInWithGoogle();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start Google sign-in');
+      setLoading(false);
+    }
+  };
+
   return (
     <div style={overlayStyle}>
       <div style={cardStyle}>
@@ -111,6 +122,23 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
             ? 'Enter your email to receive a one-time code.'
             : `We sent an 8-digit code to ${email}`}
         </p>
+
+        {step === 'email' && (
+          <>
+            <button
+              onClick={submitGoogle}
+              disabled={loading}
+              style={oauthButtonStyle(loading)}
+            >
+              Continue with Google
+            </button>
+            <div style={dividerStyle}>
+              <span style={dividerLineStyle} />
+              <span style={dividerLabelStyle}>or email a code</span>
+              <span style={dividerLineStyle} />
+            </div>
+          </>
+        )}
 
         {/* Fields */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
@@ -285,4 +313,39 @@ const ghostButtonStyle: CSSProperties = {
   fontSize: '0.82rem',
   cursor: 'pointer',
   transition: 'color 0.15s ease',
+};
+
+function oauthButtonStyle(loading: boolean): CSSProperties {
+  return {
+    width: '100%',
+    borderRadius: '10px',
+    padding: '0.85rem 1rem',
+    background: 'rgba(255,255,255,0.04)',
+    border: '1px solid rgba(255,255,255,0.1)',
+    color: '#e6edf3',
+    fontSize: '0.9rem',
+    fontWeight: 600,
+    cursor: loading ? 'not-allowed' : 'pointer',
+    opacity: loading ? 0.7 : 1,
+    marginBottom: '1rem',
+  };
+}
+
+const dividerStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '0.65rem',
+  marginBottom: '1rem',
+};
+
+const dividerLineStyle: CSSProperties = {
+  flex: 1,
+  height: '1px',
+  background: 'rgba(255,255,255,0.08)',
+};
+
+const dividerLabelStyle: CSSProperties = {
+  color: '#6e7681',
+  fontSize: '0.76rem',
+  whiteSpace: 'nowrap',
 };
