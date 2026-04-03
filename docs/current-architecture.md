@@ -40,7 +40,7 @@ This is the current source of truth for the working prototype.
 - The current runtime is **not** using LangGraph as the execution engine.
 - The transport is **SSE over fetch**, not WebSocket.
 - The persistence model is **Supabase-backed threads/messages**, not browser `session_id` ownership.
-- The cost-first deploy target is **Cloud Run**, not Render.
+- The deploy target is **Cloud Run** (backend) + **Vercel** (frontend).
 
 ## Primary Code Paths
 

@@ -17,7 +17,7 @@ This is the lowest-cost serious hosting target for the current backend shape.
 ## Why Cloud Run
 
 - True scale-to-zero when idle
-- No always-on instance charge like Render Starter
+- No always-on instance charge
 - No AWS load balancer requirement
 - Native HTTPS endpoint out of the box
 - Good fit for occasional personal use, with cold starts accepted as the cost tradeoff
