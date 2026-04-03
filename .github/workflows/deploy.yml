@@ -91,7 +91,10 @@ jobs:
 
       - name: Install dependencies
         working-directory: frontend
-        run: npm ci
+        # npm install (not npm ci) — rolldown/Vite 6 uses platform-specific native
+        # bindings as optional deps. Lock files generated on macOS miss the Linux
+        # binding; npm install resolves it, npm ci fails with MODULE_NOT_FOUND.
+        run: npm install
 
       # `npm run build` runs `tsc -b && vite build` — type errors fail the job.
       - name: Type-check and build
@@ -168,7 +171,10 @@ jobs:
 
       - name: Install dependencies
         working-directory: frontend
-        run: npm ci
+        # npm install (not npm ci) — rolldown/Vite 6 uses platform-specific native
+        # bindings as optional deps. Lock files generated on macOS miss the Linux
+        # binding; npm install resolves it, npm ci fails with MODULE_NOT_FOUND.
+        run: npm install
 
       # `vercel build` runs the framework build inside Vercel's build system
       # and produces .vercel/output. Then `vercel deploy --prebuilt` uploads
