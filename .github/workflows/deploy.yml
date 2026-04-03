@@ -129,10 +129,12 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
-      # Build from project root — Dockerfile lives here and copies backend/
+      # Dockerfile lives in backend/ and its build context is the repo root
+      # (it COPYs from backend/ relative to the context).
       - name: Build Docker image
         run: |
           docker build \
+            -f backend/Dockerfile \
             --tag ${{ env.IMAGE }}:${{ github.sha }} \
             --tag ${{ env.IMAGE }}:latest \
             .
@@ -169,6 +171,15 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: rm -f package-lock.json && npm install
+
+      # Pull project config from Vercel (creates .vercel/project.json locally).
+      # Required before `vercel build` in non-interactive CI environments.
+      - name: Pull Vercel project settings
+        working-directory: frontend
+        run: npx vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
       # `vercel build` runs the framework build inside Vercel's build system
       # and produces .vercel/output. Then `vercel deploy --prebuilt` uploads
