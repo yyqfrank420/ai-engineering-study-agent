@@ -1,0 +1,53 @@
+# ── Secrets ───────────────────────────────────────────────────────────────────
+backend/.env
+ingestion/.env
+.env
+.env.*
+!.env.example
+
+# ── Node ──────────────────────────────────────────────────────────────────────
+node_modules/
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+.pytest_cache/
+frontend/.vercel/
+
+# ── Data / Vector store ───────────────────────────────────────────────────────
+data/faiss/
+data/*.db
+*.db
+
+# ── Terraform ─────────────────────────────────────────────────────────────────
+# Provider binaries and plugins — large, machine-specific, always regenerated
+.terraform/
+# State files contain plaintext secrets — never commit
+*.tfstate
+*.tfstate.*
+# Crash logs
+crash.log
+crash.*.log
+# Override files — local only
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+# tfvars files may contain secrets — exclude all except tracked examples
+*.tfvars
+*.tfvars.json
+# .terraform.lock.hcl pins provider versions — commit this one (whitelisted below)
+!**/.terraform.lock.hcl
+
+# ── Claude Code ───────────────────────────────────────────────────────────────
+# Local Claude Code settings (permissions, tool overrides) — not for the repo
+.claude/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

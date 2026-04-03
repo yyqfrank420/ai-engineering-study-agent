@@ -1,0 +1,308 @@
+[
+  {
+    "id": "A1",
+    "category": "routing_search",
+    "description": "New topic: RAG pipelines \u2192 expect SEARCH + graph emitted",
+    "actual_route": "search",
+    "workers_fired": [
+      "graph",
+      "orchestrator",
+      "rag"
+    ],
+    "route_correct": true,
+    "graph_emitted": true,
+    "graph_emitted_correct": true,
+    "passed": true
+  },
+  {
+    "id": "A2",
+    "category": "routing_search",
+    "description": "New topic: fine-tuning \u2192 expect SEARCH",
+    "actual_route": "search",
+    "workers_fired": [
+      "graph",
+      "orchestrator",
+      "rag"
+    ],
+    "route_correct": true,
+    "graph_emitted": true,
+    "graph_emitted_correct": true,
+    "passed": true
+  },
+  {
+    "id": "A3",
+    "category": "routing_search",
+    "description": "New topic: embedding models \u2192 expect SEARCH",
+    "actual_route": "search",
+    "workers_fired": [
+      "graph",
+      "orchestrator",
+      "rag"
+    ],
+    "route_correct": true,
+    "passed": true
+  },
+  {
+    "id": "A4",
+    "category": "routing_search",
+    "description": "New topic: RLHF \u2192 expect SEARCH",
+    "actual_route": "search",
+    "workers_fired": [
+      "graph",
+      "orchestrator",
+      "rag"
+    ],
+    "route_correct": true,
+    "passed": true
+  },
+  {
+    "id": "A5",
+    "category": "routing_search",
+    "description": "New topic: model serving \u2192 expect SEARCH + graph emitted",
+    "actual_route": "search",
+    "workers_fired": [
+      "graph",
+      "orchestrator",
+      "rag"
+    ],
+    "route_correct": true,
+    "graph_emitted": true,
+    "graph_emitted_correct": true,
+    "passed": true
+  },
+  {
+    "id": "A6",
+    "category": "routing_search",
+    "description": "New topic: LLM evaluation metrics \u2192 expect SEARCH",
+    "actual_route": "search",
+    "workers_fired": [
+      "graph",
+      "orchestrator",
+      "rag"
+    ],
+    "route_correct": true,
+    "passed": true
+  },
+  {
+    "id": "B1",
+    "category": "routing_memory",
+    "description": "Follow-up: 'say that again' after RAG context \u2192 expect MEMORY, no new graph",
+    "actual_route": "memory",
+    "workers_fired": [
+      "orchestrator"
+    ],
+    "route_correct": true,
+    "graph_emitted": false,
+    "graph_emitted_correct": true,
+    "passed": true
+  },
+  {
+    "id": "B2",
+    "category": "routing_memory",
+    "description": "Follow-up: 'what did you just say' \u2192 expect MEMORY",
+    "actual_route": "memory",
+    "workers_fired": [
+      "orchestrator"
+    ],
+    "route_correct": true,
+    "passed": true
+  },
+  {
+    "id": "B3",
+    "category": "routing_memory",
+    "description": "Follow-up: 'summarise in one sentence' \u2192 expect MEMORY",
+    "actual_route": "memory",
+    "workers_fired": [
+      "orchestrator"
+    ],
+    "route_correct": true,
+    "passed": true
+  },
+  {
+    "id": "C1",
+    "category": "routing_graph_expand",
+    "description": "Explicit 3x expansion \u2192 expect SEARCH + new graph_data",
+    "actual_route": "search",
+    "workers_fired": [
+      "graph",
+      "orchestrator",
+      "rag"
+    ],
+    "route_correct": true,
+    "graph_emitted": false,
+    "graph_emitted_correct": false,
+    "passed": true
+  },
+  {
+    "id": "C2",
+    "category": "routing_graph_expand",
+    "description": "'add more nodes' \u2192 expect SEARCH + new graph_data",
+    "actual_route": "search",
+    "workers_fired": [
+      "graph",
+      "orchestrator",
+      "rag"
+    ],
+    "route_correct": true,
+    "graph_emitted": false,
+    "graph_emitted_correct": false,
+    "passed": true
+  },
+  {
+    "id": "C3",
+    "category": "routing_graph_expand",
+    "description": "'I want more detail' \u2192 expect SEARCH + new graph_data",
+    "actual_route": "search",
+    "workers_fired": [
+      "graph",
+      "orchestrator",
+      "rag"
+    ],
+    "route_correct": true,
+    "graph_emitted": false,
+    "graph_emitted_correct": false,
+    "passed": true
+  },
+  {
+    "id": "C4",
+    "category": "routing_graph_expand",
+    "description": "Single word 'deeper' \u2192 expect SEARCH",
+    "actual_route": "search",
+    "workers_fired": [
+      "graph",
+      "orchestrator",
+      "rag"
+    ],
+    "route_correct": true,
+    "passed": true
+  },
+  {
+    "id": "C5",
+    "category": "routing_graph_expand",
+    "description": "'zoom in' implicit expansion \u2192 expect SEARCH",
+    "actual_route": "search",
+    "workers_fired": [
+      "graph",
+      "orchestrator",
+      "rag"
+    ],
+    "route_correct": true,
+    "passed": true
+  },
+  {
+    "id": "C6",
+    "category": "routing_graph_expand",
+    "description": "'show more components' \u2192 expect SEARCH",
+    "actual_route": "search",
+    "workers_fired": [
+      "graph",
+      "orchestrator",
+      "rag"
+    ],
+    "route_correct": true,
+    "passed": true
+  },
+  {
+    "id": "D1",
+    "category": "format",
+    "description": "Response should use bullet points with bold key terms and citations",
+    "actual_route": "search",
+    "workers_fired": [
+      "graph",
+      "orchestrator",
+      "rag"
+    ],
+    "has_bullets": true,
+    "has_bullets_pass": true,
+    "has_bold_terms": true,
+    "has_bold_terms_pass": true,
+    "has_citations": true,
+    "has_citations_pass": true,
+    "max_5_bullets": true,
+    "max_5_bullets_pass": true,
+    "no_prose": true,
+    "no_prose_pass": true,
+    "passed": true
+  },
+  {
+    "id": "D2",
+    "category": "format",
+    "description": "RLHF response: bullets only, max 5",
+    "actual_route": "search",
+    "workers_fired": [
+      "graph",
+      "orchestrator",
+      "rag"
+    ],
+    "has_bullets": true,
+    "has_bullets_pass": true,
+    "max_5_bullets": true,
+    "max_5_bullets_pass": true,
+    "passed": true
+  },
+  {
+    "id": "D3",
+    "category": "format",
+    "description": "Tokenization: bullets with bold key terms",
+    "actual_route": "search",
+    "workers_fired": [
+      "graph",
+      "orchestrator",
+      "rag"
+    ],
+    "has_bullets": true,
+    "has_bullets_pass": true,
+    "has_bold_terms": true,
+    "has_bold_terms_pass": true,
+    "passed": true
+  },
+  {
+    "id": "E1",
+    "category": "graph_schema",
+    "description": "RAG graph: nodes must have required fields and valid types",
+    "actual_route": "search",
+    "workers_fired": [
+      "graph",
+      "orchestrator",
+      "rag"
+    ],
+    "errors": [],
+    "node_types_valid": true,
+    "node_types_valid_pass": true,
+    "nodes_have_required_fields": true,
+    "nodes_have_required_fields_pass": true,
+    "passed": true
+  },
+  {
+    "id": "E2",
+    "category": "graph_schema",
+    "description": "Fine-tuning graph: edges must have required fields, valid sync values",
+    "actual_route": "search",
+    "workers_fired": [
+      "graph",
+      "orchestrator",
+      "rag"
+    ],
+    "errors": [],
+    "edges_have_required_fields": true,
+    "edges_have_required_fields_pass": true,
+    "sync_field_valid": true,
+    "sync_field_valid_pass": true,
+    "passed": true
+  },
+  {
+    "id": "E3",
+    "category": "graph_schema",
+    "description": "Model serving graph: no forbidden 'internal' technology value on edges",
+    "actual_route": "search",
+    "workers_fired": [
+      "graph",
+      "orchestrator",
+      "rag"
+    ],
+    "errors": [],
+    "no_internal_technology": true,
+    "no_internal_technology_pass": true,
+    "passed": true
+  }
+]

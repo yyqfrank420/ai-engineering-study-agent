@@ -1,0 +1,42 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# File: render.yaml
+# Purpose: Render Blueprint — declares the backend web service configuration.
+#          Render reads this file to create/update the service on deploy.
+# Docs: https://render.com/docs/blueprint-spec
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  - type: web
+    name: agent-backend
+    region: frankfurt          # closest EU region Render offers (no London)
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false            # marks this as a secret — Render will prompt for
+                               # the value in the dashboard, never stores it in
+                               # this file or version control
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_DB_URL
+        sync: false
+      - key: SUPABASE_JWT_ISSUER
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: TURNSTILE_SECRET_KEY
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: FAISS_ARTIFACT_URL
+        sync: false
+      - key: FAISS_ARTIFACT_SHA256
+        sync: false
+      - key: DATA_DIR
+        value: ""              # leave blank to use the default <project_root>/data

@@ -1,0 +1,183 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# File: backend/adapters/database_adapter.py
+# Purpose: Thin wrapper around the app database.
+#          Uses Supabase Postgres when SUPABASE_DB_URL is configured, otherwise
+#          falls back to local SQLite for tests and local development.
+# Language: Python
+# ─────────────────────────────────────────────────────────────────────────────
+
+import sqlite3
+from contextlib import contextmanager
+from typing import Any
+
+import psycopg
+from psycopg.rows import dict_row
+
+from config import settings
+
+
+def init_db() -> None:
+    if settings.use_postgres:
+        with _connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS profiles (
+                    id TEXT PRIMARY KEY,
+                    email TEXT NOT NULL UNIQUE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_threads (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                    title TEXT NOT NULL DEFAULT 'New chat',
+                    graph_data JSONB,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id TEXT PRIMARY KEY,
+                    thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+                    user_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+                    content TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_chat_threads_user_last_seen
+                    ON chat_threads(user_id, last_seen_at DESC)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_created
+                    ON chat_messages(thread_id, created_at DESC)
+                """
+            )
+        return
+
+    settings.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+    with _connect() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id   TEXT PRIMARY KEY,
+                created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+                last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+                graph_data   TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS messages (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL REFERENCES sessions(session_id),
+                role       TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+                content    TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_messages_session
+                ON messages(session_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS profiles (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS chat_threads (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES profiles(id),
+                title TEXT NOT NULL DEFAULT 'New chat',
+                graph_data TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL REFERENCES chat_threads(id),
+                user_id TEXT NOT NULL REFERENCES profiles(id),
+                role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_chat_threads_user_last_seen
+                ON chat_threads(user_id, last_seen_at);
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_created
+                ON chat_messages(thread_id, created_at);
+            """
+        )
+        try:
+            conn.execute("ALTER TABLE sessions ADD COLUMN graph_data TEXT")
+            conn.commit()
+        except Exception:
+            pass
+
+
+@contextmanager
+def _connect():
+    if settings.use_postgres:
+        conn = psycopg.connect(settings.supabase_db_url, row_factory=dict_row)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        return
+
+    conn = sqlite3.connect(settings.sqlite_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _adapt_query(query: str) -> str:
+    if settings.use_postgres:
+        return query.replace("?", "%s")
+    return query
+
+
+def execute(query: str, params: tuple[Any, ...] = ()) -> None:
+    with _connect() as conn:
+        conn.execute(_adapt_query(query), params)
+
+
+def fetchall(query: str, params: tuple[Any, ...] = ()) -> list[dict]:
+    with _connect() as conn:
+        cursor = conn.execute(_adapt_query(query), params)
+        rows = cursor.fetchall()
+        if settings.use_postgres:
+            return [dict(row) for row in rows]
+        return [dict(row) for row in rows]
+
+
+def fetchone(query: str, params: tuple[Any, ...] = ()) -> dict | None:
+    with _connect() as conn:
+        cursor = conn.execute(_adapt_query(query), params)
+        row = cursor.fetchone()
+        return dict(row) if row else None

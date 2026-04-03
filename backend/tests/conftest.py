@@ -1,0 +1,37 @@
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+BACKEND_DIR = ROOT / "backend"
+
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+
+@pytest.fixture
+def temp_data_dir(tmp_path, monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def clear_rate_limits():
+    from api.chat_guards import _rate_counts
+    from api.sse_handler import _search_tool_requests
+    from api.auth_route import _otp_request_by_email, _otp_request_by_ip, _otp_verify_failures
+
+    _rate_counts.clear()
+    _search_tool_requests.clear()
+    _otp_request_by_email.clear()
+    _otp_request_by_ip.clear()
+    _otp_verify_failures.clear()
+    yield
+    _rate_counts.clear()
+    _search_tool_requests.clear()
+    _otp_request_by_email.clear()
+    _otp_request_by_ip.clear()
+    _otp_verify_failures.clear()
