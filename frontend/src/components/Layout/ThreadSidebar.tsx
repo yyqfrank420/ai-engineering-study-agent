@@ -131,23 +131,37 @@ export function ThreadSidebar({
   // Viewport coords of the trash button that opened the popup
   const [popupAnchor, setPopupAnchor]   = useState<{ x: number; y: number } | null>(null);
 
+  // Stable refs — prevent fetchThreads from changing identity on every token refresh,
+  // which would cause the effect below to fire repeatedly even with no real state change.
+  const authSessionRef = useRef(authSession);
+  const backendReadyRef = useRef(backendReady);
+  authSessionRef.current = authSession;
+  backendReadyRef.current = backendReady;
+
   const fetchThreads = useCallback(async () => {
-    if (!authSession || !backendReady) return;
+    if (!authSessionRef.current || !backendReadyRef.current) return;
     setFetching(true);
     try {
-      const list = await listThreads(authSession);
+      const list = await listThreads(authSessionRef.current);
       setThreads(list);
     } catch {
       // Non-fatal — sidebar just stays empty
     } finally {
       setFetching(false);
     }
-  }, [authSession, backendReady]);
+  }, []); // stable reference — never recreated
 
-  // Re-fetch whenever the active thread changes (new chat created, thread switched)
+  // Fetch on active thread change (new chat, thread switch)
   useEffect(() => {
     fetchThreads();
   }, [fetchThreads, activeThreadId]);
+
+  // Fetch once when backend first becomes ready
+  useEffect(() => {
+    if (backendReady) fetchThreads();
+  // fetchThreads is stable so this only runs when backendReady changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backendReady]);
 
   const handleDelete = useCallback(async (threadId: string) => {
     if (!authSession) return;

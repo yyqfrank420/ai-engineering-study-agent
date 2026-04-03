@@ -71,15 +71,20 @@ export function useThreadSession({
   }, [authSession, resetThreadState]);
 
   useEffect(() => {
-    if (!authSession || !backendReady) {
+    // Reset everything only on sign-out — never on backend going not-ready.
+    // Wiping state when the backend TTL expires or is re-preparing would
+    // destroy live streamed content that hasn't been persisted yet.
+    if (!authSession) {
       resetThreadState();
       return;
     }
 
+    // Backend warming up — preserve existing state, wait for it to become ready.
+    if (!backendReady) return;
+
     // Guard against token refresh events: Supabase fires onAuthStateChange
     // with a new session object when the token is refreshed (same user, different
-    // object reference). Re-fetching the thread would wipe live streamed state
-    // that the backend hasn't persisted yet.
+    // object reference). Re-fetching would wipe live streamed state.
     if (loadedUserIdRef.current === authSession.user.id) return;
     loadedUserIdRef.current = authSession.user.id;
 

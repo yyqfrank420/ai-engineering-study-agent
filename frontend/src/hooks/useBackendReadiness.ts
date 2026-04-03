@@ -5,7 +5,7 @@ import { storageKeyForPrepare } from '../utils/threadState';
 
 export type BackendReadiness = 'unknown' | 'preparing' | 'ready' | 'error';
 
-const PREPARE_TTL_MS = 12 * 60 * 1000;
+const PREPARE_TTL_MS = 60 * 60 * 1000; // 1 hour — matches Supabase access token lifetime
 const PREPARE_BYPASS = import.meta.env.VITE_DEV_BYPASS_AUTH === 'true' || import.meta.env.DEV;
 
 export function useBackendReadiness(authSession: AuthSession | null) {
