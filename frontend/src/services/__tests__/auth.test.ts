@@ -71,29 +71,23 @@ describe('signInWithGoogle', () => {
 
   it('throws when Supabase returns an error', async () => {
     const supabaseError = new Error('OAuth provider not enabled');
-    mockSignInWithOAuth.mockResolvedValueOnce({
-      data: { url: null, provider: 'google' },
-      error: supabaseError,
-    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mockSignInWithOAuth.mockResolvedValueOnce({ data: { url: null, provider: 'google' }, error: supabaseError } as any);
 
     await expect(signInWithGoogle()).rejects.toThrow('OAuth provider not enabled');
   });
 
   it('throws when Supabase returns no URL and no error', async () => {
-    mockSignInWithOAuth.mockResolvedValueOnce({
-      data: { url: null, provider: 'google' },
-      error: null,
-    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mockSignInWithOAuth.mockResolvedValueOnce({ data: { url: null, provider: 'google' }, error: null } as any);
 
     await expect(signInWithGoogle()).rejects.toThrow('Failed to start Google sign-in');
   });
 
   it('does not call window.location.assign when Supabase returns an error', async () => {
     const supabaseError = new Error('OAuth provider not enabled');
-    mockSignInWithOAuth.mockResolvedValueOnce({
-      data: { url: null, provider: 'google' },
-      error: supabaseError,
-    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mockSignInWithOAuth.mockResolvedValueOnce({ data: { url: null, provider: 'google' }, error: supabaseError } as any);
 
     await expect(signInWithGoogle()).rejects.toThrow();
     expect(window.location.assign).not.toHaveBeenCalled();
