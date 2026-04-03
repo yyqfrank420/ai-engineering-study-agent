@@ -1,13 +1,14 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # File: scripts/apply_supabase_config.py
-# Purpose: Applies Supabase auth config (email templates, redirect URLs) via
-#          the Supabase Management API. Run this once after project creation
-#          or whenever docs/supabase/ config changes. Keeps all Supabase
+# Purpose: Applies Supabase auth config (email templates, redirect URLs, Google
+#          OAuth provider) via the Supabase Management API. Run this once after
+#          project creation or whenever config changes. Keeps all Supabase
 #          settings version-controlled instead of managed via dashboard.
 # Language: Python
 # Connects to: Supabase Management API (api.supabase.com)
 # Inputs:  SUPABASE_PROJECT_REF, SUPABASE_MANAGEMENT_TOKEN, APP_SITE_URL env vars
 #          APP_REDIRECT_URLS env var (optional, comma-separated)
+#          GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET env vars (optional)
 #          docs/supabase/email_templates/magic_link.html
 # Outputs: Updates project auth config in-place
 # ─────────────────────────────────────────────────────────────────────────────
@@ -24,6 +25,8 @@ PROJECT_REF = os.environ.get("SUPABASE_PROJECT_REF", "").strip()
 MANAGEMENT_TOKEN = os.environ.get("SUPABASE_MANAGEMENT_TOKEN", "")
 SITE_URL = os.environ.get("APP_SITE_URL", "").strip()
 REDIRECT_URLS_RAW = os.environ.get("APP_REDIRECT_URLS", "").strip()
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
 
 if not PROJECT_REF:
     print("ERROR: SUPABASE_PROJECT_REF is not set.")
@@ -65,6 +68,14 @@ payload = {
     # Magic link / OTP email template
     "mailer_templates_magic_link_content": magic_link_html,
 }
+
+# Google OAuth — only included if credentials are present in env.
+# Credentials stored in GCP Secret Manager: google-oauth-client-id, google-oauth-client-secret.
+if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
+    payload["external_google_enabled"] = True
+    payload["external_google_client_id"] = GOOGLE_CLIENT_ID
+    payload["external_google_secret"] = GOOGLE_CLIENT_SECRET
+    print("  Google OAuth: enabled")
 
 headers = {
     "Authorization": f"Bearer {MANAGEMENT_TOKEN}",

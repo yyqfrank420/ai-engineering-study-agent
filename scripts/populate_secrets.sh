@@ -29,6 +29,8 @@ SECRET_MAP=(
   [TURNSTILE_SECRET_KEY]="turnstile-secret-key"
   [FAISS_ARTIFACT_URL]="faiss-artifact-url"
   [FAISS_ARTIFACT_SHA256]="faiss-artifact-sha256"
+  [GOOGLE_OAUTH_CLIENT_ID]="google-oauth-client-id"
+  [GOOGLE_OAUTH_CLIENT_SECRET]="google-oauth-client-secret"
 )
 
 if [[ ! -f "$ENV_FILE" ]]; then
