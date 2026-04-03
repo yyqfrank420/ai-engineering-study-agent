@@ -16,7 +16,7 @@ import { useAuthSession } from './hooks/useAuthSession';
 import { useBackendReadiness } from './hooks/useBackendReadiness';
 import { useSelectionSuggestion } from './hooks/useSelectionSuggestion';
 import { useThreadSession } from './hooks/useThreadSession';
-import { storageKeyForThread } from './utils/threadState';
+import { storageKeyForThread, writeThreadSnapshot } from './utils/threadState';
 
 import type { ComplexityLevel, GraphMode } from './types';
 
@@ -42,6 +42,7 @@ export default function App() {
     backendReadiness,
     prepareMessage,
     isBackendReady,
+    prepareBackendNow,
     clearPreparedCache,
   } = useBackendReadiness(authSession);
 
@@ -125,6 +126,8 @@ export default function App() {
   const isStreaming = isGenerating || loadingThread;
   const composerLocked = streamStatus === 'generating' || loadingThread;
   const sendLocked = composerLocked || backendReadiness !== 'ready' || !activeThreadId;
+  const showPrepare = !!authSession && backendReadiness !== 'ready';
+  const prepareDisabled = composerLocked || !authSession || backendReadiness === 'preparing';
 
   const handleNodeClick = (node: GraphNode) => {
     setSelectedNode({ node, suggestions: [] });
@@ -141,6 +144,19 @@ export default function App() {
     () => threadTitle || 'New chat',
     [threadTitle],
   );
+
+  useEffect(() => {
+    if (!authSession || !activeThreadId) {
+      return;
+    }
+
+    writeThreadSnapshot(authSession.user.id, activeThreadId, {
+      title: effectiveThreadTitle,
+      messages,
+      graphData,
+    });
+  }, [activeThreadId, authSession, effectiveThreadTitle, graphData, messages]);
+
   const latestAssistantText = useMemo(
     () => [...messages].reverse().find((message) => message.role === 'assistant')?.content ?? '',
     [messages],
@@ -270,9 +286,12 @@ export default function App() {
               <ChatInput
                 onSend={handleSend}
                 onStop={stopGeneration}
+                onPrepare={prepareBackendNow}
                 isGenerating={isGenerating}
                 disabled={composerLocked}
                 sendDisabled={sendLocked}
+                showPrepare={showPrepare}
+                prepareDisabled={prepareDisabled}
                 prepareMessage={prepareMessage}
                 complexity={complexity}
                 graphMode={graphMode}

@@ -1,7 +1,9 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from adapters.database_adapter import init_db
 from adapters.supabase_auth_adapter import get_current_user
+from api.sse_handler import ChatRequest, chat_endpoint
 from config import settings
 from main import create_app
 from storage import message_store
@@ -44,6 +46,23 @@ def test_cors_allows_vercel_preview_origin():
 
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "https://prototype-branch.vercel.app"
+
+
+def test_cors_allows_delete_for_vercel_preview_origin():
+    app = create_app(load_resources=False)
+    client = TestClient(app)
+
+    response = client.options(
+        "/api/threads/thread-123",
+        headers={
+            "Origin": "https://prototype-branch.vercel.app",
+            "Access-Control-Request-Method": "DELETE",
+        },
+    )
+
+    assert response.status_code == 200
+    allow_methods = response.headers["access-control-allow-methods"]
+    assert "DELETE" in allow_methods
 
 
 def test_health_reports_faiss_not_loaded_when_resources_missing():
@@ -112,6 +131,16 @@ def test_prepare_returns_503_when_parent_docs_missing():
 
     assert response.status_code == 503
     assert "warming up" in response.json()["detail"].lower()
+
+
+def test_cloud_run_refuses_sqlite_fallback(monkeypatch):
+    monkeypatch.setenv("K_SERVICE", "agent-backend")
+    monkeypatch.setattr(settings, "supabase_db_url", "")
+    app = create_app(load_resources=False)
+
+    with pytest.raises(RuntimeError, match="SUPABASE_DB_URL"):
+        with TestClient(app):
+            pass
 
 
 def test_chat_requires_auth():
@@ -188,23 +217,42 @@ def test_node_selected_applies_rate_limit(temp_data_dir, monkeypatch):
     assert "Rate limit exceeded" in response.text
 
 
-def test_chat_rejects_thread_at_message_limit_before_generation(temp_data_dir, monkeypatch):
+@pytest.mark.asyncio
+async def test_chat_rejects_thread_at_message_limit_before_generation(temp_data_dir, monkeypatch):
     monkeypatch.setattr(settings, "max_messages_per_thread", 2)
     init_db()
     upsert_profile("user-1", "friend@example.com")
     thread = create_thread("user-1")
     message_store.append("user-1", thread["id"], "user", "first")
     message_store.append("user-1", thread["id"], "assistant", "second")
-    app = _authed_app()
+    request = type(
+        "RequestStub",
+        (),
+        {
+            "app": type(
+                "AppStub",
+                (),
+                {
+                    "state": type(
+                        "StateStub",
+                        (),
+                        {"vectorstore": object(), "parent_docs": [{"page_content": "placeholder"}]},
+                    )()
+                },
+            )()
+        },
+    )()
 
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/chat",
-            json={"thread_id": thread["id"], "content": "one more"},
-        )
+    response = await chat_endpoint(
+        ChatRequest(thread_id=thread["id"], content="one more"),
+        request,
+        {"id": "user-1", "email": "friend@example.com"},
+    )
 
-    assert response.status_code == 200
-    assert "Thread message limit reached" in response.text
+    first_chunk = await anext(response.body_iterator)
+    first_text = first_chunk if isinstance(first_chunk, str) else first_chunk.decode()
+
+    assert "Thread message limit reached" in first_text
 
 
 def test_chat_rejects_when_knowledge_base_not_loaded(temp_data_dir):

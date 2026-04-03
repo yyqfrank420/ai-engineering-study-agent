@@ -16,6 +16,7 @@
 import asyncio
 import uuid
 from contextlib import suppress
+import time
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -30,11 +31,10 @@ from agent.tools.graph_worker_tools.generate_graph_tool import generate_graph
 from agent.tools.rag_worker_tools.get_section_tool import make_get_section_tool
 from agent.tools.rag_worker_tools.rag_search_tool import make_rag_search_tool
 from config import settings
-from storage import message_store, thread_store
+from storage import message_store, runtime_state_store, thread_store
 from storage.profile_store import upsert_profile
 
 router = APIRouter(prefix="/api")
-_search_tool_requests: dict[str, asyncio.Event] = {}
 
 
 # ── Request models ─────────────────────────────────────────────────────────────
@@ -112,6 +112,15 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
             yield sse({"type": "error", "content": "Empty message"})
         return streaming_response(_empty())
 
+    message_count = message_store.count_messages(user_id, thread_id)
+    if message_count + 2 > settings.max_messages_per_thread:
+        async def _thread_full():
+            yield sse({
+                "type": "error",
+                "content": "Thread message limit reached. Start a new chat to continue.",
+            })
+        return streaming_response(_thread_full())
+
     limit_error = check_rate_limit(user_id)
     if limit_error:
         async def _rate_limited():
@@ -122,15 +131,6 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
         async def _injection():
             yield sse({"type": "error", "content": "Message blocked by security filter"})
         return streaming_response(_injection())
-
-    message_count = message_store.count_messages(user_id, thread_id)
-    if message_count + 2 > settings.max_messages_per_thread:
-        async def _thread_full():
-            yield sse({
-                "type": "error",
-                "content": "Thread message limit reached. Start a new chat to continue.",
-            })
-        return streaming_response(_thread_full())
 
     if not knowledge_base_ready(request):
         async def _missing_resources():
@@ -162,15 +162,23 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
             await queue.put(event)
 
         async def await_search_tool_request(request_id: str, timeout_s: float) -> bool:
-            event = asyncio.Event()
-            _search_tool_requests[request_id] = event
+            expires_at_epoch = time.time() + timeout_s
+            runtime_state_store.prune_search_tool_requests(older_than_epoch=time.time())
+            runtime_state_store.create_search_tool_request(
+                request_id,
+                user_id,
+                thread_id,
+                expires_at_epoch=expires_at_epoch,
+            )
             try:
-                await asyncio.wait_for(event.wait(), timeout=timeout_s)
-                return True
-            except asyncio.TimeoutError:
+                deadline = asyncio.get_event_loop().time() + timeout_s
+                while asyncio.get_event_loop().time() < deadline:
+                    if runtime_state_store.is_search_tool_requested(request_id, user_id, thread_id):
+                        return True
+                    await asyncio.sleep(0.1)
                 return False
             finally:
-                _search_tool_requests.pop(request_id, None)
+                runtime_state_store.delete_search_tool_request(request_id)
 
         await send({
             "type": "worker_status",
@@ -274,11 +282,11 @@ async def use_search_tool_endpoint(body: SearchToolRequest, user=Depends(get_cur
     if thread is None:
         return {"ok": False, "status": "thread_not_found"}
 
-    event = _search_tool_requests.get(body.request_id)
-    if event is None:
+    runtime_state_store.prune_search_tool_requests(older_than_epoch=time.time())
+    requested = runtime_state_store.mark_search_tool_requested(body.request_id, user_id, body.thread_id)
+    if not requested:
         return {"ok": False, "status": "expired"}
 
-    event.set()
     return {"ok": True, "status": "search_requested"}
 
 

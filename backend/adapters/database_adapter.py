@@ -66,6 +66,40 @@ def init_db() -> None:
                     ON chat_messages(thread_id, created_at DESC)
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS request_events (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                    event_type TEXT NOT NULL,
+                    created_at_epoch DOUBLE PRECISION NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_request_events_user_type_created
+                    ON request_events(user_id, event_type, created_at_epoch DESC)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS search_tool_requests (
+                    request_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                    thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+                    requested BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at_epoch DOUBLE PRECISION NOT NULL,
+                    expires_at_epoch DOUBLE PRECISION NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_search_tool_requests_user_thread
+                    ON search_tool_requests(user_id, thread_id)
+                """
+            )
         return
 
     settings.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
@@ -120,6 +154,28 @@ def init_db() -> None:
                 ON chat_threads(user_id, last_seen_at);
             CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_created
                 ON chat_messages(thread_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS request_events (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES profiles(id),
+                event_type TEXT NOT NULL,
+                created_at_epoch REAL NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_request_events_user_type_created
+                ON request_events(user_id, event_type, created_at_epoch);
+
+            CREATE TABLE IF NOT EXISTS search_tool_requests (
+                request_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES profiles(id),
+                thread_id TEXT NOT NULL REFERENCES chat_threads(id),
+                requested INTEGER NOT NULL DEFAULT 0,
+                created_at_epoch REAL NOT NULL,
+                expires_at_epoch REAL NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_search_tool_requests_user_thread
+                ON search_tool_requests(user_id, thread_id);
             """
         )
         try:

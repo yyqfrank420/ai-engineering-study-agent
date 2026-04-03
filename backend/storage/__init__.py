@@ -5,10 +5,11 @@
 #          archival tests, but they are not part of the production path.
 # ─────────────────────────────────────────────────────────────────────────────
 
-from . import message_store, profile_store, thread_store
+from . import message_store, profile_store, runtime_state_store, thread_store
 
 __all__ = [
     "message_store",
     "profile_store",
+    "runtime_state_store",
     "thread_store",
 ]

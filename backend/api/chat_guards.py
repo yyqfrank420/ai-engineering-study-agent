@@ -1,28 +1,26 @@
-import time
-from collections import defaultdict
-
 from fastapi import Request
 
 from config import settings
-
-_rate_counts: dict[str, list[float]] = defaultdict(list)
+from storage.runtime_state_store import get_recent_request_events, prune_request_events, record_request_event
 
 
 def check_rate_limit(key: str) -> str | None:
     """Return an error string when the user is over limit, otherwise None."""
-    now = time.time()
-    timestamps = [timestamp for timestamp in _rate_counts[key] if now - timestamp < 3600]
-    _rate_counts[key] = timestamps
+    import time
 
-    per_minute = sum(1 for timestamp in timestamps if now - timestamp < 60)
-    per_hour = len(timestamps)
+    now = time.time()
+    prune_request_events(older_than_epoch=now - 3600)
+    events = get_recent_request_events(key, "chat_request", since_epoch=now - 3600)
+
+    per_minute = sum(1 for event in events if now - float(event["created_at_epoch"]) < 60)
+    per_hour = len(events)
 
     if per_minute >= settings.rate_limit_per_minute:
         return f"Rate limit exceeded: {settings.rate_limit_per_minute} messages/minute"
     if per_hour >= settings.rate_limit_per_hour:
         return f"Rate limit exceeded: {settings.rate_limit_per_hour} messages/hour"
 
-    timestamps.append(now)
+    record_request_event(key, "chat_request", created_at_epoch=now)
     return None
 
 

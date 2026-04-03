@@ -5,9 +5,9 @@ from fastapi.testclient import TestClient
 
 from adapters.database_adapter import init_db
 from adapters.supabase_auth_adapter import get_current_user
-from api.sse_handler import _search_tool_requests
 from main import create_app
 from storage.profile_store import upsert_profile
+from storage.runtime_state_store import create_search_tool_request, is_search_tool_requested
 from storage.thread_store import create_thread
 
 
@@ -26,14 +26,18 @@ def test_rag_worker_marks_empty_results_as_weak():
     assert "search tool" in notice.lower() or "web search" in notice.lower()
 
 
-def test_use_search_tool_endpoint_sets_pending_event(temp_data_dir):
+def test_use_search_tool_endpoint_marks_request_in_runtime_store(temp_data_dir):
     init_db()
     upsert_profile("user-1", "friend@example.com")
     thread = create_thread("user-1")
     app = _authed_app()
     request_id = "req-123"
-    event = asyncio.Event()
-    _search_tool_requests[request_id] = event
+    create_search_tool_request(
+        request_id,
+        "user-1",
+        thread["id"],
+        expires_at_epoch=10**12,
+    )
 
     with TestClient(app) as client:
         response = client.post(
@@ -43,7 +47,7 @@ def test_use_search_tool_endpoint_sets_pending_event(temp_data_dir):
 
     assert response.status_code == 200
     assert response.json()["ok"] is True
-    assert event.is_set() is True
+    assert is_search_tool_requested(request_id, "user-1", thread["id"]) is True
 
 
 @pytest.mark.asyncio

@@ -102,6 +102,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
   const streamingIdRef = useRef<string | null>(null);
   const activeChatStreamIdRef = useRef<string | null>(null);
   const activeNodeStreamIdRef = useRef<string | null>(null);
+  const userAbortedChatRef = useRef(false);
 
   // Caches suggested questions per node ID so repeat clicks skip the LLM call
   const suggestionsCacheRef = useRef<Map<string, string[]>>(new Map());
@@ -287,10 +288,29 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
     setGraphNotice(null);
     setStreamStatus('generating');
     setWorkerStatus(OPTIMISTIC_CHAT_STATUS);
+    userAbortedChatRef.current = false;
     const clientRequestId = makeId();
     activeChatStreamIdRef.current = clientRequestId;
 
-    sseClient.sendMessage(authSession, activeThreadId, content, opts, clientRequestId).catch(err => {
+    sseClient.sendMessage(authSession, activeThreadId, content, opts, clientRequestId).then(sawDone => {
+      if (!sawDone && !userAbortedChatRef.current && activeChatStreamIdRef.current === clientRequestId) {
+        if (streamingIdRef.current) {
+          const id = streamingIdRef.current;
+          setMessages(prev => prev.map(m =>
+            m.id === id ? { ...m, isStreaming: false } : m
+          ));
+          streamingIdRef.current = null;
+        }
+        setMessages(prev => [...prev, {
+          id: makeId(),
+          role: 'assistant',
+          content: 'Connection closed before the response finished. Please try again.',
+          isStreaming: false,
+        }]);
+        setWorkerStatus(IDLE_WORKER_STATUS);
+        setStreamStatus('connected');
+      }
+    }).catch(err => {
       // Network-level failure (not an SSE error event)
       if (streamingIdRef.current) {
         const id = streamingIdRef.current;
@@ -309,6 +329,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
       if (activeChatStreamIdRef.current === clientRequestId) {
         activeChatStreamIdRef.current = null;
       }
+      userAbortedChatRef.current = false;
     });
   }, [activeThreadId, authSession]);
 
@@ -361,6 +382,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
   }, [activeThreadId, authSession]);
 
   const stopGeneration = useCallback(() => {
+    userAbortedChatRef.current = true;
     sseClient.stopGeneration();
     // Finalise any streaming message so it renders as complete
     if (streamingIdRef.current) {

@@ -19,10 +19,13 @@ import type { ComplexityLevel, GraphMode } from '../../types';
 interface ChatInputProps {
   onSend:        (content: string) => void;
   onStop:        () => void;
+  onPrepare?:    () => void | Promise<void>;
   disabled?:     boolean;   // locks textarea (loading, no thread)
   sendDisabled?: boolean;   // blocks send while backend is not ready
+  showPrepare?:  boolean;
+  prepareDisabled?: boolean;
   isGenerating?: boolean;   // LLM actively streaming — show Stop instead of Send
-  prepareMessage?: string | null; // non-null while backend is warming up (auto-triggered)
+  prepareMessage?: string | null; // non-null while backend is warming up or failed
   // Mode control state — passed from App.tsx
   complexity:         ComplexityLevel;
   graphMode:          GraphMode;
@@ -177,8 +180,8 @@ function ModePopover({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function ChatInput({
-  onSend, onStop, disabled, isGenerating,
-  sendDisabled, prepareMessage,
+  onSend, onStop, onPrepare, disabled, isGenerating,
+  sendDisabled, showPrepare, prepareDisabled, prepareMessage,
   complexity, graphMode, researchEnabled,
   onComplexityChange, onGraphModeChange, onResearchChange,
   selectionSuggestion, selectionReferenceActive, onUseSelection, onDismissSelection, onClearSelectionReference,
@@ -395,12 +398,23 @@ export function ChatInput({
           >
             Stop
           </button>
+        ) : showPrepare ? (
+          <button
+            onClick={() => void onPrepare?.()}
+            disabled={prepareDisabled}
+            aria-label="Prepare backend"
+            style={sendButtonStyle(!prepareDisabled, 'Prepare')}
+          >
+            {prepareMessage && !prepareMessage.toLowerCase().includes('unavailable')
+              ? 'Preparing…'
+              : 'Prepare'}
+          </button>
         ) : (
           <button
             onClick={submit}
             disabled={!isReady}
             aria-label="Send message"
-            style={sendButtonStyle(isReady)}
+            style={sendButtonStyle(isReady, 'Send')}
           >
             Send
           </button>
@@ -575,20 +589,29 @@ const stopButtonStyle: CSSProperties = {
   transition:           'background 0.15s',
 };
 
-function sendButtonStyle(isReady: boolean): CSSProperties {
+function sendButtonStyle(isReady: boolean, variant: 'Send' | 'Prepare'): CSSProperties {
+  const isPrepare = variant === 'Prepare';
   return {
     padding:              '0.5rem 1rem',
     borderRadius:         '10px',
     background:           isReady
-      ? 'linear-gradient(135deg, rgba(124,58,237,0.9), rgba(59,130,246,0.9))'
+      ? isPrepare
+        ? 'linear-gradient(135deg, rgba(37,99,235,0.9), rgba(14,165,233,0.88))'
+        : 'linear-gradient(135deg, rgba(124,58,237,0.9), rgba(59,130,246,0.9))'
       : 'rgba(255,255,255,0.04)',
     backdropFilter:       'blur(8px)',
     WebkitBackdropFilter: 'blur(8px)',
     boxShadow:            isReady
-      ? 'inset 0 1px 0 rgba(255,255,255,0.2), 0 4px 12px rgba(124,58,237,0.25)'
+      ? isPrepare
+        ? 'inset 0 1px 0 rgba(255,255,255,0.2), 0 4px 12px rgba(37,99,235,0.25)'
+        : 'inset 0 1px 0 rgba(255,255,255,0.2), 0 4px 12px rgba(124,58,237,0.25)'
       : 'inset 0 1px 0 rgba(255,255,255,0.04)',
     color:                isReady ? '#fff' : '#6e7681',
-    border:               isReady ? '1px solid rgba(167,139,250,0.3)' : '1px solid rgba(255,255,255,0.06)',
+    border:               isReady
+      ? isPrepare
+        ? '1px solid rgba(96,165,250,0.3)'
+        : '1px solid rgba(167,139,250,0.3)'
+      : '1px solid rgba(255,255,255,0.06)',
     cursor:               isReady ? 'pointer' : 'not-allowed',
     fontSize:             '0.875rem',
     fontWeight:           500,
@@ -598,4 +621,3 @@ function sendButtonStyle(isReady: boolean): CSSProperties {
     opacity:              isReady ? 1 : 0.5,
   };
 }
-

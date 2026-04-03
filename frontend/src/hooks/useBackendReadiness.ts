@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AuthSession } from '../types';
 import { prepareBackend } from '../services/api';
-import { storageKeyForPrepare } from '../utils/threadState';
 
 export type BackendReadiness = 'unknown' | 'preparing' | 'ready' | 'error';
 
-const PREPARE_TTL_MS = 60 * 60 * 1000; // 1 hour — matches Supabase access token lifetime
 const PREPARE_BYPASS = import.meta.env.VITE_DEV_BYPASS_AUTH === 'true' || import.meta.env.DEV;
 
 export function useBackendReadiness(authSession: AuthSession | null) {
@@ -13,26 +11,30 @@ export function useBackendReadiness(authSession: AuthSession | null) {
     PREPARE_BYPASS ? 'ready' : 'unknown',
   );
   const [prepareMessage, setPrepareMessage] = useState<string | null>(null);
-  // Prevent double-firing auto-prepare if authSession object identity changes (e.g. token refresh)
   const preparingForUserRef = useRef<string | null>(null);
+  const activeUserIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!authSession) {
+      activeUserIdRef.current = null;
       setBackendReadiness(PREPARE_BYPASS ? 'ready' : 'unknown');
       setPrepareMessage(null);
       preparingForUserRef.current = null;
       return;
     }
 
-    const rememberedReadyAt = Number(localStorage.getItem(storageKeyForPrepare(authSession.user.id)) ?? '0');
-    const isFresh = PREPARE_BYPASS || (rememberedReadyAt > 0 && Date.now() - rememberedReadyAt < PREPARE_TTL_MS);
-    setBackendReadiness(isFresh ? 'ready' : 'unknown');
+    if (activeUserIdRef.current === authSession.user.id) {
+      return;
+    }
+    activeUserIdRef.current = authSession.user.id;
+    setBackendReadiness(PREPARE_BYPASS ? 'ready' : 'unknown');
     setPrepareMessage(null);
   }, [authSession]);
 
-  const handlePrepare = useCallback(async (session: AuthSession) => {
-    if (preparingForUserRef.current === session.user.id) return;
-    preparingForUserRef.current = session.user.id;
+  const prepareBackendNow = useCallback(async () => {
+    if (!authSession) return;
+    if (preparingForUserRef.current === authSession.user.id) return;
+    preparingForUserRef.current = authSession.user.id;
     setBackendReadiness('preparing');
     setPrepareMessage('Waking up backend…');
     const timerIds = [
@@ -41,7 +43,6 @@ export function useBackendReadiness(authSession: AuthSession | null) {
     ];
     try {
       await prepareBackend();
-      localStorage.setItem(storageKeyForPrepare(session.user.id), String(Date.now()));
       setBackendReadiness('ready');
       setPrepareMessage(null);
     } catch (err) {
@@ -51,26 +52,20 @@ export function useBackendReadiness(authSession: AuthSession | null) {
     } finally {
       timerIds.forEach(id => window.clearTimeout(id));
     }
-  }, []);
-
-  // Auto-trigger prepare silently when the user is authenticated and backend is not warm.
-  // Never show an explicit Prepare button — the user shouldn't need to do this manually.
-  useEffect(() => {
-    if (authSession && backendReadiness === 'unknown') {
-      handlePrepare(authSession);
-    }
-  }, [authSession, backendReadiness, handlePrepare]);
+  }, [authSession]);
 
   const clearPreparedCache = useCallback(() => {
     if (!authSession) return;
-    localStorage.removeItem(storageKeyForPrepare(authSession.user.id));
     preparingForUserRef.current = null;
+    setBackendReadiness(PREPARE_BYPASS ? 'ready' : 'unknown');
+    setPrepareMessage(null);
   }, [authSession]);
 
   return {
     backendReadiness,
     prepareMessage,
     isBackendReady: backendReadiness === 'ready',
+    prepareBackendNow,
     clearPreparedCache,
   };
 }

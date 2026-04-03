@@ -21,6 +21,20 @@ export interface StreamMeta {
 
 export type EventHandler = (event: ServerEvent, meta: StreamMeta) => void;
 
+function dispatchSSEChunk(chunk: string, handlers: EventHandler[], meta: StreamMeta): boolean {
+  const line = chunk.trim();
+  if (!line.startsWith('data: ')) return false;
+
+  try {
+    const event = JSON.parse(line.slice(6)) as ServerEvent;
+    handlers.forEach(handler => handler(event, meta));
+    return event.type === 'done';
+  } catch {
+    console.error('[sse] Failed to parse event:', line);
+    return false;
+  }
+}
+
 /**
  * Read an SSE stream from a fetch Response and dispatch each event to handlers.
  *
@@ -30,7 +44,7 @@ export type EventHandler = (event: ServerEvent, meta: StreamMeta) => void;
  * We split on double-newlines rather than using EventSource because EventSource
  * only supports GET requests.
  */
-async function consumeSSEStream(response: Response, handlers: EventHandler[], meta: StreamMeta): Promise<void> {
+async function consumeSSEStream(response: Response, handlers: EventHandler[], meta: StreamMeta): Promise<boolean> {
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
   }
@@ -41,6 +55,7 @@ async function consumeSSEStream(response: Response, handlers: EventHandler[], me
   const reader  = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer    = '';
+  let sawDone   = false;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -49,21 +64,20 @@ async function consumeSSEStream(response: Response, handlers: EventHandler[], me
     // stream: true tells the decoder this chunk may be mid-codepoint
     buffer += decoder.decode(value, { stream: true });
 
-    // SSE events are delimited by double newlines
-    const chunks = buffer.split('\n\n');
+    // SSE events are delimited by a blank line. Accept both LF and CRLF framing.
+    const chunks = buffer.split(/\r?\n\r?\n/);
     buffer = chunks.pop()!;  // last element is the incomplete trailing chunk
 
     for (const chunk of chunks) {
-      const line = chunk.trim();
-      if (!line.startsWith('data: ')) continue;
-      try {
-        const event = JSON.parse(line.slice(6)) as ServerEvent;
-        handlers.forEach(h => h(event, meta));
-      } catch {
-        console.error('[sse] Failed to parse event:', line);
-      }
+      sawDone = dispatchSSEChunk(chunk, handlers, meta) || sawDone;
     }
   }
+
+  if (buffer.trim()) {
+    sawDone = dispatchSSEChunk(buffer, handlers, meta) || sawDone;
+  }
+
+  return sawDone;
 }
 
 export class SSEClient {
@@ -83,7 +97,7 @@ export class SSEClient {
     content: string,
     opts?: { complexity?: ComplexityLevel; graphMode?: GraphMode; researchEnabled?: boolean },
     clientRequestId = Math.random().toString(36).slice(2),
-  ): Promise<void> {
+  ): Promise<boolean> {
     this._chatAbort = new AbortController();
     try {
       const response = await fetch(`${API_BASE}/api/chat`, {
@@ -101,12 +115,12 @@ export class SSEClient {
         }),
         signal: this._chatAbort.signal,
       });
-      await consumeSSEStream(response, this.eventHandlers, {
+      return await consumeSSEStream(response, this.eventHandlers, {
         kind: 'chat',
         clientRequestId,
       });
     } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') return;
+      if (err instanceof Error && err.name === 'AbortError') return false;
       throw err;
     } finally {
       this._chatAbort = null;
@@ -130,7 +144,7 @@ export class SSEClient {
     title: string,
     description: string,
     clientRequestId = Math.random().toString(36).slice(2),
-  ): Promise<void> {
+  ): Promise<boolean> {
     const response = await fetch(`${API_BASE}/api/node-selected`, {
       method: 'POST',
       headers: {
@@ -144,7 +158,7 @@ export class SSEClient {
         description,
       }),
     });
-    await consumeSSEStream(response, this.eventHandlers, {
+    return await consumeSSEStream(response, this.eventHandlers, {
       kind: 'node-selected',
       clientRequestId,
     });

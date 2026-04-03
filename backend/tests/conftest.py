@@ -24,18 +24,23 @@ def temp_data_dir(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def clear_rate_limits():
-    from api.chat_guards import _rate_counts
-    from api.sse_handler import _search_tool_requests
     from api.auth_route import _otp_request_by_email, _otp_request_by_ip, _otp_verify_failures
+    from adapters.database_adapter import execute
 
-    _rate_counts.clear()
-    _search_tool_requests.clear()
     _otp_request_by_email.clear()
     _otp_request_by_ip.clear()
     _otp_verify_failures.clear()
+    try:
+        execute("DELETE FROM request_events")
+        execute("DELETE FROM search_tool_requests")
+    except Exception:
+        pass
     yield
-    _rate_counts.clear()
-    _search_tool_requests.clear()
     _otp_request_by_email.clear()
     _otp_request_by_ip.clear()
     _otp_verify_failures.clear()
+    try:
+        execute("DELETE FROM request_events")
+        execute("DELETE FROM search_tool_requests")
+    except Exception:
+        pass

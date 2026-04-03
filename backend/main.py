@@ -10,6 +10,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 from contextlib import asynccontextmanager
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,6 +30,8 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
         Startup: load FAISS index into app.state and initialise the database.
         These are shared across all SSE requests — loaded once, reused always.
         """
+        if os.getenv("K_SERVICE") and not settings.use_postgres:
+            raise RuntimeError("SUPABASE_DB_URL must be configured in Cloud Run; refusing SQLite fallback.")
         print("[startup] Initialising database…")
         init_db()
         if not hasattr(app.state, "vectorstore"):
@@ -64,7 +67,7 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
         allow_origins=settings.cors_allowed_origins,
         allow_origin_regex=settings.vercel_origin_regex,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
 

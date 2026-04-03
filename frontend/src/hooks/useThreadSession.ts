@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AuthSession, GraphData, Message } from '../types';
+import type { AuthSession } from '../types';
 import { createThread, fetchLatestThread, fetchThread } from '../services/api';
-import { mapThreadMessages, storageKeyForThread } from '../utils/threadState';
-
-type ThreadSnapshot = {
-  messages: Message[];
-  graphData: GraphData | null;
-};
+import {
+  clearThreadSnapshot,
+  mapThreadMessages,
+  readThreadSnapshot,
+  storageKeyForThread,
+  type ThreadSnapshot,
+} from '../utils/threadState';
 
 type UseThreadSessionArgs = {
   authSession: AuthSession | null;
@@ -24,6 +25,7 @@ export function useThreadSession({
   const [loadingThread, setLoadingThread] = useState(false);
   const [threadError, setThreadError] = useState<string | null>(null);
   const [threadSnapshot, setThreadSnapshot] = useState<ThreadSnapshot>({
+    title: 'New chat',
     messages: [],
     graphData: null,
   });
@@ -31,13 +33,15 @@ export function useThreadSession({
   // (which change the authSession object reference without changing the user)
   // do not trigger a full reload and wipe live streamed state.
   const loadedUserIdRef = useRef<string | null>(null);
+  const hydratedSnapshotUserIdRef = useRef<string | null>(null);
 
   const resetThreadState = useCallback(() => {
     loadedUserIdRef.current = null;
+    hydratedSnapshotUserIdRef.current = null;
     setActiveThreadId(null);
     setThreadTitle('New chat');
     setThreadError(null);
-    setThreadSnapshot({ messages: [], graphData: null });
+    setThreadSnapshot({ title: 'New chat', messages: [], graphData: null });
   }, []);
 
   const loadThread = useCallback(
@@ -53,9 +57,19 @@ export function useThreadSession({
         setActiveThreadId(detail.thread.id);
         setThreadTitle(detail.thread.title);
         localStorage.setItem(storageKeyForThread(session.user.id), detail.thread.id);
-        setThreadSnapshot({
+        const fetchedSnapshot: ThreadSnapshot = {
+          title: detail.thread.title,
           messages: mapThreadMessages(detail.messages),
           graphData: detail.thread.graph_data,
+        };
+        setThreadSnapshot(prev => {
+          if (prev.messages.length > fetchedSnapshot.messages.length) {
+            return prev;
+          }
+          if (prev.messages.length === fetchedSnapshot.messages.length && prev.graphData && !fetchedSnapshot.graphData) {
+            return prev;
+          }
+          return fetchedSnapshot;
         });
       } finally {
         setLoadingThread(false);
@@ -69,6 +83,31 @@ export function useThreadSession({
       resetThreadState();
     }
   }, [authSession, resetThreadState]);
+
+  useEffect(() => {
+    if (!authSession) {
+      return;
+    }
+
+    if (hydratedSnapshotUserIdRef.current === authSession.user.id) {
+      return;
+    }
+    hydratedSnapshotUserIdRef.current = authSession.user.id;
+
+    const rememberedThreadId = localStorage.getItem(storageKeyForThread(authSession.user.id));
+    if (!rememberedThreadId) {
+      return;
+    }
+
+    const cachedSnapshot = readThreadSnapshot(authSession.user.id, rememberedThreadId);
+    if (!cachedSnapshot) {
+      return;
+    }
+
+    setActiveThreadId(rememberedThreadId);
+    setThreadTitle(cachedSnapshot.title);
+    setThreadSnapshot(cachedSnapshot);
+  }, [authSession]);
 
   useEffect(() => {
     // Reset everything only on sign-out — never on backend going not-ready.
@@ -114,6 +153,7 @@ export function useThreadSession({
       setThreadTitle(detail.thread.title);
       localStorage.setItem(storageKeyForThread(authSession.user.id), detail.thread.id);
       setThreadSnapshot({
+        title: detail.thread.title,
         messages: mapThreadMessages(detail.messages),
         graphData: detail.thread.graph_data,
       });
@@ -136,7 +176,13 @@ export function useThreadSession({
 
   const handleDeleteThread = useCallback(
     (threadId: string) => {
-      if (threadId !== activeThreadId || !authSession || !backendReady) {
+      if (!authSession) {
+        return;
+      }
+
+      clearThreadSnapshot(authSession.user.id, threadId);
+
+      if (threadId !== activeThreadId || !backendReady) {
         return;
       }
 
