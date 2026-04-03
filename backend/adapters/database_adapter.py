@@ -22,7 +22,7 @@ def init_db() -> None:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS profiles (
-                    id TEXT PRIMARY KEY,
+                    id UUID PRIMARY KEY,
                     email TEXT NOT NULL UNIQUE,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -32,8 +32,8 @@ def init_db() -> None:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS chat_threads (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                    id UUID PRIMARY KEY,
+                    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
                     title TEXT NOT NULL DEFAULT 'New chat',
                     graph_data JSONB,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -45,9 +45,9 @@ def init_db() -> None:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS chat_messages (
-                    id TEXT PRIMARY KEY,
-                    thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
-                    user_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                    id UUID PRIMARY KEY,
+                    thread_id UUID NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+                    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
                     role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
                     content TEXT NOT NULL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -69,8 +69,8 @@ def init_db() -> None:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS request_events (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                    id UUID PRIMARY KEY,
+                    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
                     event_type TEXT NOT NULL,
                     created_at_epoch DOUBLE PRECISION NOT NULL
                 )
@@ -85,9 +85,9 @@ def init_db() -> None:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS search_tool_requests (
-                    request_id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-                    thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+                    request_id UUID PRIMARY KEY,
+                    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                    thread_id UUID NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
                     requested BOOLEAN NOT NULL DEFAULT FALSE,
                     created_at_epoch DOUBLE PRECISION NOT NULL,
                     expires_at_epoch DOUBLE PRECISION NOT NULL
