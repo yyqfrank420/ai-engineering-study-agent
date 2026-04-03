@@ -15,6 +15,10 @@ def temp_data_dir(tmp_path, monkeypatch):
     from config import settings
 
     monkeypatch.setattr(settings, "data_dir", tmp_path)
+    # Force SQLite mode for unit tests that call init_db() directly.
+    # Without this, a SUPABASE_DB_URL env var (e.g. in CI) flips use_postgres=True
+    # and the legacy/unit tests that expect a fresh SQLite DB break.
+    monkeypatch.setattr(settings, "supabase_db_url", "")
     return tmp_path
 
 
