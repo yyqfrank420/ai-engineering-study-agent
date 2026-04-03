@@ -19,6 +19,11 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 
 COPY backend/ ./
 
+# Bundle the FAISS index files so Cloud Run instances don't need to download them.
+# ensure_faiss_artifacts() skips the download if these files are already present.
+# Total size ~7MB — acceptable to bake into the image.
+COPY data/faiss/ /data/faiss/
+
 EXPOSE 8080
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
