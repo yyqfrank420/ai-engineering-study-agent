@@ -131,18 +131,20 @@ jobs:
 
       # Dockerfile lives in backend/ and its build context is the repo root
       # (it COPYs from backend/ relative to the context).
-      - name: Build Docker image
+      # --cache-from/--cache-to stores build cache layers in Artifact Registry.
+      # Cache hit on the pip install layer (heaviest step) when requirements.txt
+      # hasn't changed — cuts build time from ~8min to ~1-2min on warm runs.
+      # --push streams layers directly to the registry (no local load needed).
+      - name: Build and push Docker image
         run: |
-          docker build \
+          docker buildx build \
             -f backend/Dockerfile \
+            --cache-from type=registry,ref=${{ env.IMAGE }}:buildcache \
+            --cache-to   type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max \
             --tag ${{ env.IMAGE }}:${{ github.sha }} \
             --tag ${{ env.IMAGE }}:latest \
+            --push \
             .
-
-      - name: Push image to Artifact Registry
-        run: |
-          docker push ${{ env.IMAGE }}:${{ github.sha }}
-          docker push ${{ env.IMAGE }}:latest
 
       # Deploy the new image. Cloud Run keeps all prior revisions, so
       # rollback = gcloud run services update-traffic $SERVICE_NAME \
