@@ -8,7 +8,9 @@ frontend
 frontend/dist
 docs
 ingestion
+# Exclude data except the FAISS index (bundled into image)
 data
+!data/faiss
 render.yaml
 
 backend/.env
