@@ -5,7 +5,6 @@ import { useAgentStream } from './hooks/useAgentStream';
 import { TitleBar } from './components/Layout/TitleBar';
 import { SplitPane } from './components/Layout/SplitPane';
 import { ThreadSidebar } from './components/Layout/ThreadSidebar';
-import { FooterBanner } from './components/Layout/FooterBanner';
 import { ThinkingIndicator } from './components/Chat/ThinkingIndicator';
 import { RetrievalNoticeBar } from './components/Chat/RetrievalNoticeBar';
 import { ContextBar } from './components/Chat/ContextBar';
@@ -29,6 +28,8 @@ const MessageList = lazy(() =>
 
 export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [draftHasText, setDraftHasText] = useState(false);
+  const [graphRevealed, setGraphRevealed] = useState(false);
   const { authReady, handleAuthenticated, setAuthSession, authSession } = useAuthSession();
   const {
     selectionSuggestion,
@@ -86,6 +87,17 @@ export default function App() {
   useEffect(() => {
     hydrateThread(threadSnapshot);
   }, [hydrateThread, threadSnapshot]);
+
+  useEffect(() => {
+    setDraftHasText(false);
+    setGraphRevealed(false);
+  }, [activeThreadId]);
+
+  useEffect(() => {
+    if (draftHasText || messages.length > 0 || !!graphData) {
+      setGraphRevealed(true);
+    }
+  }, [draftHasText, graphData, messages.length]);
 
   const handleLogout = useCallback(async () => {
     if (authSession) {
@@ -170,6 +182,8 @@ export default function App() {
     return <div style={loadingScreenStyle}>Loading session…</div>;
   }
 
+  const showGraphPane = graphRevealed;
+
   return (
     <div style={{ position: 'relative', height: '100vh', overflow: 'hidden' }}>
     {/* Auth overlay — sits above blurred app when unauthenticated */}
@@ -219,6 +233,7 @@ export default function App() {
           isOpen={sidebarOpen}
         />
         <SplitPane
+          graphVisible={showGraphPane}
           left={
             <Suspense fallback={<div style={panelFallbackStyle}>Loading graph…</div>}>
               <GraphCanvas
@@ -284,9 +299,11 @@ export default function App() {
                 onClear={() => setSelectedNode(null)}
               />
               <ChatInput
+                key={activeThreadId ?? 'no-thread'}
                 onSend={handleSend}
                 onStop={stopGeneration}
                 onPrepare={prepareBackendNow}
+                onDraftChange={setDraftHasText}
                 isGenerating={isGenerating}
                 disabled={composerLocked}
                 sendDisabled={sendLocked}
@@ -309,7 +326,6 @@ export default function App() {
           }
         />
       </div>
-      <FooterBanner />
     </div>
     </div>
   );

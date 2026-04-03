@@ -20,6 +20,7 @@ interface ChatInputProps {
   onSend:        (content: string) => void;
   onStop:        () => void;
   onPrepare?:    () => void | Promise<void>;
+  onDraftChange?: (hasText: boolean) => void;
   disabled?:     boolean;   // locks textarea (loading, no thread)
   sendDisabled?: boolean;   // blocks send while backend is not ready
   showPrepare?:  boolean;
@@ -180,7 +181,7 @@ function ModePopover({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function ChatInput({
-  onSend, onStop, onPrepare, disabled, isGenerating,
+  onSend, onStop, onPrepare, onDraftChange, disabled, isGenerating,
   sendDisabled, showPrepare, prepareDisabled, prepareMessage,
   complexity, graphMode, researchEnabled,
   onComplexityChange, onGraphModeChange, onResearchChange,
@@ -247,6 +248,10 @@ export function ChatInput({
     }
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, [popoverOpen, handleOutsideClick]);
+
+  useEffect(() => {
+    onDraftChange?.(value.trim().length > 0);
+  }, [onDraftChange, value]);
 
   const isReady = !disabled && !sendDisabled && !!value.trim();
   const placeholder = (selectionReferenceActive || !!selectionSuggestion)
