@@ -1,6 +1,10 @@
 from adapters.database_adapter import execute, fetchone
 
 
+def get_profile_by_email(email: str) -> dict | None:
+    return fetchone("SELECT * FROM profiles WHERE email = ?", (email,))
+
+
 def upsert_profile(user_id: str, email: str) -> dict:
     existing = fetchone("SELECT * FROM profiles WHERE id = ?", (user_id,))
     if existing:

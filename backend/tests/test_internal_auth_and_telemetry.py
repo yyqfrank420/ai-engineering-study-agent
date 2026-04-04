@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from adapters.database_adapter import init_db
 from adapters.llm_adapter import stream_response
 from config import settings
+from storage.profile_store import upsert_profile
 from storage.telemetry_store import list_recent_http_request_logs, list_recent_llm_telemetry
 
 
@@ -59,6 +60,31 @@ def test_internal_login_rejects_wrong_password(temp_data_dir, monkeypatch):
 
     assert response.status_code == 401
     assert "Invalid internal login password" in response.text
+
+
+def test_internal_login_reuses_existing_profile_id_for_same_email(temp_data_dir, monkeypatch):
+    from main import create_app
+
+    monkeypatch.setattr(settings, "supabase_jwt_secret", "x" * 32)
+    monkeypatch.setattr(settings, "supabase_jwt_issuer", "https://project.supabase.co/auth/v1")
+    monkeypatch.setattr(settings, "supabase_jwt_audience", "authenticated")
+    monkeypatch.setattr(settings, "internal_test_password", "correct horse battery staple")
+    monkeypatch.setattr(settings, "internal_test_email_allowlist_raw", "friend@example.com")
+
+    init_db()
+    upsert_profile("existing-user-id", "friend@example.com")
+
+    app = create_app(load_resources=False)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/auth/internal-login",
+            json={"email": "friend@example.com", "password": "correct horse battery staple"},
+        )
+
+    assert response.status_code == 200
+    session = response.json()["session"]
+    assert session["user"]["id"] == "existing-user-id"
 
 
 def test_request_logging_middleware_records_http_request(temp_data_dir):

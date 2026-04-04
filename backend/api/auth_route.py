@@ -11,7 +11,7 @@ from pydantic import BaseModel, field_validator
 
 from adapters.supabase_auth_adapter import request_email_otp, verify_email_otp, verify_turnstile
 from config import settings
-from storage.profile_store import upsert_profile
+from storage.profile_store import get_profile_by_email, upsert_profile
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -64,7 +64,8 @@ def _mint_internal_session(email: str) -> dict:
     if not settings.supabase_jwt_secret:
         raise HTTPException(status_code=500, detail="Internal test auth is not configured")
 
-    user_id = str(uuid.uuid5(_INTERNAL_TEST_USER_NAMESPACE, email))
+    existing_profile = get_profile_by_email(email)
+    user_id = existing_profile["id"] if existing_profile else str(uuid.uuid5(_INTERNAL_TEST_USER_NAMESPACE, email))
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(minutes=settings.internal_test_session_minutes)
     payload = {
