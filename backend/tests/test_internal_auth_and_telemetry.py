@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import uuid
 
 from fastapi.testclient import TestClient
 
@@ -85,6 +86,21 @@ def test_internal_login_reuses_existing_profile_id_for_same_email(temp_data_dir,
     assert response.status_code == 200
     session = response.json()["session"]
     assert session["user"]["id"] == "existing-user-id"
+
+
+def test_internal_login_stringifies_existing_uuid_profile_id(temp_data_dir, monkeypatch):
+    from api import auth_route
+
+    monkeypatch.setattr(settings, "supabase_jwt_secret", "x" * 32)
+    monkeypatch.setattr(settings, "supabase_jwt_issuer", "https://project.supabase.co/auth/v1")
+    monkeypatch.setattr(settings, "supabase_jwt_audience", "authenticated")
+
+    existing_id = uuid.uuid4()
+    monkeypatch.setattr(auth_route, "get_profile_by_email", lambda email: {"id": existing_id, "email": email})
+
+    session = auth_route._mint_internal_session("friend@example.com")
+
+    assert session["user"]["id"] == str(existing_id)
 
 
 def test_request_logging_middleware_records_http_request(temp_data_dir):
