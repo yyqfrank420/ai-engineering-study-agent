@@ -170,6 +170,8 @@ jobs:
             TURNSTILE_SECRET_KEY=turnstile-secret-key:latest
             FAISS_ARTIFACT_URL=faiss-artifact-url:latest
             FAISS_ARTIFACT_SHA256=faiss-artifact-sha256:latest
+            INTERNAL_TEST_PASSWORD=internal-test-password:latest
+            INTERNAL_TEST_EMAIL_ALLOWLIST_RAW=internal-test-email-allowlist-raw:latest
 
   # ── 4. Deploy frontend → Vercel ─────────────────────────────────────────────
   deploy-frontend:
