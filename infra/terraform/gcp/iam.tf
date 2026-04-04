@@ -35,6 +35,28 @@ resource "google_project_iam_member" "ci_run_developer" {
   member  = "serviceAccount:${google_service_account.ci.email}"
 }
 
+# CI also needs to read the internal test credentials that power the
+# staging gate. Scope this to the two staging-only secrets instead of
+# granting project-wide Secret Manager access.
+data "google_secret_manager_secret" "staging_eval" {
+  for_each = toset([
+    "internal-test-password",
+    "internal-test-email-allowlist-raw",
+  ])
+
+  project   = var.project_id
+  secret_id = each.value
+}
+
+resource "google_secret_manager_secret_iam_member" "ci_staging_eval_secret_accessor" {
+  for_each = data.google_secret_manager_secret.staging_eval
+
+  project   = var.project_id
+  secret_id = each.value.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.ci.email}"
+}
+
 # Allow CI to deploy Cloud Run services that run as the backend SA.
 # Scoped to the backend SA only — not a project-wide SA user binding.
 resource "google_service_account_iam_member" "ci_act_as_backend" {
