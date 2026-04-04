@@ -95,6 +95,13 @@ This document captures hard-won learnings across every layer of the project. Wri
 - Enrichment fires after the `done` SSE event — the user gets the response immediately, nodes fill in progressively.
 - **Lesson:** Heavy work that doesn't affect the primary response should run asynchronously after `done`. Fire-and-forget with progressive UI updates is better UX than blocking the response.
 
+### 2.8 Staging harnesses must read past `done`
+
+- The backend can emit `done` before all post-response persistence work finishes. The SSE stream itself closes only after that cleanup path returns.
+- Our first staging harness treated `done` as "HTTP response complete" and stopped reading immediately. That created false negatives: streamed answers looked correct, but thread-persistence assertions ran before the server finished saving the turn.
+- **Fix:** The harness now reads until stream EOF, not just until the first `done` event.
+- **Lesson:** In streaming systems, "application finished" and "transport closed" are not always the same checkpoint. Test harnesses need to honor the server's actual lifecycle, not just the semantic event they care about.
+
 ---
 
 ## 3. Dataset Engineering (Ingestion Pipeline)
@@ -208,6 +215,29 @@ This document captures hard-won learnings across every layer of the project. Wri
 - If resources were created manually (or by a previous process) before Terraform managed them, Terraform will try to create them again — and fail with a 409 conflict.
 - **Fix:** `terraform import <resource_address> <resource_id>` brings existing resources under Terraform management without recreating them.
 - **Lesson:** Any time you're introducing Terraform to a project that already has existing infrastructure, `terraform import` every existing resource before the first `terraform apply`. Otherwise the first apply will fail on every resource that already exists.
+
+### 4.11 Production-like auth testing should be explicit, not hidden
+
+- We needed reliable post-auth staging checks against the real deployment without relying on OTP emails and their rate limits.
+- The safe compromise was an explicit internal test login endpoint protected by a long secret and an allowlisted email, while keeping the downstream bearer-token behavior identical to normal auth.
+- Two easy-to-miss implementation details mattered:
+  - reuse the existing profile id for an allowlisted email instead of minting a new id and colliding with persisted data
+  - stringify Postgres `UUID` values before JWT encoding
+- **Lesson:** If you need a production testing bypass, isolate it in a separate, auditable auth path. Do not smuggle it into the public login input.
+
+### 4.12 Tagged no-traffic candidate deploys make staging gates practical
+
+- Running staging tests against "whatever is live" is not a deployment gate. It's just production smoke testing after the fact.
+- The current CI/CD flow now deploys the backend as a tagged Cloud Run candidate revision with **no traffic**, runs the staging suite against that tagged URL, and only then promotes traffic to the candidate revision.
+- This lets the pipeline block bad backend deploys without needing a separate always-on staging environment.
+- **Lesson:** For small Cloud Run services, tagged no-traffic revisions are the cheapest viable staging environment. Use revision tags plus a scripted eval suite before shifting production traffic.
+
+### 4.13 Memory sizing can be the real production bug
+
+- The first live staging failures looked like application regressions: empty graphs, missing persisted turns, incomplete workflows.
+- Cloud Run logs showed the real cause: repeated OOM kills on the chat/search/graph path with the old `2Gi` limit.
+- Raising backend memory to `4Gi` removed the runtime instability and let the staging suite pass on the same code path.
+- **Lesson:** When a streamed AI workflow fails mid-flight, check container memory before debugging prompts or business logic. OOMs often masquerade as random application bugs.
 
 ---
 

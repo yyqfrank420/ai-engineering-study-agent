@@ -1,15 +1,20 @@
 from eval.staging_cases import STAGING_CASES, StagingStep, StepExpectation
 from eval.staging_runner import (
+    _blocking_request,
     count_visible_threads,
     detect_route,
     evaluate_expectation,
     extract_graph_data,
     extract_response_text,
+    extract_worker_statuses,
     extract_workers,
     parse_sse_event_line,
     parse_sse_events,
     resolve_node_selected_payload,
+    run_case,
 )
+import asyncio
+import urllib.request
 
 
 def test_parse_sse_events_extracts_multiple_events():
@@ -33,6 +38,18 @@ def test_route_detection_treats_rag_as_search():
     events = [{"type": "worker_status", "worker": "rag", "status": "Searching"}]
 
     assert detect_route(events) == "search"
+
+
+def test_route_detection_treats_lookup_without_rag_as_simple():
+    events = [{"type": "worker_status", "worker": "orchestrator", "status": "Looking it up..."}]
+
+    assert detect_route(events) == "simple"
+
+
+def test_route_detection_defaults_to_memory_when_only_writing():
+    events = [{"type": "worker_status", "worker": "orchestrator", "status": "Writing the explanation..."}]
+
+    assert detect_route(events) == "memory"
 
 
 def test_evaluate_expectation_checks_thread_roles_and_response_text():
@@ -104,6 +121,7 @@ def test_extract_helpers_return_expected_values():
     ]
 
     assert extract_workers(events) == {"orchestrator"}
+    assert extract_worker_statuses(events) == ["Routing"]
     assert extract_graph_data(events)["title"] == "Graph"
     assert extract_response_text(events) == "Hello world"
 
@@ -143,3 +161,76 @@ def test_thread_count_delta_uses_visible_threads_only():
     )
 
     assert failures == []
+
+
+def test_blocking_request_reads_until_stream_eof(monkeypatch):
+    class _FakeResponse:
+        status = 200
+
+        def __init__(self):
+            self._lines = iter(
+                [
+                    b'data: {"type":"worker_status","worker":"orchestrator","status":"Routing"}\n',
+                    b"\n",
+                    b'data: {"type":"done"}\n',
+                    b"\n",
+                    b": trailer\n",
+                    b"",
+                ]
+            )
+
+        def readline(self):
+            return next(self._lines)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda request, data=None, timeout=120: _FakeResponse())
+
+    run = _blocking_request("POST", "https://example.com/api/chat", "token", {"content": "hi"}, True)
+
+    assert [event["type"] for event in run["events"]] == ["worker_status", "done"]
+    assert ": trailer" in run["body_text"]
+
+
+def test_run_case_records_step_exception_without_crashing(monkeypatch):
+    from eval.staging_cases import StagingCase
+
+    async def _fake_create_thread(client, base_url, auth_token, title):
+        return {"id": "thread-1"}
+
+    async def _fake_delete_thread(client, method, url, auth_token, json_payload=None):
+        return {"status_code": 204, "json_body": None, "events": [], "body_text": ""}
+
+    monkeypatch.setattr("eval.staging_runner.create_thread", _fake_create_thread)
+    monkeypatch.setattr("eval.staging_runner.perform_json_request", _fake_delete_thread)
+
+    case = StagingCase(
+        id="SX",
+        category="edge_cases",
+        description="node-selected without prior graph should fail in-place",
+        steps=[
+            StagingStep(
+                kind="node_selected",
+                description="missing graph context",
+                payload={"use_first_graph_node": True},
+            )
+        ],
+    )
+
+    result = asyncio.run(
+        run_case(
+            client=None,
+            base_url="https://example.com",
+            auth_token="token",
+            case=case,
+            keep_threads=False,
+        )
+    )
+
+    assert result["passed"] is False
+    assert result["steps"][0]["passed"] is False
+    assert "no graph was emitted" in result["steps"][0]["failures"][0]

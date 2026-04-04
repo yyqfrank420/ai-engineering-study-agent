@@ -23,6 +23,7 @@ frontend/.vercel/
 # data/faiss/ intentionally NOT ignored — bundled into Docker image (7MB static index)
 data/*.db
 *.db
+backend/eval/results/staging-*.json
 
 # ── Terraform ─────────────────────────────────────────────────────────────────
 # Provider binaries and plugins — large, machine-specific, always regenerated

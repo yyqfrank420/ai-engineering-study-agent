@@ -85,8 +85,9 @@ STAGING_CASES: list[StagingCase] = [
                     "research_enabled": False,
                 },
                 expect=StepExpectation(
-                    route="search",
-                    workers_include=["rag"],
+                    route="simple",
+                    workers_include=["orchestrator"],
+                    workers_exclude=["rag", "graph", "research"],
                     response_min_length=120,
                 ),
             ),

@@ -66,6 +66,17 @@ npm run build
 npm run dev
 ```
 
+Staging-style live evals:
+
+```bash
+python scripts/run_staging_eval.py \
+  --base-url 'https://<backend>.run.app' \
+  --email '<allowlisted-email>' \
+  --internal-password '<internal-test-password>'
+```
+
+The blocking deploy pipeline now uses the same harness against a tagged, no-traffic Cloud Run candidate revision before production traffic is promoted.
+
 ## Notes
 
 - `docs/superpowers/specs/2026-03-31-ai-study-agent-design.md` is a historical design snapshot, not the current source of truth.

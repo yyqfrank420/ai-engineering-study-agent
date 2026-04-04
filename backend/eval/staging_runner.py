@@ -146,6 +146,19 @@ def extract_workers(events: list[dict]) -> set[str]:
     }
 
 
+def extract_worker_statuses(events: list[dict], worker: str | None = None) -> list[str]:
+    statuses: list[str] = []
+    for event in events:
+        if event.get("type") != "worker_status":
+            continue
+        if worker and event.get("worker") != worker:
+            continue
+        status = event.get("status")
+        if isinstance(status, str):
+            statuses.append(status)
+    return statuses
+
+
 def extract_graph_data(events: list[dict]) -> dict | None:
     graph_events = [event for event in events if event.get("type") == "graph_data"]
     if not graph_events:
@@ -154,7 +167,14 @@ def extract_graph_data(events: list[dict]) -> dict | None:
 
 
 def detect_route(events: list[dict]) -> str:
-    return "search" if "rag" in extract_workers(events) else "memory"
+    workers = extract_workers(events)
+    if "rag" in workers:
+        return "search"
+
+    orchestrator_statuses = [status.lower() for status in extract_worker_statuses(events, worker="orchestrator")]
+    if any("looking it up" in status for status in orchestrator_statuses):
+        return "simple"
+    return "memory"
 
 
 def count_suggested_questions(events: list[dict]) -> int:
@@ -223,8 +243,6 @@ def _blocking_request(
                     if event is None:
                         continue
                     events.append(event)
-                    if event.get("type") == "done":
-                        break
                 body_text = "".join(raw_lines)
                 return {
                     "status_code": status_code,
@@ -419,16 +437,25 @@ async def run_case(
 
     try:
         for index, step in enumerate(case.steps, start=1):
-            run = await run_step(client, base_url, auth_token, thread_id, step, case_state)
-            graph_data = extract_graph_data(run.get("events", []))
-            if graph_data is not None:
-                case_state["last_graph_data"] = graph_data
+            try:
+                run = await run_step(client, base_url, auth_token, thread_id, step, case_state)
+                graph_data = extract_graph_data(run.get("events", []))
+                if graph_data is not None:
+                    case_state["last_graph_data"] = graph_data
 
-            if step.kind == "list_threads" and "baseline_thread_count" not in case_state:
-                body = run.get("json_body") or {}
-                case_state["baseline_thread_count"] = count_visible_threads(body, case_state)
+                if step.kind == "list_threads" and "baseline_thread_count" not in case_state:
+                    body = run.get("json_body") or {}
+                    case_state["baseline_thread_count"] = count_visible_threads(body, case_state)
 
-            failures = evaluate_expectation(step, run, case_state)
+                failures = evaluate_expectation(step, run, case_state)
+            except Exception as exc:
+                run = {
+                    "status_code": None,
+                    "events": [],
+                    "json_body": None,
+                    "body_text": "",
+                }
+                failures = [f"step raised {type(exc).__name__}: {exc}"]
             step_results.append(
                 {
                     "index": index,
@@ -441,6 +468,8 @@ async def run_case(
                     "json_body": run.get("json_body"),
                 }
             )
+            if failures and run.get("status_code") is None:
+                break
 
         passed = all(result["passed"] for result in step_results)
         return {

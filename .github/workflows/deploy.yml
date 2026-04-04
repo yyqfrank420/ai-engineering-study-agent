@@ -18,6 +18,7 @@ env:
   PROJECT_ID: project-c170fa55-f0d5-4d83-bfe
   REGION: europe-west2
   SERVICE_NAME: agent-backend
+  CANDIDATE_TAG: staging-${{ github.run_id }}
   # Full image path: <region>-docker.pkg.dev/<project>/<repo>/<image>:<sha>
   IMAGE: europe-west2-docker.pkg.dev/project-c170fa55-f0d5-4d83-bfe/agent-backend/agent-backend
 
@@ -102,9 +103,9 @@ jobs:
           VITE_API_URL: https://ci-placeholder.run.app
         run: npm run build
 
-  # ── 3. Deploy backend → Cloud Run ───────────────────────────────────────────
-  deploy-backend:
-    name: Build, push, deploy backend
+  # ── 3. Deploy backend candidate → Cloud Run (no traffic) ───────────────────
+  deploy-backend-candidate:
+    name: Build, push, deploy backend candidate
     runs-on: ubuntu-latest
     needs: [test-backend, test-frontend]   # both must pass first
 
@@ -150,16 +151,16 @@ jobs:
             --push \
             .
 
-      # Deploy the new image. Cloud Run keeps all prior revisions, so
-      # rollback = gcloud run services update-traffic $SERVICE_NAME \
-      #   --to-revisions=<sha>=100 --region=$REGION
-      - name: Deploy to Cloud Run
+      # Deploy a tagged, no-traffic candidate revision. Staging evals run
+      # against the candidate URL before any user traffic is shifted.
+      - id: deploy
+        name: Deploy candidate to Cloud Run
         uses: google-github-actions/deploy-cloudrun@v2
         with:
           service: ${{ env.SERVICE_NAME }}
           region: ${{ env.REGION }}
           image: ${{ env.IMAGE }}:${{ github.sha }}
-          flags: --memory=4Gi
+          flags: --memory=4Gi --no-traffic --tag=${{ env.CANDIDATE_TAG }}
           secrets: |-
             ANTHROPIC_API_KEY=anthropic-api-key:latest
             OPENAI_API_KEY=openai-api-key:latest
@@ -174,11 +175,148 @@ jobs:
             INTERNAL_TEST_PASSWORD=internal-test-password:latest
             INTERNAL_TEST_EMAIL_ALLOWLIST_RAW=internal-test-email-allowlist-raw:latest
 
-  # ── 4. Deploy frontend → Vercel ─────────────────────────────────────────────
+  # ── 4. Blocking staging eval against the tagged candidate revision ──────────
+  staging-eval:
+    name: Run staging eval on backend candidate
+    runs-on: ubuntu-latest
+    needs: [deploy-backend-candidate]
+    timeout-minutes: 20
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Load staging eval credentials from Secret Manager
+        run: |
+          password="$(gcloud secrets versions access latest --secret=internal-test-password)"
+          allowlist="$(gcloud secrets versions access latest --secret=internal-test-email-allowlist-raw)"
+          email="$(printf '%s\n' "$allowlist" | tr ',;' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d' | head -n1)"
+
+          if [ -z "$password" ] || [ -z "$email" ]; then
+            echo "Missing staging eval credentials in Secret Manager" >&2
+            exit 1
+          fi
+
+          echo "::add-mask::$password"
+          echo "::add-mask::$email"
+          {
+            echo "EVAL_INTERNAL_PASSWORD=$password"
+            echo "EVAL_EMAIL=$email"
+          } >> "$GITHUB_ENV"
+
+      - id: candidate-url
+        name: Load tagged candidate URL from Cloud Run
+        env:
+          CANDIDATE_TAG: ${{ env.CANDIDATE_TAG }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          tag = os.environ["CANDIDATE_TAG"]
+          command = [
+              "gcloud",
+              "run",
+              "services",
+              "describe",
+              os.environ["SERVICE_NAME"],
+              "--region",
+              os.environ["REGION"],
+              "--project",
+              os.environ["PROJECT_ID"],
+              "--format=json",
+          ]
+          service = json.loads(subprocess.check_output(command, text=True))
+          traffic = service.get("status", {}).get("traffic") or []
+          candidate_url = next(
+              (entry.get("url") for entry in traffic if entry.get("tag") == tag and entry.get("url")),
+              "",
+          )
+          if not candidate_url:
+            raise SystemExit(f"Cloud Run did not expose a tagged URL for '{tag}'")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+            fh.write(f"url={candidate_url}\n")
+          PY
+
+      - name: Wait for backend candidate readiness
+        env:
+          CANDIDATE_URL: ${{ steps.candidate-url.outputs.url }}
+        run: |
+          for attempt in $(seq 1 30); do
+            status="$(curl -sS -o /tmp/prepare.json -w '%{http_code}' "$CANDIDATE_URL/api/prepare" || true)"
+            if [ "$status" = "200" ]; then
+              exit 0
+            fi
+            sleep 10
+          done
+
+          echo "Candidate backend never became ready" >&2
+          cat /tmp/prepare.json >&2 || true
+          exit 1
+
+      - name: Run staging eval suite
+        env:
+          BASE_URL: ${{ steps.candidate-url.outputs.url }}
+        run: |
+          python scripts/run_staging_eval.py \
+            --base-url "$BASE_URL" \
+            --email "$EVAL_EMAIL" \
+            --internal-password "$EVAL_INTERNAL_PASSWORD"
+
+  # ── 5. Promote backend only if staging eval passed ──────────────────────────
+  promote-backend:
+    name: Promote backend candidate
+    runs-on: ubuntu-latest
+    needs: [staging-eval]
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Shift production traffic to the staged revision
+        run: |
+          gcloud run services update-traffic "${{ env.SERVICE_NAME }}" \
+            --region "${{ env.REGION }}" \
+            --to-tags "${{ env.CANDIDATE_TAG }}=100"
+
+  # ── 6. Deploy frontend → Vercel ─────────────────────────────────────────────
   deploy-frontend:
     name: Deploy frontend to Vercel
     runs-on: ubuntu-latest
-    needs: [test-backend, test-frontend]   # both must pass first
+    needs: [promote-backend, test-backend, test-frontend]
 
     steps:
       - uses: actions/checkout@v4
