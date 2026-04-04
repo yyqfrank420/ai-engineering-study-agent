@@ -547,29 +547,6 @@ export function D3Graph({ graphData, currentStep, activeNodeIds, onNodeClick }: 
       .attr('dominant-baseline', 'middle')
       .style('pointer-events', 'none');
 
-    // ── Step number badges ────────────────────────────────────────────────────
-    // Each edge that maps to a sequence step gets a numbered circle badge.
-    // Badge sits AT the edge midpoint; label is offset 12px above to avoid overlap.
-    const stepBadgeGroup = linkGroup.selectAll('g.step-badge')
-      .data(links).enter().append('g').attr('class', 'step-badge');
-    stepBadgeGroup.attr('opacity', 0);
-
-    // Only render circle and number for edges that have a step
-    stepBadgeGroup.filter((d: any) => d.stepNum !== null).append('circle')
-      .attr('r', 9)
-      .attr('fill', '#0d1117')
-      .attr('stroke', 'rgba(167,139,250,0.55)')
-      .attr('stroke-width', 1.2);
-
-    stepBadgeGroup.filter((d: any) => d.stepNum !== null).append('text')
-      .text((d: any) => String(d.stepNum))
-      .attr('text-anchor', 'middle')
-      .attr('dominant-baseline', 'middle')
-      .attr('font-size', '0.48rem')
-      .attr('font-weight', 700)
-      .attr('fill', '#a78bfa')
-      .style('pointer-events', 'none');
-
     // ── Node groups ───────────────────────────────────────────────────────────
     const nodeGroup = g.append('g');
 
@@ -730,6 +707,29 @@ export function D3Graph({ graphData, currentStep, activeNodeIds, onNodeClick }: 
       .attr('text-anchor', 'middle')
       .attr('font-size', '0.38rem').attr('font-weight', 700).attr('letter-spacing', '0.1em')
       .attr('fill', '#94a3b8').attr('opacity', 0.9).style('pointer-events', 'none');
+
+    // ── Step number badges ────────────────────────────────────────────────────
+    // Render badges in a dedicated overlay layer above nodes so they remain
+    // visible when an edge midpoint passes through a card body.
+    const stepBadgeLayer = g.append('g').attr('class', 'step-badge-layer');
+    const stepBadgeGroup = stepBadgeLayer.selectAll('g.step-badge')
+      .data(links).enter().append('g').attr('class', 'step-badge');
+    stepBadgeGroup.attr('opacity', 0);
+
+    stepBadgeGroup.filter((d: any) => d.stepNum !== null).append('circle')
+      .attr('r', 9)
+      .attr('fill', '#0d1117')
+      .attr('stroke', 'rgba(167,139,250,0.55)')
+      .attr('stroke-width', 1.2);
+
+    stepBadgeGroup.filter((d: any) => d.stepNum !== null).append('text')
+      .text((d: any) => String(d.stepNum))
+      .attr('text-anchor', 'middle')
+      .attr('dominant-baseline', 'middle')
+      .attr('font-size', '0.48rem')
+      .attr('font-weight', 700)
+      .attr('fill', '#a78bfa')
+      .style('pointer-events', 'none');
 
     // ── renderAll: position everything from current node.x/y ─────────────────
     // Called once on init, and on every drag tick.
