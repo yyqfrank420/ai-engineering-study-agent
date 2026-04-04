@@ -25,7 +25,13 @@ def build_chip_prompt(node_title: str, node_description: str, history: list[dict
     ]
 
 
-async def stream_suggested_questions(node_title: str, node_description: str, history: list[dict]):
+async def stream_suggested_questions(
+    node_title: str,
+    node_description: str,
+    history: list[dict],
+    *,
+    telemetry: dict | None = None,
+):
     system = (
         'You are a study assistant for "AI Engineering" by Chip Huyen.\n'
         "Generate exactly 3 follow-up exploration chips for a graph node.\n\n"
@@ -49,6 +55,7 @@ async def stream_suggested_questions(node_title: str, node_description: str, his
         temperature=settings.suggestion_chip_temperature,
         top_p=settings.suggestion_chip_top_p,
         top_k=settings.suggestion_chip_top_k,
+        telemetry=telemetry,
     ):
         if event_type == "provider_switch":
             yield {"type": "provider_switch", "provider": chunk}

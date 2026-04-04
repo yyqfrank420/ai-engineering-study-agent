@@ -139,6 +139,10 @@ async def enrich_node(
         temperature=settings.node_detail_temperature,
         top_p=settings.node_detail_top_p,
         top_k=settings.node_detail_top_k,
+        telemetry={
+            "operation": "node_detail_worker",
+            "metadata": {"node_id": node["id"], "node_label": node["label"]},
+        },
     ):
         if event_type == "provider_switch":
             await send({"type": "provider_switch", "provider": content})

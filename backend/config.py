@@ -96,6 +96,15 @@ class Settings(BaseSettings):
     faiss_artifact_sha256: str = ""
     faiss_artifact_timeout_s: int = 120
 
+    # ── Internal test access ────────────────────────────────────────────────
+    # Explicit internal-only login path for production testing without OTP.
+    # This is disabled unless BOTH the password and allowlist are configured.
+    internal_test_password: str = ""
+    internal_test_email_allowlist_raw: str = ""
+    internal_test_session_minutes: int = 30
+    internal_test_attempt_window_s: int = 600
+    internal_test_attempt_limit: int = 10
+
     # ── Dev ───────────────────────────────────────────────────────────────────
     # Set to true in local .env only. NEVER enable in production.
     # Accepts the token "dev-local" as a valid auth token for any request.
@@ -168,6 +177,20 @@ class Settings(BaseSettings):
     @property
     def effective_supabase_jwt_audience(self) -> str:
         return self.supabase_jwt_audience.strip()
+
+    @property
+    def internal_test_email_allowlist(self) -> list[str]:
+        raw = self.internal_test_email_allowlist_raw.replace("\n", ",")
+        return [email.strip().lower() for email in raw.split(",") if email.strip()]
+
+    @property
+    def internal_test_enabled(self) -> bool:
+        return bool(
+            self.internal_test_password.strip()
+            and self.internal_test_email_allowlist
+            and self.supabase_jwt_secret.strip()
+            and self.effective_supabase_jwt_issuer
+        )
 
 
 # Module-level singleton — import this everywhere

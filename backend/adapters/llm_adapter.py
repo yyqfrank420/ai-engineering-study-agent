@@ -15,21 +15,28 @@
 
 import asyncio
 from collections.abc import AsyncGenerator
+from functools import lru_cache
+import time
 
 import anthropic
 import openai
 
 from config import settings
+from storage.telemetry_store import record_llm_telemetry
 
-# ── Clients (module-level, constructed once and reused) ───────────────────────
+# ── Clients (lazy-initialised and reused) ────────────────────────────────────
 
-_anthropic_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 
-# OpenAI client is optional — only constructed if the key is configured
-_openai_client: openai.AsyncOpenAI | None = (
-    openai.AsyncOpenAI(api_key=settings.openai_api_key)
-    if settings.openai_api_key else None
-)
+@lru_cache(maxsize=1)
+def _get_anthropic_client() -> anthropic.AsyncAnthropic:
+    return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+
+@lru_cache(maxsize=1)
+def _get_openai_client() -> openai.AsyncOpenAI | None:
+    if not settings.openai_api_key:
+        return None
+    return openai.AsyncOpenAI(api_key=settings.openai_api_key)
 
 # Maps Anthropic model name → OpenAI fallback model name.
 # Populated from settings so a config change is all that's needed to swap models.
@@ -59,7 +66,8 @@ async def _openai_stream(
         reasoning_effort: Optional reasoning depth for thinking models
                           ("low" | "medium" | "high" | "xhigh")
     """
-    assert _openai_client is not None, "OpenAI client not initialised (OPENAI_API_KEY not set)"
+    openai_client = _get_openai_client()
+    assert openai_client is not None, "OpenAI client not initialised (OPENAI_API_KEY not set)"
 
     # OpenAI takes the system prompt as the first message in the list
     openai_messages = [{"role": "system", "content": system}, *messages]
@@ -78,7 +86,7 @@ async def _openai_stream(
         if top_p is not None:
             kwargs["top_p"] = top_p
 
-    stream = await _openai_client.chat.completions.create(**kwargs)
+    stream = await openai_client.chat.completions.create(**kwargs)
     async for chunk in stream:
         if chunk.choices:
             delta = chunk.choices[0].delta
@@ -96,6 +104,7 @@ async def stream_response(
     temperature: float | None = None,
     top_p: float | None = None,
     top_k: int | None = None,
+    telemetry: dict | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
     """
     Stream a response with automatic retry + OpenAI fallback.
@@ -137,11 +146,42 @@ async def stream_response(
         }
 
     last_exc: Exception | None = None
+    started_at = time.perf_counter()
+    output_chars = 0
+    used_fallback = False
+    final_provider = "anthropic"
+    final_model = model
+
+    def _record(status: str, *, error_type: str | None = None) -> None:
+        details = telemetry or {}
+        try:
+            record_llm_telemetry(
+                operation=details.get("operation", "unknown"),
+                provider=final_provider,
+                model=final_model,
+                status=status,
+                duration_ms=max(1, int((time.perf_counter() - started_at) * 1000)),
+                output_chars=output_chars,
+                used_fallback=used_fallback,
+                user_id=details.get("user_id"),
+                thread_id=details.get("thread_id"),
+                error_type=error_type,
+                metadata={
+                    "message_count": len(messages),
+                    "thinking_budget": thinking_budget,
+                    "temperature": temperature,
+                    "top_p": top_p,
+                    "top_k": top_k,
+                    **(details.get("metadata") or {}),
+                },
+            )
+        except Exception as exc:
+            print(f"[llm] Telemetry write failed: {type(exc).__name__}: {exc}")
 
     for attempt in range(1, settings.llm_max_retries + 1):
         tokens_yielded = False
         try:
-            async with _anthropic_client.messages.stream(**kwargs) as stream:
+            async with _get_anthropic_client().messages.stream(**kwargs) as stream:
                 async for event in stream:
                     if event.type == "content_block_delta":
                         tokens_yielded = True
@@ -149,7 +189,9 @@ async def stream_response(
                         if delta.type == "thinking_delta":
                             yield ("thinking", delta.thinking)
                         elif delta.type == "text_delta":
+                            output_chars += len(delta.text)
                             yield ("text", delta.text)
+            _record("success")
             yield ("done", "")
             return   # Anthropic succeeded
 
@@ -157,6 +199,7 @@ async def stream_response(
             last_exc = exc
             if tokens_yielded:
                 # Already sent partial output — can't replay safely, surface the error
+                _record("error", error_type=type(exc).__name__)
                 raise
             print(
                 f"[llm] Anthropic attempt {attempt}/{settings.llm_max_retries} failed: "
@@ -167,8 +210,11 @@ async def stream_response(
 
     # All Anthropic attempts exhausted — try OpenAI fallback
     fallback_model = _FALLBACK_MODELS.get(model)
-    if fallback_model and _openai_client:
+    if fallback_model and _get_openai_client():
         print(f"[llm] Falling back to OpenAI {fallback_model}")
+        used_fallback = True
+        final_provider = "openai"
+        final_model = fallback_model
         yield ("provider_switch", "openai")
         # Only the orchestrator path uses reasoning_effort
         reasoning_effort = (
@@ -176,14 +222,23 @@ async def stream_response(
             if model == settings.orchestrator_model
             else None
         )
-        async for event in _openai_stream(
-            fallback_model,
-            system,
-            messages,
-            reasoning_effort,
-            temperature,
-            top_p,
-        ):
-            yield event
+        try:
+            async for event in _openai_stream(
+                fallback_model,
+                system,
+                messages,
+                reasoning_effort,
+                temperature,
+                top_p,
+            ):
+                if event[0] == "text":
+                    output_chars += len(event[1])
+                yield event
+            _record("success")
+        except Exception as exc:
+            _record("error", error_type=type(exc).__name__)
+            raise
     else:
+        if last_exc is not None:
+            _record("error", error_type=type(last_exc).__name__)
         raise last_exc  # type: ignore[misc]

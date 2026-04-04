@@ -1,5 +1,10 @@
 import time
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+import hmac
+import uuid
+
+import jwt
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, field_validator
@@ -13,6 +18,15 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 _otp_request_by_email: dict[str, list[float]] = defaultdict(list)
 _otp_request_by_ip: dict[str, list[float]] = defaultdict(list)
 _otp_verify_failures: dict[str, list[float]] = defaultdict(list)
+_internal_login_failures: dict[str, list[float]] = defaultdict(list)
+_INTERNAL_TEST_USER_NAMESPACE = uuid.UUID("db57f8ae-e7ce-4f62-9779-6337ed49f1f6")
+
+
+def _normalise_email(value: str) -> str:
+    email = value.strip().lower()
+    if "@" not in email or "." not in email.split("@")[-1]:
+        raise ValueError("Invalid email")
+    return email
 
 
 class OTPRequest(BaseModel):
@@ -22,10 +36,7 @@ class OTPRequest(BaseModel):
     @field_validator("email")
     @classmethod
     def validate_email(cls, value: str) -> str:
-        email = value.strip().lower()
-        if "@" not in email or "." not in email.split("@")[-1]:
-            raise ValueError("Invalid email")
-        return email
+        return _normalise_email(value)
 
 
 class OTPVerifyRequest(BaseModel):
@@ -36,10 +47,46 @@ class OTPVerifyRequest(BaseModel):
     @field_validator("email")
     @classmethod
     def validate_email(cls, value: str) -> str:
-        email = value.strip().lower()
-        if "@" not in email or "." not in email.split("@")[-1]:
-            raise ValueError("Invalid email")
-        return email
+        return _normalise_email(value)
+
+
+class InternalLoginRequest(BaseModel):
+    email: str
+    password: str
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        return _normalise_email(value)
+
+
+def _mint_internal_session(email: str) -> dict:
+    if not settings.supabase_jwt_secret:
+        raise HTTPException(status_code=500, detail="Internal test auth is not configured")
+
+    user_id = str(uuid.uuid5(_INTERNAL_TEST_USER_NAMESPACE, email))
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(minutes=settings.internal_test_session_minutes)
+    payload = {
+        "sub": user_id,
+        "email": email,
+        "aud": settings.effective_supabase_jwt_audience,
+        "iss": settings.effective_supabase_jwt_issuer,
+        "role": "authenticated",
+        "aal": "aal1",
+        "app_metadata": {"provider": "internal_test", "providers": ["internal_test"]},
+        "user_metadata": {"email": email},
+        "iat": int(now.timestamp()),
+        "exp": int(expires_at.timestamp()),
+    }
+    access_token = jwt.encode(payload, settings.supabase_jwt_secret, algorithm="HS256")
+    return {
+        "access_token": access_token,
+        "refresh_token": "",
+        "expires_in": int((expires_at - now).total_seconds()),
+        "token_type": "bearer",
+        "user": {"id": user_id, "email": email},
+    }
 
 
 def _prune(bucket: dict[str, list[float]], key: str, window_s: int) -> list[float]:
@@ -70,6 +117,15 @@ def _record_request(email: str, ip: str) -> None:
 
 def _record_failure(email: str) -> None:
     _otp_verify_failures[email].append(time.time())
+
+
+def _record_internal_failure(key: str) -> None:
+    _internal_login_failures[key].append(time.time())
+
+
+def _is_internal_login_rate_limited(key: str) -> bool:
+    failures = _prune(_internal_login_failures, key, settings.internal_test_attempt_window_s)
+    return len(failures) >= settings.internal_test_attempt_limit
 
 
 @router.post("/request-otp")
@@ -120,3 +176,27 @@ async def verify_otp(body: OTPVerifyRequest, request: Request):
             },
         },
     }
+
+
+@router.post("/internal-login")
+async def internal_login(body: InternalLoginRequest, request: Request):
+    if not settings.internal_test_enabled:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    ip = request.client.host if request.client else "unknown"
+    limiter_key = f"{body.email}:{ip}"
+    if _is_internal_login_rate_limited(limiter_key):
+        raise HTTPException(status_code=429, detail="Too many internal login attempts")
+
+    if body.email not in settings.internal_test_email_allowlist:
+        _record_internal_failure(limiter_key)
+        raise HTTPException(status_code=403, detail="Email is not allowed for internal login")
+
+    if not hmac.compare_digest(body.password, settings.internal_test_password):
+        _record_internal_failure(limiter_key)
+        raise HTTPException(status_code=401, detail="Invalid internal login password")
+
+    session = _mint_internal_session(body.email)
+    upsert_profile(session["user"]["id"], body.email)
+    _internal_login_failures.pop(limiter_key, None)
+    return {"ok": True, "session": session}

@@ -104,6 +104,8 @@ async def test_run_agent_uses_search_tool_after_weak_retrieval(monkeypatch):
 
     state = {
         "session_id": "thread-1",
+        "user_id": "user-1",
+        "user_email": "friend@example.com",
         "request_id": "req-1",
         "user_message": "Need broader context",
         "history": [],
@@ -175,6 +177,8 @@ async def test_run_agent_warns_when_it_can_answer_but_cannot_build_graph(monkeyp
 
     state = {
         "session_id": "thread-1",
+        "user_id": "user-1",
+        "user_email": "friend@example.com",
         "request_id": "req-1",
         "user_message": "What is Amazon AgentCore and how can we build one with open source code?",
         "history": [],

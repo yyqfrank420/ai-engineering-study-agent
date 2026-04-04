@@ -11,16 +11,19 @@
 
 from contextlib import asynccontextmanager
 import os
+import time
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from adapters.database_adapter import init_db
+from adapters.supabase_auth_adapter import verify_access_token
 from api.auth_route import router as auth_router
 from api.health_route import router as health_router
 from api.sse_handler import router as sse_router
 from api.thread_route import router as thread_router
 from config import settings
+from storage.telemetry_store import record_http_request_log
 
 
 def create_app(*, load_resources: bool = True) -> FastAPI:
@@ -70,6 +73,46 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
         allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def log_requests(request: Request, call_next):
+        started_at = time.perf_counter()
+        user_id: str | None = None
+        status_code = 500
+
+        authorization = request.headers.get("authorization", "")
+        if authorization.startswith("Bearer "):
+            token = authorization.split(" ", 1)[1].strip()
+            if settings.dev_bypass_auth and token == "dev-local":
+                user_id = "00000000-0000-0000-0000-000000000dev"
+            else:
+                try:
+                    payload = verify_access_token(token)
+                    user_id = payload.get("sub")
+                except Exception:
+                    user_id = None
+
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+        except Exception:
+            status_code = 500
+            raise
+        finally:
+            try:
+                record_http_request_log(
+                    method=request.method,
+                    path=request.url.path,
+                    status_code=status_code,
+                    latency_ms=max(1, int((time.perf_counter() - started_at) * 1000)),
+                    user_id=user_id,
+                    ip_address=request.client.host if request.client else None,
+                    user_agent=request.headers.get("user-agent"),
+                )
+            except Exception as exc:
+                print(f"[telemetry] HTTP request log failed: {type(exc).__name__}: {exc}")
+
+        return response
 
     app.include_router(health_router)
     app.include_router(auth_router)

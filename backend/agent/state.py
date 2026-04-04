@@ -65,6 +65,8 @@ class Chunk(TypedDict):
 class AgentState(TypedDict):
     # ── Input ─────────────────────────────────────────────────────────────────
     session_id: str          # thread identifier; field name kept for runtime compatibility
+    user_id: str
+    user_email: str
     user_message: str
     history: list[dict]      # prior conversation turns (role/content dicts)
 

@@ -190,6 +190,8 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
         existing_graph = thread_store.get_graph(user_id, thread_id)
         state: AgentState = {
             "session_id":        thread_id,
+            "user_id":           user_id,
+            "user_email":        user["email"] or f"{user_id}@unknown.local",
             "request_id":        request_id,
             "user_message":      content,
             "history":           history,
@@ -336,7 +338,17 @@ async def node_selected_endpoint(body: NodeSelectedRequest, user=Depends(get_cur
     history = message_store.get_history(user_id, thread_id, limit=6)
 
     async def stream():
-        async for event in stream_suggested_questions(node_title, node_description, history):
+        async for event in stream_suggested_questions(
+            node_title,
+            node_description,
+            history,
+            telemetry={
+                "operation": "node_selected_chips",
+                "user_id": user_id,
+                "thread_id": thread_id,
+                "metadata": {"node_id": body.node_id},
+            },
+        ):
             yield sse(event)
 
     return streaming_response(stream())

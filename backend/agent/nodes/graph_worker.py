@@ -289,6 +289,12 @@ async def _generate_raw_graph_response(system: str, messages: list[dict], send) 
         temperature=settings.graph_temperature,
         top_p=settings.graph_top_p,
         top_k=settings.graph_top_k,
+        telemetry={
+            "operation": "graph_worker",
+            "user_id": state["user_id"],
+            "thread_id": state["session_id"],
+            "metadata": {"graph_mode": state.get("graph_mode", "auto")},
+        },
     ):
         if event_type == "provider_switch":
             await send({"type": "provider_switch", "provider": content})

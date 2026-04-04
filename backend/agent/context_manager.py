@@ -57,6 +57,7 @@ async def _call_haiku_summary(old_text: str) -> str:
         temperature=settings.condense_temperature,
         top_p=settings.condense_top_p,
         top_k=settings.condense_top_k,
+        telemetry={"operation": "context_condense"},
     ):
         if event_type == "text":
             tokens.append(content)

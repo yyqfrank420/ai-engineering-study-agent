@@ -155,6 +155,11 @@ async def orchestrator_route(state: AgentState) -> AgentState:
         temperature=settings.router_temperature,
         top_p=settings.router_top_p,
         top_k=settings.router_top_k,
+        telemetry={
+            "operation": "orchestrator_route",
+            "user_id": state["user_id"],
+            "thread_id": state["session_id"],
+        },
     ):
         if event_type == "provider_switch":
             await send({"type": "provider_switch", "provider": content})
@@ -198,6 +203,11 @@ async def quick_synthesise(state: AgentState) -> AgentState:
         temperature=settings.quick_synthesis_temperature,
         top_p=settings.quick_synthesis_top_p,
         top_k=settings.quick_synthesis_top_k,
+        telemetry={
+            "operation": "quick_synthesise",
+            "user_id": state["user_id"],
+            "thread_id": state["session_id"],
+        },
     ):
         if event_type == "provider_switch":
             await send({"type": "provider_switch", "provider": content})
@@ -268,6 +278,12 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
         temperature=settings.synthesis_temperature,
         top_p=settings.synthesis_top_p,
         top_k=settings.synthesis_top_k,
+        telemetry={
+            "operation": "orchestrator_synthesise",
+            "user_id": state["user_id"],
+            "thread_id": state["session_id"],
+            "metadata": {"route": state.get("route", "")},
+        },
     ):
         if event_type == "provider_switch":
             await send({"type": "provider_switch", "provider": content})

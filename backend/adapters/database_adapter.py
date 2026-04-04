@@ -100,6 +100,65 @@ def init_db() -> None:
                     ON search_tool_requests(user_id, thread_id)
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS http_request_logs (
+                    id UUID PRIMARY KEY,
+                    user_id UUID,
+                    method TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    status_code INTEGER NOT NULL,
+                    latency_ms INTEGER NOT NULL,
+                    ip_address TEXT,
+                    user_agent TEXT,
+                    metadata_json TEXT,
+                    created_at_epoch DOUBLE PRECISION NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_http_request_logs_created
+                    ON http_request_logs(created_at_epoch DESC)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_http_request_logs_user_created
+                    ON http_request_logs(user_id, created_at_epoch DESC)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS llm_telemetry (
+                    id UUID PRIMARY KEY,
+                    user_id UUID,
+                    thread_id UUID,
+                    operation TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    duration_ms INTEGER NOT NULL,
+                    output_chars INTEGER NOT NULL,
+                    used_fallback BOOLEAN NOT NULL DEFAULT FALSE,
+                    error_type TEXT,
+                    metadata_json TEXT,
+                    created_at_epoch DOUBLE PRECISION NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_llm_telemetry_created
+                    ON llm_telemetry(created_at_epoch DESC)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_llm_telemetry_user_created
+                    ON llm_telemetry(user_id, created_at_epoch DESC)
+                """
+            )
         return
 
     settings.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
@@ -176,6 +235,45 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_search_tool_requests_user_thread
                 ON search_tool_requests(user_id, thread_id);
+
+            CREATE TABLE IF NOT EXISTS http_request_logs (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                method TEXT NOT NULL,
+                path TEXT NOT NULL,
+                status_code INTEGER NOT NULL,
+                latency_ms INTEGER NOT NULL,
+                ip_address TEXT,
+                user_agent TEXT,
+                metadata_json TEXT,
+                created_at_epoch REAL NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_http_request_logs_created
+                ON http_request_logs(created_at_epoch);
+            CREATE INDEX IF NOT EXISTS idx_http_request_logs_user_created
+                ON http_request_logs(user_id, created_at_epoch);
+
+            CREATE TABLE IF NOT EXISTS llm_telemetry (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                thread_id TEXT,
+                operation TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                status TEXT NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                output_chars INTEGER NOT NULL,
+                used_fallback INTEGER NOT NULL DEFAULT 0,
+                error_type TEXT,
+                metadata_json TEXT,
+                created_at_epoch REAL NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_llm_telemetry_created
+                ON llm_telemetry(created_at_epoch);
+            CREATE INDEX IF NOT EXISTS idx_llm_telemetry_user_created
+                ON llm_telemetry(user_id, created_at_epoch);
             """
         )
         try:
