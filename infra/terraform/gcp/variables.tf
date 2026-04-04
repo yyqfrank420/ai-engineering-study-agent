@@ -47,7 +47,7 @@ variable "cpu" {
 variable "memory" {
   description = "Cloud Run memory limit."
   type        = string
-  default     = "2Gi"
+  default     = "4Gi"
 }
 
 variable "min_instance_count" {

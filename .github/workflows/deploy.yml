@@ -151,8 +151,9 @@ jobs:
             --push \
             .
 
-      # Deploy a tagged, no-traffic candidate revision. Staging evals run
-      # against the candidate URL before any user traffic is shifted.
+      # Deploy a tagged, no-traffic candidate revision. Terraform owns the
+      # stable Cloud Run service config (memory, env, secrets); CI only rolls
+      # out a new image and tags the candidate revision for eval.
       - id: deploy
         name: Deploy candidate to Cloud Run
         uses: google-github-actions/deploy-cloudrun@v2
@@ -160,20 +161,7 @@ jobs:
           service: ${{ env.SERVICE_NAME }}
           region: ${{ env.REGION }}
           image: ${{ env.IMAGE }}:${{ github.sha }}
-          flags: --memory=4Gi --no-traffic --tag=${{ env.CANDIDATE_TAG }}
-          secrets: |-
-            ANTHROPIC_API_KEY=anthropic-api-key:latest
-            OPENAI_API_KEY=openai-api-key:latest
-            SUPABASE_URL=supabase-url:latest
-            SUPABASE_ANON_KEY=supabase-anon-key:latest
-            SUPABASE_DB_URL=supabase-db-url:latest
-            SUPABASE_JWT_ISSUER=supabase-jwt-issuer:latest
-            SUPABASE_JWT_SECRET=supabase-jwt-secret:latest
-            TURNSTILE_SECRET_KEY=turnstile-secret-key:latest
-            FAISS_ARTIFACT_URL=faiss-artifact-url:latest
-            FAISS_ARTIFACT_SHA256=faiss-artifact-sha256:latest
-            INTERNAL_TEST_PASSWORD=internal-test-password:latest
-            INTERNAL_TEST_EMAIL_ALLOWLIST_RAW=internal-test-email-allowlist-raw:latest
+          flags: --no-traffic --tag=${{ env.CANDIDATE_TAG }}
 
   # ── 4. Blocking staging eval against the tagged candidate revision ──────────
   staging-eval:

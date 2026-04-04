@@ -20,13 +20,30 @@ If you want Terraform to create secret versions too:
 
 ## Expected workflow
 
-1. Build and push backend image to Artifact Registry
-2. Apply Terraform with the desired image tag
-3. Read `cloud_run_service_url` output
-4. Set frontend `VITE_API_URL` to that URL
+1. Apply Terraform when infrastructure or stable runtime config changes
+2. Push application changes to `main`
+3. GitHub Actions builds the backend image and deploys a no-traffic Cloud Run candidate revision
+4. GitHub Actions runs the staging eval suite against the tagged candidate URL
+5. GitHub Actions promotes traffic only if the staging gate passes
+
+Terraform owns the long-lived Cloud Run service shape:
+
+- service account
+- resource limits
+- startup probe
+- env vars and Secret Manager bindings
+- IAM
+
+CI/CD owns revision rollout:
+
+- image tag selection
+- no-traffic candidate deploys
+- revision tags
+- traffic promotion
 
 ## Notes
 
 - Cloud Run is intentionally configured for `min_instance_count = 0`
 - use the default `run.app` URL first
 - do not add a load balancer unless a real requirement appears
+- the initial `container_image` bootstrap override is only for first creation; CI manages images after that
