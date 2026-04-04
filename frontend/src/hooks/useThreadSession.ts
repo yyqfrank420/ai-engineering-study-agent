@@ -128,14 +128,21 @@ export function useThreadSession({
     loadedUserIdRef.current = authSession.user.id;
 
     const rememberedThreadId = localStorage.getItem(storageKeyForThread(authSession.user.id));
-    const initialLoad = rememberedThreadId
-      ? loadThread(authSession, rememberedThreadId).catch(() => loadThread(authSession, null))
-      : loadThread(authSession, null);
+    if (!rememberedThreadId) {
+      setActiveThreadId(null);
+      setThreadTitle('New chat');
+      setThreadSnapshot({ title: 'New chat', messages: [], graphData: null });
+      return;
+    }
 
-    initialLoad.catch((error: unknown) => {
+    loadThread(authSession, rememberedThreadId).catch((error: unknown) => {
+      localStorage.removeItem(storageKeyForThread(authSession.user.id));
       const message = error instanceof Error ? error.message : 'Could not connect to backend';
-      console.error('[thread] Failed to load thread:', message);
+      console.error('[thread] Failed to load remembered thread:', message);
       setThreadError(message);
+      setActiveThreadId(null);
+      setThreadTitle('New chat');
+      setThreadSnapshot({ title: 'New chat', messages: [], graphData: null });
     });
   }, [authSession, backendReady, loadThread, resetThreadState]);
 

@@ -63,9 +63,13 @@ export function SequenceBar({
 
   useEffect(() => {
     if (!isPlaying) return;
-    if (atLast) { setIsPlaying(false); return; }
 
     const id = setTimeout(() => {
+      if (atLast) {
+        onStepChange(-1);
+        setIsPlaying(false);
+        return;
+      }
       onStepChange(atOverview ? 0 : currentStep + 1);
     }, 1800);
     return () => clearTimeout(id);

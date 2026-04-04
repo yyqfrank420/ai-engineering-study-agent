@@ -28,7 +28,6 @@ const MessageList = lazy(() =>
 
 export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [draftHasText, setDraftHasText] = useState(false);
   const [graphRevealed, setGraphRevealed] = useState(false);
   const { authReady, handleAuthenticated, setAuthSession, authSession } = useAuthSession();
   const {
@@ -89,15 +88,14 @@ export default function App() {
   }, [hydrateThread, threadSnapshot]);
 
   useEffect(() => {
-    setDraftHasText(false);
     setGraphRevealed(false);
   }, [activeThreadId]);
 
   useEffect(() => {
-    if (draftHasText || messages.length > 0 || !!graphData) {
+    if (messages.length > 0 || !!graphData) {
       setGraphRevealed(true);
     }
-  }, [draftHasText, graphData, messages.length]);
+  }, [graphData, messages.length]);
 
   const handleLogout = useCallback(async () => {
     if (authSession) {
@@ -303,7 +301,6 @@ export default function App() {
                 onSend={handleSend}
                 onStop={stopGeneration}
                 onPrepare={prepareBackendNow}
-                onDraftChange={setDraftHasText}
                 isGenerating={isGenerating}
                 disabled={composerLocked}
                 sendDisabled={sendLocked}

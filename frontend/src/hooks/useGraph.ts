@@ -58,12 +58,13 @@ export function useGraph(graphData: GraphData | null, animateSequence: boolean) 
 
   useEffect(() => {
     if (!isAutoPlaying || !hasSequence) return;
-    if (currentStep >= totalSteps - 1) {
-      setIsAutoPlaying(false);
-      return;
-    }
 
     const timeout = window.setTimeout(() => {
+      if (currentStep >= totalSteps - 1) {
+        setCurrentStep(-1);
+        setIsAutoPlaying(false);
+        return;
+      }
       setCurrentStep(prev => Math.min(prev + 1, totalSteps - 1));
     }, AUTO_PLAY_STEP_MS);
 
