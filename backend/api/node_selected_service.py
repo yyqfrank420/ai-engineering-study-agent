@@ -35,14 +35,16 @@ async def stream_suggested_questions(
     system = (
         'You are a study assistant for "AI Engineering" by Chip Huyen.\n'
         "Generate exactly 3 follow-up exploration chips for a graph node.\n\n"
-        "Each chip is either:\n"
-        "  (a) A SHORT TOPIC PHRASE — 3-5 words, noun-phrase style. No question mark.\n"
-        "      Good: \"Authentication in Production\", \"Fine-tuning vs RAG\", \"Latency Tradeoffs\"\n"
-        "      Bad:  \"How does authentication work in a production AI system?\"\n\n"
-        "  (b) A BRIEF QUESTION starting with 'Can' — max 8 words total.\n"
-        "      Good: \"Can RAG replace fine-tuning?\", \"Can Claude self-evaluate?\"\n"
-        "      Bad:  \"Can you explain how RAG compares to fine-tuning in terms of performance?\"\n\n"
-        "Mix both types. Keep them specific to the node. Avoid repeating the node name.\n"
+        "Make the chips feel like useful next actions in the UI.\n"
+        "Across the 3 chips, prefer this mix:\n"
+        "  1. one chip that asks to explain a part more clearly\n"
+        "  2. one chip that asks to expand the graph around this node or nearby area\n"
+        "  3. one chip that compares this node with a related concept, step, or trade-off\n\n"
+        "Each chip should be either:\n"
+        "  (a) A SHORT TOPIC PHRASE — 3-6 words, noun-phrase style. No question mark.\n"
+        "  (b) A BRIEF QUESTION — max 9 words total.\n\n"
+        "Keep them specific to the node and recent context.\n"
+        "It is okay to mention the node name when that makes the action clearer.\n"
         "Return ONLY a JSON array of 3 strings — no other text."
     )
 

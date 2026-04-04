@@ -111,11 +111,11 @@ async def test_orchestrator_synthesise_emits_status_and_includes_graph_context(m
     assert events[-1] == {"type": "done"}
 
     assert "<style>" in captured["system"]
-    assert "Flowing prose only. No section headers. No bullets." in captured["system"]
-    assert "Open with a concrete grounding" in captured["system"]
-    assert "If graph context is provided, weave the exact node labels" in captured["system"]
-    assert "Never invent vendor-specific implementation details." in captured["system"]
-    assert "Do not answer with only \"the book does not cover this\"." in captured["system"]
+    assert "use 3-5 short chunks" in captured["system"]
+    assert "Each chunk should follow this pattern: `Topic: locator`" in captured["system"]
+    assert "End with `If you want, I can:`" in captured["system"]
+    assert "If graph context is provided, anchor the explanation" in captured["system"]
+    assert "Do not invent graph positions or edge directions" in captured["system"]
     assert captured["temperature"] == orchestrator.settings.synthesis_temperature
     assert "Current graph:" in captured["messages"][-1]["content"]
     assert "Title: RAG pipeline" in captured["messages"][-1]["content"]

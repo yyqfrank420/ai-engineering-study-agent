@@ -107,6 +107,22 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
   // Caches suggested questions per node ID so repeat clicks skip the LLM call
   const suggestionsCacheRef = useRef<Map<string, string[]>>(new Map());
 
+  const resetThreadView = useCallback(() => {
+    setMessages([]);
+    setGraphData(null);
+    setSelectedNode(null);
+    suggestionsCacheRef.current.clear();
+    streamingIdRef.current = null;
+    activeChatStreamIdRef.current = null;
+    activeNodeStreamIdRef.current = null;
+    userAbortedChatRef.current = false;
+    setWorkerStatus(IDLE_WORKER_STATUS);
+    setRetrievalNotice(null);
+    setGraphNotice(null);
+    setProviderNotice(null);
+    setStreamStatus('connected');
+  }, []);
+
   useEffect(() => {
     const offEvent = sseClient.onEvent(handleEvent);
     return () => { offEvent(); };
@@ -114,20 +130,15 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    resetThreadView();
+  }, [activeThreadId, resetThreadView]);
+
   const hydrateThread = useCallback((thread: { messages: Message[]; graphData: GraphData | null }) => {
+    resetThreadView();
     setMessages(thread.messages);
     setGraphData(thread.graphData);
-    setSelectedNode(null);
-    suggestionsCacheRef.current.clear();
-    streamingIdRef.current = null;
-    activeChatStreamIdRef.current = null;
-    activeNodeStreamIdRef.current = null;
-    setWorkerStatus(IDLE_WORKER_STATUS);
-    setRetrievalNotice(null);
-    setGraphNotice(null);
-    setProviderNotice(null);
-    setStreamStatus('connected');
-  }, []);
+  }, [resetThreadView]);
 
   const handleEvent = useCallback((event: ServerEvent, meta: { kind: 'chat' | 'node-selected'; clientRequestId: string }) => {
     if (meta.kind === 'chat' && activeChatStreamIdRef.current !== meta.clientRequestId) {

@@ -74,7 +74,7 @@ If the user asks where the graph is, they mean that canvas panel.
 
 <core_task>
 Write a concise beginner-friendly explanation grounded in the retrieved book evidence.
-If graph context is provided, weave the exact node labels into the explanation naturally.
+If graph context is provided, anchor the explanation to the exact node labels, sequence steps, lanes, or groups when useful.
 </core_task>
 
 <book_scope>
@@ -86,20 +86,30 @@ If graph context is provided, weave the exact node labels into the explanation n
 </book_scope>
 
 <style>
-- Flowing prose only. No section headers. No bullets. No checklist formatting.
-- Open with a concrete grounding: a short scene, analogy, or "what is actually happening" framing.
-- Then explain how the parts connect, what flows into what, and why the design matters.
+- For non-trivial explanations, use 3-5 short chunks.
+- Each chunk should follow this pattern: `Topic: locator` on one line, then 1-2 short sentences.
+- A locator should use graph anchors when available: node label, step number, lane, or group area.
+- If the user asks several questions in one paragraph, split them into 2-5 chunks and answer them in order.
+- Keep each chunk focused on one or two ideas only.
+- Optional opener: one short human line for ambitious or intricate requests. Keep it under 8 words.
 - Define technical terms immediately. Write the full phrase first, then the acronym in parentheses.
-- Keep it to 130–200 words total.
-- Use short paragraphs with one idea each.
+- Keep it to about 120-220 words total before follow-up suggestions.
+- Use bullets only for the final follow-up options.
+- End with `If you want, I can:` and 2-3 short follow-up bullets.
+- Follow-up bullets should be action-oriented, for example:
+  - explain a part more clearly
+  - expand the graph around a node or area
+  - compare two concepts or steps
 - Cite inline as (Chapter N, p.X) only when it adds value.
 - Use math only when the user clearly needs it.
 </style>
 
 <failure_avoidance>
+- Do not write dense wall-of-text paragraphs.
 - Do not dump glossary entries.
 - Do not sound like lecture notes.
 - Do not answer with only "the book does not cover this".
+- Do not invent graph positions or edge directions that are not supported by the provided graph context.
 - Do not mention the graph unless it exists or the user asked about it.
 </failure_avoidance>"""
 
@@ -115,7 +125,9 @@ Answer the user's short factual question in 2-4 sentences.
 <style>
 - Plain English.
 - One concrete analogy only if it helps the idea click faster.
-- No headers. No bullets. No step-by-step walkthrough.
+- If the user bundled multiple sub-questions together, answer them in 2-4 short chunks in order.
+- Keep each chunk to one idea.
+- No long paragraphs. No step-by-step walkthrough unless the user asked for it.
 - If the term appears in the book, briefly name its role in the AI pipeline.
 - If it is outside the book, say that in one sentence and redirect to the closest related concept the book covers.
 </style>
@@ -334,7 +346,11 @@ def _format_graph_context(graph_data: dict) -> str:
         label = node.get("label", "?")
         description = node.get("description", "").strip()
         tech = node.get("technology", "").strip()
-        extras = " | ".join(part for part in (tech, description) if part)
+        lane = node.get("lane")
+        tier = node.get("tier")
+        lane_text = "bottom lane" if lane == "bottom" else ""
+        tier_text = f"{tier} tier" if tier else ""
+        extras = " | ".join(part for part in (tech, lane_text, tier_text, description) if part)
         node_lines.append(f"- {label}" + (f": {extras}" if extras else ""))
 
     edge_lines = []
@@ -352,11 +368,19 @@ def _format_graph_context(graph_data: dict) -> str:
         summary = f"step {step_no}: {active_nodes}" if active_nodes else f"step {step_no}"
         sequence_lines.append(summary + (f" — {description}" if description else ""))
 
+    group_lines = []
+    for group in (graph_data.get("groups") or [])[:4]:
+        label = group.get("label", "?")
+        node_ids = ", ".join(group.get("nodeIds") or [])
+        group_lines.append(f"- {label}: {node_ids}")
+
     parts = [f"Title: {title}"]
     if node_lines:
         parts.append("Nodes:\n" + "\n".join(node_lines))
     if edge_lines:
         parts.append("Edges:\n" + "\n".join(edge_lines))
+    if group_lines:
+        parts.append("Groups:\n" + "\n".join(group_lines))
     if sequence_lines:
-        parts.append("Sequence:\n" + "\n".join(f"- {line}" for line in sequence_lines))
+        parts.append("Sequence (step badges on flow edges):\n" + "\n".join(f"- {line}" for line in sequence_lines))
     return "\n\n".join(parts)

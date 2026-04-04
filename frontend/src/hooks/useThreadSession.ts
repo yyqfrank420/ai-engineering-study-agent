@@ -34,18 +34,30 @@ export function useThreadSession({
   // do not trigger a full reload and wipe live streamed state.
   const loadedUserIdRef = useRef<string | null>(null);
   const hydratedSnapshotUserIdRef = useRef<string | null>(null);
+  const activeThreadIdRef = useRef<string | null>(null);
+  const threadRequestSeqRef = useRef(0);
 
   const resetThreadState = useCallback(() => {
     loadedUserIdRef.current = null;
     hydratedSnapshotUserIdRef.current = null;
+    activeThreadIdRef.current = null;
     setActiveThreadId(null);
     setThreadTitle('New chat');
     setThreadError(null);
     setThreadSnapshot({ title: 'New chat', messages: [], graphData: null });
   }, []);
 
+  const clearActiveThreadView = useCallback(() => {
+    setThreadError(null);
+    setActiveThreadId(null);
+    activeThreadIdRef.current = null;
+    setThreadTitle('New chat');
+    setThreadSnapshot({ title: 'New chat', messages: [], graphData: null });
+  }, []);
+
   const loadThread = useCallback(
     async (session: AuthSession, threadId?: string | null) => {
+      const requestSeq = ++threadRequestSeqRef.current;
       setLoadingThread(true);
       setThreadError(null);
 
@@ -53,16 +65,25 @@ export function useThreadSession({
         const detail = threadId
           ? await fetchThread(session, threadId)
           : await fetchLatestThread(session);
+        if (requestSeq !== threadRequestSeqRef.current) {
+          return;
+        }
 
+        const targetThreadId = detail.thread.id;
+        const switchingThreads = activeThreadIdRef.current !== targetThreadId;
         setActiveThreadId(detail.thread.id);
+        activeThreadIdRef.current = targetThreadId;
         setThreadTitle(detail.thread.title);
-        localStorage.setItem(storageKeyForThread(session.user.id), detail.thread.id);
+        localStorage.setItem(storageKeyForThread(session.user.id), targetThreadId);
         const fetchedSnapshot: ThreadSnapshot = {
           title: detail.thread.title,
           messages: mapThreadMessages(detail.messages),
           graphData: detail.thread.graph_data,
         };
         setThreadSnapshot(prev => {
+          if (switchingThreads) {
+            return fetchedSnapshot;
+          }
           if (prev.messages.length > fetchedSnapshot.messages.length) {
             return prev;
           }
@@ -72,7 +93,9 @@ export function useThreadSession({
           return fetchedSnapshot;
         });
       } finally {
-        setLoadingThread(false);
+        if (requestSeq === threadRequestSeqRef.current) {
+          setLoadingThread(false);
+        }
       }
     },
     [],
@@ -105,6 +128,7 @@ export function useThreadSession({
     }
 
     setActiveThreadId(rememberedThreadId);
+    activeThreadIdRef.current = rememberedThreadId;
     setThreadTitle(cachedSnapshot.title);
     setThreadSnapshot(cachedSnapshot);
   }, [authSession]);
@@ -129,9 +153,7 @@ export function useThreadSession({
 
     const rememberedThreadId = localStorage.getItem(storageKeyForThread(authSession.user.id));
     if (!rememberedThreadId) {
-      setActiveThreadId(null);
-      setThreadTitle('New chat');
-      setThreadSnapshot({ title: 'New chat', messages: [], graphData: null });
+      clearActiveThreadView();
       return;
     }
 
@@ -140,23 +162,28 @@ export function useThreadSession({
       const message = error instanceof Error ? error.message : 'Could not connect to backend';
       console.error('[thread] Failed to load remembered thread:', message);
       setThreadError(message);
-      setActiveThreadId(null);
-      setThreadTitle('New chat');
-      setThreadSnapshot({ title: 'New chat', messages: [], graphData: null });
+      clearActiveThreadView();
     });
-  }, [authSession, backendReady, loadThread, resetThreadState]);
+  }, [authSession, backendReady, clearActiveThreadView, loadThread, resetThreadState]);
 
   const handleNewChat = useCallback(async () => {
     if (!authSession || !backendReady) {
       return;
     }
 
+    const requestSeq = ++threadRequestSeqRef.current;
     clearSelection();
+    localStorage.removeItem(storageKeyForThread(authSession.user.id));
+    clearActiveThreadView();
     setLoadingThread(true);
 
     try {
       const detail = await createThread(authSession);
+      if (requestSeq !== threadRequestSeqRef.current) {
+        return;
+      }
       setActiveThreadId(detail.thread.id);
+      activeThreadIdRef.current = detail.thread.id;
       setThreadTitle(detail.thread.title);
       localStorage.setItem(storageKeyForThread(authSession.user.id), detail.thread.id);
       setThreadSnapshot({
@@ -165,9 +192,11 @@ export function useThreadSession({
         graphData: detail.thread.graph_data,
       });
     } finally {
-      setLoadingThread(false);
+      if (requestSeq === threadRequestSeqRef.current) {
+        setLoadingThread(false);
+      }
     }
-  }, [authSession, backendReady, clearSelection]);
+  }, [authSession, backendReady, clearActiveThreadView, clearSelection]);
 
   const handleSelectThread = useCallback(
     (threadId: string) => {
@@ -193,9 +222,11 @@ export function useThreadSession({
         return;
       }
 
+      clearSelection();
+      clearActiveThreadView();
       loadThread(authSession, null).catch(console.error);
     },
-    [activeThreadId, authSession, backendReady, loadThread],
+    [activeThreadId, authSession, backendReady, clearActiveThreadView, clearSelection, loadThread],
   );
 
   const retryLatestThread = useCallback(() => {
