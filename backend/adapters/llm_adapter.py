@@ -16,6 +16,7 @@
 import asyncio
 from collections.abc import AsyncGenerator
 from functools import lru_cache
+import inspect
 import time
 
 import anthropic
@@ -44,6 +45,39 @@ _FALLBACK_MODELS: dict[str, str] = {
     settings.orchestrator_model: settings.orchestrator_fallback_model,
     settings.worker_model:       settings.worker_fallback_model,
 }
+
+
+def build_telemetry(
+    operation: str,
+    *,
+    user_id: str | None = None,
+    thread_id: str | None = None,
+    metadata: dict | None = None,
+) -> dict:
+    payload = {"operation": operation}
+    if user_id:
+        payload["user_id"] = user_id
+    if thread_id:
+        payload["thread_id"] = thread_id
+    if metadata:
+        payload["metadata"] = metadata
+    return payload
+
+
+def stream_response_compat(streamer, **kwargs):
+    telemetry = kwargs.pop("telemetry", None)
+    if telemetry is not None:
+        try:
+            params = inspect.signature(streamer).parameters.values()
+            accepts_telemetry = any(
+                param.kind == inspect.Parameter.VAR_KEYWORD or param.name == "telemetry"
+                for param in params
+            )
+        except (TypeError, ValueError):
+            accepts_telemetry = True
+        if accepts_telemetry:
+            kwargs["telemetry"] = telemetry
+    return streamer(**kwargs)
 
 
 async def _openai_stream(

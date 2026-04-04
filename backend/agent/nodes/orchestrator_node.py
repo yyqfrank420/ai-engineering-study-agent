@@ -12,7 +12,7 @@
 #          Side effects: sends SSE events to browser
 # ─────────────────────────────────────────────────────────────────────────────
 
-from adapters.llm_adapter import stream_response
+from adapters.llm_adapter import build_telemetry, stream_response, stream_response_compat
 from agent.context_manager import maybe_condense_history
 from agent.state import AgentState
 from config import settings
@@ -147,7 +147,8 @@ async def orchestrator_route(state: AgentState) -> AgentState:
     ]
 
     route_token = ""
-    async for event_type, content in stream_response(
+    async for event_type, content in stream_response_compat(
+        stream_response,
         model=settings.orchestrator_model,
         system=_ROUTER_SYSTEM,
         messages=messages,
@@ -155,11 +156,11 @@ async def orchestrator_route(state: AgentState) -> AgentState:
         temperature=settings.router_temperature,
         top_p=settings.router_top_p,
         top_k=settings.router_top_k,
-        telemetry={
-            "operation": "orchestrator_route",
-            "user_id": state["user_id"],
-            "thread_id": state["session_id"],
-        },
+        telemetry=build_telemetry(
+            "orchestrator_route",
+            user_id=state.get("user_id"),
+            thread_id=state.get("session_id"),
+        ),
     ):
         if event_type == "provider_switch":
             await send({"type": "provider_switch", "provider": content})
@@ -195,7 +196,8 @@ async def quick_synthesise(state: AgentState) -> AgentState:
         await send({"type": "graph_data", "data": state["graph_data"]})
 
     response_text = ""
-    async for event_type, content in stream_response(
+    async for event_type, content in stream_response_compat(
+        stream_response,
         model=settings.worker_model,   # Haiku — fast and cheap for factual Q&A
         system=_QUICK_SYNTHESIS_SYSTEM,
         messages=messages,
@@ -203,11 +205,11 @@ async def quick_synthesise(state: AgentState) -> AgentState:
         temperature=settings.quick_synthesis_temperature,
         top_p=settings.quick_synthesis_top_p,
         top_k=settings.quick_synthesis_top_k,
-        telemetry={
-            "operation": "quick_synthesise",
-            "user_id": state["user_id"],
-            "thread_id": state["session_id"],
-        },
+        telemetry=build_telemetry(
+            "quick_synthesise",
+            user_id=state.get("user_id"),
+            thread_id=state.get("session_id"),
+        ),
     ):
         if event_type == "provider_switch":
             await send({"type": "provider_switch", "provider": content})
@@ -270,7 +272,8 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
     ]
 
     response_text = ""
-    async for event_type, content in stream_response(
+    async for event_type, content in stream_response_compat(
+        stream_response,
         model=settings.orchestrator_model,
         system=_SYNTHESIS_SYSTEM,
         messages=messages,
@@ -278,12 +281,12 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
         temperature=settings.synthesis_temperature,
         top_p=settings.synthesis_top_p,
         top_k=settings.synthesis_top_k,
-        telemetry={
-            "operation": "orchestrator_synthesise",
-            "user_id": state["user_id"],
-            "thread_id": state["session_id"],
-            "metadata": {"route": state.get("route", "")},
-        },
+        telemetry=build_telemetry(
+            "orchestrator_synthesise",
+            user_id=state.get("user_id"),
+            thread_id=state.get("session_id"),
+            metadata={"route": state.get("route", "")},
+        ),
     ):
         if event_type == "provider_switch":
             await send({"type": "provider_switch", "provider": content})

@@ -20,7 +20,7 @@
 import json
 import uuid
 
-from adapters.llm_adapter import stream_response
+from adapters.llm_adapter import build_telemetry, stream_response, stream_response_compat
 from agent.state import AgentState, GraphData
 from config import settings
 
@@ -279,9 +279,16 @@ IMPORTANT OVERRIDE:
 """
 
 
-async def _generate_raw_graph_response(system: str, messages: list[dict], send) -> str:
+async def _generate_raw_graph_response(
+    system: str,
+    messages: list[dict],
+    send,
+    *,
+    telemetry: dict | None = None,
+) -> str:
     raw = ""
-    async for event_type, content in stream_response(
+    async for event_type, content in stream_response_compat(
+        stream_response,
         model=settings.worker_model,
         system=system,
         messages=messages,
@@ -289,12 +296,7 @@ async def _generate_raw_graph_response(system: str, messages: list[dict], send) 
         temperature=settings.graph_temperature,
         top_p=settings.graph_top_p,
         top_k=settings.graph_top_k,
-        telemetry={
-            "operation": "graph_worker",
-            "user_id": state["user_id"],
-            "thread_id": state["session_id"],
-            "metadata": {"graph_mode": state.get("graph_mode", "auto")},
-        },
+        telemetry=telemetry,
     ):
         if event_type == "provider_switch":
             await send({"type": "provider_switch", "provider": content})
@@ -351,9 +353,15 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
             f"User question: {state['user_message']}"
         ),
     }]
+    telemetry = build_telemetry(
+        "graph_worker",
+        user_id=state.get("user_id"),
+        thread_id=state.get("session_id"),
+        metadata={"graph_mode": state.get("graph_mode", "auto")},
+    )
 
     try:
-        raw = await _generate_raw_graph_response(system, messages, send)
+        raw = await _generate_raw_graph_response(system, messages, send, telemetry=telemetry)
 
         # Model decided no graph change needed
         if "NO_GRAPH" in raw.strip().upper()[:120] and not raw.strip().startswith("{"):
@@ -362,6 +370,7 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
                     f"{system}\n{_FORCE_GRAPH_APPEND}",
                     messages,
                     send,
+                    telemetry=telemetry,
                 )
                 if "NO_GRAPH" in raw.strip().upper()[:120] and not raw.strip().startswith("{"):
                     return {**state, "graph_data": None}

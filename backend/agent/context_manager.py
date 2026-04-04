@@ -22,7 +22,7 @@
 import asyncio
 import logging
 
-from adapters.llm_adapter import stream_response
+from adapters.llm_adapter import build_telemetry, stream_response, stream_response_compat
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -50,14 +50,15 @@ async def _call_haiku_summary(old_text: str) -> str:
     messages = [{"role": "user", "content": f"Summarise this conversation:\n\n{old_text}"}]
 
     tokens: list[str] = []
-    async for event_type, content in stream_response(
+    async for event_type, content in stream_response_compat(
+        stream_response,
         model=settings.worker_model,
         system=system,
         messages=messages,
         temperature=settings.condense_temperature,
         top_p=settings.condense_top_p,
         top_k=settings.condense_top_k,
-        telemetry={"operation": "context_condense"},
+        telemetry=build_telemetry("context_condense"),
     ):
         if event_type == "text":
             tokens.append(content)

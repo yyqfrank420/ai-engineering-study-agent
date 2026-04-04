@@ -17,7 +17,7 @@ import json
 import re
 from typing import Any, Callable, Awaitable
 
-from adapters.llm_adapter import stream_response
+from adapters.llm_adapter import build_telemetry, stream_response, stream_response_compat
 from agent.state import GraphNode
 from config import settings
 
@@ -131,7 +131,8 @@ async def enrich_node(
     }]
 
     description = ""
-    async for event_type, content in stream_response(
+    async for event_type, content in stream_response_compat(
+        stream_response,
         model=settings.worker_model,
         system=_SYSTEM,
         messages=messages,
@@ -139,10 +140,10 @@ async def enrich_node(
         temperature=settings.node_detail_temperature,
         top_p=settings.node_detail_top_p,
         top_k=settings.node_detail_top_k,
-        telemetry={
-            "operation": "node_detail_worker",
-            "metadata": {"node_id": node["id"], "node_label": node["label"]},
-        },
+        telemetry=build_telemetry(
+            "node_detail_worker",
+            metadata={"node_id": node["id"], "node_label": node["label"]},
+        ),
     ):
         if event_type == "provider_switch":
             await send({"type": "provider_switch", "provider": content})
