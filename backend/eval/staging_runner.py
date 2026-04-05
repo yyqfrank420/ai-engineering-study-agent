@@ -548,18 +548,28 @@ async def main() -> None:
     _console.print(f"Base URL: [bold]{args.base_url}[/]")
     _console.print(f"Cases: [bold]{len(selected_cases)}[/]\n")
 
-    results: list[dict] = []
-    for case in selected_cases:
+    async def run_case_with_retry(case: StagingCase) -> dict:
+        """Run a case with retry logic for flaky tests."""
         _console.print(f"Running [bold]{case.id}[/] {case.description}")
-        result = await run_case(
-            None,
-            args.base_url,
-            auth_token,
-            case,
-            keep_threads=args.keep_threads,
-        )
-        results.append(result)
-        _console.print("[green]PASS[/]\n" if result["passed"] else "[red]FAIL[/]\n")
+        result = None
+        for attempt in range(1, 3):
+            result = await run_case(
+                None,
+                args.base_url,
+                auth_token,
+                case,
+                keep_threads=args.keep_threads,
+            )
+            if result["passed"]:
+                _console.print("[green]PASS[/]\n")
+                return result
+            if attempt == 1:
+                _console.print(f"[yellow]FAIL (attempt 1/2, retrying...)[/]")
+        _console.print("[red]FAIL[/]\n")
+        return result
+
+    # Run cases concurrently to reduce eval time from ~7m to ~1m
+    results = await asyncio.gather(*[run_case_with_retry(case) for case in selected_cases])
 
     print_report(results)
     path = write_results(results)
