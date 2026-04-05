@@ -267,6 +267,14 @@ This document captures hard-won learnings across every layer of the project. Wri
 - **Why:** Red = error = something broke. Greyed = disabled = expected boundary. Users understand greyed-out buttons as "not available right now" without anxiety.
 - **Lesson:** Disabled states should communicate "expected limit reached", not "something failed". Use grey for limits, red for errors. These are different signals.
 
+### 5.5 Graph layout persistence: debounce before persistence
+
+- Users pan/zoom the D3 graph. After session reload, the exact same viewport + node positions are restored.
+- **Implementation:** Frontend `useRef` cache stores view state keyed by graph fingerprint (thread ID + graph structure hash). On viewport/position change, 400ms debounce → `PUT /api/threads/{id}/graph` with updated GraphData. Backend `save_graph()` persists to Postgres in the `graph_data` JSONB column, returns 413 if oversized.
+- **Why debounce:** Drag/pan interactions fire many position updates per second. Without debounce, each tiny mouse move would fire a PUT request. 400ms debounce is long enough to batch interactions into a single save, short enough that the user doesn't notice async lag.
+- **Why keyed by structure hash:** If the same thread gets a new graph (e.g., user asks a different question), the view state should reset. The fingerprint includes node IDs, edges, sequence — if any change, the layout cache key changes and the old view state is discarded.
+- **Lesson:** For frequent DOM updates, debounce before persistence. Keyboard input, mouse drag, scroll events — batch them. The debounce delay trades imperceptible lag for massively reduced network traffic and database writes.
+
 ---
 
 ## 6. Security

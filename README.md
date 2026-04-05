@@ -48,6 +48,13 @@ Relevant docs:
 - [docs/prepare-flow-refactor.md](/Users/yangyuqing/Desktop/Coding%20Projects/Agent/docs/prepare-flow-refactor.md)
 - [docs/build-plan.md](/Users/yangyuqing/Desktop/Coding%20Projects/Agent/docs/build-plan.md)
 
+## Shipped Features
+
+- **Graph layout persistence** (2026-04-05): Pan/zoom + node positions saved per graph, restored on session reload. Debounced 400ms frontend cache → `PUT /api/threads/{id}/graph`.
+- **Cold-start UX contract**: Explicit `Prepare` button unlocks Send after backend is ready.
+- **Three-way routing**: SIMPLE (direct Haiku) / MEMORY (session history) / SEARCH (RAG + graph + research).
+- **D3 architecture diagram**: Interactive graph with step-by-step walkthrough and node detail enrichment.
+
 ## Local Development
 
 Backend:
