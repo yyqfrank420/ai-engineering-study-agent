@@ -49,6 +49,9 @@ async def test_graph_worker_prompt_includes_rag_evidence_and_concept_bias(monkey
     assert 'If in doubt, choose "concept".' in captured["system"]
     assert "If the exact product is out of book but the underlying pattern is in book, graph the pattern." in captured["system"]
     assert "Do NOT drift into random enterprise boxes like VPCs" in captured["system"]
+    assert 'Use type "decision" for business constraints' in captured["system"]
+    assert 'Example: "Compute Budget" is a decision, not a service.' in captured["system"]
+    assert '"decision"  — non-service constraints or choices' in captured["system"]
     assert captured["temperature"] == graph_worker.settings.graph_temperature
     assert captured["top_p"] == graph_worker.settings.graph_top_p
     assert captured["top_k"] == graph_worker.settings.graph_top_k
@@ -142,6 +145,53 @@ async def test_graph_worker_ignores_non_object_json_before_valid_object(monkeypa
 
     assert result["graph_data"]["title"] == "RAG Flow"
     assert result["graph_data"]["version"]
+
+
+@pytest.mark.asyncio
+async def test_graph_worker_keeps_existing_graph_and_prompts_for_new_chat(monkeypatch):
+    import agent.nodes.graph_worker as graph_worker
+
+    async def fake_stream_response(*, model, system, messages, thinking_budget, temperature=None, top_p=None, top_k=None):
+        yield ("text", '{"action":"new_chat"}')
+
+    monkeypatch.setattr(graph_worker, "stream_response", fake_stream_response)
+
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    state = {
+        "send": send,
+        "user_id": "user-1",
+        "session_id": "thread-1",
+        "user_message": "Draw me a training pipeline for a small language model instead.",
+        "graph_data": {
+            "title": "RAG Flow",
+            "nodes": [{"id": "retriever", "label": "Retriever", "type": "service", "technology": "FAISS", "description": "Finds relevant chunks", "tier": None}],
+            "edges": [],
+            "sequence": [],
+        },
+        "complexity": "auto",
+        "research_context": "",
+        "graph_notice_sent": False,
+        "rag_chunks": [
+            {
+                "chapter": 7,
+                "page_number": 332,
+                "chapter_title": "Training",
+                "section": "Pre-training",
+                "text": "Pre-training and fine-tuning are distinct phases in model development.",
+            }
+        ],
+    }
+
+    result = await graph_worker.graph_worker_node(state, tools=[])
+
+    assert result["graph_data"] is None
+    assert result["graph_notice_sent"] is True
+    assert any(event["type"] == "graph_notice" for event in events)
+    assert "Start a new chat" in events[-1]["message"]
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,7 @@
 #            NO_GRAPH  — query is a follow-up; keep existing graph unchanged
 #            replace   — topic has shifted; replace graph entirely
 #            update    — same topic; merge new nodes/edges into existing graph
+#            new_chat  — topic is unrelated enough that the user should start a new chat
 #
 #          The model outputs ONLY a JSON object when generating/updating,
 #          so parsing is reliable. The backend performs the merge for "update".
@@ -55,25 +56,35 @@ Pick ONE action:
    Output ONLY the two words: NO_GRAPH
 
 2. "replace"
-   The question is about a different concept, architecture, or learning flow.
+   The question is about a different concept, architecture, or learning flow,
+   but it is still a natural continuation of the current thread.
    Output a brand-new graph that replaces the existing one entirely.
 
 3. "update"
    The question stays on the same topic but adds structure or detail.
    Output ONLY the new nodes and edges to add.
+
+4. "new_chat"
+   Use this when ALL of the following are true:
+   - a graph already exists
+   - the user is asking for a graph / architecture / diagram / expansion
+   - the new request is about a clearly unrelated topic, so replacing the current graph would be confusing
+   In this case, do NOT redraw over the old graph.
+   Output ONLY this JSON object:
+   {"action":"new_chat"}
 </decision_policy>
 
 <output_contract>
 When outputting a graph, respond with ONLY a JSON object:
 {
-  "action": "replace" | "update",
+  "action": "replace" | "update" | "new_chat",
   "graph_type": "architecture" | "concept",
   "title": "<2-5 word title>",
   "nodes": [
     {
       "id": "<snake_id>",
       "label": "<MAX 3 words, MAX 20 chars — e.g. 'API Gateway', 'Vector Store', 'LLM Engine'>",
-      "type": "<client|service|datastore|gateway|network|external>",
+      "type": "<client|service|datastore|gateway|network|external|decision>",
       "technology": "<MAX 25 chars — e.g. 'Python / FastAPI', 'FAISS', 'Redis 7', 'vLLM / A100'>",
       "description": "<1 sentence: what this node is responsible for>",
       "tier": "<public|private>",
@@ -98,6 +109,7 @@ When outputting a graph, respond with ONLY a JSON object:
 
 For "update": nodes/edges are ONLY the additions — do not duplicate existing ones.
 For "replace": include the complete graph.
+For "new_chat": return ONLY {"action":"new_chat"} and nothing else.
 Sequence is [] unless there is a meaningful process order.
 Groups: for architecture graphs with 5+ nodes, define 2–4 named layers that cluster related
 nodes. Examples: "Orchestration Layer", "Storage Layer", "Tool Execution Layer",
@@ -120,6 +132,8 @@ No markdown, no prose, no code fence — only the JSON or NO_GRAPH.
   - If the question is about a method, idea, tradeoff, or technique (for example LoRA, PEFT,
     quantization, reranking, batching, fine-tuning), prefer a "concept" graph.
   - For concept graphs, nodes should be concepts or roles in the learning flow, not random services.
+  - Use type "decision" for business constraints, tradeoffs, approval gates, budgets, policy choices,
+    or other non-service decision points. Example: "Compute Budget" is a decision, not a service.
   - Avoid drifting into very low-level math or internal neuron-layer detail unless the user explicitly asks.
   - If the retrieved evidence is narrow, keep the graph small and faithful instead of making it look "complete".
 </grounding_rules>
@@ -176,6 +190,7 @@ No markdown, no prose, no code fence — only the JSON or NO_GRAPH.
   "gateway"   — traffic entry & control: load balancers, API gateways, CDN, reverse proxies
   "network"   — boundaries & plumbing: VPC, subnet, NAT gateway, firewall, VPC endpoint
   "external"  — third-party dependencies: SaaS APIs, managed services outside your control
+  "decision"  — non-service constraints or choices: compute budget, approval gate, policy, tradeoff, business rule
 </node_types>
 
 <node_fields>
@@ -256,6 +271,11 @@ No markdown, no prose, no code fence — only the JSON or NO_GRAPH.
   STORAGE PLACEMENT:
     - Attach storage/datastore nodes to the service that primarily owns them.
     - Do NOT cluster all datastores in one column; spread them next to their service.
+
+  DECISION / CONSTRAINT PLACEMENT:
+    - Use type:"decision" for nodes that constrain or steer the next design choice.
+    - A decision node can appear upstream of the service or concept it shapes.
+    - Do NOT label a budget, tradeoff, or approval gate as type:"service" just to make the diagram fit.
 
   OBSERVABILITY / MONITORING lane field:
     - "lane": "bottom"  — use for monitoring, logging, or observability nodes that
@@ -383,6 +403,15 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
             return {**state, "graph_data": None}
 
         action = parsed.get("action", "replace")
+        if action == "new_chat" and existing:
+            await send({
+                "type": "graph_notice",
+                "message": (
+                    "This looks like a different graph topic. Start a new chat if you want a fresh graph "
+                    "instead of replacing the current one."
+                ),
+            })
+            return {**state, "graph_data": None, "graph_notice_sent": True}
         if action == "update" and existing:
             merged = _merge_graphs(existing, parsed, generate_graph)
             return {**state, "graph_data": _attach_graph_version(merged)}

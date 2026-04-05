@@ -30,7 +30,7 @@ def generate_graph(
         graph_type: "architecture" for system diagrams, "concept" for idea maps
         title:      Short descriptive title e.g. "RAG Inference Pipeline"
         nodes:      List of {id, label, type, technology, description, tier?}
-                    type: "client" | "service" | "datastore" | "gateway" | "network" | "external"
+                    type: "client" | "service" | "datastore" | "gateway" | "network" | "external" | "decision"
                     technology: specific tech choice e.g. "Python / FastAPI"
                     description: 1-sentence responsibility summary
                     tier: "public" | "private" (architecture only, optional for concept)

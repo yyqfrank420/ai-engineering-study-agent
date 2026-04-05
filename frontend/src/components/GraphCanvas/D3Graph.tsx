@@ -28,6 +28,7 @@ const TYPE_STYLE: Record<string, { fill: string; stroke: string; badge: string }
   gateway:   { fill: 'rgba(217,119,6,0.12)',   stroke: 'rgba(217,119,6,0.85)',   badge: '#fbbf24'  },
   network:   { fill: 'rgba(239,68,68,0.10)',   stroke: 'rgba(239,68,68,0.80)',   badge: '#f87171'  },
   external:  { fill: 'rgba(100,116,139,0.08)', stroke: 'rgba(100,116,139,0.6)',  badge: '#94a3b8'  },
+  decision:  { fill: 'rgba(14,165,233,0.10)',  stroke: 'rgba(14,165,233,0.82)',  badge: '#38bdf8'  },
 };
 const FALLBACK_STYLE = {
   fill: 'rgba(100,116,139,0.08)', stroke: 'rgba(100,116,139,0.6)', badge: '#94a3b8',

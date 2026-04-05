@@ -150,6 +150,27 @@ export default function App() {
     );
   }, [handleSend]);
 
+  const handleExpandGraph = useCallback((node: GraphNode) => {
+    clearSelection();
+    setSelectedNode(null);
+    sendMessage(
+      [
+        `Expand the current graph around ${node.label}.`,
+        '',
+        'Keep the same overall topic and build on the existing graph instead of replacing it.',
+        'Add only the most relevant nearby nodes, edges, and steps that help a beginner understand this part better.',
+        'Do not start a brand-new graph unless the topic has clearly changed.',
+        'Do not expand business-constraint or decision nodes unless they are central to the user request.',
+      ].join('\n'),
+      {
+        complexity,
+        graphMode: 'on',
+        researchEnabled,
+        displayContent: `Expand graph around ${node.label}`,
+      },
+    );
+  }, [clearSelection, complexity, researchEnabled, sendMessage]);
+
   const effectiveThreadTitle = useMemo(
     () => threadTitle || 'New chat',
     [threadTitle],
@@ -241,6 +262,7 @@ export default function App() {
                 activeThreadId={activeThreadId}
                 onNodeClick={handleNodeClick}
                 onTellMeMore={handleTellMeMore}
+                onExpandGraph={handleExpandGraph}
                 selectedNode={selectedNode}
                 onClosePopup={() => setSelectedNode(null)}
                 sourceTexts={[latestAssistantText]}

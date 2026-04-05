@@ -19,6 +19,7 @@ const TYPE_COLORS: Record<string, string> = {
   gateway:   '#fbbf24',
   network:   '#f87171',
   external:  '#94a3b8',
+  decision:  '#38bdf8',
 };
 
 const TYPE_BG: Record<string, string> = {
@@ -28,6 +29,7 @@ const TYPE_BG: Record<string, string> = {
   gateway:   'rgba(217,119,6,0.12)',
   network:   'rgba(239,68,68,0.10)',
   external:  'rgba(100,116,139,0.08)',
+  decision:  'rgba(14,165,233,0.10)',
 };
 
 interface NodeDetailPopupProps {
@@ -35,12 +37,14 @@ interface NodeDetailPopupProps {
   edges: GraphEdge[];   // full graph edges — used to derive connections
   onClose: () => void;
   onTellMeMore: (node: GraphNode) => void;
+  onExpandGraph: (node: GraphNode) => void;
 }
 
-export function NodeDetailPopup({ node, edges, onClose, onTellMeMore }: NodeDetailPopupProps) {
+export function NodeDetailPopup({ node, edges, onClose, onTellMeMore, onExpandGraph }: NodeDetailPopupProps) {
   // Derive which nodes this node connects to/from
   const outgoing = edges.filter(e => e.source === node.id || (e.source as any)?.id === node.id);
   const incoming = edges.filter(e => e.target === node.id || (e.target as any)?.id === node.id);
+  const showExpandGraph = node.type !== 'decision';
 
   return (
     <div style={{
@@ -155,7 +159,7 @@ export function NodeDetailPopup({ node, edges, onClose, onTellMeMore }: NodeDeta
       )}
 
       {/* Book detail — enriched async by Node Detail Worker */}
-      {node.detail ? (
+      {node.detail && (
         <p style={{
           fontSize: '0.74rem',
           color: '#c9d1d9',
@@ -166,14 +170,16 @@ export function NodeDetailPopup({ node, edges, onClose, onTellMeMore }: NodeDeta
         }}>
           {node.detail}
         </p>
-      ) : (
-        <div style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'flex-start',
-          gap: '0.45rem',
-          marginBottom: '0.6rem',
-        }}>
+      )}
+
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        gap: '0.45rem',
+        marginBottom: '0.6rem',
+      }}>
+        <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
           <button
             onClick={() => onTellMeMore(node)}
             style={{
@@ -188,15 +194,33 @@ export function NodeDetailPopup({ node, edges, onClose, onTellMeMore }: NodeDeta
           >
             Tell me more
           </button>
-          <div style={{
-            color: '#6e7681',
-            fontSize: '0.67rem',
-            lineHeight: 1.45,
-          }}>
-            Ask the chat to walk through this part of the diagram while the deeper book note catches up.
-          </div>
+          {showExpandGraph && (
+            <button
+              onClick={() => onExpandGraph(node)}
+              style={{
+                background: 'rgba(56,189,248,0.12)',
+                border: '1px solid rgba(56,189,248,0.28)',
+                color: '#bfefff',
+                borderRadius: '999px',
+                padding: '0.3rem 0.75rem',
+                fontSize: '0.7rem',
+                cursor: 'pointer',
+              }}
+            >
+              Expand graph
+            </button>
+          )}
         </div>
-      )}
+        <div style={{
+          color: '#6e7681',
+          fontSize: '0.67rem',
+          lineHeight: 1.45,
+        }}>
+          {showExpandGraph
+            ? 'Ask the chat to explain this part or expand the nearby graph structure.'
+            : 'Ask the chat to explain this constraint more clearly.'}
+        </div>
+      </div>
 
       {/* Book references */}
       {node.book_refs && node.book_refs.length > 0 && (

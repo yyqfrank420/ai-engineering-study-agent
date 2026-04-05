@@ -20,6 +20,7 @@ interface GraphCanvasProps {
   activeThreadId: string | null;
   onNodeClick: (node: GraphNode) => void;
   onTellMeMore: (node: GraphNode) => void;
+  onExpandGraph: (node: GraphNode) => void;
   selectedNode: SelectedNode | null;
   onClosePopup: () => void;
   sourceTexts: string[];
@@ -46,6 +47,7 @@ export function GraphCanvas({
   activeThreadId,
   onNodeClick,
   onTellMeMore,
+  onExpandGraph,
   selectedNode,
   onClosePopup,
   sourceTexts,
@@ -182,6 +184,7 @@ export function GraphCanvas({
             edges={graphData.edges}
             onClose={onClosePopup}
             onTellMeMore={onTellMeMore}
+            onExpandGraph={onExpandGraph}
           />
         )}
 
