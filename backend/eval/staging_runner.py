@@ -568,8 +568,16 @@ async def main() -> None:
         _console.print("[red]FAIL[/]\n")
         return result
 
-    # Run cases concurrently to reduce eval time from ~7m to ~1m
-    results = await asyncio.gather(*[run_case_with_retry(case) for case in selected_cases])
+    # Split cases: run independent ones concurrently, then sequential ones after.
+    # real_workflow cases measure thread counts and are sensitive to concurrent
+    # thread creation/deletion from other tests running in parallel — they must
+    # run after all concurrent cases have cleaned up their threads.
+    concurrent_cases = [c for c in selected_cases if c.category != "real_workflow"]
+    sequential_cases = [c for c in selected_cases if c.category == "real_workflow"]
+
+    concurrent_results = await asyncio.gather(*[run_case_with_retry(c) for c in concurrent_cases])
+    sequential_results = [await run_case_with_retry(c) for c in sequential_cases]
+    results = list(concurrent_results) + sequential_results
 
     print_report(results)
     path = write_results(results)
