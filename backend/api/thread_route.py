@@ -1,16 +1,22 @@
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from adapters.supabase_auth_adapter import get_current_user
 from storage.message_store import get_messages
 from storage.profile_store import upsert_profile
-from storage.thread_store import create_thread, delete_thread, get_latest_thread, get_thread, list_threads
+from storage.thread_store import create_thread, delete_thread, get_latest_thread, get_thread, list_threads, save_graph
 
 router = APIRouter(prefix="/api/threads", tags=["threads"])
 
 
 class CreateThreadRequest(BaseModel):
     title: str = "New chat"
+
+
+class UpdateGraphRequest(BaseModel):
+    graph_data: dict[str, Any]
 
 
 @router.get("")
@@ -44,6 +50,19 @@ async def delete_thread_endpoint(thread_id: str, user=Depends(get_current_user))
     if thread is None:
         raise HTTPException(status_code=404, detail="Thread not found")
     delete_thread(user["id"], thread_id)
+
+
+@router.put("/{thread_id}/graph", status_code=204)
+async def update_thread_graph_endpoint(
+    thread_id: str,
+    body: UpdateGraphRequest,
+    user=Depends(get_current_user),
+):
+    thread = get_thread(user["id"], thread_id)
+    if thread is None:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    if not save_graph(user["id"], thread_id, body.graph_data):
+        raise HTTPException(status_code=413, detail="Graph data too large")
 
 
 @router.get("/{thread_id}")

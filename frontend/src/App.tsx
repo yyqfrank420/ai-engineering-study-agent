@@ -237,6 +237,8 @@ export default function App() {
               <GraphCanvas
                 graphData={graphData}
                 animateSequence={streamStatus === 'generating'}
+                authSession={authSession}
+                activeThreadId={activeThreadId}
                 onNodeClick={handleNodeClick}
                 onTellMeMore={handleTellMeMore}
                 selectedNode={selectedNode}

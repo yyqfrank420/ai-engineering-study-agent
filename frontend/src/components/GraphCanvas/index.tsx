@@ -4,17 +4,20 @@
 //          SequenceBar. Manages which node popup is open.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState, useEffect } from 'react';
-import type { GraphData, GraphNode, SelectedNode } from '../../types';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import type { AuthSession, GraphData, GraphNode, GraphViewState, SelectedNode } from '../../types';
 import { useGraph } from '../../hooks/useGraph';
 import { D3Graph } from './D3Graph';
 import { GlossaryDrawer } from './GlossaryDrawer';
 import { NodeDetailPopup } from './NodeDetailPopup';
 import { SequenceBar } from './SequenceBar';
+import { updateThreadGraph } from '../../services/api';
 
 interface GraphCanvasProps {
   graphData: GraphData | null;
   animateSequence: boolean;
+  authSession: AuthSession | null;
+  activeThreadId: string | null;
   onNodeClick: (node: GraphNode) => void;
   onTellMeMore: (node: GraphNode) => void;
   selectedNode: SelectedNode | null;
@@ -22,9 +25,25 @@ interface GraphCanvasProps {
   sourceTexts: string[];
 }
 
+function sameGraphViewState(a: GraphViewState | null | undefined, b: GraphViewState | null | undefined): boolean {
+  if (!a || !b) return a === b;
+  if (a.viewport.x !== b.viewport.x || a.viewport.y !== b.viewport.y || a.viewport.k !== b.viewport.k) {
+    return false;
+  }
+  const aEntries = Object.entries(a.nodePositions);
+  const bEntries = Object.entries(b.nodePositions);
+  if (aEntries.length !== bEntries.length) return false;
+  return aEntries.every(([nodeId, pos]) => {
+    const other = b.nodePositions[nodeId];
+    return !!other && other.x === pos.x && other.y === pos.y;
+  });
+}
+
 export function GraphCanvas({
   graphData,
   animateSequence,
+  authSession,
+  activeThreadId,
   onNodeClick,
   onTellMeMore,
   selectedNode,
@@ -33,9 +52,51 @@ export function GraphCanvas({
 }: GraphCanvasProps) {
   const { currentStep, totalSteps, hasSequence, activeNodeIds, stepDescription, goToStep } = useGraph(graphData, animateSequence);
   const [sequenceDismissed, setSequenceDismissed] = useState(false);
+  const viewStateCacheRef = useRef(new Map<string, GraphViewState>());
+  const [pendingPersistViewState, setPendingPersistViewState] = useState<GraphViewState | null>(null);
+  const graphViewKey = useMemo(() => {
+    if (!graphData || !activeThreadId) return null;
+    return [
+      activeThreadId,
+      graphData.version ?? '',
+      graphData.graph_type,
+      graphData.title,
+      graphData.nodes.map((node) => `${node.id}:${node.label}:${node.type}:${node.tier ?? ''}:${node.lane ?? ''}`).join('|'),
+      graphData.edges.map((edge) => `${edge.source}->${edge.target}:${edge.label}:${edge.sync}`).join('|'),
+      (graphData.groups ?? []).map((group) => `${group.id}:${group.nodeIds.join(',')}`).join('|'),
+      graphData.sequence.map((step) => `${step.step}:${step.nodes.join(',')}`).join('|'),
+    ].join('::');
+  }, [activeThreadId, graphData]);
+  const persistedViewState = graphViewKey ? viewStateCacheRef.current.get(graphViewKey) ?? graphData?.view_state ?? null : null;
 
   // Reset dismissed state whenever the graph changes (new topic = new sequence)
   useEffect(() => { setSequenceDismissed(false); }, [graphData]);
+
+  useEffect(() => {
+    if (!graphViewKey || !graphData?.view_state) return;
+    if (!viewStateCacheRef.current.has(graphViewKey)) {
+      viewStateCacheRef.current.set(graphViewKey, graphData.view_state);
+    }
+  }, [graphData, graphViewKey]);
+
+  useEffect(() => {
+    if (!authSession || !activeThreadId || !graphData || !pendingPersistViewState) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void updateThreadGraph(authSession, activeThreadId, {
+        ...graphData,
+        view_state: pendingPersistViewState,
+      }).catch((error) => {
+        console.error('[graph] Failed to persist graph view state:', error);
+      });
+    }, 400);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [activeThreadId, authSession, graphData, pendingPersistViewState]);
 
   if (!graphData) {
     return (
@@ -101,6 +162,16 @@ export function GraphCanvas({
           currentStep={currentStep}
           activeNodeIds={activeNodeIds}
           onNodeClick={onNodeClick}
+          initialViewState={persistedViewState ?? undefined}
+          onViewStateChange={(viewState) => {
+            if (!graphViewKey) return;
+            const existingViewState = viewStateCacheRef.current.get(graphViewKey) ?? graphData.view_state ?? null;
+            if (sameGraphViewState(existingViewState, viewState)) {
+              return;
+            }
+            viewStateCacheRef.current.set(graphViewKey, viewState);
+            setPendingPersistViewState(viewState);
+          }}
         />
 
         {/* Node detail popup — resolve live node from graphData so enrichment

@@ -1,4 +1,4 @@
-import type { AuthSession, ThreadDetail, ThreadSummary } from '../types';
+import type { AuthSession, GraphData, ThreadDetail, ThreadSummary } from '../types';
 import { API_BASE } from './config';
 
 async function authedFetch(path: string, session: AuthSession, init?: RequestInit): Promise<Response> {
@@ -43,6 +43,14 @@ export async function listThreads(session: AuthSession): Promise<ThreadSummary[]
 export async function deleteThread(session: AuthSession, threadId: string): Promise<void> {
   const response = await authedFetch(`/api/threads/${threadId}`, session, { method: 'DELETE' });
   if (!response.ok) throw new Error('Failed to delete thread');
+}
+
+export async function updateThreadGraph(session: AuthSession, threadId: string, graphData: GraphData): Promise<void> {
+  const response = await authedFetch(`/api/threads/${threadId}/graph`, session, {
+    method: 'PUT',
+    body: JSON.stringify({ graph_data: graphData }),
+  });
+  if (!response.ok) throw new Error('Failed to update thread graph');
 }
 
 export async function prepareBackend(): Promise<{ status: string; faiss_loaded: boolean }> {

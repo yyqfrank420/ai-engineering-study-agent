@@ -11,7 +11,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
-import type { GraphData, GraphGroup, GraphNode } from '../../types';
+import type { GraphData, GraphGroup, GraphNode, GraphViewState } from '../../types';
 
 // ── Node dimensions ─────────────────────────────────────────────────────────
 // NODE_W is wide enough to show labels up to ~24 chars without truncation.
@@ -122,6 +122,8 @@ interface D3GraphProps {
   currentStep: number;
   activeNodeIds: Set<string>;
   onNodeClick: (node: GraphNode) => void;
+  initialViewState?: GraphViewState;
+  onViewStateChange?: (state: GraphViewState) => void;
 }
 
 interface GraphRenderState {
@@ -181,16 +183,28 @@ function graphStructureKey(graphData: GraphData): string {
   });
 }
 
-export function D3Graph({ graphData, currentStep, activeNodeIds, onNodeClick }: D3GraphProps) {
+export function D3Graph({
+  graphData,
+  currentStep,
+  activeNodeIds,
+  onNodeClick,
+  initialViewState,
+  onViewStateChange,
+}: D3GraphProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const renderStateRef = useRef<GraphRenderState | null>(null);
   const onNodeClickRef = useRef(onNodeClick);
+  const onViewStateChangeRef = useRef(onViewStateChange);
   const [edgeTooltip, setEdgeTooltip] = useState<EdgeTooltip | null>(null);
   const structureKey = graphStructureKey(graphData);
 
   useEffect(() => {
     onNodeClickRef.current = onNodeClick;
   }, [onNodeClick]);
+
+  useEffect(() => {
+    onViewStateChangeRef.current = onViewStateChange;
+  }, [onViewStateChange]);
 
   // ── Main render effect — fires when graphData changes ───────────────────────
   useEffect(() => {
@@ -235,9 +249,33 @@ export function D3Graph({ graphData, currentStep, activeNodeIds, onNodeClick }: 
     // ── Pan + zoom container ──────────────────────────────────────────────────
     // Store the zoom behaviour so we can set the initial fit transform later.
     const g = svg.append('g');
+    const emitViewState = (nodesToPersist: any[], transform: d3.ZoomTransform) => {
+      onViewStateChangeRef.current?.({
+        nodePositions: Object.fromEntries(
+          nodesToPersist.map((node) => [
+            node.id,
+            {
+              x: node.x,
+              y: node.y,
+            },
+          ]),
+        ),
+        viewport: {
+          x: transform.x,
+          y: transform.y,
+          k: transform.k,
+        },
+      });
+    };
+
     const zoomBehavior = d3.zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.1, 3])
-      .on('zoom', (event) => g.attr('transform', event.transform));
+      .on('zoom', (event) => {
+        g.attr('transform', event.transform.toString());
+      })
+      .on('end', (event) => {
+        emitViewState(nodes, event.transform);
+      });
     svg.call(zoomBehavior);
 
     // ── Deep-copy nodes (D3 may mutate x/y) ──────────────────────────────────
@@ -353,6 +391,13 @@ export function D3Graph({ graphData, currentStep, activeNodeIds, onNodeClick }: 
         n.x = x;
         n.y = V_PAD + effectiveMainH + (BOTTOM_BAND_H / Math.max(bottomNodes.length, 1)) * (i + 0.5);
       });
+    }
+
+    for (const node of nodes) {
+      const persistedPosition = initialViewState?.nodePositions[node.id];
+      if (!persistedPosition) continue;
+      node.x = persistedPosition.x;
+      node.y = persistedPosition.y;
     }
 
     // Total layout dimensions (used for auto-fit zoom below)
@@ -563,6 +608,10 @@ export function D3Graph({ graphData, currentStep, activeNodeIds, onNodeClick }: 
             d.x = event.x;
             d.y = event.y;
             renderAll();
+          })
+          .on('end', () => {
+            const currentTransform = d3.zoomTransform(svgRef.current!);
+            emitViewState(nodes, currentTransform);
           })
       )
       .on('click', (_event, d: any) => onNodeClickRef.current(d as GraphNode))
@@ -829,10 +878,12 @@ export function D3Graph({ graphData, currentStep, activeNodeIds, onNodeClick }: 
     // negative, sliding the entire graph behind the left edge of the container.
     const fitTx = Math.max(FIT_PADDING, (width  - layoutW * fitScale) / 2);
     const fitTy = Math.max(FIT_PADDING, (height - layoutH * fitScale) / 2);
-    svg.call(
-      (zoomBehavior.transform as any),
-      d3.zoomIdentity.translate(fitTx, fitTy).scale(fitScale),
-    );
+    const initialTransform = initialViewState?.viewport
+      ? d3.zoomIdentity
+          .translate(initialViewState.viewport.x, initialViewState.viewport.y)
+          .scale(initialViewState.viewport.k)
+      : d3.zoomIdentity.translate(fitTx, fitTy).scale(fitScale);
+    svg.call((zoomBehavior.transform as any), initialTransform);
 
     renderStateRef.current = {
       nodeSel,

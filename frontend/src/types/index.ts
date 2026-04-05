@@ -60,6 +60,15 @@ export interface GraphGroup {
   nodeIds: string[];    // IDs of member nodes
 }
 
+export interface GraphViewState {
+  nodePositions: Record<string, { x: number; y: number }>;
+  viewport: {
+    x: number;
+    y: number;
+    k: number;
+  };
+}
+
 export interface GraphData {
   graph_type: 'architecture' | 'concept';
   title: string;
@@ -68,6 +77,7 @@ export interface GraphData {
   sequence: GraphStep[];
   groups?: GraphGroup[];
   version?: string;
+  view_state?: GraphViewState;
 }
 
 // ── Chat types ────────────────────────────────────────────────────────────────
