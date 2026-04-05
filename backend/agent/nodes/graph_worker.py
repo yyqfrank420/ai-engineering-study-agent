@@ -403,15 +403,31 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
             return {**state, "graph_data": None}
 
         action = parsed.get("action", "replace")
-        if action == "new_chat" and existing:
-            await send({
-                "type": "graph_notice",
-                "message": (
-                    "This looks like a different graph topic. Start a new chat if you want a fresh graph "
-                    "instead of replacing the current one."
-                ),
-            })
-            return {**state, "graph_data": None, "graph_notice_sent": True}
+        if action == "new_chat":
+            if existing:
+                await send({
+                    "type": "graph_notice",
+                    "message": (
+                        "This looks like a different graph topic. Start a new chat if you want a fresh graph "
+                        "instead of replacing the current one."
+                    ),
+                })
+                return {**state, "graph_data": None, "graph_notice_sent": True}
+            else:
+                # new_chat with no existing graph is invalid — re-prompt for a real graph
+                raw = await _generate_raw_graph_response(
+                    f"{system}\n{_FORCE_GRAPH_APPEND}",
+                    messages,
+                    send,
+                    telemetry=telemetry,
+                )
+                if "NO_GRAPH" in raw.strip().upper()[:120] and not raw.strip().startswith("{"):
+                    return {**state, "graph_data": None}
+                parsed = _parse_json(raw)
+                if parsed is None:
+                    return {**state, "graph_data": None}
+                # Fall through to validation with the new response
+
         if action == "update" and existing:
             merged = _merge_graphs(existing, parsed, generate_graph)
             return {**state, "graph_data": _attach_graph_version(merged)}
