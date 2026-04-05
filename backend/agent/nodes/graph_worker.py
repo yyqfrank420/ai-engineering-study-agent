@@ -438,7 +438,7 @@ def _parse_json(text: str) -> dict | None:
             break
         try:
             data, _ = decoder.raw_decode(cleaned, start)
-            if isinstance(data, dict) and (data.get("nodes") or data.get("action") == "update"):
+            if isinstance(data, dict) and (data.get("nodes") or data.get("action") in ("update", "new_chat")):
                 return data
             idx = start + 1
         except json.JSONDecodeError:
