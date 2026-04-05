@@ -108,17 +108,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      # Cache npm dependencies by lock file (handles rolldown bindings per OS)
-      - uses: actions/cache@v4
-        with:
-          path: frontend/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: npm-${{ runner.os }}-
+          # No npm cache — rolldown (Vite 6) has platform-specific native bindings.
+          # A cached node_modules may lack @rolldown/binding-linux-x64-gnu.
+          # Fresh npm install on Linux resolves the correct optional deps each time.
 
       - name: Install dependencies
         working-directory: frontend
-        run: npm install --prefer-offline --no-audit
+        run: rm -f package-lock.json && npm install
 
       # `npm run build` runs `tsc -b && vite build` — type errors fail the job.
       - name: Type-check and build
