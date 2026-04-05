@@ -335,7 +335,7 @@ jobs:
     name: Deploy frontend to Vercel
     runs-on: ubuntu-latest
     needs: [check-docs-only, promote-backend, test-backend, test-frontend]
-    if: always() && (needs.check-docs-only.outputs.docs-only == 'false' || needs.promote-backend.result == 'success') || needs.check-docs-only.outputs.docs-only == 'true'
+    if: needs.promote-backend.result == 'success' || needs.check-docs-only.outputs.docs-only == 'true'
 
     steps:
       - uses: actions/checkout@v4
@@ -343,15 +343,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          # No npm cache — rolldown (Vite 6) has platform-specific native bindings.
 
-      # Download pre-built frontend artifacts from test-frontend job
-      - uses: actions/download-artifact@v4
-        with:
-          name: frontend-dist
-          path: frontend/dist
+      - name: Install dependencies
+        working-directory: frontend
+        run: rm -f package-lock.json && npm install
 
       # Pull project config from Vercel (creates .vercel/project.json locally).
-      # Required before uploading artifacts in non-interactive CI environments.
+      # Required before `vercel build` in non-interactive CI environments.
       - name: Pull Vercel project settings
         working-directory: frontend
         run: npx vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
@@ -359,15 +358,15 @@ jobs:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
-      # Build Vercel output structure from cached dist artifacts
-      - name: Build Vercel output structure
+      # `vercel build` runs the framework build inside Vercel's build system
+      # and produces .vercel/output. Then `vercel deploy --prebuilt` uploads
+      # only the artifacts. This is faster than giving Vercel the source.
+      - name: Build (Vercel-aware)
         working-directory: frontend
-        run: |
-          mkdir -p .vercel/output/static
-          cp -r dist/* .vercel/output/static/ || true
-          cat > .vercel/output/config.json << 'JSON'
-          { "version": 3, "routes": [ { "src": "/(.*)", "dest": "/index.html" } ] }
-          JSON
+        run: npx vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
       - name: Deploy to Vercel (production)
         working-directory: frontend
