@@ -15,7 +15,11 @@ import { useAuthSession } from './hooks/useAuthSession';
 import { useBackendReadiness } from './hooks/useBackendReadiness';
 import { useSelectionSuggestion } from './hooks/useSelectionSuggestion';
 import { useThreadSession } from './hooks/useThreadSession';
-import { storageKeyForThread, writeThreadSnapshot } from './utils/threadState';
+import {
+  shouldPersistThreadSnapshot,
+  storageKeyForThread,
+  writeThreadSnapshot,
+} from './utils/threadState';
 
 import type { ComplexityLevel, GraphMode } from './types';
 
@@ -181,12 +185,18 @@ export default function App() {
       return;
     }
 
-    writeThreadSnapshot(authSession.user.id, activeThreadId, {
+    const liveSnapshot = {
       title: effectiveThreadTitle,
       messages,
       graphData,
-    });
-  }, [activeThreadId, authSession, effectiveThreadTitle, graphData, messages]);
+    };
+
+    if (!shouldPersistThreadSnapshot(liveSnapshot, threadSnapshot)) {
+      return;
+    }
+
+    writeThreadSnapshot(authSession.user.id, activeThreadId, liveSnapshot);
+  }, [activeThreadId, authSession, effectiveThreadTitle, graphData, messages, threadSnapshot]);
 
   const latestAssistantText = useMemo(
     () => [...messages].reverse().find((message) => message.role === 'assistant')?.content ?? '',

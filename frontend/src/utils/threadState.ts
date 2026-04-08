@@ -40,6 +40,25 @@ export function writeThreadSnapshot(userId: string, threadId: string, snapshot: 
   );
 }
 
+export function shouldPersistThreadSnapshot(
+  liveSnapshot: ThreadSnapshot,
+  baselineSnapshot: ThreadSnapshot,
+): boolean {
+  const liveHasGraph = liveSnapshot.graphData !== null;
+  const baselineHasGraph = baselineSnapshot.graphData !== null;
+
+  // During app bootstrap or post-deploy prepare, the live stream state can be
+  // momentarily empty before hydrateThread() replays the cached thread. Never
+  // overwrite a richer cached snapshot with that transient empty state.
+  if (liveSnapshot.messages.length < baselineSnapshot.messages.length) {
+    return false;
+  }
+  if (!liveHasGraph && baselineHasGraph) {
+    return false;
+  }
+  return true;
+}
+
 export function clearThreadSnapshot(userId: string, threadId: string): void {
   localStorage.removeItem(storageKeyForThreadSnapshot(userId, threadId));
 }

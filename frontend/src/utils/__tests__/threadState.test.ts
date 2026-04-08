@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   clearThreadSnapshot,
   readThreadSnapshot,
+  shouldPersistThreadSnapshot,
   writeThreadSnapshot,
 } from '../threadState';
 
@@ -40,5 +41,57 @@ describe('thread snapshot helpers', () => {
     clearThreadSnapshot('user-1', 'thread-1');
 
     expect(readThreadSnapshot('user-1', 'thread-1')).toBeNull();
+  });
+
+  it('does not persist a transiently emptier live snapshot over a richer cached thread', () => {
+    expect(shouldPersistThreadSnapshot(
+      {
+        title: 'Thread title',
+        messages: [],
+        graphData: null,
+      },
+      {
+        title: 'Thread title',
+        messages: [
+          { id: 'm1', role: 'user', content: 'hello', isStreaming: false },
+          { id: 'm2', role: 'assistant', content: 'world', isStreaming: false },
+        ],
+        graphData: {
+          graph_type: 'concept',
+          title: 'RAG',
+          nodes: [],
+          edges: [],
+          sequence: [],
+        },
+      },
+    )).toBe(false);
+  });
+
+  it('persists a live snapshot once it is as complete as the cached thread', () => {
+    expect(shouldPersistThreadSnapshot(
+      {
+        title: 'Thread title',
+        messages: [
+          { id: 'm1', role: 'user', content: 'hello', isStreaming: false },
+          { id: 'm2', role: 'assistant', content: 'world', isStreaming: false },
+          { id: 'm3', role: 'user', content: 'new turn', isStreaming: false },
+        ],
+        graphData: {
+          graph_type: 'concept',
+          title: 'RAG',
+          nodes: [],
+          edges: [],
+          sequence: [],
+        },
+      },
+      {
+        title: 'Thread title',
+        messages: [
+          { id: 'm1', role: 'user', content: 'hello', isStreaming: false },
+          { id: 'm2', role: 'assistant', content: 'world', isStreaming: false },
+        ],
+        graphData: null,
+      },
+    )).toBe(true);
   });
 });
