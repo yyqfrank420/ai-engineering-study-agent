@@ -2,6 +2,7 @@
 .gitignore
 .pytest_cache
 .venv
+backend/.venv
 .claude
 .superpowers
 frontend
@@ -17,6 +18,7 @@ backend/.env
 backend/.env.*
 !backend/.env.example
 backend/__pycache__
+backend/**/__pycache__
 backend/**/*.pyc
 backend/.pytest_cache
 backend/tests
