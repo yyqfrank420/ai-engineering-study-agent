@@ -163,6 +163,37 @@ def test_thread_count_delta_uses_visible_threads_only():
     assert failures == []
 
 
+def test_evaluate_expectation_marks_deleted_thread_from_404_get_thread():
+    step = StagingStep(
+        kind="get_thread",
+        description="deleted thread audit",
+        expect=StepExpectation(http_status=404, thread_deleted=True),
+    )
+    run = {
+        "status_code": 404,
+        "events": [],
+        "json_body": None,
+        "body_text": "",
+    }
+
+    failures = evaluate_expectation(step, run, {})
+
+    assert failures == []
+
+
+def test_real_workflow_case_uses_thread_specific_delete_check():
+    workflow_case = next(case for case in STAGING_CASES if case.id == "S9")
+
+    assert [step.kind for step in workflow_case.steps] == [
+        "chat",
+        "chat",
+        "get_thread",
+        "delete_thread",
+        "get_thread",
+    ]
+    assert workflow_case.steps[-1].expect.thread_deleted is True
+
+
 def test_blocking_request_reads_until_stream_eof(monkeypatch):
     class _FakeResponse:
         status = 200

@@ -2,18 +2,38 @@ import argparse
 import asyncio
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 import urllib.error
 import urllib.request
 
-from rich import box
-from rich.console import Console
-from rich.table import Table
+try:
+    from rich import box
+    from rich.console import Console
+    from rich.table import Table
+except ModuleNotFoundError:
+    box = None
+    Console = None
+    Table = None
 
 from eval.staging_cases import STAGING_CASES, StagingCase, StagingStep
 
-_console = Console()
+_console = Console() if Console is not None else None
+
+
+def _console_print(message: str = "") -> None:
+    if _console is not None:
+        _console.print(message)
+        return
+    print(message)
+
+
+def _console_rule(title: str) -> None:
+    if _console is not None:
+        _console.rule(title)
+        return
+    print(title)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -486,6 +506,26 @@ async def run_case(
 
 
 def print_report(results: list[dict]) -> None:
+    if _console is None or Table is None or box is None:
+        print("Case | Category | Status | Failed Steps")
+        for result in results:
+            failed_steps = sum(1 for step in result["steps"] if not step["passed"])
+            status = "PASS" if result["passed"] else "FAIL"
+            print(f"{result['id']} | {result['category']} | {status} | {failed_steps}")
+
+        failures = [result for result in results if not result["passed"]]
+        if failures:
+            print("\nFailures")
+            for result in failures:
+                print(f"{result['id']} {result['description']}")
+                for step in result["steps"]:
+                    if step["passed"]:
+                        continue
+                    print(f"  {step['index']}. {step['description']}")
+                    for failure in step["failures"]:
+                        print(f"    - {failure}")
+        return
+
     table = Table(box=box.ROUNDED, show_header=True, header_style="bold")
     table.add_column("Case")
     table.add_column("Category")
@@ -544,13 +584,15 @@ async def main() -> None:
     if ready["status_code"] >= 400:
         raise RuntimeError(f"Backend not ready: {ready['body_text']}")
 
-    _console.rule("[bold]Staging Eval Suite[/]")
-    _console.print(f"Base URL: [bold]{args.base_url}[/]")
-    _console.print(f"Cases: [bold]{len(selected_cases)}[/]\n")
+    _console_rule("[bold]Staging Eval Suite[/]")
+    _console_print(f"Base URL: [bold]{args.base_url}[/]" if _console is not None else f"Base URL: {args.base_url}")
+    _console_print(f"Cases: [bold]{len(selected_cases)}[/]\n" if _console is not None else f"Cases: {len(selected_cases)}\n")
 
     async def run_case_with_retry(case: StagingCase) -> dict:
         """Run a case with retry logic for flaky tests."""
-        _console.print(f"Running [bold]{case.id}[/] {case.description}")
+        started_at = time.perf_counter()
+        case_label = f"[bold]{case.id}[/]" if _console is not None else case.id
+        _console_print(f"Running {case_label} {case.description}")
         result = None
         for attempt in range(1, 3):
             result = await run_case(
@@ -561,27 +603,27 @@ async def main() -> None:
                 keep_threads=args.keep_threads,
             )
             if result["passed"]:
-                _console.print("[green]PASS[/]\n")
+                elapsed = time.perf_counter() - started_at
+                pass_message = f"[green]PASS[/] ({elapsed:.1f}s)" if _console is not None else f"PASS ({elapsed:.1f}s)"
+                _console_print(f"{pass_message}\n")
                 return result
             if attempt == 1:
-                _console.print(f"[yellow]FAIL (attempt 1/2, retrying...)[/]")
-        _console.print("[red]FAIL[/]\n")
+                retry_message = (
+                    f"[yellow]{case.id} FAIL (attempt 1/2, retrying...)[/]"
+                    if _console is not None
+                    else f"{case.id} FAIL (attempt 1/2, retrying...)"
+                )
+                _console_print(retry_message)
+        elapsed = time.perf_counter() - started_at
+        fail_message = f"[red]FAIL[/] ({elapsed:.1f}s)" if _console is not None else f"FAIL ({elapsed:.1f}s)"
+        _console_print(f"{fail_message}\n")
         return result
 
-    # Split cases: run independent ones concurrently, then sequential ones after.
-    # real_workflow cases measure thread counts and are sensitive to concurrent
-    # thread creation/deletion from other tests running in parallel — they must
-    # run after all concurrent cases have cleaned up their threads.
-    concurrent_cases = [c for c in selected_cases if c.category != "real_workflow"]
-    sequential_cases = [c for c in selected_cases if c.category == "real_workflow"]
-
-    concurrent_results = await asyncio.gather(*[run_case_with_retry(c) for c in concurrent_cases])
-    sequential_results = [await run_case_with_retry(c) for c in sequential_cases]
-    results = list(concurrent_results) + sequential_results
+    results = list(await asyncio.gather(*[run_case_with_retry(case) for case in selected_cases]))
 
     print_report(results)
     path = write_results(results)
-    _console.print(f"\nResults written to [dim]{path}[/]")
+    _console_print(f"\nResults written to [dim]{path}[/]" if _console is not None else f"\nResults written to {path}")
 
     if not all(result["passed"] for result in results):
         raise SystemExit(1)

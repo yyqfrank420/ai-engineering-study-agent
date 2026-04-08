@@ -285,11 +285,6 @@ STAGING_CASES: list[StagingCase] = [
         description="A realistic user workflow should create, use, and delete a thread cleanly.",
         steps=[
             StagingStep(
-                kind="list_threads",
-                description="Capture the current thread count.",
-                expect=StepExpectation(),
-            ),
-            StagingStep(
                 kind="chat",
                 description="Ask a first question.",
                 payload={
@@ -328,9 +323,9 @@ STAGING_CASES: list[StagingCase] = [
                 expect=StepExpectation(http_status=204),
             ),
             StagingStep(
-                kind="list_threads",
-                description="Confirm the thread count returned to baseline.",
-                expect=StepExpectation(thread_count_delta=0),
+                kind="get_thread",
+                description="Confirm the deleted thread is no longer retrievable.",
+                expect=StepExpectation(http_status=404, thread_deleted=True),
             ),
         ],
         cleanup_thread=False,
