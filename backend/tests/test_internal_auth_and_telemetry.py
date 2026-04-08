@@ -88,6 +88,17 @@ def test_internal_login_reuses_existing_profile_id_for_same_email(temp_data_dir,
     assert session["user"]["id"] == "existing-user-id"
 
 
+def test_upsert_profile_updates_existing_email_in_place(temp_data_dir):
+    init_db()
+
+    first = upsert_profile("existing-user-id", "before@example.com")
+    second = upsert_profile("existing-user-id", "after@example.com")
+
+    assert first["id"] == "existing-user-id"
+    assert second["id"] == "existing-user-id"
+    assert second["email"] == "after@example.com"
+
+
 def test_internal_login_stringifies_existing_uuid_profile_id(temp_data_dir, monkeypatch):
     from api import auth_route
 

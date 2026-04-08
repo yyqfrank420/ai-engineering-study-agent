@@ -1,4 +1,4 @@
-from adapters.database_adapter import execute, fetchone
+from adapters.database_adapter import _adapt_query, _connect, fetchone
 
 
 def get_profile_by_email(email: str) -> dict | None:
@@ -6,15 +6,21 @@ def get_profile_by_email(email: str) -> dict | None:
 
 
 def upsert_profile(user_id: str, email: str) -> dict:
-    existing = fetchone("SELECT * FROM profiles WHERE id = ?", (user_id,))
-    if existing:
-        execute(
-            "UPDATE profiles SET email = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (email, user_id),
-        )
-    else:
-        execute(
-            "INSERT INTO profiles (id, email) VALUES (?, ?)",
+    with _connect() as conn:
+        conn.execute(
+            _adapt_query(
+                """
+                INSERT INTO profiles (id, email)
+                VALUES (?, ?)
+                ON CONFLICT(id) DO UPDATE
+                SET email = excluded.email,
+                    updated_at = CURRENT_TIMESTAMP
+                """
+            ),
             (user_id, email),
         )
-    return fetchone("SELECT * FROM profiles WHERE id = ?", (user_id,)) or {"id": user_id, "email": email}
+        row = conn.execute(
+            _adapt_query("SELECT * FROM profiles WHERE id = ?"),
+            (user_id,),
+        ).fetchone()
+        return dict(row) if row else {"id": user_id, "email": email}

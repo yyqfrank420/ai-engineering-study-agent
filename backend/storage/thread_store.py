@@ -2,7 +2,7 @@ import json
 import logging
 import uuid
 
-from adapters.database_adapter import execute, fetchall, fetchone
+from adapters.database_adapter import _adapt_query, _connect, execute, fetchall, fetchone
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -49,25 +49,69 @@ def delete_thread(user_id: str, thread_id: str) -> None:
 
 
 def create_thread(user_id: str, title: str = "New chat") -> dict:
-    # Evict oldest thread when the user is at the limit
-    if count_threads(user_id) >= settings.max_threads_per_user:
-        oldest = get_oldest_thread_id(user_id)
-        if oldest:
-            logger.info(
-                "thread_store: evicting oldest thread %s for user %s (limit=%d)",
-                oldest, user_id, settings.max_threads_per_user,
-            )
-            delete_thread(user_id, oldest)
+    with _connect() as conn:
+        row = conn.execute(
+            _adapt_query("SELECT COUNT(*) AS n FROM chat_threads WHERE user_id = ?"),
+            (user_id,),
+        ).fetchone()
+        thread_count = row["n"] if row else 0
 
-    thread_id = str(uuid.uuid4())
-    execute(
-        """
-        INSERT INTO chat_threads (id, user_id, title)
-        VALUES (?, ?, ?)
-        """,
-        (thread_id, user_id, title),
-    )
-    return get_thread(user_id, thread_id)
+        # Evict oldest thread when the user is at the limit.
+        if thread_count >= settings.max_threads_per_user:
+            oldest = conn.execute(
+                _adapt_query(
+                    """
+                    SELECT id FROM chat_threads
+                    WHERE user_id = ?
+                    ORDER BY last_seen_at ASC
+                    LIMIT 1
+                    """
+                ),
+                (user_id,),
+            ).fetchone()
+            if oldest:
+                oldest_id = oldest["id"]
+                logger.info(
+                    "thread_store: evicting oldest thread %s for user %s (limit=%d)",
+                    oldest_id, user_id, settings.max_threads_per_user,
+                )
+                conn.execute(
+                    _adapt_query("DELETE FROM chat_messages WHERE thread_id = ? AND user_id = ?"),
+                    (oldest_id, user_id),
+                )
+                conn.execute(
+                    _adapt_query("DELETE FROM chat_threads WHERE id = ? AND user_id = ?"),
+                    (oldest_id, user_id),
+                )
+
+        thread_id = str(uuid.uuid4())
+        conn.execute(
+            _adapt_query(
+                """
+                INSERT INTO chat_threads (id, user_id, title)
+                VALUES (?, ?, ?)
+                """
+            ),
+            (thread_id, user_id, title),
+        )
+        row = conn.execute(
+            _adapt_query(
+                """
+                SELECT id, user_id, title, graph_data, created_at, updated_at, last_seen_at
+                FROM chat_threads
+                WHERE id = ? AND user_id = ?
+                """
+            ),
+            (thread_id, user_id),
+        ).fetchone()
+        thread = dict(row) if row else None
+
+    if thread and thread.get("graph_data"):
+        try:
+            thread["graph_data"] = json.loads(thread["graph_data"]) if isinstance(thread["graph_data"], str) else thread["graph_data"]
+        except Exception:
+            thread["graph_data"] = None
+    return thread
 
 
 def get_thread(user_id: str, thread_id: str) -> dict | None:
