@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useThreadSession } from '../useThreadSession';
 import type { GraphData } from '../../types';
+import { storageKeyForThread } from '../../utils/threadState';
 
 vi.mock('../../services/api', () => ({
   createThread: vi.fn(),
@@ -132,6 +133,48 @@ describe('useThreadSession', () => {
       expect(result.current.threadSnapshot.messages).toHaveLength(0);
       expect(result.current.threadSnapshot.graphData).toBeNull();
       expect(result.current.loadingThread).toBe(false);
+    });
+  });
+
+  it('loads the latest thread when the backend becomes ready without a remembered thread', async () => {
+    vi.mocked(fetchLatestThread).mockResolvedValueOnce(
+      makeThreadDetail('thread-latest', 'Latest chat'),
+    );
+
+    const { result } = renderHook(() => useThreadSession({
+      authSession: TEST_SESSION,
+      backendReady: true,
+      clearSelection: vi.fn(),
+    }));
+
+    await waitFor(() => {
+      expect(fetchLatestThread).toHaveBeenCalledWith(TEST_SESSION);
+      expect(result.current.activeThreadId).toBe('thread-latest');
+      expect(result.current.threadTitle).toBe('Latest chat');
+      expect(result.current.loadingThread).toBe(false);
+    });
+  });
+
+  it('falls back to the latest thread when the remembered thread is stale', async () => {
+    localStorage.setItem(storageKeyForThread(TEST_SESSION.user.id), 'thread-stale');
+
+    vi.mocked(fetchThread).mockRejectedValueOnce(new Error('Thread not found'));
+    vi.mocked(fetchLatestThread).mockResolvedValueOnce(
+      makeThreadDetail('thread-fallback', 'Recovered chat'),
+    );
+
+    const { result } = renderHook(() => useThreadSession({
+      authSession: TEST_SESSION,
+      backendReady: true,
+      clearSelection: vi.fn(),
+    }));
+
+    await waitFor(() => {
+      expect(fetchThread).toHaveBeenCalledWith(TEST_SESSION, 'thread-stale');
+      expect(fetchLatestThread).toHaveBeenCalledWith(TEST_SESSION);
+      expect(result.current.activeThreadId).toBe('thread-fallback');
+      expect(result.current.threadTitle).toBe('Recovered chat');
+      expect(localStorage.getItem(storageKeyForThread(TEST_SESSION.user.id))).toBe('thread-fallback');
     });
   });
 

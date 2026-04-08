@@ -152,17 +152,28 @@ export function useThreadSession({
     loadedUserIdRef.current = authSession.user.id;
 
     const rememberedThreadId = localStorage.getItem(storageKeyForThread(authSession.user.id));
-    if (!rememberedThreadId) {
-      clearActiveThreadView();
-      return;
-    }
 
-    loadThread(authSession, rememberedThreadId).catch((error: unknown) => {
+    loadThread(authSession, rememberedThreadId).catch(async (error: unknown) => {
+      if (!rememberedThreadId) {
+        const message = error instanceof Error ? error.message : 'Could not connect to backend';
+        console.error('[thread] Failed to load latest thread:', message);
+        setThreadError(message);
+        clearActiveThreadView();
+        return;
+      }
+
       localStorage.removeItem(storageKeyForThread(authSession.user.id));
       const message = error instanceof Error ? error.message : 'Could not connect to backend';
-      console.error('[thread] Failed to load remembered thread:', message);
-      setThreadError(message);
-      clearActiveThreadView();
+      console.error('[thread] Failed to load remembered thread, falling back to latest:', message);
+
+      try {
+        await loadThread(authSession, null);
+      } catch (fallbackError: unknown) {
+        const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : 'Could not connect to backend';
+        console.error('[thread] Failed to load latest thread after remembered-thread miss:', fallbackMessage);
+        setThreadError(fallbackMessage);
+        clearActiveThreadView();
+      }
     });
   }, [authSession, backendReady, clearActiveThreadView, loadThread, resetThreadState]);
 

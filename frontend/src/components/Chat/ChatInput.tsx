@@ -13,7 +13,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, Dispatch, SetStateAction } from 'react';
 import type { ComplexityLevel, GraphMode } from '../../types';
 
 interface ChatInputProps {
@@ -21,6 +21,7 @@ interface ChatInputProps {
   onStop:        () => void;
   onPrepare?:    () => void | Promise<void>;
   onDraftChange?: (hasText: boolean) => void;
+  threadId?:     string | null;
   disabled?:     boolean;   // locks textarea (loading, no thread)
   sendDisabled?: boolean;   // blocks send while backend is not ready
   showPrepare?:  boolean;
@@ -93,6 +94,16 @@ function SegRow<T extends string>({
       </div>
     </div>
   );
+}
+
+function clearDraft(
+  setValue: Dispatch<SetStateAction<string>>,
+  textarea: HTMLTextAreaElement | null,
+) {
+  setValue('');
+  if (textarea) {
+    textarea.style.height = 'auto';
+  }
 }
 
 // ── Mode popover content ──────────────────────────────────────────────────────
@@ -181,7 +192,7 @@ function ModePopover({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function ChatInput({
-  onSend, onStop, onPrepare, onDraftChange, disabled, isGenerating,
+  onSend, onStop, onPrepare, onDraftChange, threadId, disabled, isGenerating,
   sendDisabled, showPrepare, prepareDisabled, prepareMessage,
   complexity, graphMode, researchEnabled,
   onComplexityChange, onGraphModeChange, onResearchChange,
@@ -193,6 +204,7 @@ export function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const popoverRef  = useRef<HTMLDivElement>(null);
   const triggerRef  = useRef<HTMLButtonElement>(null);
+  const previousThreadIdRef = useRef<string | null>(threadId ?? null);
 
   // Has non-default settings
   const hasActiveSettings =
@@ -215,8 +227,7 @@ export function ChatInput({
     const trimmed = value.trim();
     if (!trimmed || disabled || sendDisabled) return;
     // Clear immediately on submit — don't wait for disabled cycle
-    setValue('');
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    clearDraft(setValue, textareaRef.current);
     onSend(trimmed);
   };
 
@@ -252,6 +263,19 @@ export function ChatInput({
   useEffect(() => {
     onDraftChange?.(value.trim().length > 0);
   }, [onDraftChange, value]);
+
+  useEffect(() => {
+    const previousThreadId = previousThreadIdRef.current;
+    const nextThreadId = threadId ?? null;
+
+    // Preserve the draft for the initial bootstrap from "no thread yet" to the
+    // first real thread after Prepare. Clear only on real thread switches.
+    if (previousThreadId && previousThreadId !== nextThreadId) {
+      clearDraft(setValue, textareaRef.current);
+    }
+
+    previousThreadIdRef.current = nextThreadId;
+  }, [threadId]);
 
   const isReady = !disabled && !sendDisabled && !!value.trim();
   const placeholder = (selectionReferenceActive || !!selectionSuggestion)

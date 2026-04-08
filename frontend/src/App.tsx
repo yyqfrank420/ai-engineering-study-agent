@@ -321,10 +321,10 @@ export default function App() {
                 onClear={() => setSelectedNode(null)}
               />
               <ChatInput
-                key={activeThreadId ?? 'no-thread'}
                 onSend={handleSend}
                 onStop={stopGeneration}
                 onPrepare={prepareBackendNow}
+                threadId={activeThreadId}
                 isGenerating={isGenerating}
                 disabled={composerLocked}
                 sendDisabled={sendLocked}
