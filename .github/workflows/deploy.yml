@@ -132,10 +132,50 @@ jobs:
           retention-days: 1
 
   # ── 3. Deploy backend candidate → Cloud Run (no traffic) ───────────────────
+  apply-supabase-schema:
+    name: Apply Supabase schema
+    runs-on: ubuntu-latest
+    needs: [test-backend, test-frontend]
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install psql
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Load Supabase DB URL from Secret Manager
+        run: |
+          db_url="$(gcloud secrets versions access latest --secret=supabase-db-url)"
+          if [ -z "$db_url" ]; then
+            echo "Missing supabase-db-url secret in Secret Manager" >&2
+            exit 1
+          fi
+
+          echo "::add-mask::$db_url"
+          echo "SUPABASE_DB_URL=$db_url" >> "$GITHUB_ENV"
+
+      - name: Apply tracked schema
+        run: bash scripts/apply_supabase_schema.sh
+
   deploy-backend-candidate:
     name: Build, push, deploy backend candidate
     runs-on: ubuntu-latest
-    needs: [test-backend, test-frontend]   # both must pass first
+    needs: [apply-supabase-schema]   # schema must be current before deploy
 
     permissions:
       contents: read

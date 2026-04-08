@@ -15,150 +15,27 @@ from psycopg.rows import dict_row
 
 from config import settings
 
+POSTGRES_REQUIRED_TABLES = (
+    "profiles",
+    "chat_threads",
+    "chat_messages",
+    "request_events",
+    "search_tool_requests",
+    "http_request_logs",
+    "llm_telemetry",
+)
+
+POSTGRES_REQUIRED_POLICIES = {
+    "profiles": {"profiles_select_own", "profiles_update_own"},
+    "chat_threads": {"threads_all_own"},
+    "chat_messages": {"messages_all_own"},
+}
+
 
 def init_db() -> None:
     if settings.use_postgres:
         with _connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS profiles (
-                    id UUID PRIMARY KEY,
-                    email TEXT NOT NULL UNIQUE,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS chat_threads (
-                    id UUID PRIMARY KEY,
-                    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-                    title TEXT NOT NULL DEFAULT 'New chat',
-                    graph_data JSONB,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS chat_messages (
-                    id UUID PRIMARY KEY,
-                    thread_id UUID NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
-                    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-                    role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
-                    content TEXT NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_chat_threads_user_last_seen
-                    ON chat_threads(user_id, last_seen_at DESC)
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_created
-                    ON chat_messages(thread_id, created_at DESC)
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS request_events (
-                    id UUID PRIMARY KEY,
-                    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-                    event_type TEXT NOT NULL,
-                    created_at_epoch DOUBLE PRECISION NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_request_events_user_type_created
-                    ON request_events(user_id, event_type, created_at_epoch DESC)
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS search_tool_requests (
-                    request_id UUID PRIMARY KEY,
-                    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-                    thread_id UUID NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
-                    requested BOOLEAN NOT NULL DEFAULT FALSE,
-                    created_at_epoch DOUBLE PRECISION NOT NULL,
-                    expires_at_epoch DOUBLE PRECISION NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_search_tool_requests_user_thread
-                    ON search_tool_requests(user_id, thread_id)
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS http_request_logs (
-                    id UUID PRIMARY KEY,
-                    user_id UUID,
-                    method TEXT NOT NULL,
-                    path TEXT NOT NULL,
-                    status_code INTEGER NOT NULL,
-                    latency_ms INTEGER NOT NULL,
-                    ip_address TEXT,
-                    user_agent TEXT,
-                    metadata_json TEXT,
-                    created_at_epoch DOUBLE PRECISION NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_http_request_logs_created
-                    ON http_request_logs(created_at_epoch DESC)
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_http_request_logs_user_created
-                    ON http_request_logs(user_id, created_at_epoch DESC)
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS llm_telemetry (
-                    id UUID PRIMARY KEY,
-                    user_id UUID,
-                    thread_id UUID,
-                    operation TEXT NOT NULL,
-                    provider TEXT NOT NULL,
-                    model TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    duration_ms INTEGER NOT NULL,
-                    output_chars INTEGER NOT NULL,
-                    used_fallback BOOLEAN NOT NULL DEFAULT FALSE,
-                    error_type TEXT,
-                    metadata_json TEXT,
-                    created_at_epoch DOUBLE PRECISION NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_llm_telemetry_created
-                    ON llm_telemetry(created_at_epoch DESC)
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_llm_telemetry_user_created
-                    ON llm_telemetry(user_id, created_at_epoch DESC)
-                """
-            )
+            _validate_postgres_schema(conn)
         return
 
     settings.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
@@ -335,3 +212,65 @@ def fetchone(query: str, params: tuple[Any, ...] = ()) -> dict | None:
         cursor = conn.execute(_adapt_query(query), params)
         row = cursor.fetchone()
         return dict(row) if row else None
+
+
+def _validate_postgres_schema(conn: psycopg.Connection) -> None:
+    public_tables = {
+        row["tablename"]
+        for row in conn.execute(
+            """
+            SELECT tablename
+            FROM pg_tables
+            WHERE schemaname = 'public'
+            """
+        ).fetchall()
+    }
+    missing_tables = sorted(set(POSTGRES_REQUIRED_TABLES) - public_tables)
+
+    rls_enabled_tables = {
+        row["table_name"]
+        for row in conn.execute(
+            """
+            SELECT c.relname AS table_name
+            FROM pg_class AS c
+            JOIN pg_namespace AS n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public'
+              AND c.relkind = 'r'
+              AND c.relrowsecurity
+            """
+        ).fetchall()
+    }
+    tables_without_rls = sorted(public_tables - rls_enabled_tables)
+
+    policies_by_table: dict[str, set[str]] = {}
+    for row in conn.execute(
+        """
+        SELECT tablename, policyname
+        FROM pg_policies
+        WHERE schemaname = 'public'
+        """
+    ).fetchall():
+        policies_by_table.setdefault(row["tablename"], set()).add(row["policyname"])
+
+    missing_policies: list[str] = []
+    for table_name, required_policies in POSTGRES_REQUIRED_POLICIES.items():
+        actual_policies = policies_by_table.get(table_name, set())
+        for policy_name in sorted(required_policies - actual_policies):
+            missing_policies.append(f"{table_name}.{policy_name}")
+
+    if not missing_tables and not tables_without_rls and not missing_policies:
+        return
+
+    problems: list[str] = []
+    if missing_tables:
+        problems.append(f"missing tables: {', '.join(missing_tables)}")
+    if tables_without_rls:
+        problems.append(f"RLS disabled: {', '.join(tables_without_rls)}")
+    if missing_policies:
+        problems.append(f"missing policies: {', '.join(missing_policies)}")
+
+    raise RuntimeError(
+        "Postgres schema is not ready for production; "
+        + "; ".join(problems)
+        + ". Apply docs/supabase/schema.sql before starting the app."
+    )
