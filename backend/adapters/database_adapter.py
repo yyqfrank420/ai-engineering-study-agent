@@ -42,24 +42,6 @@ def init_db() -> None:
     with _connect() as conn:
         conn.executescript(
             """
-            CREATE TABLE IF NOT EXISTS sessions (
-                session_id   TEXT PRIMARY KEY,
-                created_at   TEXT NOT NULL DEFAULT (datetime('now')),
-                last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
-                graph_data   TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS messages (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL REFERENCES sessions(session_id),
-                role       TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
-                content    TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_messages_session
-                ON messages(session_id, created_at);
-
             CREATE TABLE IF NOT EXISTS profiles (
                 id TEXT PRIMARY KEY,
                 email TEXT NOT NULL UNIQUE,
@@ -153,11 +135,6 @@ def init_db() -> None:
                 ON llm_telemetry(user_id, created_at_epoch);
             """
         )
-        try:
-            conn.execute("ALTER TABLE sessions ADD COLUMN graph_data TEXT")
-            conn.commit()
-        except Exception:
-            pass
 
 
 @contextmanager
@@ -201,10 +178,7 @@ def execute(query: str, params: tuple[Any, ...] = ()) -> None:
 def fetchall(query: str, params: tuple[Any, ...] = ()) -> list[dict]:
     with _connect() as conn:
         cursor = conn.execute(_adapt_query(query), params)
-        rows = cursor.fetchall()
-        if settings.use_postgres:
-            return [dict(row) for row in rows]
-        return [dict(row) for row in rows]
+        return [dict(row) for row in cursor.fetchall()]
 
 
 def fetchone(query: str, params: tuple[Any, ...] = ()) -> dict | None:

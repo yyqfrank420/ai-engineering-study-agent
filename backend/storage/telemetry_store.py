@@ -11,6 +11,19 @@ def _dump_metadata(metadata: dict | None) -> str | None:
     return json.dumps(metadata, sort_keys=True)
 
 
+def _list_recent(table: str, columns: str, *, since_epoch: float, user_id: str | None = None) -> list[dict]:
+    """Query recent rows from a telemetry table, optionally filtered by user."""
+    where = "created_at_epoch >= ?"
+    params: tuple = (since_epoch,)
+    if user_id:
+        where += " AND user_id = ?"
+        params = (since_epoch, user_id)
+    return fetchall(
+        f"SELECT {columns} FROM {table} WHERE {where} ORDER BY created_at_epoch DESC",
+        params,
+    )
+
+
 def record_http_request_log(
     *,
     method: str,
@@ -46,29 +59,14 @@ def record_http_request_log(
     )
 
 
-def list_recent_http_request_logs(*, since_epoch: float, user_id: str | None = None) -> list[dict]:
-    if user_id:
-        return fetchall(
-            """
-            SELECT id, user_id, method, path, status_code, latency_ms,
-                   ip_address, user_agent, metadata_json, created_at_epoch
-            FROM http_request_logs
-            WHERE created_at_epoch >= ? AND user_id = ?
-            ORDER BY created_at_epoch DESC
-            """,
-            (since_epoch, user_id),
-        )
+_HTTP_LOG_COLUMNS = (
+    "id, user_id, method, path, status_code, latency_ms, "
+    "ip_address, user_agent, metadata_json, created_at_epoch"
+)
 
-    return fetchall(
-        """
-        SELECT id, user_id, method, path, status_code, latency_ms,
-               ip_address, user_agent, metadata_json, created_at_epoch
-        FROM http_request_logs
-        WHERE created_at_epoch >= ?
-        ORDER BY created_at_epoch DESC
-        """,
-        (since_epoch,),
-    )
+
+def list_recent_http_request_logs(*, since_epoch: float, user_id: str | None = None) -> list[dict]:
+    return _list_recent("http_request_logs", _HTTP_LOG_COLUMNS, since_epoch=since_epoch, user_id=user_id)
 
 
 def record_llm_telemetry(
@@ -112,26 +110,11 @@ def record_llm_telemetry(
     )
 
 
-def list_recent_llm_telemetry(*, since_epoch: float, user_id: str | None = None) -> list[dict]:
-    if user_id:
-        return fetchall(
-            """
-            SELECT id, user_id, thread_id, operation, provider, model, status,
-                   duration_ms, output_chars, used_fallback, error_type, metadata_json, created_at_epoch
-            FROM llm_telemetry
-            WHERE created_at_epoch >= ? AND user_id = ?
-            ORDER BY created_at_epoch DESC
-            """,
-            (since_epoch, user_id),
-        )
+_LLM_TELEMETRY_COLUMNS = (
+    "id, user_id, thread_id, operation, provider, model, status, "
+    "duration_ms, output_chars, used_fallback, error_type, metadata_json, created_at_epoch"
+)
 
-    return fetchall(
-        """
-        SELECT id, user_id, thread_id, operation, provider, model, status,
-               duration_ms, output_chars, used_fallback, error_type, metadata_json, created_at_epoch
-        FROM llm_telemetry
-        WHERE created_at_epoch >= ?
-        ORDER BY created_at_epoch DESC
-        """,
-        (since_epoch,),
-    )
+
+def list_recent_llm_telemetry(*, since_epoch: float, user_id: str | None = None) -> list[dict]:
+    return _list_recent("llm_telemetry", _LLM_TELEMETRY_COLUMNS, since_epoch=since_epoch, user_id=user_id)

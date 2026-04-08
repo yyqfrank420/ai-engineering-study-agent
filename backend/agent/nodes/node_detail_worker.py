@@ -17,8 +17,9 @@ import json
 import re
 from typing import Any, Callable, Awaitable
 
-from adapters.llm_adapter import build_telemetry, stream_response, stream_response_compat
+from adapters.llm_adapter import build_telemetry
 from agent.state import GraphNode
+from agent.stream_utils import stream_llm
 from config import settings
 
 _SYSTEM = """<role>
@@ -130,13 +131,10 @@ async def enrich_node(
         ),
     }]
 
-    description = ""
-    async for event_type, content in stream_response_compat(
-        stream_response,
+    description = await stream_llm(
         model=settings.worker_model,
         system=_SYSTEM,
         messages=messages,
-        thinking_budget=None,
         temperature=settings.node_detail_temperature,
         top_p=settings.node_detail_top_p,
         top_k=settings.node_detail_top_k,
@@ -144,11 +142,8 @@ async def enrich_node(
             "node_detail_worker",
             metadata={"node_id": node["id"], "node_label": node["label"]},
         ),
-    ):
-        if event_type == "provider_switch":
-            await send({"type": "provider_switch", "provider": content})
-        elif event_type == "text":
-            description += content
+        send=send,
+    )
 
     description = description.strip()
     book_refs = _parse_book_refs(description)

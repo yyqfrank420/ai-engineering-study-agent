@@ -31,6 +31,7 @@ import type {
   ServerEvent,
   WorkerStatus,
 } from '../types';
+import { graphStructureKey } from '../utils/graphStructureKey';
 
 function makeId() {
   return Math.random().toString(36).slice(2);
@@ -48,41 +49,7 @@ const OPTIMISTIC_CHAT_STATUS: WorkerStatus = {
   orchestrator: 'Question received — starting the workflow…',
 };
 
-function graphStructureKey(graph: GraphData | null): string {
-  if (!graph) return 'null';
-  if (graph.version) return `version:${graph.version}`;
-  return JSON.stringify({
-    title: graph.title,
-    graph_type: graph.graph_type,
-    nodes: graph.nodes.map(node => ({
-      id: node.id,
-      label: node.label,
-      type: node.type,
-      technology: node.technology,
-      description: node.description,
-      tier: node.tier ?? null,
-      lane: node.lane ?? null,
-    })),
-    edges: graph.edges.map(edge => ({
-      source: edge.source,
-      target: edge.target,
-      label: edge.label,
-      technology: edge.technology,
-      sync: edge.sync,
-      description: edge.description,
-    })),
-    sequence: graph.sequence.map(step => ({
-      step: step.step,
-      nodes: step.nodes,
-      description: step.description,
-    })),
-    groups: (graph.groups ?? []).map(group => ({
-      id: group.id,
-      label: group.label,
-      nodeIds: group.nodeIds,
-    })),
-  });
-}
+// graphStructureKey imported from ../utils/graphStructureKey
 
 export function useAgentStream(authSession: AuthSession | null, activeThreadId: string | null) {
   const [messages,     setMessages]     = useState<Message[]>([]);

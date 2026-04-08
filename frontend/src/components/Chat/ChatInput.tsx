@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, Dispatch, SetStateAction } from 'react';
 import type { ComplexityLevel, GraphMode } from '../../types';
+import { SegmentedControl } from './SegmentedControl';
 
 interface ChatInputProps {
   onSend:        (content: string) => void;
@@ -43,6 +44,33 @@ interface ChatInputProps {
 }
 
 // ── Compact segmented row ─────────────────────────────────────────────────────
+// Wraps the shared SegmentedControl with a left-aligned label and popover-
+// specific styling (stretch items, slightly smaller font, different hover color).
+
+function segRowOptionStyle(isActive: boolean, isHovered: boolean): CSSProperties {
+  return {
+    flex:       1,
+    textAlign:  'center',
+    padding:    '3px 4px',
+    fontSize:   '0.68rem',
+    fontWeight: isActive ? 600 : 400,
+    color:      isActive
+      ? '#a78bfa'
+      : isHovered
+      ? '#c9d1d9'
+      : '#6e7681',
+    background: isActive
+      ? 'rgba(167,139,250,0.14)'
+      : isHovered
+      ? 'rgba(255,255,255,0.05)'
+      : 'transparent',
+    cursor:     isActive ? 'default' : 'pointer',
+    userSelect: 'none',
+    transition: 'background 0.1s, color 0.1s',
+    whiteSpace: 'nowrap',
+    lineHeight: '1.6',
+  };
+}
 
 function SegRow<T extends string>({
   label, options, value, onChange,
@@ -52,46 +80,22 @@ function SegRow<T extends string>({
   value: T;
   onChange: (v: T) => void;
 }) {
-  const [hovered, setHovered] = useState<T | null>(null);
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
       <span style={miniLabelStyle}>{label}</span>
-      <div style={segContainerStyle}>
-        {options.map((opt, i) => (
-          <span key={opt.value} style={{ display: 'flex', alignItems: 'stretch', flex: 1 }}>
-            {i > 0 && <span style={thinDivStyle} />}
-            <span
-              onClick={() => onChange(opt.value)}
-              onMouseEnter={() => setHovered(opt.value)}
-              onMouseLeave={() => setHovered(null)}
-              style={{
-                flex:       1,
-                textAlign:  'center',
-                padding:    '3px 4px',
-                fontSize:   '0.68rem',
-                fontWeight: opt.value === value ? 600 : 400,
-                color:      opt.value === value
-                  ? '#a78bfa'
-                  : hovered === opt.value
-                  ? '#c9d1d9'
-                  : '#6e7681',
-                background: opt.value === value
-                  ? 'rgba(167,139,250,0.14)'
-                  : hovered === opt.value
-                  ? 'rgba(255,255,255,0.05)'
-                  : 'transparent',
-                cursor:     opt.value === value ? 'default' : 'pointer',
-                userSelect: 'none',
-                transition: 'background 0.1s, color 0.1s',
-                whiteSpace: 'nowrap',
-                lineHeight: '1.6',
-              }}
-            >
-              {opt.label}
-            </span>
+      <SegmentedControl
+        options={options}
+        value={value}
+        onChange={onChange}
+        containerStyle={segContainerStyle}
+        dividerStyle={thinDivStyle}
+        optionStyle={segRowOptionStyle}
+        optionWrapper={(children, _i) => (
+          <span style={{ display: 'flex', alignItems: 'stretch', flex: 1 }}>
+            {children}
           </span>
-        ))}
-      </div>
+        )}
+      />
     </div>
   );
 }

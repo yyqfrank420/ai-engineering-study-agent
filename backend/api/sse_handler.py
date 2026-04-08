@@ -26,7 +26,7 @@ from agent.graph import run_agent
 from agent.state import AgentState
 from api.chat_guards import byte_len, check_prompt_injection, check_rate_limit, knowledge_base_ready
 from api.node_selected_service import stream_suggested_questions
-from api.sse_utils import sse, streaming_response
+from api.sse_utils import sse, sse_error, streaming_response
 from agent.tools.graph_worker_tools.generate_graph_tool import generate_graph
 from agent.tools.rag_worker_tools.get_section_tool import make_get_section_tool
 from agent.tools.rag_worker_tools.rag_search_tool import make_rag_search_tool
@@ -97,48 +97,28 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
     content = body.content
     thread = thread_store.get_thread(user_id, thread_id)
     if thread is None:
-        async def _missing_thread():
-            yield sse({"type": "error", "content": "Thread not found"})
-        return streaming_response(_missing_thread())
+        return sse_error("Thread not found")
 
     # ── Pre-flight checks (synchronous, before opening the stream) ─────────────
     if byte_len(content) > settings.max_message_bytes:
-        async def _too_large():
-            yield sse({"type": "error", "content": "Message too large (max 2KB)"})
-        return streaming_response(_too_large())
+        return sse_error("Message too large (max 2KB)")
 
     if not content:
-        async def _empty():
-            yield sse({"type": "error", "content": "Empty message"})
-        return streaming_response(_empty())
+        return sse_error("Empty message")
 
     message_count = message_store.count_messages(user_id, thread_id)
     if message_count + 2 > settings.max_messages_per_thread:
-        async def _thread_full():
-            yield sse({
-                "type": "error",
-                "content": "Thread message limit reached. Start a new chat to continue.",
-            })
-        return streaming_response(_thread_full())
+        return sse_error("Thread message limit reached. Start a new chat to continue.")
 
     limit_error = check_rate_limit(user_id)
     if limit_error:
-        async def _rate_limited():
-            yield sse({"type": "error", "content": limit_error})
-        return streaming_response(_rate_limited())
+        return sse_error(limit_error)
 
     if not check_prompt_injection(content):
-        async def _injection():
-            yield sse({"type": "error", "content": "Message blocked by security filter"})
-        return streaming_response(_injection())
+        return sse_error("Message blocked by security filter")
 
     if not knowledge_base_ready(request):
-        async def _missing_resources():
-            yield sse({
-                "type": "error",
-                "content": "Knowledge base is still loading. Please try again in a moment.",
-            })
-        return streaming_response(_missing_resources())
+        return sse_error("Knowledge base is still loading. Please try again in a moment.")
 
     # ── Build tools bound to the loaded FAISS index ────────────────────────────
     rag_search_tool  = make_rag_search_tool(request.app.state.vectorstore, request.app.state.parent_docs)
@@ -305,35 +285,20 @@ async def node_selected_endpoint(body: NodeSelectedRequest, user=Depends(get_cur
     node_description = body.description
     thread = thread_store.get_thread(user_id, thread_id)
     if thread is None:
-        async def _missing_thread():
-            yield sse({"type": "error", "content": "Thread not found"})
-            yield sse({"type": "done"})
-        return streaming_response(_missing_thread())
+        return sse_error("Thread not found", include_done=True)
 
     if not body.node_id:
-        async def _missing_node():
-            yield sse({"type": "error", "content": "Missing node id"})
-            yield sse({"type": "done"})
-        return streaming_response(_missing_node())
+        return sse_error("Missing node id", include_done=True)
 
     if not node_title:
-        async def _missing_title():
-            yield sse({"type": "error", "content": "Missing node title"})
-            yield sse({"type": "done"})
-        return streaming_response(_missing_title())
+        return sse_error("Missing node title", include_done=True)
 
     if byte_len(f"{node_title}\n{node_description}") > settings.max_node_text_bytes:
-        async def _node_too_large():
-            yield sse({"type": "error", "content": "Selected node payload too large"})
-            yield sse({"type": "done"})
-        return streaming_response(_node_too_large())
+        return sse_error("Selected node payload too large", include_done=True)
 
     limit_error = check_rate_limit(user_id)
     if limit_error:
-        async def _rate_limited():
-            yield sse({"type": "error", "content": limit_error})
-            yield sse({"type": "done"})
-        return streaming_response(_rate_limited())
+        return sse_error(limit_error, include_done=True)
 
     history = message_store.get_history(user_id, thread_id, limit=6)
 

@@ -12,9 +12,10 @@
 #          Side effects: sends SSE events to browser
 # ─────────────────────────────────────────────────────────────────────────────
 
-from adapters.llm_adapter import build_telemetry, stream_response, stream_response_compat
+from adapters.llm_adapter import build_telemetry
 from agent.context_manager import maybe_condense_history
 from agent.state import AgentState
+from agent.stream_utils import stream_llm
 from config import settings
 
 _ROUTER_SYSTEM = """<role>
@@ -158,13 +159,10 @@ async def orchestrator_route(state: AgentState) -> AgentState:
         }
     ]
 
-    route_token = ""
-    async for event_type, content in stream_response_compat(
-        stream_response,
+    route_token = await stream_llm(
         model=settings.orchestrator_model,
         system=_ROUTER_SYSTEM,
         messages=messages,
-        thinking_budget=None,  # routing is cheap — no extended thinking needed
         temperature=settings.router_temperature,
         top_p=settings.router_top_p,
         top_k=settings.router_top_k,
@@ -173,11 +171,8 @@ async def orchestrator_route(state: AgentState) -> AgentState:
             user_id=state.get("user_id"),
             thread_id=state.get("session_id"),
         ),
-    ):
-        if event_type == "provider_switch":
-            await send({"type": "provider_switch", "provider": content})
-        elif event_type == "text":
-            route_token += content
+        send=send,
+    )
 
     token = route_token.upper()
     if "SIMPLE" in token:
@@ -207,13 +202,10 @@ async def quick_synthesise(state: AgentState) -> AgentState:
     if state.get("graph_data"):
         await send({"type": "graph_data", "data": state["graph_data"]})
 
-    response_text = ""
-    async for event_type, content in stream_response_compat(
-        stream_response,
+    response_text = await stream_llm(
         model=settings.worker_model,   # Haiku — fast and cheap for factual Q&A
         system=_QUICK_SYNTHESIS_SYSTEM,
         messages=messages,
-        thinking_budget=None,
         temperature=settings.quick_synthesis_temperature,
         top_p=settings.quick_synthesis_top_p,
         top_k=settings.quick_synthesis_top_k,
@@ -222,12 +214,9 @@ async def quick_synthesise(state: AgentState) -> AgentState:
             user_id=state.get("user_id"),
             thread_id=state.get("session_id"),
         ),
-    ):
-        if event_type == "provider_switch":
-            await send({"type": "provider_switch", "provider": content})
-        elif event_type == "text":
-            response_text += content
-            await send({"type": "response_delta", "content": content})
+        send=send,
+        stream_deltas=True,
+    )
 
     await send({"type": "done"})
     return {**state, "response_text": response_text}
@@ -283,13 +272,10 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
         },
     ]
 
-    response_text = ""
-    async for event_type, content in stream_response_compat(
-        stream_response,
+    response_text = await stream_llm(
         model=settings.orchestrator_model,
         system=_SYNTHESIS_SYSTEM,
         messages=messages,
-        thinking_budget=None,   # concise guided teaching does not need extended thinking
         temperature=settings.synthesis_temperature,
         top_p=settings.synthesis_top_p,
         top_k=settings.synthesis_top_k,
@@ -299,14 +285,10 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
             thread_id=state.get("session_id"),
             metadata={"route": state.get("route", "")},
         ),
-    ):
-        if event_type == "provider_switch":
-            await send({"type": "provider_switch", "provider": content})
-        elif event_type == "thinking":
-            await send({"type": "thinking_delta", "content": content})
-        elif event_type == "text":
-            response_text += content
-            await send({"type": "response_delta", "content": content})
+        send=send,
+        stream_deltas=True,
+        stream_thinking=True,
+    )
 
     await send({"type": "done"})
     return {**state, "response_text": response_text}

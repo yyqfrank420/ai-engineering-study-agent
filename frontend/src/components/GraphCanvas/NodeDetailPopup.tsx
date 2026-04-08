@@ -11,26 +11,16 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { GraphEdge, GraphNode } from '../../types';
+import { TYPE_STYLE } from '../../utils/graphColors';
 
-const TYPE_COLORS: Record<string, string> = {
-  client:    '#60a5fa',
-  service:   '#a78bfa',
-  datastore: '#34d399',
-  gateway:   '#fbbf24',
-  network:   '#f87171',
-  external:  '#94a3b8',
-  decision:  '#38bdf8',
-};
-
-const TYPE_BG: Record<string, string> = {
-  client:    'rgba(59,130,246,0.12)',
-  service:   'rgba(139,92,246,0.12)',
-  datastore: 'rgba(16,185,129,0.12)',
-  gateway:   'rgba(217,119,6,0.12)',
-  network:   'rgba(239,68,68,0.10)',
-  external:  'rgba(100,116,139,0.08)',
-  decision:  'rgba(14,165,233,0.10)',
-};
+// Derive the flat color / background maps that this component uses from the
+// canonical TYPE_STYLE. badge → accent color, fill → background.
+const TYPE_COLORS: Record<string, string> = Object.fromEntries(
+  Object.entries(TYPE_STYLE).map(([k, v]) => [k, v.badge]),
+);
+const TYPE_BG: Record<string, string> = Object.fromEntries(
+  Object.entries(TYPE_STYLE).map(([k, v]) => [k, v.fill]),
+);
 
 interface NodeDetailPopupProps {
   node: GraphNode;

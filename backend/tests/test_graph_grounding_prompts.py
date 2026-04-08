@@ -17,7 +17,8 @@ async def test_graph_worker_prompt_includes_rag_evidence_and_concept_bias(monkey
         captured["top_k"] = top_k
         yield ("text", "NO_GRAPH")
 
-    monkeypatch.setattr(graph_worker, "stream_response", fake_stream_response)
+    import agent.stream_utils as stream_utils_mod
+    monkeypatch.setattr(stream_utils_mod, "stream_response", fake_stream_response)
 
     events = []
 
@@ -75,7 +76,8 @@ async def test_graph_worker_retries_when_no_graph_exists_and_model_returns_no_gr
                 '{"action":"replace","graph_type":"concept","title":"Open Agent Stack","nodes":[{"id":"model_api","label":"Model API","type":"service","technology":"Llama","description":"Core model brain","tier":null}],"edges":[],"sequence":[]}',
             )
 
-    monkeypatch.setattr(graph_worker, "stream_response", fake_stream_response)
+    import agent.stream_utils as stream_utils_mod
+    monkeypatch.setattr(stream_utils_mod, "stream_response", fake_stream_response)
 
     events = []
 
@@ -117,7 +119,8 @@ async def test_graph_worker_ignores_non_object_json_before_valid_object(monkeypa
             '[{"noise": true}] {"action":"replace","graph_type":"concept","title":"RAG Flow","nodes":[{"id":"retriever","label":"Retriever","type":"service","technology":"FAISS","description":"Finds relevant chunks","tier":null}],"edges":[],"sequence":[]}',
         )
 
-    monkeypatch.setattr(graph_worker, "stream_response", fake_stream_response)
+    import agent.stream_utils as stream_utils_mod
+    monkeypatch.setattr(stream_utils_mod, "stream_response", fake_stream_response)
 
     events = []
 
@@ -154,7 +157,8 @@ async def test_graph_worker_keeps_existing_graph_and_prompts_for_new_chat(monkey
     async def fake_stream_response(*, model, system, messages, thinking_budget, temperature=None, top_p=None, top_k=None):
         yield ("text", '{"action":"new_chat"}')
 
-    monkeypatch.setattr(graph_worker, "stream_response", fake_stream_response)
+    import agent.stream_utils as stream_utils_mod
+    monkeypatch.setattr(stream_utils_mod, "stream_response", fake_stream_response)
 
     events = []
 
@@ -217,7 +221,8 @@ async def test_node_detail_prompt_forbids_bullets_and_equations(monkeypatch):
         captured["top_k"] = top_k
         yield ("text", "LoRA is a lightweight way to adapt a model. It fits into the training flow by changing only a small set of weights. (Chapter 7, p.356)")
 
-    monkeypatch.setattr(node_detail_worker, "stream_response", fake_stream_response)
+    import agent.stream_utils as stream_utils_mod
+    monkeypatch.setattr(stream_utils_mod, "stream_response", fake_stream_response)
 
     events = []
 

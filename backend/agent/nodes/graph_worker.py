@@ -21,8 +21,9 @@
 import json
 import uuid
 
-from adapters.llm_adapter import build_telemetry, stream_response, stream_response_compat
+from adapters.llm_adapter import build_telemetry
 from agent.state import AgentState, GraphData
+from agent.stream_utils import stream_llm
 from config import settings
 
 # Complexity hint prefixes prepended to the system prompt when set by the user.
@@ -306,23 +307,16 @@ async def _generate_raw_graph_response(
     *,
     telemetry: dict | None = None,
 ) -> str:
-    raw = ""
-    async for event_type, content in stream_response_compat(
-        stream_response,
+    return await stream_llm(
         model=settings.worker_model,
         system=system,
         messages=messages,
-        thinking_budget=None,
         temperature=settings.graph_temperature,
         top_p=settings.graph_top_p,
         top_k=settings.graph_top_k,
         telemetry=telemetry,
-    ):
-        if event_type == "provider_switch":
-            await send({"type": "provider_switch", "provider": content})
-        elif event_type == "text":
-            raw += content
-    return raw
+        send=send,
+    )
 
 
 async def graph_worker_node(state: AgentState, tools: list) -> AgentState:

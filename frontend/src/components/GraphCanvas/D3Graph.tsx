@@ -12,6 +12,8 @@
 import { useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
 import type { GraphData, GraphGroup, GraphNode, GraphViewState } from '../../types';
+import { graphStructureKey } from '../../utils/graphStructureKey';
+import { TYPE_STYLE, FALLBACK_STYLE } from '../../utils/graphColors';
 
 // ── Node dimensions ─────────────────────────────────────────────────────────
 // NODE_W is wide enough to show labels up to ~24 chars without truncation.
@@ -20,19 +22,7 @@ const NODE_H  = 56;
 const NODE_RX = 6;
 const EDGE_LABEL_MAX_CHARS = 18;
 
-// ── Color palette ────────────────────────────────────────────────────────────
-const TYPE_STYLE: Record<string, { fill: string; stroke: string; badge: string }> = {
-  client:    { fill: 'rgba(59,130,246,0.12)',  stroke: 'rgba(59,130,246,0.85)',  badge: '#60a5fa'  },
-  service:   { fill: 'rgba(139,92,246,0.12)',  stroke: 'rgba(139,92,246,0.85)',  badge: '#a78bfa'  },
-  datastore: { fill: 'rgba(16,185,129,0.12)',  stroke: 'rgba(16,185,129,0.85)',  badge: '#34d399'  },
-  gateway:   { fill: 'rgba(217,119,6,0.12)',   stroke: 'rgba(217,119,6,0.85)',   badge: '#fbbf24'  },
-  network:   { fill: 'rgba(239,68,68,0.10)',   stroke: 'rgba(239,68,68,0.80)',   badge: '#f87171'  },
-  external:  { fill: 'rgba(100,116,139,0.08)', stroke: 'rgba(100,116,139,0.6)',  badge: '#94a3b8'  },
-  decision:  { fill: 'rgba(14,165,233,0.10)',  stroke: 'rgba(14,165,233,0.82)',  badge: '#38bdf8'  },
-};
-const FALLBACK_STYLE = {
-  fill: 'rgba(100,116,139,0.08)', stroke: 'rgba(100,116,139,0.6)', badge: '#94a3b8',
-};
+// Color palette imported from ../../utils/graphColors (TYPE_STYLE, FALLBACK_STYLE)
 
 // ── Group box colors ─────────────────────────────────────────────────────────
 const GROUP_PALETTE = [
@@ -150,39 +140,7 @@ function averageOrNull(values: number[]): number | null {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-function graphStructureKey(graphData: GraphData): string {
-  return JSON.stringify({
-    title: graphData.title,
-    graph_type: graphData.graph_type,
-    nodes: graphData.nodes.map((node) => ({
-      id: node.id,
-      label: node.label,
-      type: node.type,
-      technology: node.technology,
-      description: node.description,
-      tier: node.tier ?? null,
-      lane: node.lane ?? null,
-    })),
-    edges: graphData.edges.map((edge) => ({
-      source: edge.source,
-      target: edge.target,
-      label: edge.label,
-      technology: edge.technology,
-      sync: edge.sync,
-      description: edge.description,
-    })),
-    sequence: graphData.sequence.map((step) => ({
-      step: step.step,
-      nodes: step.nodes,
-      description: step.description,
-    })),
-    groups: (graphData.groups ?? []).map((group) => ({
-      id: group.id,
-      label: group.label,
-      nodeIds: group.nodeIds,
-    })),
-  });
-}
+// graphStructureKey imported from ../../utils/graphStructureKey
 
 export function D3Graph({
   graphData,

@@ -17,6 +17,7 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { ComplexityLevel, GraphMode } from '../../types';
+import { SegmentedControl } from './SegmentedControl';
 
 interface ModeBarProps {
   complexity:          ComplexityLevel;
@@ -27,44 +28,7 @@ interface ModeBarProps {
   onResearchChange:    (v: boolean) => void;
 }
 
-// ── Segmented group ───────────────────────────────────────────────────────────
-// Renders a single rounded container with options separated by hairline dividers.
-// The active option gets a filled background inside the container.
-
-function SegmentedGroup<T extends string>({
-  options,
-  value,
-  onChange,
-}: {
-  options: { value: T; label: string }[];
-  value: T;
-  onChange: (v: T) => void;
-}) {
-  const [hovered, setHovered] = useState<T | null>(null);
-
-  return (
-    <div style={segGroupStyle}>
-      {options.map((opt, i) => {
-        const isActive  = opt.value === value;
-        const isHovered = opt.value === hovered && !isActive;
-        return (
-          <span key={opt.value} style={{ display: 'flex', alignItems: 'center' }}>
-            {/* Thin inner divider between options (not before the first) */}
-            {i > 0 && <span style={innerDividerStyle} />}
-            <span
-              style={segOptionStyle(isActive, isHovered)}
-              onClick={() => onChange(opt.value)}
-              onMouseEnter={() => setHovered(opt.value)}
-              onMouseLeave={() => setHovered(null)}
-            >
-              {opt.label}
-            </span>
-          </span>
-        );
-      })}
-    </div>
-  );
-}
+// SegmentedControl imported from ./SegmentedControl
 
 // ── Research toggle ───────────────────────────────────────────────────────────
 
@@ -173,7 +137,7 @@ export function ModeBar({
       scrollbarWidth: 'none',
     }}>
       <SectionLabel>complexity</SectionLabel>
-      <SegmentedGroup
+      <SegmentedControl
         options={COMPLEXITY_OPTIONS}
         value={complexity}
         onChange={onComplexityChange}
@@ -182,7 +146,7 @@ export function ModeBar({
       <span style={outerDividerStyle} />
 
       <SectionLabel>graph</SectionLabel>
-      <SegmentedGroup
+      <SegmentedControl
         options={GRAPH_MODE_OPTIONS}
         value={graphMode}
         onChange={onGraphModeChange}
@@ -207,13 +171,6 @@ const segGroupStyle: CSSProperties = {
   flexShrink:    0,
 };
 
-const innerDividerStyle: CSSProperties = {
-  width:      '1px',
-  height:     '14px',
-  background: '#30363d',
-  flexShrink: 0,
-};
-
 const outerDividerStyle: CSSProperties = {
   display:    'inline-block',
   width:      '1px',
@@ -224,21 +181,4 @@ const outerDividerStyle: CSSProperties = {
   marginRight: '1px',
 };
 
-function segOptionStyle(isActive: boolean, isHovered: boolean): CSSProperties {
-  return {
-    padding:     '3px 8px',
-    fontSize:    '0.72rem',
-    fontWeight:  isActive ? 600 : 400,
-    color:       isActive ? '#a78bfa' : isHovered ? '#8b949e' : '#6e7681',
-    background:  isActive
-                   ? 'rgba(167,139,250,0.15)'
-                   : isHovered
-                   ? 'rgba(255,255,255,0.04)'
-                   : 'transparent',
-    cursor:      isActive ? 'default' : 'pointer',
-    userSelect:  'none',
-    transition:  'background 0.12s, color 0.12s',
-    whiteSpace:  'nowrap',
-    lineHeight:  '1.5',
-  };
-}
+// segOptionStyle moved to SegmentedControl.tsx

@@ -55,6 +55,7 @@ def test_format_graph_context_summarises_nodes_edges_and_sequence():
 @pytest.mark.asyncio
 async def test_orchestrator_synthesise_emits_status_and_includes_graph_context(monkeypatch):
     import agent.nodes.orchestrator_node as orchestrator
+    import agent.stream_utils as stream_utils_mod
 
     captured = {}
 
@@ -69,7 +70,7 @@ async def test_orchestrator_synthesise_emits_status_and_includes_graph_context(m
         yield ("text", "Story")
         yield ("text", " answer")
 
-    monkeypatch.setattr(orchestrator, "stream_response", fake_stream_response)
+    monkeypatch.setattr(stream_utils_mod, "stream_response", fake_stream_response)
 
     events = []
 
