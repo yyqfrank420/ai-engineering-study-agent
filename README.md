@@ -73,6 +73,14 @@ npm run build
 npm run dev
 ```
 
+Pre-push sanity check:
+
+```bash
+bash scripts/prepush_check.sh
+```
+
+If `VERCEL_TOKEN`, `VERCEL_ORG_ID`, and `VERCEL_PROJECT_ID` are set, that script also runs the same Vercel CLI build path the deploy workflow now gates on.
+
 Staging-style live evals:
 
 ```bash
