@@ -122,6 +122,8 @@ jobs:
           npm ci
           node -e "require.resolve('@rolldown/binding-linux-x64-gnu')" >/dev/null 2>&1 || \
             npm install --no-save "@rolldown/binding-linux-x64-gnu@$(node -p "require('./package-lock.json').packages['node_modules/rolldown'].optionalDependencies['@rolldown/binding-linux-x64-gnu']")"
+          node -e "require.resolve('lightningcss-linux-x64-gnu')" >/dev/null 2>&1 || \
+            npm install --no-save "lightningcss-linux-x64-gnu@$(node -p "require('./package-lock.json').packages['node_modules/lightningcss'].optionalDependencies['lightningcss-linux-x64-gnu']")"
 
       # `npm run build` runs `tsc -b && vite build` — type errors fail the job.
       - name: Type-check and build
@@ -394,6 +396,8 @@ jobs:
           npm ci
           node -e "require.resolve('@rolldown/binding-linux-x64-gnu')" >/dev/null 2>&1 || \
             npm install --no-save "@rolldown/binding-linux-x64-gnu@$(node -p "require('./package-lock.json').packages['node_modules/rolldown'].optionalDependencies['@rolldown/binding-linux-x64-gnu']")"
+          node -e "require.resolve('lightningcss-linux-x64-gnu')" >/dev/null 2>&1 || \
+            npm install --no-save "lightningcss-linux-x64-gnu@$(node -p "require('./package-lock.json').packages['node_modules/lightningcss'].optionalDependencies['lightningcss-linux-x64-gnu']")"
 
       # Pull project config from Vercel (creates .vercel/project.json locally).
       # Required before `vercel build` in non-interactive CI environments.
