@@ -42,6 +42,7 @@ data "google_secret_manager_secret" "staging_eval" {
   for_each = toset([
     "internal-test-password",
     "internal-test-email-allowlist-raw",
+    "supabase-db-url",
   ])
 
   project   = var.project_id
