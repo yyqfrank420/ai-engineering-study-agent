@@ -27,6 +27,7 @@ export function useBackendReadiness(authSession: AuthSession | null) {
       return;
     }
     activeUserIdRef.current = authSession.user.id;
+    preparingForUserRef.current = null;
     setBackendReadiness(PREPARE_BYPASS ? 'ready' : 'unknown');
     setPrepareMessage(null);
   }, [authSession]);

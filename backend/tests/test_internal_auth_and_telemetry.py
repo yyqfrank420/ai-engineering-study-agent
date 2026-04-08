@@ -130,6 +130,25 @@ def test_request_logging_middleware_records_http_request(temp_data_dir):
     assert logs[0]["status_code"] == 503
 
 
+def test_latest_thread_endpoint_auto_creates_first_thread(temp_data_dir):
+    from main import create_app
+    from adapters.supabase_auth_adapter import get_current_user
+
+    init_db()
+
+    app = create_app(load_resources=False)
+    app.dependency_overrides[get_current_user] = lambda: {"id": "user-1", "email": "friend@example.com"}
+
+    with TestClient(app) as client:
+        response = client.get("/api/threads/latest")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["thread"]["id"]
+    assert payload["thread"]["title"] == "New chat"
+    assert payload["messages"] == []
+
+
 class _FakeAnthropicStream:
     def __init__(self, events):
         self._events = iter(events)

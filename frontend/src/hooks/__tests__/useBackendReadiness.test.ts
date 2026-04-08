@@ -48,4 +48,75 @@ describe('useBackendReadiness', () => {
       expect(result.current.prepareMessage).toBeNull();
     });
   });
+
+  it('surfaces prepare failures and allows a retry', async () => {
+    vi.mocked(prepareBackend)
+      .mockRejectedValueOnce(new Error('Backend unavailable'))
+      .mockResolvedValueOnce({
+        status: 'ready',
+        faiss_loaded: true,
+      });
+
+    const { result } = renderHook(() => useBackendReadiness(TEST_SESSION));
+
+    await act(async () => {
+      await result.current.prepareBackendNow();
+    });
+
+    await waitFor(() => {
+      expect(result.current.backendReadiness).toBe('error');
+      expect(result.current.prepareMessage).toBe('Backend unavailable');
+    });
+
+    await act(async () => {
+      await result.current.prepareBackendNow();
+    });
+
+    await waitFor(() => {
+      expect(result.current.backendReadiness).toBe('ready');
+      expect(result.current.isBackendReady).toBe(true);
+      expect(result.current.prepareMessage).toBeNull();
+    });
+  });
+
+  it('resets the prepared cache when the authenticated user changes', async () => {
+    vi.mocked(prepareBackend).mockResolvedValue({
+      status: 'ready',
+      faiss_loaded: true,
+    });
+
+    const { result, rerender } = renderHook(
+      ({ session }) => useBackendReadiness(session),
+      { initialProps: { session: TEST_SESSION } },
+    );
+
+    await act(async () => {
+      await result.current.prepareBackendNow();
+    });
+
+    await waitFor(() => {
+      expect(result.current.backendReadiness).toBe('ready');
+    });
+
+    rerender({
+      session: {
+        ...TEST_SESSION,
+        user: {
+          id: 'user-2',
+          email: 'second@example.com',
+        },
+      },
+    });
+
+    await waitFor(() => {
+      expect(result.current.backendReadiness).toBe('unknown');
+      expect(result.current.isBackendReady).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.prepareBackendNow();
+    });
+
+    expect(prepareBackend).toHaveBeenCalledTimes(2);
+  });
 });
