@@ -35,6 +35,8 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
         """
         if os.getenv("K_SERVICE") and not settings.use_postgres:
             raise RuntimeError("SUPABASE_DB_URL must be configured in Cloud Run; refusing SQLite fallback.")
+
+        app.state.startup_step = "database"
         print("[startup] Initialising database…")
         init_db()
         if not hasattr(app.state, "vectorstore"):
@@ -46,8 +48,11 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
             from rag.faiss_artifact import ensure_faiss_artifacts
             from rag.faiss_loader import load_faiss
 
+            app.state.startup_step = "artifacts"
             print("[startup] Ensuring FAISS artifacts…")
             ensure_faiss_artifacts()
+
+            app.state.startup_step = "index"
             print("[startup] Loading FAISS index…")
             vectorstore, parent_docs = load_faiss()
             app.state.vectorstore = vectorstore

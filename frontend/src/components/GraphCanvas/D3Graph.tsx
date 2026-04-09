@@ -575,7 +575,7 @@ export function D3Graph({
       )
       .on('click', (_event, d: any) => onNodeClickRef.current(d as GraphNode))
       .on('mouseover', function(_ev, d: any) {
-        d3.select(this).select('rect.node-card')
+        d3.select(this).select('.node-card')
           .attr('stroke-width', 2)
           .attr('filter', 'brightness(1.3)');
         // Reveal this node's outgoing loop edges (feedback arcs)
@@ -592,7 +592,7 @@ export function D3Graph({
         }
       })
       .on('mouseout', function(_ev, d: any) {
-        d3.select(this).select('rect.node-card')
+        d3.select(this).select('.node-card')
           .attr('stroke-width', 1.5)
           .attr('filter', null);
         // Hide loop edges again
@@ -610,7 +610,8 @@ export function D3Graph({
       });
 
     // Card background
-    nodeSel.append('rect')
+    nodeSel.filter((d: any) => d.type !== 'decision')
+      .append('rect')
       .attr('class', 'node-card')
       .attr('width', NODE_W).attr('height', NODE_H)
       .attr('x', -NODE_W / 2).attr('y', -NODE_H / 2)
@@ -619,8 +620,23 @@ export function D3Graph({
       .attr('stroke', (d: any) => (TYPE_STYLE[d.type] ?? FALLBACK_STYLE).stroke)
       .attr('stroke-width', 1.5);
 
+    nodeSel.filter((d: any) => d.type === 'decision')
+      .append('path')
+      .attr('class', 'node-card')
+      .attr('d', [
+        `M 0 ${-NODE_H / 2}`,
+        `L ${NODE_W / 2} 0`,
+        `L 0 ${NODE_H / 2}`,
+        `L ${-NODE_W / 2} 0`,
+        'Z',
+      ].join(' '))
+      .attr('fill',   (d: any) => (TYPE_STYLE[d.type] ?? FALLBACK_STYLE).fill)
+      .attr('stroke', (d: any) => (TYPE_STYLE[d.type] ?? FALLBACK_STYLE).stroke)
+      .attr('stroke-width', 1.5);
+
     // Left accent stripe
-    nodeSel.append('rect')
+    nodeSel.filter((d: any) => d.type !== 'decision')
+      .append('rect')
       .attr('x', -NODE_W / 2).attr('y', -NODE_H / 2 + NODE_RX)
       .attr('width', 3).attr('height', NODE_H - NODE_RX * 2)
       .attr('fill', (d: any) => (TYPE_STYLE[d.type] ?? FALLBACK_STYLE).stroke);

@@ -6,9 +6,11 @@
 #          "ready" means both the FAISS vectorstore and its parent-doc metadata
 #          are loaded into memory.
 # Language: Python
-# Connects to: main.py (router registration), app.state (faiss loaded flag)
+# Connects to: main.py (router registration), app.state (startup_step tracking)
 # Inputs:  HTTP GET /health
-# Outputs: {"status": "ok", "faiss_loaded": bool}
+# Outputs: {"status": "ok", "faiss_loaded": bool} or
+#          {"status": "preparing", "step": str} or
+#          {"status": "ready"}
 # ─────────────────────────────────────────────────────────────────────────────
 
 from fastapi import APIRouter, HTTPException, Request
@@ -29,9 +31,15 @@ async def health(request: Request):
 
 @router.get("/api/prepare")
 async def prepare(request: Request):
-    if not _knowledge_base_ready(request):
-        raise HTTPException(
-            status_code=503,
-            detail="Backend is still warming up. Please try again in a moment.",
-        )
-    return {"status": "ready", "faiss_loaded": True}
+    if _knowledge_base_ready(request):
+        return {"status": "ready"}
+
+    # Return current startup step for frontend progress messaging
+    current_step = getattr(request.app.state, "startup_step", "unknown")
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "status": "preparing",
+            "step": current_step,
+        },
+    )

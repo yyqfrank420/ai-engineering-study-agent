@@ -53,11 +53,22 @@ export async function updateThreadGraph(session: AuthSession, threadId: string, 
   if (!response.ok) throw new Error('Failed to update thread graph');
 }
 
-export async function prepareBackend(): Promise<{ status: string; faiss_loaded: boolean }> {
+export interface PrepareResponse {
+  status: string;
+  step?: string;
+}
+
+export async function prepareBackend(): Promise<PrepareResponse> {
   const response = await fetch(`${API_BASE}/api/prepare`);
   const data = await response.json();
   if (!response.ok) {
-    throw new Error(data.detail ?? 'Backend is still warming up');
+    // Backend returns detail with step info when warming up
+    const errorDetail = typeof data.detail === 'object' ? data.detail : { status: 'preparing', step: 'unknown' };
+    const error = new Error(errorDetail.status || 'Backend is still warming up') as Error & { step?: string };
+    if (errorDetail.step) {
+      error.step = errorDetail.step;
+    }
+    throw error;
   }
-  return data as { status: string; faiss_loaded: boolean };
+  return data as PrepareResponse;
 }
