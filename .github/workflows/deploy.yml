@@ -153,11 +153,19 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      # Vercel CLI performs its own install/build flow. Keeping the lockfile out
-      # of this path avoids the optional-native-dependency bug on GitHub's Linux runners.
       - name: Install dependencies for Vercel build
         working-directory: frontend
-        run: rm -f package-lock.json && npm install --prefer-offline --no-audit
+        run: |
+          npm ci
+          missing_rolldown=0
+          missing_lightningcss=0
+          node -e "require.resolve('@rolldown/binding-linux-x64-gnu')" >/dev/null 2>&1 || missing_rolldown=1
+          node -e "require.resolve('lightningcss-linux-x64-gnu')" >/dev/null 2>&1 || missing_lightningcss=1
+          if [ "$missing_rolldown" -eq 1 ] || [ "$missing_lightningcss" -eq 1 ]; then
+            npm install --no-save \
+              "@rolldown/binding-linux-x64-gnu@$(node -p "require('./package-lock.json').packages['node_modules/rolldown'].optionalDependencies['@rolldown/binding-linux-x64-gnu']")" \
+              "lightningcss-linux-x64-gnu@$(node -p "require('./package-lock.json').packages['node_modules/lightningcss'].optionalDependencies['lightningcss-linux-x64-gnu']")"
+          fi
 
       - name: Pull Vercel project settings
         working-directory: frontend
@@ -455,5 +463,4 @@ jobs:
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-
 

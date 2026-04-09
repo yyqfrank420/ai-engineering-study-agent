@@ -63,11 +63,22 @@ export async function prepareBackend(): Promise<PrepareResponse> {
   const response = await fetch(`${API_BASE}/api/prepare`);
   const data = await response.json();
   if (!response.ok) {
-    // Backend returns detail with step info when warming up
-    const errorDetail = typeof data.detail === 'object' ? data.detail : { status: 'preparing', step: 'unknown' };
-    const error = new Error(errorDetail.status || 'Backend is still warming up') as Error & { step?: string };
-    if (errorDetail.step) {
-      error.step = errorDetail.step;
+    const status = typeof data.status === 'string' ? data.status : 'preparing';
+    const step =
+      typeof data.step === 'string'
+        ? data.step
+        : typeof data.detail === 'object' && typeof data.detail?.step === 'string'
+          ? data.detail.step
+          : 'unknown';
+    const message =
+      typeof data.detail === 'string'
+        ? data.detail
+        : typeof data.detail === 'object' && typeof data.detail?.status === 'string'
+          ? data.detail.status
+          : 'Backend is still warming up';
+    const error = new Error(message || status) as Error & { step?: string };
+    if (step) {
+      error.step = step;
     }
     throw error;
   }
