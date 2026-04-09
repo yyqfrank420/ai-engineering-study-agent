@@ -7,6 +7,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import type { AuthSession, GraphData, GraphNode, GraphViewState, SelectedNode } from '../../types';
 import { useGraph } from '../../hooks/useGraph';
+import { graphStructureKey } from '../../utils/graphStructureKey';
 import { D3Graph } from './D3Graph';
 import { GlossaryDrawer } from './GlossaryDrawer';
 import { NodeDetailPopup } from './NodeDetailPopup';
@@ -56,6 +57,7 @@ export function GraphCanvas({
   const [sequenceDismissed, setSequenceDismissed] = useState(false);
   const viewStateCacheRef = useRef(new Map<string, GraphViewState>());
   const [pendingPersistViewState, setPendingPersistViewState] = useState<GraphViewState | null>(null);
+  const graphContentKey = useMemo(() => graphStructureKey(graphData), [graphData]);
   const graphViewKey = useMemo(() => {
     if (!graphData || !activeThreadId) return null;
     return [
@@ -71,8 +73,9 @@ export function GraphCanvas({
   }, [activeThreadId, graphData]);
   const persistedViewState = graphViewKey ? viewStateCacheRef.current.get(graphViewKey) ?? graphData?.view_state ?? null : null;
 
-  // Reset dismissed state whenever the graph changes (new topic = new sequence)
-  useEffect(() => { setSequenceDismissed(false); }, [graphData]);
+  // Reset dismissed state only when the graph structure changes, not when
+  // async node-detail enrichment swaps the object reference.
+  useEffect(() => { setSequenceDismissed(false); }, [graphContentKey]);
 
   useEffect(() => {
     if (!graphViewKey || !graphData?.view_state) return;

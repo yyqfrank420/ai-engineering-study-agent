@@ -15,7 +15,7 @@ from typing import Any, NotRequired, TypedDict
 class GraphNode(TypedDict):
     id: str
     label: str              # 1-4 word display name
-    type: str               # "client" | "service" | "datastore" | "gateway" | "network" | "external" | "decision"
+    type: str               # "client" | "service" | "datastore" | "gateway" | "network" | "external" | "control" | "decision"
     technology: str         # specific tech choice, e.g. "Python / FastAPI", "PostgreSQL 15"
     description: str        # 1-sentence responsibility summary (graph worker)
     tier: str | None        # "public" | "private" | None (concept graphs omit this)

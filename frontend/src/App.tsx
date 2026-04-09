@@ -145,7 +145,7 @@ export default function App() {
 
   const handleNodeClick = (node: GraphNode) => {
     setSelectedNode({ node, suggestions: [] });
-    sendNodeSelected(node.id, node.label, node.detail ?? '');
+    sendNodeSelected(node.id, node.label, node.detail ?? node.description ?? '');
   };
 
   const handleTellMeMore = useCallback((node: GraphNode) => {

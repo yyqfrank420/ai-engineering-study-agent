@@ -23,6 +23,7 @@ export const TYPE_STYLE: Record<string, TypeStyle> = {
   gateway:   { fill: 'rgba(217,119,6,0.12)',   stroke: 'rgba(217,119,6,0.85)',   badge: '#fbbf24'  },
   network:   { fill: 'rgba(239,68,68,0.10)',   stroke: 'rgba(239,68,68,0.80)',   badge: '#f87171'  },
   external:  { fill: 'rgba(100,116,139,0.08)', stroke: 'rgba(100,116,139,0.6)',  badge: '#94a3b8'  },
+  control:   { fill: 'rgba(45,212,191,0.10)',  stroke: 'rgba(45,212,191,0.85)',  badge: '#5eead4'  },
   decision:  { fill: 'rgba(14,165,233,0.10)',  stroke: 'rgba(14,165,233,0.82)',  badge: '#38bdf8'  },
 };
 

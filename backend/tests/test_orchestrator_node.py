@@ -14,6 +14,50 @@ def test_router_prompt_enforces_exact_token_output_and_search_bias():
     assert "Return EXACTLY one token and nothing else" in _ROUTER_SYSTEM
     assert "If the turn could reasonably need new evidence, choose SEARCH." in _ROUTER_SYSTEM
     assert "named products, vendors, frameworks, or services not guaranteed to be in the book" in _ROUTER_SYSTEM
+    assert "regardless of the language the user writes in" in _ROUTER_SYSTEM
+    assert "If a current graph already exists and the user appears to be asking about a different topic" in _ROUTER_SYSTEM
+
+
+def test_synthesis_prompts_preserve_user_language():
+    from agent.nodes.orchestrator_node import _QUICK_SYNTHESIS_SYSTEM, _SYNTHESIS_SYSTEM
+
+    assert "same language as the user's latest message" in _SYNTHESIS_SYSTEM
+    assert "same language as the user's latest message" in _QUICK_SYNTHESIS_SYSTEM
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_route_includes_current_graph_context(monkeypatch):
+    import agent.nodes.orchestrator_node as orchestrator
+
+    captured = {}
+
+    async def fake_stream_llm(*, model, system, messages, temperature=None, top_p=None, top_k=None, telemetry=None, send=None):
+        captured["messages"] = messages
+        return "SIMPLE"
+
+    monkeypatch.setattr(orchestrator, "stream_llm", fake_stream_llm)
+
+    async def send(_event):
+        return None
+
+    state = {
+        "send": send,
+        "history": [],
+        "user_message": "What is RLHF?",
+        "graph_data": {
+            "title": "RAG pipeline",
+            "nodes": [
+                {"id": "retriever", "label": "Retriever"},
+                {"id": "generator", "label": "Generator"},
+            ],
+        },
+    }
+
+    result = await orchestrator.orchestrator_route(state)
+
+    assert result["route"] == "simple"
+    assert "Current graph:" in captured["messages"][0]["content"]
+    assert "RAG pipeline — nodes: [Retriever, Generator]" in captured["messages"][0]["content"]
 
 
 def test_format_graph_context_summarises_nodes_edges_and_sequence():

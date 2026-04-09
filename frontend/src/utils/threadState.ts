@@ -1,4 +1,5 @@
 import type { GraphData, Message, ThreadDetail } from '../types';
+import { normalizeGraphData } from './graphData';
 
 export function storageKeyForThread(userId: string) {
   return `active-thread:${userId}`;
@@ -26,7 +27,7 @@ export function readThreadSnapshot(userId: string, threadId: string): ThreadSnap
         ...message,
         isStreaming: false,
       })),
-      graphData: parsed.graphData ?? null,
+      graphData: normalizeGraphData(parsed.graphData ?? null),
     };
   } catch {
     return null;
@@ -36,7 +37,10 @@ export function readThreadSnapshot(userId: string, threadId: string): ThreadSnap
 export function writeThreadSnapshot(userId: string, threadId: string, snapshot: ThreadSnapshot): void {
   localStorage.setItem(
     storageKeyForThreadSnapshot(userId, threadId),
-    JSON.stringify(snapshot),
+    JSON.stringify({
+      ...snapshot,
+      graphData: normalizeGraphData(snapshot.graphData),
+    }),
   );
 }
 

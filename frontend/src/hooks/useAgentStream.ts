@@ -32,6 +32,7 @@ import type {
   WorkerStatus,
 } from '../types';
 import { graphStructureKey } from '../utils/graphStructureKey';
+import { normalizeGraphData } from '../utils/graphData';
 
 function makeId() {
   return Math.random().toString(36).slice(2);
@@ -70,15 +71,21 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
   const activeChatStreamIdRef = useRef<string | null>(null);
   const activeNodeStreamIdRef = useRef<string | null>(null);
   const userAbortedChatRef = useRef(false);
+  const graphDataRef = useRef<GraphData | null>(null);
+  const selectedNodeRef = useRef<SelectedNode | null>(null);
 
   // Caches suggested questions per node ID so repeat clicks skip the LLM call
   const suggestionsCacheRef = useRef<Map<string, string[]>>(new Map());
+  const lastGraphKeyRef = useRef<string>('null');
 
   const resetThreadView = useCallback(() => {
     setMessages([]);
     setGraphData(null);
     setSelectedNode(null);
+    graphDataRef.current = null;
+    selectedNodeRef.current = null;
     suggestionsCacheRef.current.clear();
+    lastGraphKeyRef.current = 'null';
     streamingIdRef.current = null;
     activeChatStreamIdRef.current = null;
     activeNodeStreamIdRef.current = null;
@@ -101,10 +108,21 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
     resetThreadView();
   }, [activeThreadId, resetThreadView]);
 
+  useEffect(() => {
+    graphDataRef.current = graphData;
+  }, [graphData]);
+
+  useEffect(() => {
+    selectedNodeRef.current = selectedNode;
+  }, [selectedNode]);
+
   const hydrateThread = useCallback((thread: { messages: Message[]; graphData: GraphData | null }) => {
     resetThreadView();
     setMessages(thread.messages);
-    setGraphData(thread.graphData);
+    const nextGraph = normalizeGraphData(thread.graphData);
+    lastGraphKeyRef.current = graphStructureKey(nextGraph);
+    graphDataRef.current = nextGraph;
+    setGraphData(nextGraph);
   }, [resetThreadView]);
 
   const handleEvent = useCallback((event: ServerEvent, meta: { kind: 'chat' | 'node-selected'; clientRequestId: string }) => {
@@ -168,12 +186,31 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
 
       case 'graph_data':
         if (meta.kind !== 'chat') break;
-        setGraphData(prev => {
-          if (prev && graphStructureKey(prev) === graphStructureKey(event.data)) {
-            return prev;
+        {
+          const nextGraph = normalizeGraphData(event.data);
+          const nextGraphKey = graphStructureKey(nextGraph);
+          const graphChanged = lastGraphKeyRef.current !== nextGraphKey;
+          lastGraphKeyRef.current = nextGraphKey;
+
+          if (graphChanged) {
+            suggestionsCacheRef.current.clear();
+            setGraphNotice(null);
+            const currentSelected = selectedNodeRef.current;
+            if (!currentSelected || !nextGraph) {
+              setSelectedNode(null);
+            } else {
+              const liveNode = nextGraph.nodes.find((node) => node.id === currentSelected.node.id);
+              setSelectedNode(liveNode ? { node: liveNode, suggestions: [] } : null);
+            }
           }
-          return event.data;
-        });
+
+          const prevGraph = graphDataRef.current;
+          if (prevGraph && nextGraph && graphStructureKey(prevGraph) === graphStructureKey(nextGraph)) {
+            break;
+          }
+          graphDataRef.current = nextGraph;
+          setGraphData(nextGraph);
+        }
         break;
 
       case 'node_detail':
@@ -263,6 +300,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
       content: opts?.displayContent ?? content,
       isStreaming: false,
     }]);
+    setRetrievalNotice(null);
     setGraphNotice(null);
     setStreamStatus('generating');
     setWorkerStatus(OPTIMISTIC_CHAT_STATUS);

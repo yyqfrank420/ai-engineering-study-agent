@@ -36,6 +36,7 @@ async def stream_suggested_questions(
         'You are a study assistant for "AI Engineering" by Chip Huyen.\n'
         "Generate exactly 3 follow-up exploration chips for a graph node.\n\n"
         "Make the chips feel like useful next actions in the UI.\n"
+        "Write the chips in the same language as the recent context when that language is clear.\n"
         "Across the 3 chips, prefer this mix:\n"
         "  1. one chip that asks to explain a part more clearly\n"
         "  2. one chip that asks to expand the graph around this node or nearby area\n"

@@ -8,6 +8,7 @@ import {
   storageKeyForThread,
   type ThreadSnapshot,
 } from '../utils/threadState';
+import { normalizeGraphData } from '../utils/graphData';
 
 type UseThreadSessionArgs = {
   authSession: AuthSession | null;
@@ -78,7 +79,7 @@ export function useThreadSession({
         const fetchedSnapshot: ThreadSnapshot = {
           title: detail.thread.title,
           messages: mapThreadMessages(detail.messages),
-          graphData: detail.thread.graph_data,
+          graphData: normalizeGraphData(detail.thread.graph_data),
         };
         setThreadSnapshot(prev => {
           if (switchingThreads) {
@@ -200,7 +201,7 @@ export function useThreadSession({
       setThreadSnapshot({
         title: detail.thread.title,
         messages: mapThreadMessages(detail.messages),
-        graphData: detail.thread.graph_data,
+        graphData: normalizeGraphData(detail.thread.graph_data),
       });
     } finally {
       if (requestSeq === threadRequestSeqRef.current) {

@@ -17,7 +17,8 @@
 //   gateway    — traffic entry / control: load balancers, API gateways, CDN
 //   network    — boundaries & plumbing: VPC, subnet, NAT, firewall, VPC endpoint
 //   external   — third-party dependencies: SaaS APIs, managed services
-//   decision   — non-service constraints or choices: budgets, approval gates, policy decisions
+//   control    — policy/security enforcement: access control, guardrails, filters, validators
+//   decision   — non-service constraints or choices: budgets, approval gates, routing decisions
 
 export type NodeType =
   | 'client'
@@ -26,6 +27,7 @@ export type NodeType =
   | 'gateway'
   | 'network'
   | 'external'
+  | 'control'
   | 'decision';
 
 export interface GraphNode {

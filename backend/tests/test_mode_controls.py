@@ -224,3 +224,14 @@ class TestResearchWorkerResilience:
         )
 
         assert result["research_context"] == ""
+
+    def test_build_queries_uses_current_year_instead_of_hard_coded_year(self):
+        from datetime import datetime, timezone
+
+        from agent.nodes.research_worker import _build_queries
+
+        queries = _build_queries("RAG pipeline")
+
+        assert queries[0] == "RAG pipeline architecture"
+        assert queries[1] == "RAG pipeline best practices"
+        assert queries[2] == f"RAG pipeline implementation {datetime.now(timezone.utc).year}"

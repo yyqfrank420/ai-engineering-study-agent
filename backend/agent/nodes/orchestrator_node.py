@@ -26,6 +26,10 @@ You are the router for an AI study assistant specialised in the book "AI Enginee
 Classify the user's new turn into exactly one route token.
 </task>
 
+<language>
+Apply these routing rules regardless of the language the user writes in.
+</language>
+
 <output_contract>
 Return EXACTLY one token and nothing else:
 SIMPLE
@@ -38,6 +42,8 @@ SIMPLE
 - Short factual question answerable in 2-4 sentences from general AI / ML knowledge.
 - Good examples: "what is X?", "what does X stand for?", "define X", "what is X used for?"
 - Also use SIMPLE for quick conversational follow-ups like "got it", "why?", "example?".
+- If a current graph already exists and the user appears to be asking about a different topic,
+  do NOT use SIMPLE just because the question is short; use SEARCH so the graph can refresh.
 - Do NOT use SIMPLE for build, design, implementation, comparison of system choices, customisation,
   self-hosting, open-source replacements, architecture, workflow, orchestration, or graph-building.
 
@@ -77,6 +83,10 @@ If the user asks where the graph is, they mean that canvas panel.
 Write a concise beginner-friendly explanation grounded in the retrieved book evidence.
 If graph context is provided, anchor the explanation to the exact node labels, sequence steps, lanes, or groups when useful.
 </core_task>
+
+<language>
+Answer in the same language as the user's latest message unless they ask to switch.
+</language>
 
 <book_scope>
 - Stay grounded in the book.
@@ -123,6 +133,10 @@ You are a concise study assistant for "AI Engineering" by Chip Huyen (O'Reilly).
 Answer the user's short factual question in 2-4 sentences.
 </task>
 
+<language>
+Answer in the same language as the user's latest message unless they ask to switch.
+</language>
+
 <style>
 - Plain English.
 - One concrete analogy only if it helps the idea click faster.
@@ -149,11 +163,13 @@ async def orchestrator_route(state: AgentState) -> AgentState:
     await send({"type": "worker_status", "worker": "orchestrator", "status": "Routing…"})
 
     history_text = _format_history(state["history"])
+    graph_text = _format_route_graph_context(state.get("graph_data"))
     messages = [
         {
             "role": "user",
             "content": (
                 f"Conversation so far:\n{history_text}\n\n"
+                f"Current graph:\n{graph_text}\n\n"
                 f"New question: {state['user_message']}"
             ),
         }
@@ -302,6 +318,16 @@ def _format_history(history: list[dict]) -> str:
         role = msg.get("role", "user").upper()
         lines.append(f"{role}: {msg.get('content', '')[:300]}")
     return "\n".join(lines)
+
+
+def _format_route_graph_context(graph_data: dict | None) -> str:
+    if not graph_data:
+        return "(no graph available)"
+    title = graph_data.get("title") or "Untitled graph"
+    node_labels = ", ".join(node.get("label", "?") for node in (graph_data.get("nodes") or [])[:8])
+    if not node_labels:
+        node_labels = "(no nodes)"
+    return f'{title} — nodes: [{node_labels}]'
 
 
 def _format_chunks(chunks: list[dict]) -> str:

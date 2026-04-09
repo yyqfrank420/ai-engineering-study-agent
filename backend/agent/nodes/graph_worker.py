@@ -85,7 +85,7 @@ When outputting a graph, respond with ONLY a JSON object:
     {
       "id": "<snake_id>",
       "label": "<MAX 3 words, MAX 20 chars — e.g. 'API Gateway', 'Vector Store', 'LLM Engine'>",
-      "type": "<client|service|datastore|gateway|network|external|decision>",
+      "type": "<client|service|datastore|gateway|network|external|control|decision>",
       "technology": "<MAX 25 chars — e.g. 'Python / FastAPI', 'FAISS', 'Redis 7', 'vLLM / A100'>",
       "description": "<1 sentence: what this node is responsible for>",
       "tier": "<public|private>",
@@ -133,8 +133,22 @@ No markdown, no prose, no code fence — only the JSON or NO_GRAPH.
   - If the question is about a method, idea, tradeoff, or technique (for example LoRA, PEFT,
     quantization, reranking, batching, fine-tuning), prefer a "concept" graph.
   - For concept graphs, nodes should be concepts or roles in the learning flow, not random services.
-  - Use type "decision" for business constraints, tradeoffs, approval gates, budgets, policy choices,
-    or other non-service decision points. Example: "Compute Budget" is a decision, not a service.
+  - Use type "control" for policy/security enforcement nodes such as access control,
+    guardrails, validators, filters, moderation, or retrieval authorization.
+  - Use type "decision" only for explicit technical choices, routing points, approval gates,
+    budgets, tradeoffs, or other checkpoints that steer what happens next.
+  - Good control nodes: "Access Control", "Policy Filter", "Input Guardrails",
+    "Output Guardrails", "Safety Validator".
+  - Good decision nodes: "Gateway Check", "Model Router", "Technical Decision",
+    "Approval Gate", "Compute Budget".
+  - If the flow has upstream pressures, prefer separate nodes instead of overloading decision:
+      - type "external" for outside forces or actors, e.g. "External Factors", attackers,
+        regulators, vendor APIs, compliance pressure.
+      - a normal concept/service node for internal framing inputs, e.g. "Business Requirements",
+        "Security Goals", "Product Constraints".
+  - Do NOT label ordinary concepts or enforcement controls as decisions just because they influence later steps.
+    "Prompt Threats", "Instruction Hierarchy", "Fine-Tuned Model", and "Output Guardrails"
+    are usually concepts / controls / services unless the user explicitly frames them as a choice point.
   - Avoid drifting into very low-level math or internal neuron-layer detail unless the user explicitly asks.
   - If the retrieved evidence is narrow, keep the graph small and faithful instead of making it look "complete".
 </grounding_rules>
@@ -144,6 +158,9 @@ No markdown, no prose, no code fence — only the JSON or NO_GRAPH.
     - a method, technique, concept, comparison, tradeoff, or relationship between ideas
     - how something works in plain English
     - why a concept matters
+    - a security / guardrail / prompt-engineering flow
+    - a step-by-step policy, control, or reasoning flow
+    - decision logic inside a system rather than deployed infrastructure
 
   Use "architecture" only when the user clearly asks for:
     - system architecture
@@ -152,6 +169,8 @@ No markdown, no prose, no code fence — only the JSON or NO_GRAPH.
     - request path through a real system
 
   If in doubt, choose "concept".
+  If the request is mostly about logical stages, requirements, controls, or decisions,
+  choose "concept" even if words like gateway, router, or model appear.
 </graph_type_choice>
 
 <sizing_constraints>
@@ -191,7 +210,8 @@ No markdown, no prose, no code fence — only the JSON or NO_GRAPH.
   "gateway"   — traffic entry & control: load balancers, API gateways, CDN, reverse proxies
   "network"   — boundaries & plumbing: VPC, subnet, NAT gateway, firewall, VPC endpoint
   "external"  — third-party dependencies: SaaS APIs, managed services outside your control
-  "decision"  — non-service constraints or choices: compute budget, approval gate, policy, tradeoff, business rule
+  "control"   — policy/security enforcement: access control, guardrails, validators, filters, moderation
+  "decision"  — non-service constraints or choices: compute budget, approval gate, tradeoff, business rule
 </node_types>
 
 <node_fields>
@@ -236,6 +256,12 @@ No markdown, no prose, no code fence — only the JSON or NO_GRAPH.
 
 <concept_graph_guidelines>
   - 4–7 nodes total for replace; 1–4 nodes for update.
+  - Prefer a clean left-to-right learning flow over an infra-style deployment map.
+  - When the user gives numbered stages or asks for the "full flow", mirror that order directly.
+  - Use "sequence" to anchor the main stages in order.
+  - For concept graphs, omit "tier" and avoid public/private infrastructure framing unless the user explicitly asks.
+  - Keep decision nodes scarce and meaningful: use them only where the flow truly hinges on a choice,
+    requirement, or routing decision.
   - Title should name the learning topic, not a visual category. Good:
       "PEFT Fine-Tuning", "LoRA Training Flow", "Latency Tradeoffs"
     Bad:
@@ -274,8 +300,12 @@ No markdown, no prose, no code fence — only the JSON or NO_GRAPH.
     - Do NOT cluster all datastores in one column; spread them next to their service.
 
   DECISION / CONSTRAINT PLACEMENT:
-    - Use type:"decision" for nodes that constrain or steer the next design choice.
+    - Use type:"control" for policy/security enforcement nodes that continuously evaluate or enforce rules.
+    - Use type:"decision" for nodes that represent a requirement, tradeoff, checkpoint,
+      routing choice, or explicit technical/business decision.
+    - A control node is a real stage in the flow and should usually sit inline with the system it protects.
     - A decision node can appear upstream of the service or concept it shapes.
+    - Do NOT relabel ordinary concepts as decisions just because they are important.
     - Do NOT label a budget, tradeoff, or approval gate as type:"service" just to make the diagram fit.
 
   OBSERVABILITY / MONITORING lane field:
@@ -286,9 +316,10 @@ No markdown, no prose, no code fence — only the JSON or NO_GRAPH.
     - If a monitoring node is only paired with ONE service, omit the lane field and
       place it as a normal node adjacent to its service in the same column.
 
-  CLIENT ROUND-TRIP:
-    - Always close the loop: include a return edge from the final node back to the client.
-    - This return edge will be rendered as a curved arc above the diagram.
+  CLIENT OUTPUT:
+    - Do NOT add a return edge back to the client.
+    - The UI already implies that the final service produces the user-visible output.
+    - Keep the graph strictly forward-flowing unless an edge is a genuine "loop" control cycle.
 </layout_rules>"""
 
 _FORCE_GRAPH_APPEND = """
@@ -298,6 +329,38 @@ IMPORTANT OVERRIDE:
 - Do NOT respond with NO_GRAPH.
 - Return a JSON graph now, even if it must stay small and concept-focused.
 """
+
+_FORCE_REPLACE_APPEND = """
+
+IMPORTANT OVERRIDE:
+- The user is intentionally changing topics within the same chat.
+- Do NOT tell them to start a new chat.
+- Use action:"replace" and return a complete fresh graph for the new topic now.
+"""
+
+
+def _task_specific_hint(user_message: str) -> str:
+    message = (user_message or "").lower()
+    if not any(
+        token in message
+        for token in (
+            "step", "steps", "flow", "decision", "guardrail", "guardrails",
+            "prompt injection", "jailbreak",
+            "paso", "pasos", "flujo", "seguridad", "proteccion", "protección",
+            "control", "acceso", "inyeccion", "inyección",
+        )
+    ):
+        return ""
+    return (
+        "TASK-SPECIFIC OVERRIDE:\n"
+        "- This request is asking for a staged control flow, not infrastructure deployment.\n"
+        '- Prefer graph_type "concept".\n'
+        "- Mirror the user's step order directly in the graph and in sequence.\n"
+        "- If the flow includes upstream influences, add separate nodes such as External Factors or Business Requirements.\n"
+        "- Use control nodes for guardrails, policy engines, access control, and validators.\n"
+        "- Use decision nodes for technical choices or routing checkpoints, not for every upstream concept.\n"
+        "- Do not label threat categories, policy sources, model stages, or guardrail stages as decisions unless they are framed as explicit choice points.\n"
+    )
 
 
 async def _generate_raw_graph_response(
@@ -347,7 +410,9 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
 
     # Prepend complexity hint if the user selected a non-auto level
     hint = _COMPLEXITY_HINTS.get(state.get("complexity", "auto"), "")
-    system = f"{hint}\n\n{_SYSTEM}".strip() if hint else _SYSTEM
+    task_hint = _task_specific_hint(state.get("user_message", ""))
+    system_parts = [part for part in (hint, task_hint, _SYSTEM) if part]
+    system = "\n\n".join(system_parts)
 
     # Inject web research context if available (from research_worker)
     research_block = ""
@@ -399,14 +464,25 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
         action = parsed.get("action", "replace")
         if action == "new_chat":
             if existing:
-                await send({
-                    "type": "graph_notice",
-                    "message": (
-                        "This looks like a different graph topic. Start a new chat if you want a fresh graph "
-                        "instead of replacing the current one."
-                    ),
-                })
-                return {**state, "graph_data": None, "graph_notice_sent": True}
+                raw = await _generate_raw_graph_response(
+                    f"{system}\n{_FORCE_REPLACE_APPEND}",
+                    messages,
+                    send,
+                    telemetry=telemetry,
+                )
+                if "NO_GRAPH" in raw.strip().upper()[:120] and not raw.strip().startswith("{"):
+                    await send({
+                        "type": "graph_notice",
+                        "message": (
+                            "This looks like a different graph topic, but the graph generator failed to redraw it. "
+                            "Try again or start a new chat if you want a clean break."
+                        ),
+                    })
+                    return {**state, "graph_data": None, "graph_notice_sent": True}
+                parsed = _parse_json(raw)
+                if parsed is None:
+                    return {**state, "graph_data": None}
+                action = parsed.get("action", "replace")
             else:
                 # new_chat with no existing graph is invalid — re-prompt for a real graph
                 raw = await _generate_raw_graph_response(

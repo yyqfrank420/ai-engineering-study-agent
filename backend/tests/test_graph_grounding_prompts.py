@@ -50,14 +50,60 @@ async def test_graph_worker_prompt_includes_rag_evidence_and_concept_bias(monkey
     assert 'If in doubt, choose "concept".' in captured["system"]
     assert "If the exact product is out of book but the underlying pattern is in book, graph the pattern." in captured["system"]
     assert "Do NOT drift into random enterprise boxes like VPCs" in captured["system"]
-    assert 'Use type "decision" for business constraints' in captured["system"]
-    assert 'Example: "Compute Budget" is a decision, not a service.' in captured["system"]
-    assert '"decision"  — non-service constraints or choices' in captured["system"]
+    assert 'Use type "control" for policy/security enforcement nodes' in captured["system"]
+    assert 'Good control nodes: "Access Control", "Policy Filter", "Input Guardrails"' in captured["system"]
+    assert '"control"   — policy/security enforcement' in captured["system"]
+    assert "Do NOT add a return edge back to the client." in captured["system"]
     assert captured["temperature"] == graph_worker.settings.graph_temperature
     assert captured["top_p"] == graph_worker.settings.graph_top_p
     assert captured["top_k"] == graph_worker.settings.graph_top_k
     assert "Retrieved book evidence:" in captured["messages"][0]["content"]
     assert "Parameter-efficient fine-tuning" in captured["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_graph_worker_prompt_tightens_decision_nodes_for_guardrail_flows(monkeypatch):
+    import agent.nodes.graph_worker as graph_worker
+
+    captured = {}
+
+    async def fake_stream_response(*, model, system, messages, thinking_budget, temperature=None, top_p=None, top_k=None):
+        captured["system"] = system
+        yield ("text", "NO_GRAPH")
+
+    import agent.stream_utils as stream_utils_mod
+    monkeypatch.setattr(stream_utils_mod, "stream_response", fake_stream_response)
+
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    state = {
+        "send": send,
+        "user_message": "Show the full defensive prompt engineering flow and call out the two decision nodes.",
+        "graph_data": None,
+        "complexity": "auto",
+        "research_context": "",
+        "rag_chunks": [
+            {
+                "chapter": 10,
+                "page_number": 452,
+                "chapter_title": "Security and guardrails",
+                "section": "Prompt defenses",
+                "text": "Input guardrails, instruction hierarchy, routing logic, and output guardrails work together in a staged defense pipeline.",
+            }
+        ],
+    }
+
+    await graph_worker.graph_worker_node(state, tools=[])
+
+    assert "TASK-SPECIFIC OVERRIDE:" in captured["system"]
+    assert "Use control nodes for guardrails, policy engines, access control, and validators." in captured["system"]
+    assert 'Use type "decision" only for explicit technical choices, routing points, approval gates,' in captured["system"]
+    assert 'Do NOT label ordinary concepts or enforcement controls as decisions just because they influence later steps.' in captured["system"]
+    assert '"Prompt Threats", "Instruction Hierarchy", "Fine-Tuned Model", and "Output Guardrails"' in captured["system"]
+    assert 'If the request is mostly about logical stages, requirements, controls, or decisions,' in captured["system"]
 
 
 @pytest.mark.asyncio
@@ -151,11 +197,20 @@ async def test_graph_worker_ignores_non_object_json_before_valid_object(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_graph_worker_keeps_existing_graph_and_prompts_for_new_chat(monkeypatch):
+async def test_graph_worker_replaces_existing_graph_when_model_requests_new_chat(monkeypatch):
     import agent.nodes.graph_worker as graph_worker
 
+    calls = []
+
     async def fake_stream_response(*, model, system, messages, thinking_budget, temperature=None, top_p=None, top_k=None):
-        yield ("text", '{"action":"new_chat"}')
+        calls.append(system)
+        if len(calls) == 1:
+            yield ("text", '{"action":"new_chat"}')
+        else:
+            yield (
+                "text",
+                '{"action":"replace","graph_type":"concept","title":"Training Flow","nodes":[{"id":"pretrain","label":"Pretraining","type":"service","technology":"Transformer","description":"Builds the base model from broad data.","tier":null}],"edges":[],"sequence":[]}',
+            )
 
     import agent.stream_utils as stream_utils_mod
     monkeypatch.setattr(stream_utils_mod, "stream_response", fake_stream_response)
@@ -192,10 +247,11 @@ async def test_graph_worker_keeps_existing_graph_and_prompts_for_new_chat(monkey
 
     result = await graph_worker.graph_worker_node(state, tools=[])
 
-    assert result["graph_data"] is None
-    assert result["graph_notice_sent"] is True
-    assert any(event["type"] == "graph_notice" for event in events)
-    assert "Start a new chat" in events[-1]["message"]
+    assert "Do NOT tell them to start a new chat." in calls[1]
+    assert result["graph_notice_sent"] is False
+    assert result["graph_data"]["title"] == "Training Flow"
+    assert result["graph_data"]["version"]
+    assert not any(event["type"] == "graph_notice" for event in events)
 
 
 @pytest.mark.asyncio

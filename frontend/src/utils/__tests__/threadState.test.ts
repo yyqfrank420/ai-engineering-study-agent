@@ -43,6 +43,31 @@ describe('thread snapshot helpers', () => {
     expect(readThreadSnapshot('user-1', 'thread-1')).toBeNull();
   });
 
+  it('normalizes legacy security nodes away from decision badges', () => {
+    writeThreadSnapshot('user-1', 'thread-1', {
+      title: 'Thread title',
+      messages: [],
+      graphData: {
+        graph_type: 'concept',
+        title: 'RAG Security',
+        nodes: [
+          {
+            id: 'access_control',
+            label: 'Access Control',
+            type: 'decision',
+            technology: 'Policy Engine',
+            description: 'Authorizes retrieval and filters chunks by permission.',
+            detail: null,
+          },
+        ],
+        edges: [],
+        sequence: [],
+      },
+    });
+
+    expect(readThreadSnapshot('user-1', 'thread-1')?.graphData?.nodes[0]?.type).toBe('control');
+  });
+
   it('does not persist a transiently emptier live snapshot over a richer cached thread', () => {
     expect(shouldPersistThreadSnapshot(
       {

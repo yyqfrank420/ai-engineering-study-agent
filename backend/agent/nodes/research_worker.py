@@ -18,6 +18,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 import asyncio
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from agent.state import AgentState
@@ -40,11 +41,7 @@ async def research_worker_node(state: AgentState) -> AgentState:
     await send({"type": "worker_status", "worker": "research", "status": "Searching the web…"})
 
     topic = state["user_message"][:60].strip()
-    queries = [
-        f"{topic} architecture",
-        f"{topic} best practices",
-        f"{topic} implementation 2025",
-    ]
+    queries = _build_queries(topic)
 
     try:
         raw = await asyncio.to_thread(
@@ -59,6 +56,15 @@ async def research_worker_node(state: AgentState) -> AgentState:
 
     context = _format_results(raw, settings.research_noise_domains)
     return {**state, "research_context": context}
+
+
+def _build_queries(topic: str) -> list[str]:
+    current_year = datetime.now(timezone.utc).year
+    return [
+        f"{topic} architecture",
+        f"{topic} best practices",
+        f"{topic} implementation {current_year}",
+    ]
 
 
 def _run_ddg_searches(queries: list[str], results_per_query: int) -> list[dict]:
