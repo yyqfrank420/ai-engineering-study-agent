@@ -56,6 +56,7 @@ export async function updateThreadGraph(session: AuthSession, threadId: string, 
 export interface PrepareResponse {
   status: string;
   step?: string;
+  faiss_loaded?: boolean;
 }
 
 export async function prepareBackend(): Promise<PrepareResponse> {
