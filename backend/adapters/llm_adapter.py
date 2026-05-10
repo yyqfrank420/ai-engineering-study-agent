@@ -47,6 +47,9 @@ _FALLBACK_MODELS: dict[str, str] = {
     settings.worker_model:       settings.worker_fallback_model,
 }
 
+_anthropic_stream_semaphore: asyncio.Semaphore | None = None
+_anthropic_stream_limit: int | None = None
+
 
 def build_telemetry(
     operation: str,
@@ -63,6 +66,18 @@ def build_telemetry(
     if metadata:
         payload["metadata"] = metadata
     return payload
+
+
+def _get_anthropic_stream_semaphore() -> asyncio.Semaphore | None:
+    global _anthropic_stream_limit, _anthropic_stream_semaphore
+
+    limit = max(0, int(settings.anthropic_max_concurrent_streams))
+    if limit == 0:
+        return None
+    if _anthropic_stream_semaphore is None or _anthropic_stream_limit != limit:
+        _anthropic_stream_semaphore = asyncio.Semaphore(limit)
+        _anthropic_stream_limit = limit
+    return _anthropic_stream_semaphore
 
 
 def stream_response_compat(streamer, **kwargs):
@@ -129,6 +144,20 @@ async def _openai_stream(
                 yield ("text", delta.content)
 
     yield ("done", "")
+
+
+async def _anthropic_stream_once(kwargs: dict) -> AsyncGenerator[object, None]:
+    semaphore = _get_anthropic_stream_semaphore()
+    if semaphore is None:
+        async with _get_anthropic_client().messages.stream(**kwargs) as stream:
+            async for event in stream:
+                yield event
+        return
+
+    async with semaphore:
+        async with _get_anthropic_client().messages.stream(**kwargs) as stream:
+            async for event in stream:
+                yield event
 
 
 async def stream_response(
@@ -229,16 +258,15 @@ async def stream_response(
     for attempt in range(1, settings.llm_max_retries + 1):
         tokens_yielded = False
         try:
-            async with _get_anthropic_client().messages.stream(**kwargs) as stream:
-                async for event in stream:
-                    if event.type == "content_block_delta":
-                        tokens_yielded = True
-                        delta = event.delta
-                        if delta.type == "thinking_delta":
-                            yield ("thinking", delta.thinking)
-                        elif delta.type == "text_delta":
-                            output_chars += len(delta.text)
-                            yield ("text", delta.text)
+            async for event in _anthropic_stream_once(kwargs):
+                if event.type == "content_block_delta":
+                    tokens_yielded = True
+                    delta = event.delta
+                    if delta.type == "thinking_delta":
+                        yield ("thinking", delta.thinking)
+                    elif delta.type == "text_delta":
+                        output_chars += len(delta.text)
+                        yield ("text", delta.text)
             _record("success")
             yield ("done", "")
             return   # Anthropic succeeded

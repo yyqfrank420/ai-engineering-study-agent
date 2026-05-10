@@ -12,6 +12,7 @@ from eval.staging_runner import (
     parse_sse_events,
     resolve_node_selected_payload,
     run_case,
+    run_cases_with_concurrency,
 )
 import asyncio
 import urllib.request
@@ -265,3 +266,31 @@ def test_run_case_records_step_exception_without_crashing(monkeypatch):
     assert result["passed"] is False
     assert result["steps"][0]["passed"] is False
     assert "no graph was emitted" in result["steps"][0]["failures"][0]
+
+
+def test_run_cases_with_concurrency_bounds_parallel_cases():
+    from eval.staging_cases import StagingCase
+
+    active = 0
+    max_active = 0
+
+    cases = [
+        StagingCase(id="S1", category="test", description="one", steps=[]),
+        StagingCase(id="S2", category="test", description="two", steps=[]),
+        StagingCase(id="S3", category="test", description="three", steps=[]),
+    ]
+
+    async def _fake_run_case(case):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return {"id": case.id, "passed": True, "steps": []}
+
+    results = asyncio.run(
+        run_cases_with_concurrency(cases, _fake_run_case, concurrency=2)
+    )
+
+    assert [result["id"] for result in results] == ["S1", "S2", "S3"]
+    assert max_active == 2

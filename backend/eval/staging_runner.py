@@ -51,6 +51,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--case", action="append", default=[], help="Specific case ID to run")
     parser.add_argument("--category", action="append", default=[], help="Specific category to run")
     parser.add_argument("--max-cases", type=int, default=None, help="Run only the first N selected cases")
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=int(os.getenv("STAGING_EVAL_CONCURRENCY", "2")),
+        help="Maximum staging cases to run at once",
+    )
     parser.add_argument("--keep-threads", action="store_true", help="Do not auto-delete eval threads")
     return parser
 
@@ -505,6 +511,21 @@ async def run_case(
             await perform_json_request(client, "DELETE", f"{base_url}/api/threads/{thread_id}", auth_token)
 
 
+async def run_cases_with_concurrency(
+    cases: list[StagingCase],
+    run_case_with_retry,
+    *,
+    concurrency: int,
+) -> list[dict]:
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def run_limited_case(case: StagingCase) -> dict:
+        async with semaphore:
+            return await run_case_with_retry(case)
+
+    return list(await asyncio.gather(*[run_limited_case(case) for case in cases]))
+
+
 def print_report(results: list[dict]) -> None:
     if _console is None or Table is None or box is None:
         print("Case | Category | Status | Failed Steps")
@@ -619,7 +640,11 @@ async def main() -> None:
         _console_print(f"{fail_message}\n")
         return result
 
-    results = list(await asyncio.gather(*[run_case_with_retry(case) for case in selected_cases]))
+    results = await run_cases_with_concurrency(
+        selected_cases,
+        run_case_with_retry,
+        concurrency=args.concurrency,
+    )
 
     print_report(results)
     path = write_results(results)

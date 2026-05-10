@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import asyncio
 import uuid
 
 from fastapi.testclient import TestClient
@@ -197,8 +198,6 @@ def test_stream_response_records_llm_telemetry(temp_data_dir, monkeypatch):
                 chunks.append(content)
         return "".join(chunks)
 
-    import asyncio
-
     text = asyncio.run(_collect())
     rows = list_recent_llm_telemetry(since_epoch=0)
 
@@ -208,3 +207,64 @@ def test_stream_response_records_llm_telemetry(temp_data_dir, monkeypatch):
     assert rows[0]["provider"] == "anthropic"
     assert rows[0]["status"] == "success"
     assert rows[0]["output_chars"] == len("Hello world")
+
+
+def test_stream_response_limits_concurrent_anthropic_streams(temp_data_dir, monkeypatch):
+    init_db()
+
+    import adapters.llm_adapter as llm_adapter
+
+    active = 0
+    max_active = 0
+
+    class _SlowAnthropicStream:
+        def __init__(self):
+            self._events = iter([
+                SimpleNamespace(type="content_block_delta", delta=SimpleNamespace(type="text_delta", text="ok")),
+            ])
+
+        async def __aenter__(self):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            nonlocal active
+            await asyncio.sleep(0.01)
+            active -= 1
+            return False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            await asyncio.sleep(0.01)
+            try:
+                return next(self._events)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+    fake_client = SimpleNamespace(
+        messages=SimpleNamespace(stream=lambda **kwargs: _SlowAnthropicStream())
+    )
+    monkeypatch.setattr(settings, "anthropic_max_concurrent_streams", 1)
+    monkeypatch.setattr(llm_adapter, "_anthropic_stream_semaphore", None)
+    monkeypatch.setattr(llm_adapter, "_anthropic_stream_limit", None)
+    monkeypatch.setattr("adapters.llm_adapter._get_anthropic_client", lambda: fake_client)
+
+    async def _collect_one():
+        async for _event_type, _content in stream_response(
+            model=settings.worker_model,
+            system="system",
+            messages=[{"role": "user", "content": "hello"}],
+            telemetry={"operation": "unit_test_llm_limit"},
+        ):
+            pass
+
+    async def _run_concurrently():
+        await asyncio.gather(_collect_one(), _collect_one(), _collect_one())
+
+    asyncio.run(_run_concurrently())
+
+    assert max_active == 1
