@@ -116,6 +116,11 @@ jobs:
           FRONTEND_ORIGIN: http://localhost:5173
         run: pytest --tb=short -q
 
+      - name: Validate canonical graph artifacts
+        env:
+          PYTHONPATH: backend
+        run: python scripts/validate_canonical_graph_artifacts.py
+
   # ── 2. Frontend build check ─────────────────────────────────────────────────
   test-frontend:
     name: Build frontend (tsc + vite)
@@ -146,7 +151,15 @@ jobs:
               "lightningcss-linux-x64-gnu@$(node -p "require('./package-lock.json').packages['node_modules/lightningcss'].optionalDependencies['lightningcss-linux-x64-gnu']")"
           fi
 
-      # `npm run build` runs `tsc -b && vite build` — type errors fail the job.
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Run frontend unit tests
+        working-directory: frontend
+        run: npm test -- --run
+
+      # `npm run build` runs `tsc -b && vite build` - type errors fail the job.
       - name: Type-check and build
         working-directory: frontend
         env:
