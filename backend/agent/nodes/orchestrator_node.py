@@ -162,6 +162,9 @@ async def orchestrator_route(state: AgentState) -> AgentState:
     send = state["send"]
     await send({"type": "worker_status", "worker": "orchestrator", "status": "Routing…"})
 
+    if _is_memory_followup(state.get("user_message", ""), state.get("history") or []):
+        return {**state, "route": "memory"}
+
     history_text = _format_history(state["history"])
     graph_text = _format_route_graph_context(state.get("graph_data"))
     messages = [
@@ -202,6 +205,65 @@ async def orchestrator_route(state: AgentState) -> AgentState:
     else:
         route = "search"
     return {**state, "route": route}
+
+
+def _is_memory_followup(user_message: str, history: list[dict]) -> bool:
+    if not history:
+        return False
+
+    text = user_message.strip().lower()
+    if not text:
+        return False
+
+    explicit_markers = (
+        "prior answer",
+        "previous answer",
+        "last answer",
+        "earlier answer",
+        "your answer",
+        "that answer",
+        "prior response",
+        "previous response",
+        "last response",
+        "earlier response",
+        "your response",
+        "that response",
+        "prior explanation",
+        "previous explanation",
+        "last explanation",
+        "earlier explanation",
+        "that explanation",
+        "what you just said",
+        "what you said",
+        "what we discussed",
+        "above",
+    )
+    if any(marker in text for marker in explicit_markers):
+        return True
+
+    memory_actions = (
+        "restate",
+        "rephrase",
+        "summarize",
+        "summary",
+        "repeat",
+        "say again",
+        "explain again",
+        "clarify",
+    )
+    context_references = (
+        "that",
+        "this",
+        "it",
+        "those",
+        "these",
+        "the same",
+        "second option",
+        "first option",
+    )
+    return any(action in text for action in memory_actions) and any(
+        reference in text for reference in context_references
+    )
 
 
 async def quick_synthesise(state: AgentState) -> AgentState:

@@ -60,6 +60,36 @@ async def test_orchestrator_route_includes_current_graph_context(monkeypatch):
     assert "RAG pipeline — nodes: [Retriever, Generator]" in captured["messages"][0]["content"]
 
 
+@pytest.mark.asyncio
+async def test_orchestrator_route_forces_memory_for_prior_answer_followup(monkeypatch):
+    import agent.nodes.orchestrator_node as orchestrator
+
+    async def fail_stream_llm(**_kwargs):
+        raise AssertionError("memory follow-up should not call the router LLM")
+
+    monkeypatch.setattr(orchestrator, "stream_llm", fail_stream_llm)
+
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    state = {
+        "send": send,
+        "history": [
+            {"role": "user", "content": "Explain RAG."},
+            {"role": "assistant", "content": "RAG retrieves context before generation."},
+        ],
+        "user_message": "Give me a short restatement of the prior answer.",
+        "graph_data": None,
+    }
+
+    result = await orchestrator.orchestrator_route(state)
+
+    assert result["route"] == "memory"
+    assert events == [{"type": "worker_status", "worker": "orchestrator", "status": "Routing…"}]
+
+
 def test_format_graph_context_summarises_nodes_edges_and_sequence():
     from agent.nodes.orchestrator_node import _format_graph_context
 
