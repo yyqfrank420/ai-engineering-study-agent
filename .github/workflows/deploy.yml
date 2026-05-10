@@ -4,7 +4,7 @@
 #          Backend → Cloud Run (europe-west2). Frontend → Vercel.
 # Language: YAML (GitHub Actions)
 # Connects to: GCP Artifact Registry, Cloud Run, Vercel
-# Inputs:  push to `main` branch
+# Inputs:  push to `main` branch, branch CI pushes, and PRs to `main`
 # Outputs: live backend at Cloud Run run.app URL, live frontend at Vercel
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -12,7 +12,12 @@ name: CI / Deploy
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - 'codex/**'
+  pull_request:
+    branches:
+      - main
 
 env:
   PROJECT_ID: project-c170fa55-f0d5-4d83-bfe
@@ -35,11 +40,21 @@ jobs:
           fetch-depth: 0
       - id: check
         run: |
-          # Get changed files compared to main
-          files=$(git diff origin/main...HEAD --name-only)
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch origin "${{ github.base_ref }}" --depth=1
+            files=$(git diff "origin/${{ github.base_ref }}"...HEAD --name-only)
+          else
+            before="${{ github.event.before }}"
+            if [ -n "$before" ] && [ "$before" != "0000000000000000000000000000000000000000" ]; then
+              files=$(git diff "$before" HEAD --name-only)
+            else
+              files=$(git diff HEAD^ HEAD --name-only)
+            fi
+          fi
+
           # Treat markdown-only documentation edits as docs-only.
           # Keep non-markdown files under docs/ deploy-relevant (for example docs/supabase/schema.sql).
-          if echo "$files" | grep -qvE '^(README\.md|docs/.*\.md|.*\.md)$'; then
+          if [ -n "$files" ] && echo "$files" | grep -qvE '^(README\.md|docs/.*\.md|.*\.md)$'; then
             echo "docs-only=false" >> $GITHUB_OUTPUT
           else
             echo "docs-only=true" >> $GITHUB_OUTPUT
@@ -142,7 +157,7 @@ jobs:
     name: Verify frontend Vercel build
     runs-on: ubuntu-latest
     needs: [check-docs-only]
-    if: needs.check-docs-only.outputs.docs-only == 'false'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docs-only.outputs.docs-only == 'false'
 
     steps:
       - uses: actions/checkout@v4
@@ -192,7 +207,7 @@ jobs:
     name: Apply Supabase schema
     runs-on: ubuntu-latest
     needs: [check-docs-only, test-backend]
-    if: needs.check-docs-only.outputs.docs-only == 'false'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docs-only.outputs.docs-only == 'false'
 
     permissions:
       contents: read
@@ -294,7 +309,7 @@ jobs:
     name: Run staging eval on backend candidate
     runs-on: ubuntu-latest
     needs: [check-docs-only, deploy-backend-candidate]
-    if: needs.check-docs-only.outputs.docs-only == 'false'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docs-only.outputs.docs-only == 'false'
     timeout-minutes: 20
 
     permissions:
@@ -401,7 +416,7 @@ jobs:
     name: Promote backend candidate
     runs-on: ubuntu-latest
     needs: [check-docs-only, staging-eval]
-    if: needs.check-docs-only.outputs.docs-only == 'false'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docs-only.outputs.docs-only == 'false'
 
     permissions:
       contents: read
@@ -428,7 +443,7 @@ jobs:
     name: Deploy frontend to Vercel
     runs-on: ubuntu-latest
     needs: [check-docs-only, promote-backend, test-frontend, verify-frontend-vercel-build]
-    if: needs.check-docs-only.outputs.docs-only == 'false' && needs.promote-backend.result == 'success' && needs.test-frontend.result == 'success' && needs.verify-frontend-vercel-build.result == 'success'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docs-only.outputs.docs-only == 'false' && needs.promote-backend.result == 'success' && needs.test-frontend.result == 'success' && needs.verify-frontend-vercel-build.result == 'success'
 
     steps:
       - uses: actions/checkout@v4
@@ -463,4 +478,3 @@ jobs:
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-
