@@ -24,6 +24,7 @@ env:
   REGION: europe-west2
   SERVICE_NAME: agent-backend
   CANDIDATE_TAG: staging-${{ github.run_id }}
+  VERCEL_CLI_VERSION: 50.42.0
   # Full image path: <region>-docker.pkg.dev/<project>/<repo>/<image>:<sha>
   IMAGE: europe-west2-docker.pkg.dev/project-c170fa55-f0d5-4d83-bfe/agent-backend/agent-backend
 
@@ -184,14 +185,14 @@ jobs:
 
       - name: Pull Vercel project settings
         working-directory: frontend
-        run: npx vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        run: npx vercel@${{ env.VERCEL_CLI_VERSION }} pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
       - name: Build frontend with Vercel
         working-directory: frontend
-        run: npx vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        run: npx vercel@${{ env.VERCEL_CLI_VERSION }} build --prod --token=${{ secrets.VERCEL_TOKEN }}
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
@@ -461,7 +462,7 @@ jobs:
       # Required before `vercel build` in non-interactive CI environments.
       - name: Pull Vercel project settings
         working-directory: frontend
-        run: npx vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        run: npx vercel@${{ env.VERCEL_CLI_VERSION }} pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
@@ -474,7 +475,7 @@ jobs:
 
       - name: Deploy to Vercel (production)
         working-directory: frontend
-        run: npx vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+        run: npx vercel@${{ env.VERCEL_CLI_VERSION }} deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
