@@ -1,0 +1,182 @@
+{
+  "version": "1.0",
+  "relations": [
+    {
+      "relation": "part_of",
+      "layer": "concept",
+      "definition": "The source concept is a constituent, phase, or subtopic of the target concept.",
+      "allowed_source_kinds": ["method", "component", "control", "decision", "metric", "risk", "artifact", "objective"],
+      "allowed_target_kinds": ["method", "component", "control", "decision", "metric", "risk", "artifact", "objective"],
+      "positive_examples": ["LoRA is part of parameter-efficient fine-tuning.", "Latency is part of serving evaluation."],
+      "negative_examples": ["A appears near B without a part-whole statement.", "A and B are alternatives."]
+    },
+    {
+      "relation": "depends_on",
+      "layer": "concept",
+      "definition": "The source requires the target as a prerequisite, input, or enabling condition.",
+      "allowed_source_kinds": ["method", "component", "control", "decision", "objective"],
+      "allowed_target_kinds": ["method", "component", "control", "artifact"],
+      "positive_examples": ["RAG depends on retrieval.", "Evaluation depends on metrics."],
+      "negative_examples": ["A merely uses B as one optional tool.", "A only appears after B in a list."]
+    },
+    {
+      "relation": "feeds_into",
+      "layer": "concept",
+      "definition": "The output or result of the source becomes an input to the target.",
+      "allowed_source_kinds": ["method", "component", "artifact", "metric"],
+      "allowed_target_kinds": ["method", "component", "control", "decision", "metric", "objective", "artifact"],
+      "positive_examples": ["Retrieved context feeds into generation.", "Evaluation results feed into model selection."],
+      "negative_examples": ["Two ideas are compared side by side.", "A constrains B without producing an input."]
+    },
+    {
+      "relation": "compares_with",
+      "layer": "concept",
+      "definition": "The source and target are explicitly contrasted, benchmarked, or considered as alternatives.",
+      "allowed_source_kinds": ["method", "component", "metric", "objective", "artifact"],
+      "allowed_target_kinds": ["method", "component", "metric", "objective", "artifact"],
+      "positive_examples": ["Fine-tuning compares with prompting.", "Offline evaluation compares with online evaluation."],
+      "negative_examples": ["A depends on B.", "A stores B."]
+    },
+    {
+      "relation": "constrains",
+      "layer": "concept",
+      "definition": "The source limits, governs, or narrows how the target can be used.",
+      "allowed_source_kinds": ["control", "decision", "risk", "objective", "metric"],
+      "allowed_target_kinds": ["method", "component", "decision", "objective", "artifact"],
+      "positive_examples": ["Latency constrains model choice.", "Guardrails constrain model outputs."],
+      "negative_examples": ["A improves B.", "A is stored in B."]
+    },
+    {
+      "relation": "improves",
+      "layer": "concept",
+      "definition": "The source is stated to increase, improve, reduce cost of, or otherwise benefit the target.",
+      "allowed_source_kinds": ["method", "control"],
+      "allowed_target_kinds": ["metric", "objective"],
+      "positive_examples": ["Caching improves latency.", "Reranking improves response quality."],
+      "negative_examples": ["A only measures B.", "A introduces risk to B."]
+    },
+    {
+      "relation": "risks",
+      "layer": "concept",
+      "definition": "The source risk threatens, degrades, or can harm the target.",
+      "allowed_source_kinds": ["risk"],
+      "allowed_target_kinds": ["method", "component", "objective", "artifact"],
+      "positive_examples": ["Prompt injection risks safety.", "Hallucination risks answer quality."],
+      "negative_examples": ["A mitigates B.", "A is a metric for B."]
+    },
+    {
+      "relation": "evaluates",
+      "layer": "concept",
+      "definition": "The source measures, judges, validates, or scores the target.",
+      "allowed_source_kinds": ["method", "metric", "control", "objective"],
+      "allowed_target_kinds": ["method", "component", "artifact", "objective"],
+      "positive_examples": ["Benchmarks evaluate model quality.", "Human evaluation evaluates responses."],
+      "negative_examples": ["A trains B.", "A stores B."]
+    },
+    {
+      "relation": "calls",
+      "layer": "architecture",
+      "definition": "The source invokes the target service, control, or external dependency.",
+      "allowed_source_kinds": ["actor", "service", "pipeline_stage", "control"],
+      "allowed_target_kinds": ["service", "external", "control"],
+      "positive_examples": ["The orchestrator calls the model server.", "The application calls a tool service."],
+      "negative_examples": ["A reads persisted data from B.", "A is a prerequisite for B."]
+    },
+    {
+      "relation": "routes_to",
+      "layer": "architecture",
+      "definition": "The source chooses, forwards, or dispatches work to the target.",
+      "allowed_source_kinds": ["actor", "service", "pipeline_stage", "control"],
+      "allowed_target_kinds": ["service", "pipeline_stage", "external", "control"],
+      "positive_examples": ["A router routes requests to a model endpoint.", "A gateway routes traffic to the application."],
+      "negative_examples": ["A stores records in B.", "A compares with B."]
+    },
+    {
+      "relation": "reads_from",
+      "layer": "architecture",
+      "definition": "The source reads existing data from the target datastore.",
+      "allowed_source_kinds": ["service", "pipeline_stage", "control"],
+      "allowed_target_kinds": ["datastore"],
+      "positive_examples": ["The retriever reads from a vector store.", "The evaluator reads from logs."],
+      "negative_examples": ["A writes new records to B.", "A sends a network request to B."]
+    },
+    {
+      "relation": "writes_to",
+      "layer": "architecture",
+      "definition": "The source writes new or updated data to the target datastore.",
+      "allowed_source_kinds": ["service", "pipeline_stage", "control"],
+      "allowed_target_kinds": ["datastore"],
+      "positive_examples": ["The ingestion pipeline writes embeddings to the vector store.", "The monitor writes events to logs."],
+      "negative_examples": ["A only reads from B.", "A evaluates B conceptually."]
+    },
+    {
+      "relation": "stores_in",
+      "layer": "architecture",
+      "definition": "The source stores artifacts or state in the target datastore.",
+      "allowed_source_kinds": ["service", "pipeline_stage", "control"],
+      "allowed_target_kinds": ["datastore"],
+      "positive_examples": ["The application stores conversation state in a database.", "The pipeline stores chunks in a document store."],
+      "negative_examples": ["A calls B.", "A depends on B as a concept."]
+    },
+    {
+      "relation": "uses",
+      "layer": "architecture",
+      "definition": "The source consumes, invokes, or relies on the target at runtime without asserting prerequisite semantics.",
+      "allowed_source_kinds": ["actor", "service", "pipeline_stage", "control"],
+      "allowed_target_kinds": ["service", "datastore", "external", "control", "pipeline_stage"],
+      "positive_examples": ["The agent uses tools.", "The application uses a cache."],
+      "negative_examples": ["A is strictly required before B can function.", "A feeds its output into B."]
+    },
+    {
+      "relation": "monitors",
+      "layer": "architecture",
+      "definition": "The source observes, logs, traces, or measures the target.",
+      "allowed_source_kinds": ["service", "pipeline_stage", "control"],
+      "allowed_target_kinds": ["service", "datastore", "pipeline_stage", "external", "control"],
+      "positive_examples": ["The monitor watches model latency.", "The evaluator monitors model outputs."],
+      "negative_examples": ["A calls B to complete user work.", "A stores records in B."]
+    },
+    {
+      "relation": "sends_to",
+      "layer": "architecture",
+      "definition": "The source sends requests, messages, events, or data to the target.",
+      "allowed_source_kinds": ["actor", "service", "pipeline_stage", "control", "external"],
+      "allowed_target_kinds": ["service", "datastore", "pipeline_stage", "external", "control"],
+      "positive_examples": ["The client sends a prompt to the application.", "The retriever sends context to the generator."],
+      "negative_examples": ["A only compares B.", "A only labels B as risky."]
+    },
+    {
+      "relation": "implements",
+      "layer": "cross_layer",
+      "definition": "An architecture node realizes a concept, method, or control directly.",
+      "allowed_source_layers": ["architecture"],
+      "allowed_target_layers": ["concept"],
+      "allowed_source_kinds": ["service", "pipeline_stage", "control"],
+      "allowed_target_kinds": ["method", "component", "control"],
+      "positive_examples": ["A retriever service implements retrieval.", "A guardrail service implements guardrails."],
+      "negative_examples": ["Two concept nodes are related.", "An architecture node merely stores data for a concept."]
+    },
+    {
+      "relation": "supports",
+      "layer": "cross_layer",
+      "definition": "The source enables the target without directly realizing it.",
+      "allowed_source_layers": ["concept", "architecture"],
+      "allowed_target_layers": ["concept", "architecture"],
+      "allowed_source_kinds": ["method", "component", "control", "decision", "metric", "artifact", "objective", "actor", "service", "datastore", "pipeline_stage", "external"],
+      "allowed_target_kinds": ["method", "component", "control", "decision", "metric", "artifact", "objective", "service", "datastore", "pipeline_stage", "external"],
+      "positive_examples": ["Evaluation supports model selection.", "A vector store supports retrieval."],
+      "negative_examples": ["The source directly implements the target.", "The source and target are both in a same-layer relation."]
+    },
+    {
+      "relation": "applies_to",
+      "layer": "cross_layer",
+      "definition": "A concept, control, or decision governs or is relevant to a specific architecture node or stage.",
+      "allowed_source_layers": ["concept"],
+      "allowed_target_layers": ["architecture"],
+      "allowed_source_kinds": ["method", "control", "decision", "objective", "risk", "metric"],
+      "allowed_target_kinds": ["actor", "service", "datastore", "pipeline_stage", "control", "external"],
+      "positive_examples": ["Latency applies to the model server.", "Guardrails apply to the application service."],
+      "negative_examples": ["Architecture realizes a concept.", "Two architecture nodes communicate."]
+    }
+  ]
+}

@@ -6,10 +6,33 @@
 // Connects to: types/index.ts, components/GraphCanvas/SequenceBar.tsx
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer } from 'react';
 import type { GraphData } from '../types';
 
 const AUTO_PLAY_STEP_MS = 900;
+
+type PlaybackState = {
+  signature: string;
+  currentStep: number;
+  isAutoPlaying: boolean;
+};
+
+type PlaybackAction =
+  | {
+      type: 'syncGraph';
+      signature: string;
+      hasGraph: boolean;
+      shouldAutoPlay: boolean;
+    }
+  | {
+      type: 'tick';
+      totalSteps: number;
+    }
+  | {
+      type: 'goToStep';
+      step: number;
+      totalSteps: number;
+    };
 
 function graphSignature(graphData: GraphData | null): string {
   if (!graphData) return 'none';
@@ -21,51 +44,75 @@ function graphSignature(graphData: GraphData | null): string {
   });
 }
 
+function playbackReducer(state: PlaybackState, action: PlaybackAction): PlaybackState {
+  switch (action.type) {
+    case 'syncGraph':
+      if (action.signature === state.signature) {
+        return state;
+      }
+      if (!action.hasGraph) {
+        return { signature: action.signature, currentStep: -1, isAutoPlaying: false };
+      }
+      if (action.shouldAutoPlay) {
+        return { signature: action.signature, currentStep: 0, isAutoPlaying: true };
+      }
+      return { signature: action.signature, currentStep: -1, isAutoPlaying: false };
+
+    case 'tick':
+      if (!state.isAutoPlaying) {
+        return state;
+      }
+      if (state.currentStep >= action.totalSteps - 1) {
+        return { ...state, currentStep: -1, isAutoPlaying: false };
+      }
+      return {
+        ...state,
+        currentStep: Math.min(state.currentStep + 1, action.totalSteps - 1),
+      };
+
+    case 'goToStep': {
+      if (action.step === -1) {
+        return { ...state, currentStep: -1, isAutoPlaying: false };
+      }
+      const maxStep = Math.max(action.totalSteps - 1, 0);
+      return {
+        ...state,
+        currentStep: Math.max(0, Math.min(action.step, maxStep)),
+        isAutoPlaying: false,
+      };
+    }
+  }
+}
+
 export function useGraph(graphData: GraphData | null, animateSequence: boolean) {
   // -1 = overview (all nodes visible). Steps 0..N-1 dim non-active nodes.
-  const [currentStep, setCurrentStep] = useState(-1);
-  const [isAutoPlaying, setIsAutoPlaying] = useState(false);
-  const lastGraphSignatureRef = useRef<string>('none');
+  const [playback, dispatchPlayback] = useReducer(playbackReducer, {
+    signature: 'none',
+    currentStep: -1,
+    isAutoPlaying: false,
+  });
 
   const totalSteps = graphData?.sequence?.length ?? 0;
   const hasSequence = totalSteps > 1;
+  const hasGraph = Boolean(graphData);
   const signature = useMemo(() => graphSignature(graphData), [graphData]);
+  const { currentStep, isAutoPlaying } = playback;
 
   // Reset / autoplay whenever a new graph arrives.
   useEffect(() => {
-    const changed = signature !== lastGraphSignatureRef.current;
-    lastGraphSignatureRef.current = signature;
-
-    if (!graphData) {
-      setCurrentStep(-1);
-      setIsAutoPlaying(false);
-      return;
-    }
-
-    if (!changed) {
-      return;
-    }
-
-    if (animateSequence && hasSequence) {
-      setCurrentStep(0);
-      setIsAutoPlaying(true);
-      return;
-    }
-
-    setCurrentStep(-1);
-    setIsAutoPlaying(false);
-  }, [animateSequence, graphData, hasSequence, signature]);
+    dispatchPlayback({
+      type: 'syncGraph',
+      signature,
+      hasGraph,
+      shouldAutoPlay: animateSequence && hasSequence,
+    });
+  }, [animateSequence, hasGraph, hasSequence, signature]);
 
   useEffect(() => {
     if (!isAutoPlaying || !hasSequence) return;
 
     const timeout = window.setTimeout(() => {
-      if (currentStep >= totalSteps - 1) {
-        setCurrentStep(-1);
-        setIsAutoPlaying(false);
-        return;
-      }
-      setCurrentStep(prev => Math.min(prev + 1, totalSteps - 1));
+      dispatchPlayback({ type: 'tick', totalSteps });
     }, AUTO_PLAY_STEP_MS);
 
     return () => window.clearTimeout(timeout);
@@ -85,10 +132,7 @@ export function useGraph(graphData: GraphData | null, animateSequence: boolean) 
 
   const goToStep = useCallback((step: number) => {
     if (!graphData) return;
-    setIsAutoPlaying(false);
-    // -1 is a valid value (overview). Clamp everything else to 0..N-1.
-    if (step === -1) { setCurrentStep(-1); return; }
-    setCurrentStep(Math.max(0, Math.min(step, totalSteps - 1)));
+    dispatchPlayback({ type: 'goToStep', step, totalSteps });
   }, [graphData, totalSteps]);
 
   return {

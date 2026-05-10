@@ -13,7 +13,11 @@ interface TitleBarProps {
   userEmail: string;
   threadTitle: string;
   sidebarOpen: boolean;
+  showDashboardLink?: boolean;
+  dashboardActive?: boolean;
   onToggleSidebar: () => void;
+  onOpenDashboard?: () => void;
+  onOpenChat?: () => void;
   onLogout: () => void;
 }
 
@@ -35,7 +39,11 @@ export function TitleBar({
   userEmail,
   threadTitle,
   sidebarOpen,
+  showDashboardLink = false,
+  dashboardActive = false,
   onToggleSidebar,
+  onOpenDashboard,
+  onOpenChat,
   onLogout,
 }: TitleBarProps) {
   return (
@@ -122,6 +130,14 @@ export function TitleBar({
         <span style={{ fontSize: '0.75rem', color: '#8b949e' }}>
           {userEmail}
         </span>
+        {showDashboardLink && (
+          <button
+            onClick={dashboardActive ? onOpenChat : onOpenDashboard}
+            style={buttonStyle}
+          >
+            {dashboardActive ? 'Back to chat' : 'Dashboard'}
+          </button>
+        )}
         <button onClick={onLogout} style={buttonStyle}>
           Sign out
         </button>

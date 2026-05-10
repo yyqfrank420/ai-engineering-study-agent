@@ -7,6 +7,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useRef } from 'react';
+import type { ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { InlineMath, BlockMath } from 'react-katex';
@@ -22,6 +23,9 @@ interface MessageListProps {
 // boundaries before handing the plain-text portions to ReactMarkdown.
 
 type Segment = { type: 'text'; value: string } | { type: 'inline-math' | 'block-math'; value: string };
+type MarkdownChildrenProps = { children?: ReactNode };
+type MarkdownCodeProps = MarkdownChildrenProps & { className?: string; inline?: boolean };
+type MarkdownAnchorProps = MarkdownChildrenProps & { href?: string };
 
 function splitLatex(text: string): Segment[] {
   const segments: Segment[] = [];
@@ -44,38 +48,38 @@ function splitLatex(text: string): Segment[] {
 
 const mdComponents = {
   // Headings
-  h1: ({ children }: any) => (
+  h1: ({ children }: MarkdownChildrenProps) => (
     <h1 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#e6edf3', margin: '0.75rem 0 0.35rem', borderBottom: '1px solid #21262d', paddingBottom: '0.25rem' }}>{children}</h1>
   ),
-  h2: ({ children }: any) => (
+  h2: ({ children }: MarkdownChildrenProps) => (
     <h2 style={{ fontSize: '0.95rem', fontWeight: 600, color: '#e6edf3', margin: '0.65rem 0 0.3rem' }}>{children}</h2>
   ),
-  h3: ({ children }: any) => (
+  h3: ({ children }: MarkdownChildrenProps) => (
     <h3 style={{ fontSize: '0.875rem', fontWeight: 600, color: '#c9d1d9', margin: '0.5rem 0 0.25rem' }}>{children}</h3>
   ),
   // Paragraphs
-  p: ({ children }: any) => (
+  p: ({ children }: MarkdownChildrenProps) => (
     <p style={{ margin: '0.35rem 0', lineHeight: 1.65 }}>{children}</p>
   ),
   // Bold / italic
-  strong: ({ children }: any) => (
+  strong: ({ children }: MarkdownChildrenProps) => (
     <strong style={{ color: '#e6edf3', fontWeight: 600 }}>{children}</strong>
   ),
-  em: ({ children }: any) => (
+  em: ({ children }: MarkdownChildrenProps) => (
     <em style={{ color: '#c9d1d9', fontStyle: 'italic' }}>{children}</em>
   ),
   // Unordered + ordered lists
-  ul: ({ children }: any) => (
+  ul: ({ children }: MarkdownChildrenProps) => (
     <ul style={{ margin: '0.35rem 0', paddingLeft: '1.4rem', lineHeight: 1.65 }}>{children}</ul>
   ),
-  ol: ({ children }: any) => (
+  ol: ({ children }: MarkdownChildrenProps) => (
     <ol style={{ margin: '0.35rem 0', paddingLeft: '1.4rem', lineHeight: 1.65 }}>{children}</ol>
   ),
-  li: ({ children }: any) => (
+  li: ({ children }: MarkdownChildrenProps) => (
     <li style={{ margin: '0.15rem 0' }}>{children}</li>
   ),
   // Inline code
-  code: ({ inline, children, className }: any) => {
+  code: ({ inline, children, className }: MarkdownCodeProps) => {
     if (inline) {
       return (
         <code style={{
@@ -108,7 +112,7 @@ const mdComponents = {
     );
   },
   // Block quotes
-  blockquote: ({ children }: any) => (
+  blockquote: ({ children }: MarkdownChildrenProps) => (
     <blockquote style={{
       borderLeft: '3px solid rgba(167,139,250,0.4)',
       paddingLeft: '0.75rem',
@@ -120,21 +124,21 @@ const mdComponents = {
     </blockquote>
   ),
   // Tables (GFM)
-  table: ({ children }: any) => (
+  table: ({ children }: MarkdownChildrenProps) => (
     <div style={{ overflowX: 'auto', margin: '0.5rem 0' }}>
       <table style={{ borderCollapse: 'collapse', fontSize: '0.82rem', width: '100%' }}>{children}</table>
     </div>
   ),
-  th: ({ children }: any) => (
+  th: ({ children }: MarkdownChildrenProps) => (
     <th style={{ border: '1px solid #30363d', padding: '6px 10px', background: '#161b22', color: '#e6edf3', fontWeight: 600, textAlign: 'left' }}>{children}</th>
   ),
-  td: ({ children }: any) => (
+  td: ({ children }: MarkdownChildrenProps) => (
     <td style={{ border: '1px solid #21262d', padding: '6px 10px', color: '#8b949e' }}>{children}</td>
   ),
   // Horizontal rule
   hr: () => <hr style={{ border: 'none', borderTop: '1px solid #21262d', margin: '0.75rem 0' }} />,
   // Links
-  a: ({ href, children }: any) => (
+  a: ({ href, children }: MarkdownAnchorProps) => (
     <a href={href} style={{ color: '#60a5fa', textDecoration: 'none' }} target="_blank" rel="noopener noreferrer">{children}</a>
   ),
 };

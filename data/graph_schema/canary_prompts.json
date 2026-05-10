@@ -1,0 +1,85 @@
+{
+  "version": "1.0",
+  "groups": [
+    {
+      "id": "rag",
+      "prompts": [
+        "Explain retrieval augmented generation.",
+        "How does RAG work?",
+        "Show how retrieval and generation fit together."
+      ]
+    },
+    {
+      "id": "retrieval",
+      "prompts": [
+        "Explain chunking and retrieval.",
+        "How do embeddings support retrieval?",
+        "What is the role of a vector database?"
+      ]
+    },
+    {
+      "id": "evaluation",
+      "prompts": [
+        "Explain AI application evaluation.",
+        "How do benchmarks and human evaluation relate?",
+        "Show the evaluation flow for model selection."
+      ]
+    },
+    {
+      "id": "serving",
+      "prompts": [
+        "Explain model serving tradeoffs.",
+        "How do latency and cost shape model selection?",
+        "Show the request flow for model serving architecture."
+      ]
+    },
+    {
+      "id": "fine_tuning",
+      "prompts": [
+        "Explain fine-tuning.",
+        "How does PEFT relate to LoRA?",
+        "Compare prompting and fine-tuning."
+      ]
+    },
+    {
+      "id": "agents",
+      "prompts": [
+        "Explain AI agents.",
+        "Show the agent tool-use architecture.",
+        "How do planning and tools fit into agents?"
+      ]
+    },
+    {
+      "id": "guardrails",
+      "prompts": [
+        "Explain guardrails.",
+        "How do guardrails reduce prompt injection risk?",
+        "Show the safety control flow for generated outputs."
+      ]
+    },
+    {
+      "id": "prompting",
+      "prompts": [
+        "Explain prompt engineering.",
+        "How do system prompts and prompt templates relate?",
+        "Show the prompt engineering concept map."
+      ]
+    },
+    {
+      "id": "optimization",
+      "prompts": [
+        "Explain batching and caching.",
+        "How does quantization reduce serving cost?",
+        "Show the latency optimization graph."
+      ]
+    },
+    {
+      "id": "architecture",
+      "prompts": [
+        "Show the system architecture for an AI application.",
+        "Draw the component interactions for a RAG system.",
+        "Show the deployment-style request flow through services."
+      ]
+    }
+  ]
+}

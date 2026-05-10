@@ -6,6 +6,7 @@ import type { GraphData } from '../../types';
 import { storageKeyForThread } from '../../utils/threadState';
 
 vi.mock('../../services/api', () => ({
+  captureAnalyticsEvent: vi.fn().mockResolvedValue(undefined),
   createThread: vi.fn(),
   fetchLatestThread: vi.fn(),
   fetchThread: vi.fn(),
@@ -76,7 +77,7 @@ describe('useThreadSession', () => {
   });
 
   it('clears the previous thread immediately when starting a new chat', async () => {
-    vi.mocked(fetchLatestThread).mockRejectedValue(new Error('not used'));
+    vi.mocked(fetchLatestThread).mockRejectedValueOnce(new Error('not used'));
     vi.mocked(fetchThread).mockResolvedValueOnce(
       makeThreadDetail(
         'thread-old',
@@ -285,7 +286,7 @@ describe('useThreadSession', () => {
   });
 
   it('clears the deleted active thread before loading the fallback thread', async () => {
-    vi.mocked(fetchLatestThread).mockRejectedValue(new Error('not used'));
+    vi.mocked(fetchLatestThread).mockRejectedValueOnce(new Error('not used'));
     vi.mocked(fetchThread).mockResolvedValueOnce(
       makeThreadDetail(
         'thread-a',

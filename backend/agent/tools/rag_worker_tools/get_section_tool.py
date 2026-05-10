@@ -13,6 +13,7 @@ import json
 from typing import Any
 
 from langchain_core.tools import tool
+from graph.ids import parent_chunk_id_from_metadata
 
 
 def make_get_section_tool(parent_docs: list):
@@ -45,6 +46,8 @@ def make_get_section_tool(parent_docs: list):
                 "chapter_title": m.get("chapter_title"),
                 "section": m.get("section"),
                 "page_number": m.get("page_number"),
+                "parent_chunk_index": m.get("parent_chunk_index"),
+                "parent_chunk_id": parent_chunk_id_from_metadata(m),
             })
 
         return json.dumps(results[:5], ensure_ascii=False)  # cap at 5 sections

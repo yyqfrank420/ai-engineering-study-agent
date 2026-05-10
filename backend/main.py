@@ -12,6 +12,7 @@
 from contextlib import asynccontextmanager
 import os
 import time
+import uuid
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,10 +20,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from adapters.database_adapter import init_db
 from adapters.supabase_auth_adapter import verify_access_token
 from api.auth_route import router as auth_router
+from api.analytics_route import router as analytics_router
 from api.health_route import router as health_router
+from api.internal_dashboard_route import router as internal_dashboard_router
 from api.sse_handler import router as sse_router
 from api.thread_route import router as thread_router
 from config import settings
+from observability import SpanKind, configure_observability, current_trace_context, record_request_metrics, start_span
 from storage.telemetry_store import record_http_request_log
 
 
@@ -33,6 +37,8 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
         Startup: load FAISS index into app.state and initialise the database.
         These are shared across all SSE requests — loaded once, reused always.
         """
+        configure_observability()
+
         if os.getenv("K_SERVICE") and not settings.use_postgres:
             raise RuntimeError("SUPABASE_DB_URL must be configured in Cloud Run; refusing SQLite fallback.")
 
@@ -82,8 +88,10 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
         started_at = time.perf_counter()
+        request.state.request_id = str(uuid.uuid4())
         user_id: str | None = None
         status_code = 500
+        response = None
 
         authorization = request.headers.get("authorization", "")
         if authorization.startswith("Bearer "):
@@ -97,31 +105,71 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
                 except Exception:
                     user_id = None
 
-        try:
-            response = await call_next(request)
-            status_code = response.status_code
-        except Exception:
-            status_code = 500
-            raise
-        finally:
+        with start_span(
+            f"{request.method} {request.url.path}",
+            kind=SpanKind.SERVER,
+            attributes={
+                "http.request.method": request.method,
+                "url.path": request.url.path,
+                "app.request_id": request.state.request_id,
+                "app.user.authenticated": bool(user_id),
+            },
+        ) as span:
             try:
-                record_http_request_log(
+                response = await call_next(request)
+                status_code = response.status_code
+            except Exception:
+                status_code = 500
+                if span is not None:
+                    span.set_attribute("http.response.status_code", status_code)
+                raise
+            finally:
+                latency_ms = max(1, int((time.perf_counter() - started_at) * 1000))
+                route_template = getattr(request.scope.get("route"), "path", request.url.path)
+                trace_context = current_trace_context()
+                metadata = {
+                    "request_id": request.state.request_id,
+                    "trace_id": trace_context.get("trace_id"),
+                    "span_id": trace_context.get("span_id"),
+                    "thread_id": getattr(request.state, "thread_id", None),
+                    "client_request_id": getattr(request.state, "client_request_id", None),
+                }
+                if span is not None:
+                    span.set_attribute("http.route", route_template)
+                    span.set_attribute("http.response.status_code", status_code)
+                    if getattr(request.state, "thread_id", None):
+                        span.set_attribute("app.thread_id", request.state.thread_id)
+                    if getattr(request.state, "client_request_id", None):
+                        span.set_attribute("app.client_request_id", request.state.client_request_id)
+                record_request_metrics(
+                    route=route_template,
                     method=request.method,
-                    path=request.url.path,
                     status_code=status_code,
-                    latency_ms=max(1, int((time.perf_counter() - started_at) * 1000)),
-                    user_id=user_id,
-                    ip_address=request.client.host if request.client else None,
-                    user_agent=request.headers.get("user-agent"),
+                    latency_ms=latency_ms,
                 )
-            except Exception as exc:
-                print(f"[telemetry] HTTP request log failed: {type(exc).__name__}: {exc}")
+                try:
+                    record_http_request_log(
+                        method=request.method,
+                        path=request.url.path,
+                        status_code=status_code,
+                        latency_ms=latency_ms,
+                        user_id=user_id,
+                        ip_address=request.client.host if request.client else None,
+                        user_agent=request.headers.get("user-agent"),
+                        metadata=metadata,
+                    )
+                except Exception as exc:
+                    print(f"[telemetry] HTTP request log failed: {type(exc).__name__}: {exc}")
 
+        if response is not None:
+            response.headers["X-Request-Id"] = request.state.request_id
         return response
 
     app.include_router(health_router)
     app.include_router(auth_router)
+    app.include_router(analytics_router)
     app.include_router(thread_router)
+    app.include_router(internal_dashboard_router)
     app.include_router(sse_router)
     return app
 

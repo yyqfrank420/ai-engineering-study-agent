@@ -1,0 +1,7293 @@
+[
+  {
+    "parent_chunk_id": "ai-eng:p1:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:agent",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:prompt_engineering",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p1:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:agent",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:latency",
+      "concept:model_serving",
+      "concept:prompt_engineering",
+      "concept:retrieval_augmented_generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p1:pc2",
+    "canonical_node_ids": [
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p5:pc0",
+    "canonical_node_ids": [
+      "concept:accuracy"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p5:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:embeddings",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p5:pc2",
+    "canonical_node_ids": [
+      "architecture:evaluation_pipeline",
+      "concept:benchmark",
+      "concept:cost",
+      "concept:embeddings",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:latency",
+      "concept:model_selection",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p5:pc3",
+    "canonical_node_ids": [
+      "architecture:api_gateway",
+      "architecture:cache",
+      "architecture:monitoring_service",
+      "architecture:orchestrator",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:agent",
+      "concept:caching",
+      "concept:distillation",
+      "concept:evaluation",
+      "concept:feedback_loop",
+      "concept:fine_tuning",
+      "concept:guardrails",
+      "concept:latency",
+      "concept:memory",
+      "concept:model_routing",
+      "concept:planning",
+      "concept:quality",
+      "concept:quantization",
+      "concept:recall",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:caching__improves__concept:latency"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p5:pc4",
+    "canonical_node_ids": [
+      "architecture:api_gateway",
+      "architecture:cache",
+      "architecture:monitoring_service",
+      "architecture:orchestrator",
+      "architecture:user",
+      "concept:agent",
+      "concept:caching",
+      "concept:feedback_loop",
+      "concept:latency",
+      "concept:model_routing"
+    ],
+    "canonical_edge_ids": [
+      "concept:caching__improves__concept:latency"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p5:pc5",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:language_model",
+      "concept:quality",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": [
+      "concept:retrieval__feeds_into__concept:generation",
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p14:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:feedback_loop",
+      "concept:foundation_model",
+      "concept:language_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p14:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:agent",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:feedback_loop",
+      "concept:hallucination",
+      "concept:language_model",
+      "concept:prompt_engineering",
+      "concept:quality",
+      "concept:retrieval_augmented_generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p14:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:prompt_engineering",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p16:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:evaluation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p16:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:foundation_model",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p17:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:accuracy",
+      "concept:cost",
+      "concept:foundation_model",
+      "concept:hallucination",
+      "concept:latency",
+      "concept:precision",
+      "concept:recall",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p18:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:evaluation_pipeline",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:hallucination",
+      "concept:quality",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application",
+      "concept:quality__depends_on__concept:generation"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p18:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:accuracy",
+      "concept:generation",
+      "concept:prompt_engineering",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p19:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:llm_provider",
+      "architecture:user",
+      "concept:feedback_loop",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:memory",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p19:pc1",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:feedback_loop"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p20:pc0",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:chunking",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p21:pc0",
+    "canonical_node_ids": [
+      "concept:access_control"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p22:pc0",
+    "canonical_node_ids": [
+      "concept:feedback_loop",
+      "concept:fine_tuning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p22:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:agent",
+      "concept:evaluation",
+      "concept:feedback_loop",
+      "concept:fine_tuning",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p22:pc2",
+    "canonical_node_ids": [
+      "concept:feedback_loop"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p22:pc3",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:language_model",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p26:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:log_store",
+      "concept:foundation_model",
+      "concept:language_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p26:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:foundation_model",
+      "concept:language_model",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p26:pc2",
+    "canonical_node_ids": [
+      "concept:language_model",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p26:pc3",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:language_model",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p26:pc4",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:language_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p26:pc5",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:cost",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p26:pc6",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:cost",
+      "concept:language_model",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p26:pc7",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:foundation_model",
+      "concept:language_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p26:pc8",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:foundation_model",
+      "concept:language_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p26:pc9",
+    "canonical_node_ids": [
+      "concept:cost",
+      "concept:embedding_model",
+      "concept:embeddings",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:language_model",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "concept:embedding_model__feeds_into__concept:embeddings"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p26:pc10",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:accuracy",
+      "concept:benchmark",
+      "concept:embedding_model",
+      "concept:embeddings",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:language_model",
+      "concept:prompt_engineering",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": [
+      "concept:embedding_model__feeds_into__concept:embeddings",
+      "concept:retrieval__feeds_into__concept:generation",
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p26:pc11",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:prompt_engineering",
+      "concept:quality",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": [
+      "concept:retrieval__feeds_into__concept:generation",
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p26:pc12",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:cost",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:quality",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p26:pc13",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:foundation_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p26:pc14",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:foundation_model",
+      "concept:prompt_engineering",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p26:pc15",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:foundation_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p40:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:cost",
+      "concept:foundation_model",
+      "concept:planning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p40:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:foundation_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p40:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:foundation_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p40:pc3",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:data_privacy",
+      "concept:foundation_model",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p40:pc4",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:foundation_model",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p40:pc5",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p40:pc6",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:language_model",
+      "concept:safety",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p40:pc7",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:generation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p40:pc8",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p40:pc9",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:planning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p40:pc10",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:agent",
+      "concept:cost",
+      "concept:foundation_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p40:pc11",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:document_store",
+      "architecture:user",
+      "concept:distillation",
+      "concept:foundation_model",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p40:pc12",
+    "canonical_node_ids": [
+      "architecture:log_store",
+      "architecture:user",
+      "concept:distillation",
+      "concept:foundation_model",
+      "concept:generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p52:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:agent",
+      "concept:generation",
+      "concept:planning",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:agent__depends_on__concept:tool_use"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p52:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:evaluation",
+      "concept:foundation_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p52:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:generation",
+      "concept:planning"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p52:pc3",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:accuracy",
+      "concept:feedback_loop",
+      "concept:latency",
+      "concept:memory",
+      "concept:quality",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p52:pc4",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:agent",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:memory",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p52:pc5",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:foundation_model",
+      "concept:planning"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p52:pc6",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:data_flywheel",
+      "concept:feedback_loop",
+      "concept:foundation_model",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p52:pc7",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:latency",
+      "concept:planning",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p52:pc8",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:benchmark",
+      "concept:cost",
+      "concept:foundation_model",
+      "concept:hallucination",
+      "concept:planning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p59:pc0",
+    "canonical_node_ids": [
+      "architecture:llm_provider",
+      "concept:cost",
+      "concept:evaluation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p59:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:foundation_model",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p59:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:monitoring_service",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:model_serving"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p59:pc3",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:monitoring_service",
+      "concept:feedback_loop",
+      "concept:foundation_model",
+      "concept:model_serving",
+      "concept:retrieval",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p59:pc4",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:latency"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p59:pc5",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:latency",
+      "concept:prompt_engineering",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": [
+      "concept:fine_tuning__improves__concept:cost",
+      "concept:fine_tuning__improves__concept:quality"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p59:pc6",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:precision",
+      "concept:quantization",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p59:pc7",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:fine_tuning",
+      "concept:language_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p59:pc8",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p59:pc9",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:cost",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:latency",
+      "concept:prompt_engineering",
+      "concept:retrieval",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p59:pc10",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:benchmark",
+      "concept:distillation",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:prompt_engineering",
+      "concept:quality",
+      "concept:quantization"
+    ],
+    "canonical_edge_ids": [
+      "concept:evaluation__evaluates__concept:foundation_model"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p59:pc11",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p59:pc12",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:foundation_model",
+      "concept:memory",
+      "concept:prompt_engineering",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p59:pc13",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:agent",
+      "concept:evaluation",
+      "concept:feedback_loop",
+      "concept:foundation_model",
+      "concept:prompt_engineering",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p59:pc14",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:foundation_model",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p71:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:feedback_loop",
+      "concept:foundation_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p71:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:foundation_model",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p71:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p71:pc3",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p74:pc0",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:safety",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p74:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:foundation_model",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p74:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:benchmark",
+      "concept:foundation_model",
+      "concept:language_model",
+      "concept:quality",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p74:pc3",
+    "canonical_node_ids": [
+      "concept:benchmark",
+      "concept:foundation_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p74:pc4",
+    "canonical_node_ids": [
+      "concept:benchmark",
+      "concept:foundation_model",
+      "concept:language_model",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p74:pc5",
+    "canonical_node_ids": [
+      "concept:cost",
+      "concept:generation",
+      "concept:latency",
+      "concept:quality",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p74:pc6",
+    "canonical_node_ids": [
+      "concept:accuracy",
+      "concept:benchmark",
+      "concept:foundation_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p74:pc7",
+    "canonical_node_ids": [
+      "concept:accuracy",
+      "concept:data_privacy",
+      "concept:foundation_model",
+      "concept:language_model",
+      "concept:planning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:foundation_model",
+      "concept:latency",
+      "concept:quality",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc1",
+    "canonical_node_ids": [
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:quality",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc2",
+    "canonical_node_ids": [
+      "concept:generation",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc3",
+    "canonical_node_ids": [
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc4",
+    "canonical_node_ids": [
+      "concept:context_window",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc5",
+    "canonical_node_ids": [
+      "concept:embeddings",
+      "concept:foundation_model",
+      "concept:language_model",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc6",
+    "canonical_node_ids": [
+      "concept:context_window",
+      "concept:embeddings",
+      "concept:generation",
+      "concept:language_model",
+      "concept:memory",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc7",
+    "canonical_node_ids": [
+      "concept:context_window",
+      "concept:foundation_model",
+      "concept:memory"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc8",
+    "canonical_node_ids": [
+      "concept:context_window",
+      "concept:language_model",
+      "concept:memory"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc9",
+    "canonical_node_ids": [
+      "concept:context_window",
+      "concept:foundation_model",
+      "concept:language_model",
+      "concept:memory",
+      "concept:recall",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc10",
+    "canonical_node_ids": [
+      "concept:benchmark",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:language_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc11",
+    "canonical_node_ids": [
+      "concept:cost",
+      "concept:foundation_model",
+      "concept:memory",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc12",
+    "canonical_node_ids": [
+      "concept:language_model",
+      "concept:quality",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc13",
+    "canonical_node_ids": [
+      "concept:cost",
+      "concept:quality",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc14",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:cost",
+      "concept:foundation_model",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc15",
+    "canonical_node_ids": [
+      "concept:cost"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc16",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:cost",
+      "concept:foundation_model",
+      "concept:quality",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc17",
+    "canonical_node_ids": [
+      "concept:accuracy",
+      "concept:cost",
+      "concept:language_model",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc18",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:accuracy",
+      "concept:foundation_model",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc19",
+    "canonical_node_ids": [
+      "concept:accuracy",
+      "concept:foundation_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc20",
+    "canonical_node_ids": [
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:prompt_injection"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc21",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:foundation_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p82:pc22",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:cost",
+      "concept:generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p102:pc0",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:feedback_loop",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:quality",
+      "concept:supervised_fine_tuning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p102:pc1",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:prompt_engineering",
+      "concept:quality",
+      "concept:supervised_fine_tuning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p102:pc2",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:foundation_model",
+      "concept:generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p102:pc3",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:cost",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p102:pc4",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:fine_tuning",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p102:pc5",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:generation"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p102:pc6",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:language_model",
+      "concept:reliability",
+      "concept:supervised_fine_tuning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p102:pc7",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:cost",
+      "concept:foundation_model",
+      "concept:generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p102:pc8",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:supervised_fine_tuning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:hallucination",
+      "concept:quality",
+      "concept:supervised_fine_tuning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc1",
+    "canonical_node_ids": [
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:language_model",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:language_model",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc3",
+    "canonical_node_ids": [
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc4",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:foundation_model",
+      "concept:language_model",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc5",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:language_model",
+      "concept:recall",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc6",
+    "canonical_node_ids": [
+      "concept:cost",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:language_model",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc7",
+    "canonical_node_ids": [
+      "architecture:llm_provider",
+      "architecture:user",
+      "concept:cost",
+      "concept:generation",
+      "concept:language_model",
+      "concept:latency",
+      "concept:quality",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc8",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:cost",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc9",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:generation",
+      "concept:recall",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc10",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:cost",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:language_model",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc11",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:latency",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc12",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:sampling",
+      "concept:system_prompt",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc13",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:prompt_engineering",
+      "concept:sampling",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc14",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:cost",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:latency",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc15",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:latency",
+      "concept:recall",
+      "concept:sampling",
+      "concept:tokenization",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc16",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:latency",
+      "concept:prompt_engineering",
+      "concept:reliability",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc17",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:hallucination"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc18",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:generation",
+      "concept:hallucination",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc19",
+    "canonical_node_ids": [
+      "architecture:cache",
+      "architecture:llm_provider",
+      "architecture:user",
+      "concept:caching",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:memory",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc20",
+    "canonical_node_ids": [
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:hallucination",
+      "concept:language_model",
+      "concept:memory",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc21",
+    "canonical_node_ids": [
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:hallucination",
+      "concept:language_model",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc22",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:hallucination",
+      "concept:language_model",
+      "concept:sampling",
+      "concept:supervised_fine_tuning",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p112:pc23",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:hallucination",
+      "concept:prompt_engineering",
+      "concept:supervised_fine_tuning",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p135:pc0",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:foundation_model",
+      "concept:hallucination"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p135:pc1",
+    "canonical_node_ids": [
+      "architecture:evaluation_pipeline",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:hallucination",
+      "concept:quality",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p135:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:quality",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p138:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:human_evaluation",
+      "concept:language_model",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application",
+      "concept:evaluation__evaluates__concept:foundation_model"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p138:pc1",
+    "canonical_node_ids": [
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p138:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:foundation_model"
+    ],
+    "canonical_edge_ids": [
+      "concept:evaluation__evaluates__concept:foundation_model"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p138:pc3",
+    "canonical_node_ids": [
+      "architecture:orchestrator",
+      "architecture:tool_service",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:language_model",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "architecture:orchestrator__calls__architecture:tool_service",
+      "concept:evaluation__compares_with__concept:tool_use",
+      "concept:evaluation__evaluates__concept:foundation_model"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p138:pc4",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:orchestrator",
+      "architecture:tool_service",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "architecture:orchestrator__calls__architecture:tool_service",
+      "concept:evaluation__evaluates__concept:foundation_model",
+      "concept:tool_use__compares_with__concept:evaluation"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p142:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:language_model",
+      "concept:recall",
+      "concept:tokenization",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p142:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:language_model",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p142:pc2",
+    "canonical_node_ids": [
+      "concept:language_model",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p142:pc3",
+    "canonical_node_ids": [
+      "concept:evaluation",
+      "concept:language_model",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p142:pc4",
+    "canonical_node_ids": [
+      "concept:language_model",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p142:pc5",
+    "canonical_node_ids": [
+      "concept:accuracy",
+      "concept:evaluation",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p142:pc6",
+    "canonical_node_ids": [
+      "concept:context_window",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p142:pc7",
+    "canonical_node_ids": [
+      "concept:benchmark",
+      "concept:language_model",
+      "concept:memory",
+      "concept:precision",
+      "concept:quantization",
+      "concept:recall",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p142:pc8",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:evaluation",
+      "concept:feedback_loop",
+      "concept:fine_tuning",
+      "concept:language_model",
+      "concept:quantization",
+      "concept:supervised_fine_tuning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p149:pc0",
+    "canonical_node_ids": [
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:language_model",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "concept:evaluation__evaluates__concept:generation"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p149:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:accuracy",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:generation"
+    ],
+    "canonical_edge_ids": [
+      "concept:evaluation__evaluates__concept:generation"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p149:pc2",
+    "canonical_node_ids": [
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p149:pc3",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:evaluation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p149:pc4",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:human_evaluation",
+      "concept:quality",
+      "concept:retrieval"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p149:pc5",
+    "canonical_node_ids": [
+      "concept:evaluation",
+      "concept:retrieval"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p149:pc6",
+    "canonical_node_ids": [
+      "concept:evaluation",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p149:pc7",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:quality",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p149:pc8",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:benchmark",
+      "concept:embeddings",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p149:pc9",
+    "canonical_node_ids": [
+      "concept:embeddings",
+      "concept:evaluation",
+      "concept:quality",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": [
+      "concept:reliability__depends_on__concept:embeddings"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p149:pc10",
+    "canonical_node_ids": [
+      "concept:embedding_model",
+      "concept:embeddings",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": [
+      "concept:embedding_model__feeds_into__concept:embeddings"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p149:pc11",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:benchmark",
+      "concept:embeddings",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:quality",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p149:pc12",
+    "canonical_node_ids": [
+      "concept:embeddings"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p160:pc0",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:embeddings",
+      "concept:evaluation",
+      "concept:hallucination",
+      "concept:human_evaluation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p160:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:hallucination"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p160:pc2",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p160:pc3",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p160:pc4",
+    "canonical_node_ids": [
+      "concept:evaluation",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p160:pc5",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:latency",
+      "concept:quality",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p160:pc6",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:accuracy",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:sampling",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p160:pc7",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:evaluation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p160:pc8",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:guardrails",
+      "concept:human_evaluation",
+      "concept:latency",
+      "concept:quality",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p160:pc9",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:human_evaluation",
+      "concept:latency",
+      "concept:quality",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p160:pc10",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:cost",
+      "concept:data_privacy",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:human_evaluation",
+      "concept:latency",
+      "concept:safety"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p160:pc11",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p160:pc12",
+    "canonical_node_ids": [
+      "concept:evaluation",
+      "concept:quality",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p160:pc13",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:evaluation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p172:pc0",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:evaluation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p172:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:feedback_loop",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p172:pc2",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:a_b_testing",
+      "concept:evaluation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p172:pc3",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p172:pc4",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:foundation_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p172:pc5",
+    "canonical_node_ids": [
+      "concept:evaluation",
+      "concept:moderation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p172:pc6",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:document_store",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:moderation",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p172:pc7",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:document_store",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:human_evaluation",
+      "concept:prompt_engineering",
+      "concept:reliability",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p172:pc8",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:human_evaluation",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p172:pc9",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:feedback_loop",
+      "concept:human_evaluation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p180:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:a_b_testing",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:human_evaluation",
+      "concept:language_model",
+      "concept:offline_evaluation",
+      "concept:online_evaluation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": [
+      "concept:offline_evaluation__part_of__concept:evaluation",
+      "concept:online_evaluation__part_of__concept:evaluation"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p180:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:evaluation_pipeline",
+      "architecture:user",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:human_evaluation",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p180:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:evaluation_pipeline",
+      "architecture:llm_provider",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:model_selection"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:accuracy",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:a_b_testing",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:latency",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:agent",
+      "concept:benchmark",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:latency",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc3",
+    "canonical_node_ids": [
+      "concept:accuracy",
+      "concept:benchmark",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:memory"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc4",
+    "canonical_node_ids": [
+      "concept:accuracy",
+      "concept:benchmark",
+      "concept:cost",
+      "concept:precision",
+      "concept:prompt_engineering",
+      "concept:recall"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc5",
+    "canonical_node_ids": [
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:prompt_engineering",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": [
+      "concept:evaluation__evaluates__concept:generation"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc6",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:hallucination",
+      "concept:safety"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc7",
+    "canonical_node_ids": [
+      "concept:generation",
+      "concept:language_model",
+      "concept:safety"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc8",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:evaluation",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc9",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:accuracy",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:hallucination",
+      "concept:retrieval"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc10",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:evaluation",
+      "concept:safety"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc11",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:safety"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc12",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": [
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc13",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:moderation",
+      "concept:safety",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc14",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:moderation",
+      "concept:safety",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:moderation__improves__concept:safety"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc15",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc16",
+    "canonical_node_ids": [
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc17",
+    "canonical_node_ids": [
+      "concept:evaluation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc18",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:accuracy",
+      "concept:benchmark",
+      "concept:cost",
+      "concept:evaluation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc19",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:accuracy",
+      "concept:benchmark",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:language_model",
+      "concept:prompt_engineering",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": [
+      "concept:prompt_engineering__improves__concept:quality"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc20",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:benchmark",
+      "concept:evaluation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc21",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:latency",
+      "concept:memory",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc22",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:llm_provider",
+      "architecture:user",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:latency",
+      "concept:memory",
+      "concept:prompt_engineering",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p184:pc23",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:llm_provider",
+      "architecture:user",
+      "concept:benchmark",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:latency",
+      "concept:quality",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:accuracy",
+      "concept:benchmark",
+      "concept:cost",
+      "concept:data_privacy",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:hallucination",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:evaluation_pipeline",
+      "concept:accuracy",
+      "concept:benchmark",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:latency",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc2",
+    "canonical_node_ids": [
+      "architecture:evaluation_pipeline",
+      "architecture:llm_provider",
+      "architecture:monitoring_service",
+      "architecture:user",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:feedback_loop",
+      "concept:foundation_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc3",
+    "canonical_node_ids": [
+      "concept:model_selection"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc4",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:llm_provider",
+      "architecture:user",
+      "concept:distillation",
+      "concept:generation"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc5",
+    "canonical_node_ids": [
+      "architecture:llm_provider",
+      "architecture:model_server",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:model_selection"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc6",
+    "canonical_node_ids": [
+      "architecture:llm_provider",
+      "concept:cost",
+      "concept:data_privacy",
+      "concept:fine_tuning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc7",
+    "canonical_node_ids": [
+      "architecture:llm_provider",
+      "architecture:user",
+      "concept:data_privacy"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc8",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:foundation_model",
+      "concept:model_selection",
+      "concept:safety"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc9",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:benchmark",
+      "concept:fine_tuning",
+      "concept:foundation_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc10",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:benchmark",
+      "concept:cost",
+      "concept:feedback_loop",
+      "concept:generation",
+      "concept:guardrails",
+      "concept:latency",
+      "concept:retrieval_augmented_generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc11",
+    "canonical_node_ids": [
+      "architecture:llm_provider",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:guardrails",
+      "concept:model_selection",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc12",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:cost",
+      "concept:guardrails",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc13",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:guardrails",
+      "concept:model_selection",
+      "concept:safety",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:guardrails__constrains__concept:generation"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc14",
+    "canonical_node_ids": [
+      "architecture:llm_provider",
+      "concept:data_privacy",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc15",
+    "canonical_node_ids": [
+      "concept:benchmark",
+      "concept:evaluation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc16",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:language_model",
+      "concept:model_selection",
+      "concept:retrieval"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc17",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:accuracy",
+      "concept:benchmark",
+      "concept:generation",
+      "concept:language_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc18",
+    "canonical_node_ids": [
+      "concept:benchmark",
+      "concept:model_selection",
+      "concept:recall",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc19",
+    "canonical_node_ids": [
+      "concept:benchmark"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc20",
+    "canonical_node_ids": [
+      "concept:benchmark"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc21",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:agent",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:model_selection",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc22",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:accuracy",
+      "concept:benchmark",
+      "concept:evaluation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc23",
+    "canonical_node_ids": [
+      "concept:benchmark",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:model_selection",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc24",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:quality",
+      "concept:recall",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc25",
+    "canonical_node_ids": [
+      "concept:accuracy",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p203:pc26",
+    "canonical_node_ids": [
+      "concept:benchmark",
+      "concept:evaluation"
+    ],
+    "canonical_edge_ids": [
+      "concept:evaluation__compares_with__concept:benchmark"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p224:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:evaluation_pipeline",
+      "concept:benchmark",
+      "concept:evaluation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p224:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:accuracy",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p224:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:evaluation_pipeline",
+      "concept:benchmark",
+      "concept:evaluation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p224:pc3",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:feedback_loop",
+      "concept:generation",
+      "concept:safety"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p224:pc4",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:evaluation_pipeline",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:feedback_loop",
+      "concept:planning",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p224:pc5",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:evaluation_pipeline",
+      "architecture:user",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p224:pc6",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:feedback_loop",
+      "concept:human_evaluation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p224:pc7",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:fine_tuning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p224:pc8",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:evaluation_pipeline",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p224:pc9",
+    "canonical_node_ids": [
+      "architecture:evaluation_pipeline",
+      "concept:benchmark",
+      "concept:evaluation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p224:pc10",
+    "canonical_node_ids": [
+      "architecture:evaluation_pipeline",
+      "concept:evaluation",
+      "concept:quality",
+      "concept:reliability",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p232:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:evaluation_pipeline",
+      "architecture:user",
+      "concept:benchmark",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:latency",
+      "concept:reliability",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p232:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:evaluation_pipeline",
+      "architecture:llm_provider",
+      "concept:benchmark",
+      "concept:cost",
+      "concept:data_privacy",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:model_selection",
+      "concept:safety"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p232:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:evaluation_pipeline",
+      "architecture:user",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:feedback_loop",
+      "concept:latency",
+      "concept:memory",
+      "concept:prompt_engineering",
+      "concept:quality",
+      "concept:retrieval"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application",
+      "concept:evaluation__evaluates__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p232:pc3",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p236:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:evaluation",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p236:pc1",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p236:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:benchmark",
+      "concept:context_window",
+      "concept:cost",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p236:pc3",
+    "canonical_node_ids": [
+      "concept:foundation_model",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p236:pc4",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:llm_provider",
+      "architecture:user",
+      "concept:agent",
+      "concept:prompt_engineering",
+      "concept:system_prompt"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p236:pc5",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:foundation_model",
+      "concept:prompt_engineering",
+      "concept:prompt_template",
+      "concept:system_prompt"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p236:pc6",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:foundation_model",
+      "concept:language_model",
+      "concept:prompt_engineering",
+      "concept:system_prompt"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p236:pc7",
+    "canonical_node_ids": [
+      "architecture:document_store",
+      "architecture:llm_provider",
+      "architecture:user",
+      "concept:context_window",
+      "concept:fine_tuning",
+      "concept:moderation",
+      "concept:prompt_engineering",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p236:pc8",
+    "canonical_node_ids": [
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p244:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:prompt_engineering",
+      "concept:system_prompt"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p244:pc1",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:generation",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p244:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:llm_provider",
+      "concept:generation",
+      "concept:latency",
+      "concept:prompt_engineering",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p244:pc3",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:generation",
+      "concept:hallucination",
+      "concept:language_model",
+      "concept:prompt_engineering",
+      "concept:recall",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p244:pc4",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:prompt_engineering",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p244:pc5",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p244:pc6",
+    "canonical_node_ids": [
+      "architecture:llm_provider",
+      "architecture:monitoring_service",
+      "architecture:user",
+      "concept:cost",
+      "concept:generation",
+      "concept:latency",
+      "concept:prompt_engineering",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "concept:cost__compares_with__concept:latency"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p244:pc7",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:benchmark",
+      "concept:cost",
+      "concept:generation",
+      "concept:hallucination",
+      "concept:prompt_engineering",
+      "concept:reliability",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p244:pc8",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:cost",
+      "concept:latency",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p244:pc9",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:latency",
+      "concept:prompt_engineering",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p244:pc10",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:prompt_engineering",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p244:pc11",
+    "canonical_node_ids": [
+      "architecture:llm_provider",
+      "architecture:tool_service",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:prompt_engineering",
+      "concept:prompt_template",
+      "concept:tokenization",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p244:pc12",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "concept:prompt_engineering",
+      "concept:prompt_template",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p244:pc13",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:generation",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p259:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p259:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:generation",
+      "concept:prompt_engineering",
+      "concept:safety"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p259:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:prompt_engineering",
+      "concept:system_prompt"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p259:pc3",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:prompt_engineering",
+      "concept:prompt_injection",
+      "concept:safety",
+      "concept:system_prompt",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "concept:prompt_injection__risks__concept:safety"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p259:pc4",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:language_model",
+      "concept:prompt_engineering",
+      "concept:prompt_injection",
+      "concept:safety",
+      "concept:system_prompt"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p259:pc5",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:generation",
+      "concept:language_model",
+      "concept:prompt_engineering",
+      "concept:safety"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p259:pc6",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:agent",
+      "concept:guardrails",
+      "concept:prompt_engineering",
+      "concept:safety"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p259:pc7",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:agent",
+      "concept:generation",
+      "concept:language_model",
+      "concept:prompt_engineering",
+      "concept:prompt_injection",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:agent__depends_on__concept:tool_use"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p259:pc8",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:language_model",
+      "concept:prompt_engineering",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": [
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p259:pc9",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:benchmark",
+      "concept:data_privacy",
+      "concept:language_model",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p259:pc10",
+    "canonical_node_ids": [
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p259:pc11",
+    "canonical_node_ids": [
+      "concept:data_privacy",
+      "concept:prompt_engineering",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p259:pc12",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p259:pc13",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:benchmark",
+      "concept:language_model",
+      "concept:prompt_engineering",
+      "concept:safety",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p259:pc14",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:language_model",
+      "concept:prompt_engineering",
+      "concept:safety",
+      "concept:system_prompt"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p259:pc15",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:prompt_engineering",
+      "concept:prompt_injection",
+      "concept:safety",
+      "concept:system_prompt"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p259:pc16",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:cost",
+      "concept:latency",
+      "concept:prompt_injection",
+      "concept:prompt_template",
+      "concept:safety",
+      "concept:tokenization",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p259:pc17",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p275:pc0",
+    "canonical_node_ids": [
+      "architecture:guardrail_service",
+      "architecture:user",
+      "concept:foundation_model",
+      "concept:guardrails",
+      "concept:prompt_engineering",
+      "concept:safety"
+    ],
+    "canonical_edge_ids": [
+      "architecture:guardrail_service__implements__concept:guardrails"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p275:pc1",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:foundation_model",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:generation",
+      "concept:memory",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:retrieval__feeds_into__concept:generation",
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc1",
+    "canonical_node_ids": [
+      "architecture:retriever_service",
+      "architecture:user",
+      "concept:agent",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:hallucination",
+      "concept:language_model",
+      "concept:memory",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": [
+      "architecture:retriever_service__implements__concept:retrieval",
+      "concept:retrieval__feeds_into__concept:generation",
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:context_window",
+      "concept:cost",
+      "concept:generation",
+      "concept:latency",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc3",
+    "canonical_node_ids": [
+      "architecture:document_store",
+      "architecture:retriever_service",
+      "architecture:user",
+      "concept:agent",
+      "concept:chunking",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:memory",
+      "concept:quality",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "architecture:retriever_service__implements__concept:retrieval",
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc4",
+    "canonical_node_ids": [
+      "architecture:document_store",
+      "architecture:user",
+      "concept:chunking",
+      "concept:embeddings",
+      "concept:generation",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": [
+      "concept:retrieval__depends_on__concept:embeddings",
+      "concept:retrieval_augmented_generation__compares_with__concept:retrieval",
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc5",
+    "canonical_node_ids": [
+      "architecture:document_store",
+      "concept:embeddings",
+      "concept:retrieval"
+    ],
+    "canonical_edge_ids": [
+      "concept:retrieval__depends_on__concept:embeddings"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc6",
+    "canonical_node_ids": [
+      "architecture:document_store",
+      "concept:agent",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc7",
+    "canonical_node_ids": [
+      "architecture:document_store",
+      "concept:embeddings",
+      "concept:generation",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "concept:retrieval__depends_on__concept:embeddings",
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc8",
+    "canonical_node_ids": [
+      "architecture:document_store",
+      "concept:embeddings",
+      "concept:retrieval",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "concept:retrieval__depends_on__concept:embeddings"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc9",
+    "canonical_node_ids": [
+      "architecture:cache",
+      "architecture:reranker_service",
+      "architecture:retriever_service",
+      "architecture:vector_store",
+      "concept:agent",
+      "concept:caching",
+      "concept:chunking",
+      "concept:embedding_model",
+      "concept:embeddings",
+      "concept:latency",
+      "concept:reranking",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:vector_database"
+    ],
+    "canonical_edge_ids": [
+      "architecture:retriever_service__implements__concept:retrieval",
+      "architecture:vector_store__supports__concept:vector_database",
+      "concept:caching__improves__concept:latency",
+      "concept:embedding_model__feeds_into__concept:embeddings"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc10",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:vector_store",
+      "concept:embeddings",
+      "concept:precision",
+      "concept:retrieval",
+      "concept:vector_database"
+    ],
+    "canonical_edge_ids": [
+      "architecture:vector_store__supports__concept:vector_database",
+      "concept:retrieval__depends_on__concept:embeddings"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc11",
+    "canonical_node_ids": [
+      "concept:accuracy",
+      "concept:agent",
+      "concept:precision",
+      "concept:quantization",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc12",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:document_store",
+      "architecture:vector_store",
+      "concept:embeddings",
+      "concept:generation",
+      "concept:quantization",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:vector_database"
+    ],
+    "canonical_edge_ids": [
+      "architecture:vector_store__supports__concept:vector_database",
+      "concept:retrieval__depends_on__concept:embeddings",
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc13",
+    "canonical_node_ids": [
+      "architecture:document_store",
+      "architecture:retriever_service",
+      "architecture:user",
+      "concept:agent",
+      "concept:embedding_model",
+      "concept:embeddings",
+      "concept:evaluation",
+      "concept:precision",
+      "concept:quality",
+      "concept:recall",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": [
+      "architecture:retriever_service__implements__concept:retrieval",
+      "concept:embedding_model__feeds_into__concept:embeddings",
+      "concept:recall__evaluates__concept:retrieval",
+      "concept:retrieval__depends_on__concept:embeddings"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc14",
+    "canonical_node_ids": [
+      "architecture:document_store",
+      "architecture:llm_provider",
+      "architecture:retriever_service",
+      "architecture:user",
+      "architecture:vector_store",
+      "concept:agent",
+      "concept:benchmark",
+      "concept:cost",
+      "concept:embeddings",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:latency",
+      "concept:precision",
+      "concept:quality",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:vector_database"
+    ],
+    "canonical_edge_ids": [
+      "architecture:retriever_service__implements__concept:retrieval",
+      "architecture:vector_store__supports__concept:vector_database",
+      "concept:generation__compares_with__concept:embeddings",
+      "concept:retrieval__depends_on__concept:embeddings",
+      "concept:retrieval__feeds_into__concept:generation",
+      "concept:retrieval__improves__concept:quality",
+      "concept:retrieval_augmented_generation__compares_with__concept:embeddings",
+      "concept:retrieval_augmented_generation__compares_with__concept:generation",
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc15",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:llm_provider",
+      "concept:accuracy",
+      "concept:benchmark",
+      "concept:cost",
+      "concept:embeddings",
+      "concept:memory",
+      "concept:recall",
+      "concept:retrieval"
+    ],
+    "canonical_edge_ids": [
+      "concept:retrieval__depends_on__concept:embeddings"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc16",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:document_store",
+      "architecture:retriever_service",
+      "concept:agent",
+      "concept:benchmark",
+      "concept:embeddings",
+      "concept:evaluation",
+      "concept:precision",
+      "concept:quality",
+      "concept:reranking",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": [
+      "architecture:retriever_service__implements__concept:retrieval",
+      "concept:retrieval__depends_on__concept:embeddings"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc17",
+    "canonical_node_ids": [
+      "architecture:document_store",
+      "architecture:retriever_service",
+      "concept:chunking",
+      "concept:generation",
+      "concept:reranking",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": [
+      "architecture:retriever_service__implements__concept:retrieval",
+      "concept:chunking__feeds_into__concept:retrieval",
+      "concept:retrieval__feeds_into__concept:generation"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc18",
+    "canonical_node_ids": [
+      "architecture:document_store",
+      "concept:chunking",
+      "concept:retrieval"
+    ],
+    "canonical_edge_ids": [
+      "concept:chunking__feeds_into__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc19",
+    "canonical_node_ids": [
+      "architecture:document_store",
+      "concept:agent",
+      "concept:chunking",
+      "concept:context_window",
+      "concept:embedding_model",
+      "concept:embeddings",
+      "concept:generation",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "concept:embedding_model__feeds_into__concept:embeddings",
+      "concept:retrieval__depends_on__concept:embeddings"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc20",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:document_store",
+      "architecture:retriever_service",
+      "architecture:user",
+      "concept:accuracy",
+      "concept:chunking",
+      "concept:context_window",
+      "concept:precision",
+      "concept:reranking",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "architecture:retriever_service__implements__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc21",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:document_store",
+      "architecture:user",
+      "concept:agent",
+      "concept:chunking",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc22",
+    "canonical_node_ids": [
+      "architecture:retriever_service",
+      "concept:chunking",
+      "concept:embeddings",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "architecture:retriever_service__implements__concept:retrieval",
+      "concept:chunking__feeds_into__concept:retrieval",
+      "concept:evaluation__evaluates__concept:retrieval",
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc23",
+    "canonical_node_ids": [
+      "architecture:document_store",
+      "architecture:retriever_service",
+      "architecture:vector_store",
+      "concept:access_control",
+      "concept:agent",
+      "concept:chunking",
+      "concept:embedding_model",
+      "concept:embeddings",
+      "concept:evaluation",
+      "concept:latency",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:vector_database"
+    ],
+    "canonical_edge_ids": [
+      "architecture:retriever_service__implements__concept:retrieval",
+      "architecture:vector_store__supports__concept:vector_database",
+      "concept:embedding_model__feeds_into__concept:embeddings",
+      "concept:evaluation__evaluates__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc24",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:retriever_service",
+      "architecture:vector_store",
+      "concept:embedding_model",
+      "concept:embeddings",
+      "concept:generation",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:vector_database"
+    ],
+    "canonical_edge_ids": [
+      "architecture:retriever_service__implements__concept:retrieval",
+      "architecture:vector_store__supports__concept:vector_database",
+      "concept:embedding_model__feeds_into__concept:embeddings",
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p277:pc25",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:agent",
+      "concept:generation",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:agent",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:planning",
+      "concept:quality",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:agent__depends_on__concept:tool_use",
+      "concept:planning__part_of__concept:agent",
+      "concept:retrieval__feeds_into__concept:generation"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:document_store",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:agent",
+      "concept:generation",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:agent__depends_on__concept:tool_use",
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc2",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:agent",
+      "concept:feedback_loop",
+      "concept:generation",
+      "concept:planning",
+      "concept:reliability",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": [
+      "concept:planning__part_of__concept:agent"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc3",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:accuracy",
+      "concept:agent",
+      "concept:cost",
+      "concept:generation",
+      "concept:language_model",
+      "concept:planning",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:agent__depends_on__concept:planning",
+      "concept:agent__depends_on__concept:tool_use",
+      "concept:planning__part_of__concept:agent"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc4",
+    "canonical_node_ids": [
+      "architecture:retriever_service",
+      "architecture:tool_service",
+      "concept:agent",
+      "concept:planning",
+      "concept:quality",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "architecture:retriever_service__implements__concept:retrieval",
+      "concept:agent__depends_on__concept:tool_use"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc5",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "concept:agent",
+      "concept:hallucination",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc6",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:accuracy",
+      "concept:agent",
+      "concept:benchmark",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:planning",
+      "concept:prompt_engineering",
+      "concept:retrieval",
+      "concept:safety",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:agent__depends_on__concept:tool_use",
+      "concept:planning__part_of__concept:agent",
+      "concept:prompt_engineering__compares_with__concept:fine_tuning",
+      "concept:tool_use__compares_with__concept:fine_tuning",
+      "concept:tool_use__compares_with__concept:prompt_engineering"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc7",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "concept:accuracy",
+      "concept:agent",
+      "concept:benchmark",
+      "concept:data_privacy",
+      "concept:prompt_engineering",
+      "concept:retrieval_augmented_generation",
+      "concept:safety",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc8",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:agent",
+      "concept:foundation_model",
+      "concept:planning",
+      "concept:safety",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:planning__part_of__concept:agent"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc9",
+    "canonical_node_ids": [
+      "concept:agent",
+      "concept:generation",
+      "concept:planning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc10",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:agent",
+      "concept:cost",
+      "concept:generation",
+      "concept:latency",
+      "concept:planning",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:agent__depends_on__concept:tool_use",
+      "concept:latency__compares_with__concept:cost",
+      "concept:planning__part_of__concept:agent"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc11",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:agent",
+      "concept:generation",
+      "concept:planning"
+    ],
+    "canonical_edge_ids": [
+      "concept:planning__part_of__concept:agent"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc12",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:agent",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:language_model",
+      "concept:planning",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc13",
+    "canonical_node_ids": [
+      "concept:agent",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:language_model",
+      "concept:planning",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": [
+      "concept:agent__compares_with__concept:foundation_model"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc14",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:agent",
+      "concept:generation",
+      "concept:planning",
+      "concept:prompt_engineering",
+      "concept:retrieval_augmented_generation",
+      "concept:system_prompt",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:agent__depends_on__concept:tool_use",
+      "concept:planning__part_of__concept:agent"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc15",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:agent",
+      "concept:generation",
+      "concept:hallucination",
+      "concept:planning",
+      "concept:system_prompt",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:planning__part_of__concept:agent"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc16",
+    "canonical_node_ids": [
+      "architecture:llm_provider",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:agent",
+      "concept:generation",
+      "concept:planning",
+      "concept:retrieval_augmented_generation",
+      "concept:system_prompt",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:agent__depends_on__concept:tool_use"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc17",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:agent",
+      "concept:generation",
+      "concept:planning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc18",
+    "canonical_node_ids": [
+      "concept:agent",
+      "concept:generation",
+      "concept:planning",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc19",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:agent",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:latency",
+      "concept:planning",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": [
+      "concept:evaluation__evaluates__concept:agent"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc20",
+    "canonical_node_ids": [
+      "concept:agent",
+      "concept:benchmark",
+      "concept:generation",
+      "concept:planning",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": [
+      "concept:planning__part_of__concept:agent"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc21",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:agent",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:latency",
+      "concept:retrieval_augmented_generation",
+      "concept:tokenization",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:agent__depends_on__concept:tool_use"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc22",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:agent",
+      "concept:fine_tuning",
+      "concept:prompt_engineering",
+      "concept:retrieval",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:agent__depends_on__concept:tool_use"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc23",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:agent",
+      "concept:evaluation",
+      "concept:planning",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:agent__depends_on__concept:planning",
+      "concept:agent__depends_on__concept:tool_use",
+      "concept:evaluation__evaluates__concept:agent",
+      "concept:evaluation__evaluates__concept:tool_use",
+      "concept:planning__part_of__concept:agent"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc24",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:agent",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:planning",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:agent__depends_on__concept:planning",
+      "concept:planning__part_of__concept:agent"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc25",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "concept:agent",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:planning",
+      "concept:retrieval_augmented_generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:agent__depends_on__concept:tool_use",
+      "concept:planning__part_of__concept:agent"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p299:pc26",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "concept:agent",
+      "concept:planning",
+      "concept:prompt_engineering",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:agent__depends_on__concept:tool_use",
+      "concept:planning__part_of__concept:agent"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p324:pc0",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:agent",
+      "concept:benchmark",
+      "concept:cost",
+      "concept:generation",
+      "concept:planning",
+      "concept:retrieval_augmented_generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:agent__depends_on__concept:tool_use"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p324:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:agent",
+      "concept:memory",
+      "concept:planning",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": [
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p324:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:agent",
+      "concept:context_window",
+      "concept:fine_tuning",
+      "concept:memory",
+      "concept:retrieval_augmented_generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p324:pc3",
+    "canonical_node_ids": [
+      "concept:agent",
+      "concept:context_window",
+      "concept:memory",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": [
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p324:pc4",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:memory",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p324:pc5",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:agent",
+      "concept:memory",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p329:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:retriever_service",
+      "architecture:tool_service",
+      "concept:accuracy",
+      "concept:agent",
+      "concept:context_window",
+      "concept:cost",
+      "concept:embeddings",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:memory",
+      "concept:planning",
+      "concept:quality",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "architecture:retriever_service__implements__concept:retrieval",
+      "concept:agent__depends_on__concept:tool_use",
+      "concept:planning__part_of__concept:agent",
+      "concept:retrieval__depends_on__concept:embeddings",
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p329:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:agent",
+      "concept:context_window",
+      "concept:fine_tuning",
+      "concept:memory",
+      "concept:planning",
+      "concept:retrieval_augmented_generation",
+      "concept:safety",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:agent__depends_on__concept:tool_use",
+      "concept:planning__part_of__concept:agent"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p329:pc2",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:memory",
+      "concept:parameter_efficient_fine_tuning",
+      "concept:retrieval_augmented_generation",
+      "concept:safety"
+    ],
+    "canonical_edge_ids": [
+      "concept:fine_tuning__compares_with__concept:memory",
+      "concept:fine_tuning__depends_on__concept:memory",
+      "concept:parameter_efficient_fine_tuning__part_of__concept:fine_tuning"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p332:pc0",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:fine_tuning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p332:pc1",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:embeddings",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:language_model",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p332:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:document_store",
+      "concept:fine_tuning",
+      "concept:recall",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p332:pc3",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:context_window",
+      "concept:embeddings",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:quality",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "concept:fine_tuning__depends_on__concept:embeddings"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p332:pc4",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:context_window",
+      "concept:fine_tuning",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p335:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:benchmark",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:prompt_engineering",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": [
+      "concept:fine_tuning__improves__concept:quality"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p335:pc1",
+    "canonical_node_ids": [
+      "concept:distillation",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:memory",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p335:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:feedback_loop",
+      "concept:fine_tuning",
+      "concept:model_serving",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p335:pc3",
+    "canonical_node_ids": [
+      "architecture:monitoring_service",
+      "concept:cost",
+      "concept:fine_tuning",
+      "concept:language_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p335:pc4",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:fine_tuning",
+      "concept:prompt_engineering",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p335:pc5",
+    "canonical_node_ids": [
+      "concept:accuracy",
+      "concept:benchmark",
+      "concept:cost",
+      "concept:fine_tuning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p335:pc6",
+    "canonical_node_ids": [
+      "architecture:cache",
+      "architecture:evaluation_pipeline",
+      "concept:caching",
+      "concept:context_window",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:latency",
+      "concept:prompt_engineering",
+      "concept:retrieval_augmented_generation",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p335:pc7",
+    "canonical_node_ids": [
+      "concept:accuracy",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p335:pc8",
+    "canonical_node_ids": [
+      "concept:accuracy",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:hallucination",
+      "concept:quality",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": [
+      "concept:generation__depends_on__concept:fine_tuning",
+      "concept:hallucination__risks__concept:quality"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p335:pc9",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:evaluation_pipeline",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p343:pc0",
+    "canonical_node_ids": [
+      "concept:accuracy",
+      "concept:embeddings",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:memory",
+      "concept:prompt_engineering",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation"
+    ],
+    "canonical_edge_ids": [
+      "concept:retrieval__depends_on__concept:embeddings",
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p343:pc1",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:memory",
+      "concept:parameter_efficient_fine_tuning",
+      "concept:quantization"
+    ],
+    "canonical_edge_ids": [
+      "concept:parameter_efficient_fine_tuning__part_of__concept:fine_tuning"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p343:pc2",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:memory",
+      "concept:precision"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p343:pc3",
+    "canonical_node_ids": [
+      "concept:feedback_loop",
+      "concept:memory"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p343:pc4",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:fine_tuning",
+      "concept:memory"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p343:pc5",
+    "canonical_node_ids": [
+      "concept:memory"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p343:pc6",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:memory"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p343:pc7",
+    "canonical_node_ids": [
+      "concept:memory",
+      "concept:precision"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p343:pc8",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:precision"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p343:pc9",
+    "canonical_node_ids": [
+      "concept:memory",
+      "concept:precision",
+      "concept:quality",
+      "concept:quantization"
+    ],
+    "canonical_edge_ids": [
+      "concept:quantization__compares_with__concept:precision"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p343:pc10",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:accuracy",
+      "concept:benchmark",
+      "concept:fine_tuning",
+      "concept:language_model",
+      "concept:memory",
+      "concept:precision",
+      "concept:quality",
+      "concept:quantization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p343:pc11",
+    "canonical_node_ids": [
+      "architecture:cache",
+      "concept:benchmark",
+      "concept:caching",
+      "concept:language_model",
+      "concept:memory",
+      "concept:precision",
+      "concept:quantization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p343:pc12",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:language_model",
+      "concept:latency",
+      "concept:memory",
+      "concept:precision",
+      "concept:quality",
+      "concept:quantization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p343:pc13",
+    "canonical_node_ids": [
+      "concept:cost",
+      "concept:memory",
+      "concept:model_serving",
+      "concept:precision",
+      "concept:quality",
+      "concept:quantization"
+    ],
+    "canonical_edge_ids": [
+      "concept:quantization__improves__concept:cost"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p343:pc14",
+    "canonical_node_ids": [
+      "concept:memory",
+      "concept:precision"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:embeddings",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:language_model",
+      "concept:memory",
+      "concept:precision"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc1",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:memory",
+      "concept:parameter_efficient_fine_tuning",
+      "concept:precision",
+      "concept:quantization"
+    ],
+    "canonical_edge_ids": [
+      "concept:fine_tuning__depends_on__concept:memory"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc2",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:memory",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc3",
+    "canonical_node_ids": [
+      "concept:benchmark",
+      "concept:fine_tuning",
+      "concept:latency",
+      "concept:parameter_efficient_fine_tuning",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": [
+      "concept:parameter_efficient_fine_tuning__part_of__concept:fine_tuning"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc4",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:batching",
+      "concept:context_window",
+      "concept:fine_tuning",
+      "concept:low_rank_adaptation",
+      "concept:parameter_efficient_fine_tuning",
+      "concept:quality",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "concept:low_rank_adaptation__part_of__concept:parameter_efficient_fine_tuning",
+      "concept:parameter_efficient_fine_tuning__part_of__concept:fine_tuning"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc5",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:embeddings",
+      "concept:fine_tuning",
+      "concept:parameter_efficient_fine_tuning",
+      "concept:prompt_engineering",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc6",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:latency",
+      "concept:low_rank_adaptation",
+      "concept:parameter_efficient_fine_tuning",
+      "concept:prompt_engineering"
+    ],
+    "canonical_edge_ids": [
+      "concept:parameter_efficient_fine_tuning__part_of__concept:fine_tuning"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc7",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:low_rank_adaptation",
+      "concept:memory"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc8",
+    "canonical_node_ids": [
+      "concept:cost",
+      "concept:fine_tuning",
+      "concept:language_model",
+      "concept:low_rank_adaptation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc9",
+    "canonical_node_ids": [
+      "concept:accuracy",
+      "concept:fine_tuning",
+      "concept:language_model",
+      "concept:low_rank_adaptation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc10",
+    "canonical_node_ids": [
+      "concept:benchmark",
+      "concept:fine_tuning",
+      "concept:low_rank_adaptation",
+      "concept:memory"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc11",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:low_rank_adaptation",
+      "concept:memory",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc12",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:latency",
+      "concept:low_rank_adaptation",
+      "concept:memory",
+      "concept:model_serving"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc13",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:latency",
+      "concept:low_rank_adaptation",
+      "concept:memory",
+      "concept:model_serving",
+      "concept:quantization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc14",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:low_rank_adaptation",
+      "concept:memory",
+      "concept:model_serving",
+      "concept:parameter_efficient_fine_tuning",
+      "concept:quantization"
+    ],
+    "canonical_edge_ids": [
+      "concept:low_rank_adaptation__part_of__concept:parameter_efficient_fine_tuning",
+      "concept:memory__compares_with__concept:low_rank_adaptation"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc15",
+    "canonical_node_ids": [
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:low_rank_adaptation",
+      "concept:memory",
+      "concept:quantization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc16",
+    "canonical_node_ids": [
+      "concept:cost",
+      "concept:fine_tuning",
+      "concept:low_rank_adaptation",
+      "concept:memory",
+      "concept:quantization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc17",
+    "canonical_node_ids": [
+      "concept:data_privacy",
+      "concept:fine_tuning",
+      "concept:memory"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc18",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:cost",
+      "concept:data_privacy",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:language_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc19",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:language_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc20",
+    "canonical_node_ids": [
+      "concept:accuracy",
+      "concept:embeddings",
+      "concept:generation",
+      "concept:low_rank_adaptation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc21",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "concept:embeddings",
+      "concept:fine_tuning",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc22",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:recall"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc23",
+    "canonical_node_ids": [
+      "concept:fine_tuning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc24",
+    "canonical_node_ids": [
+      "concept:agent",
+      "concept:benchmark",
+      "concept:fine_tuning",
+      "concept:latency",
+      "concept:memory"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc25",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:low_rank_adaptation",
+      "concept:memory",
+      "concept:model_selection",
+      "concept:model_serving"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc26",
+    "canonical_node_ids": [
+      "concept:benchmark",
+      "concept:distillation",
+      "concept:fine_tuning",
+      "concept:model_selection"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc27",
+    "canonical_node_ids": [
+      "concept:cost",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:low_rank_adaptation",
+      "concept:model_serving",
+      "concept:parameter_efficient_fine_tuning",
+      "concept:prompt_engineering",
+      "concept:recall"
+    ],
+    "canonical_edge_ids": [
+      "concept:fine_tuning__depends_on__concept:model_serving"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc28",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:parameter_efficient_fine_tuning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc29",
+    "canonical_node_ids": [
+      "concept:cost",
+      "concept:fine_tuning",
+      "concept:memory",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p356:pc30",
+    "canonical_node_ids": [
+      "concept:cost",
+      "concept:fine_tuning",
+      "concept:memory",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p385:pc0",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:memory",
+      "concept:parameter_efficient_fine_tuning",
+      "concept:retrieval_augmented_generation",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p385:pc1",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:low_rank_adaptation",
+      "concept:memory",
+      "concept:parameter_efficient_fine_tuning",
+      "concept:quality",
+      "concept:quantization"
+    ],
+    "canonical_edge_ids": [
+      "concept:low_rank_adaptation__part_of__concept:parameter_efficient_fine_tuning",
+      "concept:parameter_efficient_fine_tuning__part_of__concept:fine_tuning"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p385:pc2",
+    "canonical_node_ids": [
+      "concept:generation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p385:pc3",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "concept:benchmark",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:quality",
+      "concept:tokenization",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p385:pc4",
+    "canonical_node_ids": [
+      "concept:benchmark",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p389:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:hallucination",
+      "concept:prompt_engineering",
+      "concept:quality",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p389:pc1",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:accuracy",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p389:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:accuracy",
+      "concept:agent",
+      "concept:generation",
+      "concept:memory",
+      "concept:tokenization",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p389:pc3",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:quality",
+      "concept:recall",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p389:pc4",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:quality",
+      "concept:safety",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p389:pc5",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:accuracy",
+      "concept:fine_tuning",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p389:pc6",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:recall",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p389:pc7",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:fine_tuning",
+      "concept:quality",
+      "concept:recall"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p389:pc8",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:fine_tuning",
+      "concept:quality",
+      "concept:recall",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p389:pc9",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:benchmark",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:language_model",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p389:pc10",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:language_model",
+      "concept:low_rank_adaptation",
+      "concept:parameter_efficient_fine_tuning",
+      "concept:quality",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "concept:low_rank_adaptation__part_of__concept:parameter_efficient_fine_tuning",
+      "concept:parameter_efficient_fine_tuning__part_of__concept:fine_tuning"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p389:pc11",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:parameter_efficient_fine_tuning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p389:pc12",
+    "canonical_node_ids": [
+      "architecture:document_store",
+      "concept:fine_tuning",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p389:pc13",
+    "canonical_node_ids": [
+      "concept:accuracy",
+      "concept:fine_tuning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p389:pc14",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:cost",
+      "concept:data_flywheel",
+      "concept:data_privacy",
+      "concept:feedback_loop",
+      "concept:fine_tuning",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p389:pc15",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:feedback_loop",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p389:pc16",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "concept:benchmark",
+      "concept:data_flywheel",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:parameter_efficient_fine_tuning",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:parameter_efficient_fine_tuning__part_of__concept:fine_tuning"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p389:pc17",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "concept:benchmark",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:parameter_efficient_fine_tuning",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:parameter_efficient_fine_tuning__part_of__concept:fine_tuning"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:evaluation",
+      "concept:generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc1",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:data_privacy",
+      "concept:generation",
+      "concept:quality",
+      "concept:recall"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc2",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:generation",
+      "concept:language_model",
+      "concept:quality",
+      "concept:recall",
+      "concept:safety",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc3",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:data_privacy",
+      "concept:generation",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc4",
+    "canonical_node_ids": [
+      "concept:generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc5",
+    "canonical_node_ids": [
+      "architecture:document_store",
+      "architecture:log_store",
+      "concept:generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc6",
+    "canonical_node_ids": [
+      "concept:embeddings"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc7",
+    "canonical_node_ids": [
+      "concept:cost",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc8",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:agent",
+      "concept:generation",
+      "concept:quality",
+      "concept:sampling",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc9",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:agent",
+      "concept:benchmark"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc10",
+    "canonical_node_ids": [
+      "concept:benchmark",
+      "concept:generation",
+      "concept:quality",
+      "concept:supervised_fine_tuning"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc11",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:fine_tuning",
+      "concept:generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc12",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:generation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc13",
+    "canonical_node_ids": [
+      "architecture:document_store",
+      "concept:chunking",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:quality",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc14",
+    "canonical_node_ids": [
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc15",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:evaluation",
+      "concept:feedback_loop",
+      "concept:fine_tuning",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:quality",
+      "concept:recall"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc16",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:hallucination",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc17",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:accuracy",
+      "concept:evaluation",
+      "concept:generation",
+      "concept:language_model",
+      "concept:quality",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc18",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:generation",
+      "concept:language_model",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc19",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:benchmark",
+      "concept:feedback_loop",
+      "concept:fine_tuning",
+      "concept:generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p404:pc20",
+    "canonical_node_ids": [
+      "concept:benchmark",
+      "concept:distillation",
+      "concept:generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p420:pc0",
+    "canonical_node_ids": [
+      "concept:cost",
+      "concept:distillation",
+      "concept:low_rank_adaptation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p420:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:quality",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p420:pc2",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "concept:generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p420:pc3",
+    "canonical_node_ids": [
+      "architecture:document_store",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p420:pc4",
+    "canonical_node_ids": [
+      "architecture:document_store"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p420:pc5",
+    "canonical_node_ids": [
+      "concept:accuracy",
+      "concept:quality",
+      "concept:safety",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p420:pc6",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:cost",
+      "concept:fine_tuning",
+      "concept:prompt_engineering",
+      "concept:sampling",
+      "concept:system_prompt",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p420:pc7",
+    "canonical_node_ids": [
+      "concept:cost",
+      "concept:fine_tuning",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p427:pc0",
+    "canonical_node_ids": [
+      "concept:data_privacy",
+      "concept:evaluation",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:quality",
+      "concept:recall"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p427:pc1",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:cost",
+      "concept:generation",
+      "concept:latency"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p427:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:cost",
+      "concept:latency"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:model_server",
+      "architecture:user",
+      "concept:cost",
+      "concept:latency",
+      "concept:model_routing"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc1",
+    "canonical_node_ids": [
+      "architecture:llm_provider",
+      "architecture:model_server",
+      "concept:cost",
+      "concept:memory"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc2",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "concept:memory",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc3",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "concept:language_model",
+      "concept:memory",
+      "concept:recall",
+      "concept:sampling",
+      "concept:tokenization",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc4",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:cache",
+      "architecture:model_server",
+      "concept:batching",
+      "concept:caching",
+      "concept:context_window",
+      "concept:cost",
+      "concept:language_model",
+      "concept:latency",
+      "concept:memory",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc5",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:batching",
+      "concept:cost",
+      "concept:generation",
+      "concept:latency",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": [
+      "concept:batching__improves__concept:cost"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc6",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:model_server",
+      "architecture:user",
+      "concept:batching",
+      "concept:cost",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:latency",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": [
+      "concept:latency__applies_to__architecture:model_server"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc7",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:document_store",
+      "architecture:user",
+      "concept:caching",
+      "concept:generation",
+      "concept:latency",
+      "concept:system_prompt",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc8",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:cost",
+      "concept:generation",
+      "concept:latency",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc9",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:latency",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc10",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:batching",
+      "concept:cost",
+      "concept:latency",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "concept:batching__improves__concept:latency"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc11",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:monitoring_service",
+      "architecture:user",
+      "concept:cost",
+      "concept:language_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc12",
+    "canonical_node_ids": [
+      "concept:generation",
+      "concept:language_model",
+      "concept:memory",
+      "concept:quantization",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc13",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:batching",
+      "concept:language_model",
+      "concept:memory",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc14",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:cost",
+      "concept:language_model",
+      "concept:latency"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc15",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc16",
+    "canonical_node_ids": [
+      "concept:cost",
+      "concept:memory"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc17",
+    "canonical_node_ids": [
+      "concept:evaluation",
+      "concept:latency",
+      "concept:memory",
+      "concept:precision"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc18",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:memory",
+      "concept:precision",
+      "concept:recall"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc19",
+    "canonical_node_ids": [
+      "concept:latency",
+      "concept:memory",
+      "concept:recall"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc20",
+    "canonical_node_ids": [
+      "architecture:cache",
+      "concept:caching",
+      "concept:generation",
+      "concept:memory"
+    ],
+    "canonical_edge_ids": [
+      "concept:caching__part_of__concept:memory"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc21",
+    "canonical_node_ids": [
+      "concept:latency"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p430:pc22",
+    "canonical_node_ids": [
+      "concept:cost",
+      "concept:evaluation",
+      "concept:memory"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc0",
+    "canonical_node_ids": [
+      "concept:benchmark",
+      "concept:cost",
+      "concept:distillation",
+      "concept:foundation_model",
+      "concept:language_model",
+      "concept:memory",
+      "concept:precision",
+      "concept:quality",
+      "concept:quantization",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc1",
+    "canonical_node_ids": [
+      "concept:accuracy",
+      "concept:distillation",
+      "concept:memory",
+      "concept:quantization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc2",
+    "canonical_node_ids": [
+      "architecture:llm_provider",
+      "architecture:user",
+      "concept:cost",
+      "concept:distillation",
+      "concept:generation",
+      "concept:latency",
+      "concept:memory",
+      "concept:precision",
+      "concept:quantization",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc3",
+    "canonical_node_ids": [
+      "concept:generation",
+      "concept:latency",
+      "concept:memory",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc4",
+    "canonical_node_ids": [
+      "concept:generation",
+      "concept:language_model",
+      "concept:latency",
+      "concept:memory",
+      "concept:quality",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc5",
+    "canonical_node_ids": [
+      "concept:chunking",
+      "concept:generation",
+      "concept:language_model",
+      "concept:retrieval",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "concept:retrieval__feeds_into__concept:generation"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc6",
+    "canonical_node_ids": [
+      "concept:generation",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc7",
+    "canonical_node_ids": [
+      "architecture:cache",
+      "concept:caching",
+      "concept:generation",
+      "concept:recall",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "concept:generation__depends_on__concept:tokenization"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc8",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:cache",
+      "concept:caching",
+      "concept:context_window",
+      "concept:generation",
+      "concept:latency",
+      "concept:memory",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "concept:generation__depends_on__concept:caching",
+      "concept:generation__depends_on__concept:tokenization"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc9",
+    "canonical_node_ids": [
+      "architecture:cache",
+      "concept:caching",
+      "concept:context_window",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:memory",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc10",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:cache",
+      "concept:caching",
+      "concept:language_model",
+      "concept:memory",
+      "concept:model_serving",
+      "concept:quantization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc11",
+    "canonical_node_ids": [
+      "architecture:cache",
+      "concept:caching",
+      "concept:memory"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc12",
+    "canonical_node_ids": [
+      "architecture:cache",
+      "concept:caching",
+      "concept:chunking",
+      "concept:generation",
+      "concept:latency",
+      "concept:memory"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc13",
+    "canonical_node_ids": [
+      "architecture:tool_service",
+      "concept:memory",
+      "concept:quality",
+      "concept:sampling",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc14",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:batching",
+      "concept:cost",
+      "concept:latency",
+      "concept:memory",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": [
+      "concept:batching__improves__concept:cost"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc15",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:batching",
+      "concept:generation",
+      "concept:language_model",
+      "concept:latency",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc16",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:batching",
+      "concept:language_model",
+      "concept:latency",
+      "concept:memory",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc17",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:cache",
+      "architecture:document_store",
+      "architecture:llm_provider",
+      "architecture:user",
+      "concept:caching",
+      "concept:cost",
+      "concept:latency",
+      "concept:system_prompt",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "concept:caching__improves__concept:latency"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc18",
+    "canonical_node_ids": [
+      "architecture:cache",
+      "architecture:llm_provider",
+      "concept:caching",
+      "concept:cost",
+      "concept:language_model",
+      "concept:latency",
+      "concept:memory",
+      "concept:prompt_engineering",
+      "concept:system_prompt",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "concept:caching__compares_with__concept:tokenization",
+      "concept:caching__improves__concept:latency"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc19",
+    "canonical_node_ids": [
+      "architecture:cache",
+      "concept:caching",
+      "concept:cost",
+      "concept:language_model",
+      "concept:memory",
+      "concept:precision"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p450:pc20",
+    "canonical_node_ids": [
+      "concept:latency"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p471:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:cost",
+      "concept:language_model",
+      "concept:latency",
+      "concept:model_serving",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p471:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:cache",
+      "architecture:llm_provider",
+      "concept:batching",
+      "concept:caching",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:language_model",
+      "concept:latency",
+      "concept:quantization",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p471:pc2",
+    "canonical_node_ids": [
+      "concept:batching",
+      "concept:caching",
+      "concept:cost",
+      "concept:latency",
+      "concept:model_serving",
+      "concept:sampling"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:llm_provider",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:feedback_loop",
+      "concept:foundation_model",
+      "concept:guardrails",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc1",
+    "canonical_node_ids": [
+      "architecture:api_gateway",
+      "architecture:application",
+      "architecture:llm_provider",
+      "architecture:model_server",
+      "architecture:monitoring_service",
+      "architecture:orchestrator",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:caching",
+      "concept:cost",
+      "concept:feedback_loop",
+      "concept:foundation_model",
+      "concept:guardrails",
+      "concept:latency",
+      "concept:model_routing",
+      "concept:quality",
+      "concept:retrieval",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:caching__improves__concept:latency"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:document_store",
+      "architecture:llm_provider",
+      "architecture:tool_service",
+      "architecture:user",
+      "architecture:vector_store",
+      "concept:chunking",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:guardrails",
+      "concept:quality",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:tool_use",
+      "concept:vector_database"
+    ],
+    "canonical_edge_ids": [
+      "architecture:vector_store__supports__concept:vector_database",
+      "concept:chunking__feeds_into__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc3",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:llm_provider",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:feedback_loop",
+      "concept:generation",
+      "concept:guardrails",
+      "concept:system_prompt",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc4",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:feedback_loop",
+      "concept:guardrails",
+      "concept:quality",
+      "concept:recall"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc5",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:guardrail_service",
+      "architecture:user",
+      "concept:cost",
+      "concept:feedback_loop",
+      "concept:guardrails",
+      "concept:latency",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": [
+      "concept:reliability__compares_with__concept:latency"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc6",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:guardrail_service",
+      "architecture:user",
+      "concept:guardrails",
+      "concept:latency",
+      "concept:moderation",
+      "concept:safety",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "architecture:guardrail_service__implements__concept:guardrails"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc7",
+    "canonical_node_ids": [
+      "architecture:api_gateway",
+      "architecture:application",
+      "architecture:guardrail_service",
+      "architecture:llm_provider",
+      "architecture:user",
+      "concept:cost",
+      "concept:feedback_loop",
+      "concept:guardrails",
+      "concept:latency",
+      "concept:model_routing",
+      "concept:model_serving"
+    ],
+    "canonical_edge_ids": [
+      "architecture:guardrail_service__implements__concept:guardrails"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc8",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:agent",
+      "concept:cost",
+      "concept:feedback_loop",
+      "concept:latency",
+      "concept:memory",
+      "concept:model_routing"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc9",
+    "canonical_node_ids": [
+      "architecture:api_gateway",
+      "architecture:application",
+      "architecture:llm_provider",
+      "architecture:user",
+      "concept:feedback_loop",
+      "concept:generation",
+      "concept:model_routing",
+      "concept:retrieval"
+    ],
+    "canonical_edge_ids": [
+      "concept:retrieval__feeds_into__concept:generation"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc10",
+    "canonical_node_ids": [
+      "architecture:api_gateway",
+      "architecture:application",
+      "architecture:user",
+      "concept:cost",
+      "concept:feedback_loop",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc11",
+    "canonical_node_ids": [
+      "architecture:api_gateway",
+      "architecture:application",
+      "architecture:cache",
+      "architecture:llm_provider",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:caching",
+      "concept:cost",
+      "concept:feedback_loop",
+      "concept:guardrails",
+      "concept:language_model",
+      "concept:latency",
+      "concept:model_routing",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "concept:caching__improves__concept:latency"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc12",
+    "canonical_node_ids": [
+      "architecture:cache",
+      "architecture:user",
+      "concept:caching",
+      "concept:embeddings",
+      "concept:memory",
+      "concept:retrieval"
+    ],
+    "canonical_edge_ids": [
+      "concept:retrieval__depends_on__concept:embeddings"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc13",
+    "canonical_node_ids": [
+      "architecture:cache",
+      "architecture:user",
+      "architecture:vector_store",
+      "concept:caching",
+      "concept:cost",
+      "concept:embedding_model",
+      "concept:embeddings",
+      "concept:generation",
+      "concept:quality",
+      "concept:reliability",
+      "concept:vector_database"
+    ],
+    "canonical_edge_ids": [
+      "architecture:vector_store__supports__concept:vector_database",
+      "concept:embedding_model__feeds_into__concept:embeddings"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc14",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:cache",
+      "architecture:llm_provider",
+      "architecture:user",
+      "concept:agent",
+      "concept:caching",
+      "concept:cost",
+      "concept:embeddings",
+      "concept:feedback_loop",
+      "concept:quality",
+      "concept:reliability",
+      "concept:retrieval"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc15",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:monitoring_service",
+      "architecture:user",
+      "concept:feedback_loop",
+      "concept:foundation_model",
+      "concept:retrieval"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc16",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:evaluation_pipeline",
+      "architecture:monitoring_service",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:foundation_model",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc17",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:evaluation_pipeline",
+      "architecture:log_store",
+      "architecture:monitoring_service",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:feedback_loop"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc18",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:cache",
+      "architecture:monitoring_service",
+      "architecture:user",
+      "concept:caching",
+      "concept:cost",
+      "concept:feedback_loop",
+      "concept:foundation_model",
+      "concept:generation",
+      "concept:guardrails",
+      "concept:quality",
+      "concept:safety",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc19",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "architecture:vector_store",
+      "concept:cost",
+      "concept:feedback_loop",
+      "concept:generation",
+      "concept:latency",
+      "concept:precision",
+      "concept:quality",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:tokenization",
+      "concept:vector_database"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application",
+      "architecture:vector_store__supports__concept:vector_database",
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc20",
+    "canonical_node_ids": [
+      "architecture:log_store",
+      "architecture:monitoring_service",
+      "architecture:user",
+      "concept:cost",
+      "concept:feedback_loop",
+      "concept:generation",
+      "concept:latency",
+      "concept:sampling",
+      "concept:tokenization"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc21",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:llm_provider",
+      "architecture:log_store",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:prompt_template",
+      "concept:sampling",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc22",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:log_store",
+      "architecture:user",
+      "concept:cost",
+      "concept:evaluation",
+      "concept:feedback_loop",
+      "concept:prompt_template",
+      "concept:system_prompt"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc23",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:orchestrator",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:benchmark",
+      "concept:retrieval",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "architecture:application__calls__architecture:orchestrator",
+      "architecture:orchestrator__calls__architecture:tool_service"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc24",
+    "canonical_node_ids": [
+      "architecture:api_gateway",
+      "architecture:application",
+      "architecture:monitoring_service",
+      "architecture:orchestrator",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:feedback_loop",
+      "concept:latency",
+      "concept:model_routing",
+      "concept:retrieval",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "architecture:orchestrator__calls__architecture:tool_service"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p473:pc25",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:orchestrator",
+      "architecture:tool_service",
+      "concept:agent",
+      "concept:retrieval",
+      "concept:retrieval_augmented_generation",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "architecture:application__calls__architecture:orchestrator",
+      "architecture:orchestrator__calls__architecture:tool_service",
+      "concept:agent__depends_on__concept:tool_use",
+      "concept:retrieval_augmented_generation__depends_on__concept:retrieval"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p498:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:orchestrator",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:feedback_loop",
+      "concept:latency"
+    ],
+    "canonical_edge_ids": [
+      "architecture:application__calls__architecture:orchestrator"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p498:pc1",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:data_privacy",
+      "concept:feedback_loop",
+      "concept:foundation_model"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p498:pc2",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:feedback_loop"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p498:pc3",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:agent",
+      "concept:feedback_loop",
+      "concept:generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p498:pc4",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:agent",
+      "concept:feedback_loop",
+      "concept:generation",
+      "concept:recall"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p498:pc5",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:accuracy",
+      "concept:feedback_loop"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p498:pc6",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:feedback_loop",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:language_model"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p498:pc7",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:feedback_loop"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p498:pc8",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:feedback_loop"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p498:pc9",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:agent",
+      "concept:feedback_loop",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p498:pc10",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:evaluation",
+      "concept:feedback_loop",
+      "concept:fine_tuning",
+      "concept:generation",
+      "concept:latency",
+      "concept:reliability"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p498:pc11",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:feedback_loop"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p498:pc12",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:feedback_loop",
+      "concept:generation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p498:pc13",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:data_privacy",
+      "concept:feedback_loop"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p498:pc14",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:feedback_loop",
+      "concept:generation",
+      "concept:quality"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p498:pc15",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:feedback_loop"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p498:pc16",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:evaluation",
+      "concept:feedback_loop",
+      "concept:generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p498:pc17",
+    "canonical_node_ids": [
+      "architecture:user",
+      "concept:accuracy",
+      "concept:feedback_loop"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc0",
+    "canonical_node_ids": [
+      "architecture:application",
+      "architecture:user",
+      "concept:accuracy",
+      "concept:agent",
+      "concept:feedback_loop",
+      "concept:foundation_model",
+      "concept:generation"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc1",
+    "canonical_node_ids": [
+      "architecture:api_gateway",
+      "architecture:application",
+      "architecture:monitoring_service",
+      "architecture:tool_service",
+      "architecture:user",
+      "concept:data_flywheel",
+      "concept:feedback_loop",
+      "concept:foundation_model",
+      "concept:guardrails",
+      "concept:tool_use"
+    ],
+    "canonical_edge_ids": [
+      "architecture:user__sends_to__architecture:application"
+    ]
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc2",
+    "canonical_node_ids": [
+      "concept:data_flywheel",
+      "concept:safety"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc3",
+    "canonical_node_ids": [
+      "architecture:application",
+      "concept:foundation_model"
+    ],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc4",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc5",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc6",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc7",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc8",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc9",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc10",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc11",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc12",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc13",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc14",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc15",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc16",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc17",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc18",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc19",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc20",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  },
+  {
+    "parent_chunk_id": "ai-eng:p516:pc21",
+    "canonical_node_ids": [],
+    "canonical_edge_ids": []
+  }
+]

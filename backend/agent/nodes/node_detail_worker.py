@@ -121,12 +121,18 @@ async def enrich_node(
     tier_note = f" ({node.get('tier', 'unknown')} tier)" if node.get('tier') else ""
     node_desc = node.get("description", "")
     desc_note = f"\nRole: {node_desc}" if node_desc else ""
+    evidence_ids = node.get("evidence_chunk_ids") or []
+    canonical_note = (
+        "\nCanonical evidence chunks: " + ", ".join(evidence_ids[:4])
+        if evidence_ids
+        else ""
+    )
 
     messages = [{
         "role": "user",
         "content": (
             f"Explain this concept: **{node['label']}**{tech_note} (type: {node['type']}{tier_note})"
-            f"{desc_note}{connections_text}\n\n"
+            f"{desc_note}{canonical_note}{connections_text}\n\n"
             f"Relevant book content:\n{context}"
         ),
     }]
@@ -140,7 +146,11 @@ async def enrich_node(
         top_k=settings.node_detail_top_k,
         telemetry=build_telemetry(
             "node_detail_worker",
-            metadata={"node_id": node["id"], "node_label": node["label"]},
+            metadata={
+                "node_id": node["id"],
+                "node_label": node["label"],
+                "graph_version": graph_version,
+            },
         ),
         send=send,
     )

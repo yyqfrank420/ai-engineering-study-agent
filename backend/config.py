@@ -80,6 +80,14 @@ class Settings(BaseSettings):
         return self.data_dir / "faiss"
 
     @property
+    def graph_dir(self) -> Path:
+        return self.data_dir / "graph"
+
+    @property
+    def graph_schema_dir(self) -> Path:
+        return self.data_dir / "graph_schema"
+
+    @property
     def sqlite_path(self) -> Path:
         return self.data_dir / "sessions.db"
 
@@ -104,6 +112,21 @@ class Settings(BaseSettings):
     internal_test_session_minutes: int = 30
     internal_test_attempt_window_s: int = 600
     internal_test_attempt_limit: int = 10
+
+    # ── Observability / analytics ────────────────────────────────────────────
+    otel_enabled: bool = False
+    otel_service_name: str = "ai-engineering-study-agent"
+    otel_service_version: str = "0.1.0"
+    otel_environment: str = "development"
+    # Base OTLP/HTTP endpoint, e.g. https://collector.example.com
+    otel_exporter_otlp_endpoint: str = ""
+    otel_exporter_otlp_headers_raw: str = ""
+    posthog_api_key: str = ""
+    posthog_host: str = "https://us.i.posthog.com"
+    # Optional server-side credentials for future dashboard reads.
+    posthog_project_id: str = ""
+    posthog_personal_api_key: str = ""
+    internal_dashboard_allowlist_raw: str = ""
 
     # ── Dev ───────────────────────────────────────────────────────────────────
     # Set to true in local .env only. NEVER enable in production.
@@ -191,6 +214,24 @@ class Settings(BaseSettings):
             and self.supabase_jwt_secret.strip()
             and self.effective_supabase_jwt_issuer
         )
+
+    @property
+    def otel_exporter_otlp_headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        for pair in self.otel_exporter_otlp_headers_raw.split(","):
+            if "=" not in pair:
+                continue
+            key, value = pair.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            if key and value:
+                headers[key] = value
+        return headers
+
+    @property
+    def internal_dashboard_allowlist(self) -> list[str]:
+        raw = self.internal_dashboard_allowlist_raw.replace("\n", ",")
+        return [email.strip().lower() for email in raw.split(",") if email.strip()]
 
 
 # Module-level singleton — import this everywhere

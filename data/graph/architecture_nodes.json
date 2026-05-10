@@ -1,0 +1,2574 @@
+[
+  {
+    "canonical_id": "architecture:api_gateway",
+    "layer": "architecture",
+    "label": "API Gateway",
+    "aliases": [
+      "gateway"
+    ],
+    "kind": "service",
+    "description": "Canonical service grounded in book evidence: Add Model Router and Gateway 456 Step 4.",
+    "chapter_refs": [
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "AI Engineering Architecture",
+        "page_number": 473
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "Summary",
+        "page_number": 516
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "Building Applications with Foundation Models",
+        "page_number": 5
+      }
+    ],
+    "source_chunk_ids": [
+      "ai-eng:p5:pc3",
+      "ai-eng:p5:pc4",
+      "ai-eng:p473:pc1",
+      "ai-eng:p473:pc7",
+      "ai-eng:p473:pc9",
+      "ai-eng:p473:pc10",
+      "ai-eng:p473:pc11",
+      "ai-eng:p473:pc24",
+      "ai-eng:p516:pc1"
+    ],
+    "support_spans": [
+      "Add Model Router and Gateway 456 Step 4.",
+      "Add model router and gateway to support complex pipelines and add more security.",
+      "Add Model Router and Gateway As applications grow to involve more models, routers and gateways emerge to help you manage the complexity and costs of serving multiple models.",
+      "Gateway A model gateway is an intermediate layer that allows your organization to interface with different models in a unified and secure manner.",
+      "458 | Chapter 10: AI Engineering Architecture and User Feedback In its simplest form, a model gateway is a unified wrapper.",
+      "A model gateway can also be used to implement fallback policies to overcome rate limits or API failures (the latter is unfortunately common)."
+    ],
+    "confidence": 0.95
+  },
+  {
+    "canonical_id": "architecture:application",
+    "layer": "architecture",
+    "label": "Application",
+    "aliases": [
+      "AI application",
+      "applications"
+    ],
+    "kind": "service",
+    "description": "Canonical service grounded in book evidence: AI Engineering Building Applications with Foundation Models “This book of fers a comprehensive, well-structured guide to the essential aspects of building generative AI systems.",
+    "chapter_refs": [
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "Acknowledgments",
+        "page_number": 22
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "The Rise of AI Engineering",
+        "page_number": 26
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "Foundation Model Use Cases",
+        "page_number": 40
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "Planning AI Applications",
+        "page_number": 52
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "The AI Engineering Stack",
+        "page_number": 59
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "Summary",
+        "page_number": 71
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 2,
+        "chapter_title": "Understanding Foundation Models",
+        "section": "Training Data",
+        "page_number": 74
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 2,
+        "chapter_title": "Understanding Foundation Models",
+        "section": "Modeling",
+        "page_number": 82
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 2,
+        "chapter_title": "Understanding Foundation Models",
+        "section": "Post-Training",
+        "page_number": 102
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 2,
+        "chapter_title": "Understanding Foundation Models",
+        "section": "Sampling",
+        "page_number": 112
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 2,
+        "chapter_title": "Understanding Foundation Models",
+        "section": "Summary",
+        "page_number": 135
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 3,
+        "chapter_title": "Evaluation Methodology",
+        "section": "Challenges of Evaluating Foundation Models",
+        "page_number": 138
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 3,
+        "chapter_title": "Evaluation Methodology",
+        "section": "Understanding Language Modeling Metrics",
+        "page_number": 142
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 3,
+        "chapter_title": "Evaluation Methodology",
+        "section": "Exact Evaluation",
+        "page_number": 149
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 3,
+        "chapter_title": "Evaluation Methodology",
+        "section": "AI as a Judge",
+        "page_number": 160
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 3,
+        "chapter_title": "Evaluation Methodology",
+        "section": "Ranking Models with Comparative Evaluation",
+        "page_number": 172
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 3,
+        "chapter_title": "Evaluation Methodology",
+        "section": "Summary",
+        "page_number": 180
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 4,
+        "chapter_title": "Evaluate AI Systems",
+        "section": "Evaluation Criteria",
+        "page_number": 184
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 4,
+        "chapter_title": "Evaluate AI Systems",
+        "section": "Model Selection",
+        "page_number": 203
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 4,
+        "chapter_title": "Evaluate AI Systems",
+        "section": "Design Your Evaluation Pipeline",
+        "page_number": 224
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 4,
+        "chapter_title": "Evaluate AI Systems",
+        "section": "Summary",
+        "page_number": 232
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 5,
+        "chapter_title": "Prompt Engineering",
+        "section": "Introduction to Prompting",
+        "page_number": 236
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 5,
+        "chapter_title": "Prompt Engineering",
+        "section": "Prompt Engineering Best Practices",
+        "page_number": 244
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 5,
+        "chapter_title": "Prompt Engineering",
+        "section": "Defensive Prompt Engineering",
+        "page_number": 259
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "RAG",
+        "page_number": 277
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "Agents",
+        "page_number": 299
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "Memory",
+        "page_number": 324
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "Summary",
+        "page_number": 329
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 7,
+        "chapter_title": "Finetuning",
+        "section": "Finetuning Overview",
+        "page_number": 332
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 7,
+        "chapter_title": "Finetuning",
+        "section": "When to Finetune",
+        "page_number": 335
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 7,
+        "chapter_title": "Finetuning",
+        "section": "Memory Bottlenecks",
+        "page_number": 343
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 7,
+        "chapter_title": "Finetuning",
+        "section": "Finetuning Techniques",
+        "page_number": 356
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 7,
+        "chapter_title": "Finetuning",
+        "section": "Summary",
+        "page_number": 385
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 8,
+        "chapter_title": "Dataset Engineering",
+        "section": "Data Curation",
+        "page_number": 389
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 8,
+        "chapter_title": "Dataset Engineering",
+        "section": "Data Augmentation and Synthesis",
+        "page_number": 404
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 8,
+        "chapter_title": "Dataset Engineering",
+        "section": "Data Processing",
+        "page_number": 420
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 8,
+        "chapter_title": "Dataset Engineering",
+        "section": "Summary",
+        "page_number": 427
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 9,
+        "chapter_title": "Inference Optimization",
+        "section": "Understanding Inference Optimization",
+        "page_number": 430
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 9,
+        "chapter_title": "Inference Optimization",
+        "section": "Inference Optimization",
+        "page_number": 450
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 9,
+        "chapter_title": "Inference Optimization",
+        "section": "Summary",
+        "page_number": 471
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "AI Engineering Architecture",
+        "page_number": 473
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "User Feedback",
+        "page_number": 498
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "Summary",
+        "page_number": 516
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "Chip Huyen",
+        "page_number": 1
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "Building Applications with Foundation Models",
+        "page_number": 5
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "What This Book Is About",
+        "page_number": 14
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "What This Book Is Not",
+        "page_number": 16
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "Who This Book Is For",
+        "page_number": 17
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "Navigating This Book",
+        "page_number": 18
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "Conventions Used in This Book",
+        "page_number": 19
+      }
+    ],
+    "source_chunk_ids": [
+      "ai-eng:p1:pc0",
+      "ai-eng:p1:pc1",
+      "ai-eng:p5:pc1",
+      "ai-eng:p5:pc5",
+      "ai-eng:p14:pc0",
+      "ai-eng:p14:pc1",
+      "ai-eng:p14:pc2",
+      "ai-eng:p16:pc0",
+      "ai-eng:p16:pc1",
+      "ai-eng:p17:pc0",
+      "ai-eng:p18:pc0",
+      "ai-eng:p18:pc1",
+      "ai-eng:p19:pc0",
+      "ai-eng:p22:pc1",
+      "ai-eng:p22:pc3",
+      "ai-eng:p26:pc0",
+      "ai-eng:p26:pc1",
+      "ai-eng:p26:pc3",
+      "ai-eng:p26:pc5",
+      "ai-eng:p26:pc8",
+      "ai-eng:p26:pc10",
+      "ai-eng:p26:pc11",
+      "ai-eng:p26:pc12",
+      "ai-eng:p26:pc13",
+      "ai-eng:p26:pc14",
+      "ai-eng:p26:pc15",
+      "ai-eng:p40:pc0",
+      "ai-eng:p40:pc1",
+      "ai-eng:p40:pc2",
+      "ai-eng:p40:pc3",
+      "ai-eng:p40:pc5",
+      "ai-eng:p40:pc6",
+      "ai-eng:p40:pc9",
+      "ai-eng:p40:pc11",
+      "ai-eng:p52:pc0",
+      "ai-eng:p52:pc1",
+      "ai-eng:p52:pc2",
+      "ai-eng:p52:pc3",
+      "ai-eng:p52:pc4",
+      "ai-eng:p52:pc5",
+      "ai-eng:p52:pc6",
+      "ai-eng:p52:pc8",
+      "ai-eng:p59:pc1",
+      "ai-eng:p59:pc2",
+      "ai-eng:p59:pc3",
+      "ai-eng:p59:pc4",
+      "ai-eng:p59:pc5",
+      "ai-eng:p59:pc6",
+      "ai-eng:p59:pc7",
+      "ai-eng:p59:pc8",
+      "ai-eng:p59:pc9",
+      "ai-eng:p59:pc10",
+      "ai-eng:p59:pc11",
+      "ai-eng:p59:pc12",
+      "ai-eng:p59:pc13",
+      "ai-eng:p59:pc14",
+      "ai-eng:p71:pc0",
+      "ai-eng:p71:pc1",
+      "ai-eng:p71:pc2",
+      "ai-eng:p74:pc1",
+      "ai-eng:p74:pc2",
+      "ai-eng:p82:pc0",
+      "ai-eng:p82:pc18",
+      "ai-eng:p102:pc5",
+      "ai-eng:p112:pc0",
+      "ai-eng:p112:pc2",
+      "ai-eng:p112:pc4",
+      "ai-eng:p112:pc5",
+      "ai-eng:p112:pc9",
+      "ai-eng:p112:pc10",
+      "ai-eng:p112:pc11",
+      "ai-eng:p112:pc12",
+      "ai-eng:p112:pc14",
+      "ai-eng:p112:pc15",
+      "ai-eng:p112:pc18",
+      "ai-eng:p135:pc2",
+      "ai-eng:p138:pc0",
+      "ai-eng:p138:pc2",
+      "ai-eng:p138:pc4",
+      "ai-eng:p142:pc0",
+      "ai-eng:p142:pc1",
+      "ai-eng:p149:pc1",
+      "ai-eng:p160:pc1",
+      "ai-eng:p160:pc3",
+      "ai-eng:p160:pc5",
+      "ai-eng:p160:pc7",
+      "ai-eng:p160:pc8",
+      "ai-eng:p160:pc10",
+      "ai-eng:p160:pc11",
+      "ai-eng:p172:pc1",
+      "ai-eng:p172:pc6",
+      "ai-eng:p172:pc7",
+      "ai-eng:p172:pc8",
+      "ai-eng:p180:pc0",
+      "ai-eng:p180:pc1",
+      "ai-eng:p180:pc2",
+      "ai-eng:p184:pc0",
+      "ai-eng:p184:pc1",
+      "ai-eng:p184:pc2",
+      "ai-eng:p184:pc6",
+      "ai-eng:p184:pc15",
+      "ai-eng:p184:pc19",
+      "ai-eng:p184:pc20",
+      "ai-eng:p184:pc22",
+      "ai-eng:p184:pc23",
+      "ai-eng:p203:pc0",
+      "ai-eng:p203:pc1",
+      "ai-eng:p203:pc4",
+      "ai-eng:p203:pc8",
+      "ai-eng:p203:pc10",
+      "ai-eng:p203:pc13",
+      "ai-eng:p203:pc21",
+      "ai-eng:p203:pc22",
+      "ai-eng:p224:pc0",
+      "ai-eng:p224:pc1",
+      "ai-eng:p224:pc2",
+      "ai-eng:p224:pc3",
+      "ai-eng:p224:pc4",
+      "ai-eng:p224:pc5",
+      "ai-eng:p224:pc6",
+      "ai-eng:p224:pc7",
+      "ai-eng:p224:pc8",
+      "ai-eng:p232:pc0",
+      "ai-eng:p232:pc1",
+      "ai-eng:p232:pc2",
+      "ai-eng:p232:pc3",
+      "ai-eng:p236:pc0",
+      "ai-eng:p236:pc2",
+      "ai-eng:p236:pc4",
+      "ai-eng:p236:pc5",
+      "ai-eng:p244:pc0",
+      "ai-eng:p244:pc2",
+      "ai-eng:p244:pc7",
+      "ai-eng:p244:pc8",
+      "ai-eng:p244:pc10",
+      "ai-eng:p244:pc13",
+      "ai-eng:p259:pc0",
+      "ai-eng:p259:pc1",
+      "ai-eng:p259:pc2",
+      "ai-eng:p259:pc3",
+      "ai-eng:p259:pc7",
+      "ai-eng:p259:pc12",
+      "ai-eng:p259:pc13",
+      "ai-eng:p259:pc17",
+      "ai-eng:p277:pc0",
+      "ai-eng:p277:pc2",
+      "ai-eng:p277:pc10",
+      "ai-eng:p277:pc12",
+      "ai-eng:p277:pc15",
+      "ai-eng:p277:pc16",
+      "ai-eng:p277:pc20",
+      "ai-eng:p277:pc21",
+      "ai-eng:p277:pc24",
+      "ai-eng:p299:pc0",
+      "ai-eng:p299:pc1",
+      "ai-eng:p299:pc22",
+      "ai-eng:p299:pc24",
+      "ai-eng:p324:pc1",
+      "ai-eng:p324:pc2",
+      "ai-eng:p324:pc4",
+      "ai-eng:p329:pc0",
+      "ai-eng:p329:pc1",
+      "ai-eng:p332:pc2",
+      "ai-eng:p332:pc4",
+      "ai-eng:p335:pc0",
+      "ai-eng:p335:pc2",
+      "ai-eng:p335:pc4",
+      "ai-eng:p335:pc9",
+      "ai-eng:p343:pc4",
+      "ai-eng:p343:pc10",
+      "ai-eng:p356:pc0",
+      "ai-eng:p385:pc3",
+      "ai-eng:p389:pc0",
+      "ai-eng:p389:pc2",
+      "ai-eng:p389:pc3",
+      "ai-eng:p389:pc6",
+      "ai-eng:p389:pc7",
+      "ai-eng:p389:pc9",
+      "ai-eng:p389:pc14",
+      "ai-eng:p404:pc0",
+      "ai-eng:p404:pc15",
+      "ai-eng:p404:pc16",
+      "ai-eng:p404:pc17",
+      "ai-eng:p420:pc1",
+      "ai-eng:p427:pc2",
+      "ai-eng:p430:pc0",
+      "ai-eng:p430:pc4",
+      "ai-eng:p430:pc6",
+      "ai-eng:p430:pc7",
+      "ai-eng:p430:pc9",
+      "ai-eng:p430:pc10",
+      "ai-eng:p430:pc11",
+      "ai-eng:p430:pc18",
+      "ai-eng:p450:pc8",
+      "ai-eng:p450:pc10",
+      "ai-eng:p450:pc16",
+      "ai-eng:p450:pc17",
+      "ai-eng:p471:pc0",
+      "ai-eng:p471:pc1",
+      "ai-eng:p473:pc0",
+      "ai-eng:p473:pc1",
+      "ai-eng:p473:pc2",
+      "ai-eng:p473:pc3",
+      "ai-eng:p473:pc4",
+      "ai-eng:p473:pc5",
+      "ai-eng:p473:pc6",
+      "ai-eng:p473:pc7",
+      "ai-eng:p473:pc9",
+      "ai-eng:p473:pc10",
+      "ai-eng:p473:pc11",
+      "ai-eng:p473:pc14",
+      "ai-eng:p473:pc15",
+      "ai-eng:p473:pc16",
+      "ai-eng:p473:pc17",
+      "ai-eng:p473:pc18",
+      "ai-eng:p473:pc19",
+      "ai-eng:p473:pc21",
+      "ai-eng:p473:pc22",
+      "ai-eng:p473:pc23",
+      "ai-eng:p473:pc24",
+      "ai-eng:p473:pc25",
+      "ai-eng:p498:pc0",
+      "ai-eng:p498:pc1",
+      "ai-eng:p498:pc2",
+      "ai-eng:p498:pc3",
+      "ai-eng:p498:pc4",
+      "ai-eng:p498:pc6",
+      "ai-eng:p498:pc7",
+      "ai-eng:p498:pc8",
+      "ai-eng:p498:pc10",
+      "ai-eng:p498:pc11",
+      "ai-eng:p498:pc12",
+      "ai-eng:p498:pc13",
+      "ai-eng:p498:pc15",
+      "ai-eng:p516:pc0",
+      "ai-eng:p516:pc1",
+      "ai-eng:p516:pc3"
+    ],
+    "support_spans": [
+      "AI Engineering Building Applications with Foundation Models “This book of fers a comprehensive, well-structured guide to the essential aspects of building generative AI systems.",
+      "Drawing on her deep expertise, AI Engineering serves as a comprehensive and holistic guide, masterfully detailing everything required to design and deploy generative AI applications in production.",
+      "Introduction to Building AI Applications with Foundation Models.",
+      "In 2012, the AlexNet authors noted in their landmark paper that: “All of our experiments suggest that our results can be improved simply by waiting for faster GPUs and bigger datasets to become available.”1, 2 What surprised me was the sheer number of applications this capability boost unlocked.",
+      "But while many principles for building AI applications remain the same, the scale and improved capabilities of AI models introduce opportunities and challenges that require new solutions.",
+      "large language models (LLMs) and large multimodal models (LMMs), to specific applications."
+    ],
+    "confidence": 0.96
+  },
+  {
+    "canonical_id": "architecture:cache",
+    "layer": "architecture",
+    "label": "Cache",
+    "aliases": [
+      "cached",
+      "caches"
+    ],
+    "kind": "datastore",
+    "description": "Canonical datastore grounded in book evidence: Reduce Latency with Caches 460 Step 5.",
+    "chapter_refs": [
+      {
+        "book": "AI Engineering",
+        "chapter": 2,
+        "chapter_title": "Understanding Foundation Models",
+        "section": "Sampling",
+        "page_number": 112
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "RAG",
+        "page_number": 277
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 7,
+        "chapter_title": "Finetuning",
+        "section": "When to Finetune",
+        "page_number": 335
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 7,
+        "chapter_title": "Finetuning",
+        "section": "Memory Bottlenecks",
+        "page_number": 343
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 9,
+        "chapter_title": "Inference Optimization",
+        "section": "Understanding Inference Optimization",
+        "page_number": 430
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 9,
+        "chapter_title": "Inference Optimization",
+        "section": "Inference Optimization",
+        "page_number": 450
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 9,
+        "chapter_title": "Inference Optimization",
+        "section": "Summary",
+        "page_number": 471
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "AI Engineering Architecture",
+        "page_number": 473
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "Building Applications with Foundation Models",
+        "page_number": 5
+      }
+    ],
+    "source_chunk_ids": [
+      "ai-eng:p5:pc3",
+      "ai-eng:p5:pc4",
+      "ai-eng:p112:pc19",
+      "ai-eng:p277:pc9",
+      "ai-eng:p335:pc6",
+      "ai-eng:p343:pc11",
+      "ai-eng:p430:pc4",
+      "ai-eng:p430:pc20",
+      "ai-eng:p450:pc7",
+      "ai-eng:p450:pc8",
+      "ai-eng:p450:pc9",
+      "ai-eng:p450:pc10",
+      "ai-eng:p450:pc11",
+      "ai-eng:p450:pc12",
+      "ai-eng:p450:pc17",
+      "ai-eng:p450:pc18",
+      "ai-eng:p450:pc19",
+      "ai-eng:p471:pc1",
+      "ai-eng:p473:pc11",
+      "ai-eng:p473:pc12",
+      "ai-eng:p473:pc13",
+      "ai-eng:p473:pc14",
+      "ai-eng:p473:pc18"
+    ],
+    "support_spans": [
+      "Reduce Latency with Caches 460 Step 5.",
+      "You can cache the answer so that the next time the same question is asked, the same answer is returned.",
+      "Real-world semantic retrieval systems might contain other components, such as a reranker to rerank all retrieved candidates, and caches to reduce latency.8 With embedding-based retrieval, we again encounter embeddings, which are dis‐ cussed in Chapter 3.",
+      "With prompt caching, where repetitive prompt segments can be cached for reuse, this is no longer a strong benefit.",
+      "17 Another major contributor to the memory footprint of transformer-based models is the KV cache, which is discussed in Chapter 9.",
+      "5 Prefilling effectively populates the initial KV cache for the transformer model."
+    ],
+    "confidence": 0.96
+  },
+  {
+    "canonical_id": "architecture:document_store",
+    "layer": "architecture",
+    "label": "Document Store",
+    "aliases": [
+      "document database",
+      "documents"
+    ],
+    "kind": "datastore",
+    "description": "Canonical datastore grounded in book evidence: 26 | Chapter 1: Introduction to Building AI Applications with Foundation Models For consumers, many applications can process your documents—contracts, disclo‐ sures, papers—and...",
+    "chapter_refs": [
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "Foundation Model Use Cases",
+        "page_number": 40
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 3,
+        "chapter_title": "Evaluation Methodology",
+        "section": "Ranking Models with Comparative Evaluation",
+        "page_number": 172
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 5,
+        "chapter_title": "Prompt Engineering",
+        "section": "Introduction to Prompting",
+        "page_number": 236
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "RAG",
+        "page_number": 277
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "Agents",
+        "page_number": 299
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 7,
+        "chapter_title": "Finetuning",
+        "section": "Finetuning Overview",
+        "page_number": 332
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 8,
+        "chapter_title": "Dataset Engineering",
+        "section": "Data Curation",
+        "page_number": 389
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 8,
+        "chapter_title": "Dataset Engineering",
+        "section": "Data Augmentation and Synthesis",
+        "page_number": 404
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 8,
+        "chapter_title": "Dataset Engineering",
+        "section": "Data Processing",
+        "page_number": 420
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 9,
+        "chapter_title": "Inference Optimization",
+        "section": "Understanding Inference Optimization",
+        "page_number": 430
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 9,
+        "chapter_title": "Inference Optimization",
+        "section": "Inference Optimization",
+        "page_number": 450
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "AI Engineering Architecture",
+        "page_number": 473
+      }
+    ],
+    "source_chunk_ids": [
+      "ai-eng:p40:pc11",
+      "ai-eng:p172:pc6",
+      "ai-eng:p172:pc7",
+      "ai-eng:p236:pc7",
+      "ai-eng:p277:pc3",
+      "ai-eng:p277:pc4",
+      "ai-eng:p277:pc5",
+      "ai-eng:p277:pc6",
+      "ai-eng:p277:pc7",
+      "ai-eng:p277:pc8",
+      "ai-eng:p277:pc12",
+      "ai-eng:p277:pc13",
+      "ai-eng:p277:pc14",
+      "ai-eng:p277:pc16",
+      "ai-eng:p277:pc17",
+      "ai-eng:p277:pc18",
+      "ai-eng:p277:pc19",
+      "ai-eng:p277:pc20",
+      "ai-eng:p277:pc21",
+      "ai-eng:p277:pc23",
+      "ai-eng:p299:pc1",
+      "ai-eng:p332:pc2",
+      "ai-eng:p389:pc12",
+      "ai-eng:p404:pc5",
+      "ai-eng:p404:pc13",
+      "ai-eng:p420:pc3",
+      "ai-eng:p420:pc4",
+      "ai-eng:p430:pc7",
+      "ai-eng:p450:pc17",
+      "ai-eng:p473:pc2"
+    ],
+    "support_spans": [
+      "26 | Chapter 1: Introduction to Building AI Applications with Foundation Models For consumers, many applications can process your documents—contracts, disclo‐ sures, papers—and let you retrieve information in a conversational manner.",
+      "If a public leaderboard doesn’t support sophisticated context construction, such as augmenting the context with relevant documents retrieved from your internal data‐",
+      "If a public leaderboard doesn’t support sophisticated context construction, such as augmenting the context with relevant documents retrieved from your internal data‐ bases, its ranking won’t reflect how well a model might work for your RAG system.",
+      "This is barely long enough for a college essay and too short for most legal documents or research papers.",
+      "For simplicity, let’s assume that the external memory is a data‐ base of documents, such as a company’s memos, contracts, and meeting notes.",
+      "At its core, retrieval works by ranking documents based on their relevance to a given query."
+    ],
+    "confidence": 0.96
+  },
+  {
+    "canonical_id": "architecture:evaluation_pipeline",
+    "layer": "architecture",
+    "label": "Evaluation Pipeline",
+    "aliases": [
+      "eval pipeline",
+      "evaluation pipeline"
+    ],
+    "kind": "pipeline_stage",
+    "description": "Canonical pipeline stage grounded in book evidence: 159 Evaluation Criteria 160 Domain-Specific Capability 161 Generation Capability 163 Instruction-Following Capability 172 Cost and Latency 177 Model Selection 179 Model Selectio...",
+    "chapter_refs": [
+      {
+        "book": "AI Engineering",
+        "chapter": 2,
+        "chapter_title": "Understanding Foundation Models",
+        "section": "Summary",
+        "page_number": 135
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 3,
+        "chapter_title": "Evaluation Methodology",
+        "section": "Summary",
+        "page_number": 180
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 4,
+        "chapter_title": "Evaluate AI Systems",
+        "section": "Model Selection",
+        "page_number": 203
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 4,
+        "chapter_title": "Evaluate AI Systems",
+        "section": "Design Your Evaluation Pipeline",
+        "page_number": 224
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 4,
+        "chapter_title": "Evaluate AI Systems",
+        "section": "Summary",
+        "page_number": 232
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 7,
+        "chapter_title": "Finetuning",
+        "section": "When to Finetune",
+        "page_number": 335
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "AI Engineering Architecture",
+        "page_number": 473
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "Building Applications with Foundation Models",
+        "page_number": 5
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "Navigating This Book",
+        "page_number": 18
+      }
+    ],
+    "source_chunk_ids": [
+      "ai-eng:p5:pc2",
+      "ai-eng:p18:pc0",
+      "ai-eng:p135:pc1",
+      "ai-eng:p180:pc1",
+      "ai-eng:p180:pc2",
+      "ai-eng:p203:pc1",
+      "ai-eng:p203:pc2",
+      "ai-eng:p224:pc0",
+      "ai-eng:p224:pc2",
+      "ai-eng:p224:pc4",
+      "ai-eng:p224:pc5",
+      "ai-eng:p224:pc8",
+      "ai-eng:p224:pc9",
+      "ai-eng:p224:pc10",
+      "ai-eng:p232:pc0",
+      "ai-eng:p232:pc1",
+      "ai-eng:p232:pc2",
+      "ai-eng:p335:pc6",
+      "ai-eng:p335:pc9",
+      "ai-eng:p473:pc16",
+      "ai-eng:p473:pc17"
+    ],
+    "support_spans": [
+      "159 Evaluation Criteria 160 Domain-Specific Capability 161 Generation Capability 163 Instruction-Following Capability 172 Cost and Latency 177 Model Selection 179 Model Selection Workflow 179 Model Build Versus Buy 181 Navigate Public Benchmarks 191 Design Your Evaluation Pipeline 200 Step 1.",
+      "This book dedicates two chapters, Chapters 3 and 4, to explore different evaluation methods and how to use them to create a reliable and systematic evaluation pipeline for your application.",
+      "The first step toward systematic AI engineering is to establish a solid evaluation pipeline to help detect failures and unexpected changes.",
+      "Figuring out how to build a reliable evaluation pipeline to evaluate open-ended applications is the topic of the next chapter.",
+      "The last part discusses developing an evaluation pipeline that can guide the develop‐ ment of your application over time.",
+      "Run experiments with your own evaluation pipeline to find the best model, again, balancing all your objectives."
+    ],
+    "confidence": 0.96
+  },
+  {
+    "canonical_id": "architecture:guardrail_service",
+    "layer": "architecture",
+    "label": "Guardrail Service",
+    "aliases": [
+      "guardrail",
+      "moderation service"
+    ],
+    "kind": "control",
+    "description": "Canonical control grounded in book evidence: For example, a guardrail can check if an output contains PII or toxic informa‐ tion.",
+    "chapter_refs": [
+      {
+        "book": "AI Engineering",
+        "chapter": 5,
+        "chapter_title": "Prompt Engineering",
+        "section": "Summary",
+        "page_number": 275
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "AI Engineering Architecture",
+        "page_number": 473
+      }
+    ],
+    "source_chunk_ids": [
+      "ai-eng:p275:pc0",
+      "ai-eng:p473:pc5",
+      "ai-eng:p473:pc6",
+      "ai-eng:p473:pc7"
+    ],
+    "support_spans": [
+      "For example, a guardrail can check if an output contains PII or toxic informa‐ tion.",
+      "454 | Chapter 10: AI Engineering Architecture and User Feedback Guardrail implementation Guardrails come with trade-offs.",
+      "Guardrail solutions that you can use out of the box include Meta’s Purple Llama, NVIDIA’s NeMo Guard‐ rails, Azure’s PyRIT, Azure’s AI content filters, the Perspective API, and OpenAI’s content moderation API.",
+      "gateways also provide guardrail functionalities, as discussed in the next section."
+    ],
+    "confidence": 0.81
+  },
+  {
+    "canonical_id": "architecture:llm_provider",
+    "layer": "architecture",
+    "label": "LLM Provider",
+    "aliases": [
+      "foundation model API",
+      "model API",
+      "model APIs"
+    ],
+    "kind": "external",
+    "description": "Canonical external grounded in book evidence: If you’re using a model API—i.e., someone else hosts your model for you—this API will likely take care of inference optimization for you.",
+    "chapter_refs": [
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "The AI Engineering Stack",
+        "page_number": 59
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 2,
+        "chapter_title": "Understanding Foundation Models",
+        "section": "Sampling",
+        "page_number": 112
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 3,
+        "chapter_title": "Evaluation Methodology",
+        "section": "Summary",
+        "page_number": 180
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 4,
+        "chapter_title": "Evaluate AI Systems",
+        "section": "Evaluation Criteria",
+        "page_number": 184
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 4,
+        "chapter_title": "Evaluate AI Systems",
+        "section": "Model Selection",
+        "page_number": 203
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 4,
+        "chapter_title": "Evaluate AI Systems",
+        "section": "Summary",
+        "page_number": 232
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 5,
+        "chapter_title": "Prompt Engineering",
+        "section": "Introduction to Prompting",
+        "page_number": 236
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 5,
+        "chapter_title": "Prompt Engineering",
+        "section": "Prompt Engineering Best Practices",
+        "page_number": 244
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "RAG",
+        "page_number": 277
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "Agents",
+        "page_number": 299
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 9,
+        "chapter_title": "Inference Optimization",
+        "section": "Understanding Inference Optimization",
+        "page_number": 430
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 9,
+        "chapter_title": "Inference Optimization",
+        "section": "Inference Optimization",
+        "page_number": 450
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 9,
+        "chapter_title": "Inference Optimization",
+        "section": "Summary",
+        "page_number": 471
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "AI Engineering Architecture",
+        "page_number": 473
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "Conventions Used in This Book",
+        "page_number": 19
+      }
+    ],
+    "source_chunk_ids": [
+      "ai-eng:p19:pc0",
+      "ai-eng:p59:pc0",
+      "ai-eng:p112:pc7",
+      "ai-eng:p112:pc19",
+      "ai-eng:p180:pc2",
+      "ai-eng:p184:pc22",
+      "ai-eng:p184:pc23",
+      "ai-eng:p203:pc2",
+      "ai-eng:p203:pc4",
+      "ai-eng:p203:pc5",
+      "ai-eng:p203:pc6",
+      "ai-eng:p203:pc7",
+      "ai-eng:p203:pc11",
+      "ai-eng:p203:pc14",
+      "ai-eng:p232:pc1",
+      "ai-eng:p236:pc4",
+      "ai-eng:p236:pc7",
+      "ai-eng:p244:pc2",
+      "ai-eng:p244:pc6",
+      "ai-eng:p244:pc11",
+      "ai-eng:p277:pc14",
+      "ai-eng:p277:pc15",
+      "ai-eng:p299:pc16",
+      "ai-eng:p430:pc1",
+      "ai-eng:p450:pc2",
+      "ai-eng:p450:pc17",
+      "ai-eng:p450:pc18",
+      "ai-eng:p471:pc1",
+      "ai-eng:p473:pc0",
+      "ai-eng:p473:pc1",
+      "ai-eng:p473:pc2",
+      "ai-eng:p473:pc3",
+      "ai-eng:p473:pc7",
+      "ai-eng:p473:pc9",
+      "ai-eng:p473:pc11",
+      "ai-eng:p473:pc14",
+      "ai-eng:p473:pc21"
+    ],
+    "support_spans": [
+      "If you’re using a model API—i.e., someone else hosts your model for you—this API will likely take care of inference optimization for you.",
+      "For example, as model providers converge to the same API, it’s becoming easier to swap one model API for another.",
+      "28 Paid model APIs often charge per number of output tokens.",
+      "However, if you use a 106 | Chapter 2: Understanding Foundation Models model API provider like OpenAI or Google, it’s up to these providers to give you any control.",
+      "A question many teams will need to visit over and over again is whether to host their own models or to use a model API.",
+      "If you use model APIs, they typically charge by tokens."
+    ],
+    "confidence": 0.96
+  },
+  {
+    "canonical_id": "architecture:log_store",
+    "layer": "architecture",
+    "label": "Log Store",
+    "aliases": [
+      "logs",
+      "traces"
+    ],
+    "kind": "datastore",
+    "description": "Canonical datastore grounded in book evidence: This section traces the key breakthroughs that enabled the evolution from language models to AI engineering.",
+    "chapter_refs": [
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "The Rise of AI Engineering",
+        "page_number": 26
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "Foundation Model Use Cases",
+        "page_number": 40
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 8,
+        "chapter_title": "Dataset Engineering",
+        "section": "Data Augmentation and Synthesis",
+        "page_number": 404
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "AI Engineering Architecture",
+        "page_number": 473
+      }
+    ],
+    "source_chunk_ids": [
+      "ai-eng:p26:pc0",
+      "ai-eng:p40:pc12",
+      "ai-eng:p404:pc5",
+      "ai-eng:p473:pc17",
+      "ai-eng:p473:pc20",
+      "ai-eng:p473:pc21",
+      "ai-eng:p473:pc22"
+    ],
+    "support_spans": [
+      "This section traces the key breakthroughs that enabled the evolution from language models to AI engineering.",
+      "Photos, videos, logs, and PDFs are all unstruc‐ tured or semistructured data.",
+      "Data Augmentation and Synthesis | 383 It’s common to use templates to generate documents that follow a specific structure, such as invoices, resumes, tax forms, bank statements, event agendas, product cata‐ logs, contracts, configuration files, etc.",
+      "When something goes wrong with an observable system, we should be able to figure out what went wrong by looking at the system’s logs and metrics without having to ship new code to the system.",
+      "Logs and traces Metrics are typically aggregated.",
+      "You look at the logs of events that took place around five minutes ago to figure out what happened."
+    ],
+    "confidence": 0.94
+  },
+  {
+    "canonical_id": "architecture:model_server",
+    "layer": "architecture",
+    "label": "Model Server",
+    "aliases": [
+      "inference server",
+      "model service"
+    ],
+    "kind": "service",
+    "description": "Canonical service grounded in book evidence: Many model developers are also model service providers.",
+    "chapter_refs": [
+      {
+        "book": "AI Engineering",
+        "chapter": 4,
+        "chapter_title": "Evaluate AI Systems",
+        "section": "Model Selection",
+        "page_number": 203
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 9,
+        "chapter_title": "Inference Optimization",
+        "section": "Understanding Inference Optimization",
+        "page_number": 430
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "AI Engineering Architecture",
+        "page_number": 473
+      }
+    ],
+    "source_chunk_ids": [
+      "ai-eng:p203:pc5",
+      "ai-eng:p430:pc0",
+      "ai-eng:p430:pc1",
+      "ai-eng:p430:pc4",
+      "ai-eng:p430:pc6",
+      "ai-eng:p473:pc1"
+    ],
+    "support_spans": [
+      "Many model developers are also model service providers.",
+      "Inference Overview In production, the component that runs model inference is called an inference server.",
+      "Similarly, an inference server should be designed to address the computational bottlenecks of the inference workloads it serves.",
+      "The factors that affect the amount of prefilling and decoding computation in an LLM inference server, and therefore its bottlenecks, include context length, output length, and request batching strategies.",
+      "Let’s say that your inference server can serve only a maxi‐ mum of X requests/second without latency degradation, you have to serve Y requests/second, and Y is larger than X.",
+      "Building an inference server for self-hosted models is discussed in Chapter 9."
+    ],
+    "confidence": 0.905
+  },
+  {
+    "canonical_id": "architecture:monitoring_service",
+    "layer": "architecture",
+    "label": "Monitoring Service",
+    "aliases": [
+      "monitoring",
+      "observability"
+    ],
+    "kind": "control",
+    "description": "Canonical control grounded in book evidence: Add Agent Patterns 463 Monitoring and Observability 465 AI Pipeline Orchestration 472",
+    "chapter_refs": [
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "The AI Engineering Stack",
+        "page_number": 59
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 4,
+        "chapter_title": "Evaluate AI Systems",
+        "section": "Model Selection",
+        "page_number": 203
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 5,
+        "chapter_title": "Prompt Engineering",
+        "section": "Prompt Engineering Best Practices",
+        "page_number": 244
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 7,
+        "chapter_title": "Finetuning",
+        "section": "When to Finetune",
+        "page_number": 335
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 9,
+        "chapter_title": "Inference Optimization",
+        "section": "Understanding Inference Optimization",
+        "page_number": 430
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "AI Engineering Architecture",
+        "page_number": 473
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "Summary",
+        "page_number": 516
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "Building Applications with Foundation Models",
+        "page_number": 5
+      }
+    ],
+    "source_chunk_ids": [
+      "ai-eng:p5:pc3",
+      "ai-eng:p5:pc4",
+      "ai-eng:p59:pc2",
+      "ai-eng:p59:pc3",
+      "ai-eng:p203:pc2",
+      "ai-eng:p244:pc6",
+      "ai-eng:p335:pc3",
+      "ai-eng:p430:pc11",
+      "ai-eng:p473:pc1",
+      "ai-eng:p473:pc15",
+      "ai-eng:p473:pc16",
+      "ai-eng:p473:pc17",
+      "ai-eng:p473:pc18",
+      "ai-eng:p473:pc20",
+      "ai-eng:p473:pc24",
+      "ai-eng:p516:pc1"
+    ],
+    "support_spans": [
+      "Add Agent Patterns 463 Monitoring and Observability 465 AI Pipeline Orchestration 472",
+      "Add Agent Patterns 463 Monitoring and Observability 465 AI Pipeline Orchestration 472 User Feedback 474 Extracting Conversational Feedback 475 Feedback Design 480 Feedback Limitations 490 Summary 492 Epilogue.",
+      "Infrastructure At the bottom is the stack is infrastructure, which includes tooling for model serving, managing data and compute, and monitoring.",
+      "Even though models and applications have changed, the core infrastruc‐ tural needs—resource management, serving, monitoring, etc.—remain the same.",
+      "Chapter 10 discusses monitoring and collecting user feedback.",
+      "Prompt decomposition not only enhances performance but also offers several additional benefits: Monitoring You can monitor not just the final output but also all intermediate outputs."
+    ],
+    "confidence": 0.96
+  },
+  {
+    "canonical_id": "architecture:orchestrator",
+    "layer": "architecture",
+    "label": "Orchestrator",
+    "aliases": [
+      "orchestration"
+    ],
+    "kind": "service",
+    "description": "Canonical service grounded in book evidence: Add Agent Patterns 463 Monitoring and Observability 465 AI Pipeline Orchestration 472",
+    "chapter_refs": [
+      {
+        "book": "AI Engineering",
+        "chapter": 3,
+        "chapter_title": "Evaluation Methodology",
+        "section": "Challenges of Evaluating Foundation Models",
+        "page_number": 138
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "AI Engineering Architecture",
+        "page_number": 473
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "User Feedback",
+        "page_number": 498
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "Building Applications with Foundation Models",
+        "page_number": 5
+      }
+    ],
+    "source_chunk_ids": [
+      "ai-eng:p5:pc3",
+      "ai-eng:p5:pc4",
+      "ai-eng:p138:pc3",
+      "ai-eng:p138:pc4",
+      "ai-eng:p473:pc1",
+      "ai-eng:p473:pc23",
+      "ai-eng:p473:pc24",
+      "ai-eng:p473:pc25",
+      "ai-eng:p498:pc0"
+    ],
+    "support_spans": [
+      "Add Agent Patterns 463 Monitoring and Observability 465 AI Pipeline Orchestration 472",
+      "Add Agent Patterns 463 Monitoring and Observability 465 AI Pipeline Orchestration 472 User Feedback 474 Extracting Conversational Feedback 475 Feedback Design 480 Feedback Limitations 490 Summary 492 Epilogue.",
+      "To further demonstrate how the investment in evaluation lags behind other areas in the AI space, the number of tools for evaluation is small compared to the number of tools for modeling and training and AI orchestration, as shown in Figure 3-3.",
+      "the AI space, the number of tools for evaluation is small compared to the number of tools for modeling and training and AI orchestration, as shown in Figure 3-3.",
+      "Orchestration, chaining all these components together, will be discussed after that.",
+      "AI Pipeline Orchestration An AI application can get fairly complex, consisting of multiple models, retrieving data from many databases, and having access to a wide range of tools."
+    ],
+    "confidence": 0.96
+  },
+  {
+    "canonical_id": "architecture:reranker_service",
+    "layer": "architecture",
+    "label": "Reranker Service",
+    "aliases": [
+      "reranker"
+    ],
+    "kind": "service",
+    "description": "Canonical service grounded in book evidence: Real-world semantic retrieval systems might contain other components, such as a reranker to rerank all retrieved candidates, and caches to reduce latency.8 With embedding-based...",
+    "chapter_refs": [
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "RAG",
+        "page_number": 277
+      }
+    ],
+    "source_chunk_ids": [
+      "ai-eng:p277:pc9"
+    ],
+    "support_spans": [
+      "Real-world semantic retrieval systems might contain other components, such as a reranker to rerank all retrieved candidates, and caches to reduce latency.8 With embedding-based retrieval, we again encounter embeddings, which are dis‐ cussed in Chapter 3."
+    ],
+    "confidence": 0.68
+  },
+  {
+    "canonical_id": "architecture:retriever_service",
+    "layer": "architecture",
+    "label": "Retriever Service",
+    "aliases": [
+      "retriever"
+    ],
+    "kind": "service",
+    "description": "Canonical service grounded in book evidence: With RAG, only the information most relevant to the query, as determined by the retriever, is retrieved and input into the model.",
+    "chapter_refs": [
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "RAG",
+        "page_number": 277
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "Agents",
+        "page_number": 299
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "Summary",
+        "page_number": 329
+      }
+    ],
+    "source_chunk_ids": [
+      "ai-eng:p277:pc1",
+      "ai-eng:p277:pc3",
+      "ai-eng:p277:pc9",
+      "ai-eng:p277:pc13",
+      "ai-eng:p277:pc14",
+      "ai-eng:p277:pc16",
+      "ai-eng:p277:pc17",
+      "ai-eng:p277:pc20",
+      "ai-eng:p277:pc22",
+      "ai-eng:p277:pc23",
+      "ai-eng:p277:pc24",
+      "ai-eng:p299:pc4",
+      "ai-eng:p329:pc0"
+    ],
+    "support_spans": [
+      "With RAG, only the information most relevant to the query, as determined by the retriever, is retrieved and input into the model.",
+      "RAG Architecture A RAG system has two components: a retriever that retrieves information from external memory sources and a generator that generates a response based on the retrieved information.",
+      "Retriever: fetch k data chunks whose embeddings are closest to the query embed‐ ding, as determined by the retriever.",
+      "You can finetune the embedding model and the retriever, either separately, together, or in conjunction with the generative model.",
+      "The quality of a retriever should also be evaluated in the context of the whole RAG system.",
+      "First, a cheap, less precise retriever, such as a term-based system, fetches candidates."
+    ],
+    "confidence": 0.925
+  },
+  {
+    "canonical_id": "architecture:tool_service",
+    "layer": "architecture",
+    "label": "Tool Service",
+    "aliases": [
+      "external tool",
+      "tools"
+    ],
+    "kind": "external",
+    "description": "Canonical external grounded in book evidence: Unlike other books that focus on tools or current trends that are constantly changing, Chip delivers timeless foundational knowledge.",
+    "chapter_refs": [
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "The Rise of AI Engineering",
+        "page_number": 26
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "Foundation Model Use Cases",
+        "page_number": 40
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "Planning AI Applications",
+        "page_number": 52
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "The AI Engineering Stack",
+        "page_number": 59
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "Summary",
+        "page_number": 71
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 2,
+        "chapter_title": "Understanding Foundation Models",
+        "section": "Sampling",
+        "page_number": 112
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 2,
+        "chapter_title": "Understanding Foundation Models",
+        "section": "Summary",
+        "page_number": 135
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 3,
+        "chapter_title": "Evaluation Methodology",
+        "section": "Challenges of Evaluating Foundation Models",
+        "page_number": 138
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 3,
+        "chapter_title": "Evaluation Methodology",
+        "section": "Understanding Language Modeling Metrics",
+        "page_number": 142
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 3,
+        "chapter_title": "Evaluation Methodology",
+        "section": "AI as a Judge",
+        "page_number": 160
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 4,
+        "chapter_title": "Evaluate AI Systems",
+        "section": "Evaluation Criteria",
+        "page_number": 184
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 4,
+        "chapter_title": "Evaluate AI Systems",
+        "section": "Model Selection",
+        "page_number": 203
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 5,
+        "chapter_title": "Prompt Engineering",
+        "section": "Prompt Engineering Best Practices",
+        "page_number": 244
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 5,
+        "chapter_title": "Prompt Engineering",
+        "section": "Defensive Prompt Engineering",
+        "page_number": 259
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "RAG",
+        "page_number": 277
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "Agents",
+        "page_number": 299
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "Memory",
+        "page_number": 324
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "Summary",
+        "page_number": 329
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 7,
+        "chapter_title": "Finetuning",
+        "section": "Finetuning Techniques",
+        "page_number": 356
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 7,
+        "chapter_title": "Finetuning",
+        "section": "Summary",
+        "page_number": 385
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 8,
+        "chapter_title": "Dataset Engineering",
+        "section": "Data Curation",
+        "page_number": 389
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 8,
+        "chapter_title": "Dataset Engineering",
+        "section": "Data Augmentation and Synthesis",
+        "page_number": 404
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 8,
+        "chapter_title": "Dataset Engineering",
+        "section": "Data Processing",
+        "page_number": 420
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 9,
+        "chapter_title": "Inference Optimization",
+        "section": "Understanding Inference Optimization",
+        "page_number": 430
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 9,
+        "chapter_title": "Inference Optimization",
+        "section": "Inference Optimization",
+        "page_number": 450
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "AI Engineering Architecture",
+        "page_number": 473
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "Summary",
+        "page_number": 516
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "Chip Huyen",
+        "page_number": 1
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "Building Applications with Foundation Models",
+        "page_number": 5
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "What This Book Is About",
+        "page_number": 14
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "What This Book Is Not",
+        "page_number": 16
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "Using Code Examples",
+        "page_number": 20
+      }
+    ],
+    "source_chunk_ids": [
+      "ai-eng:p1:pc1",
+      "ai-eng:p5:pc3",
+      "ai-eng:p14:pc1",
+      "ai-eng:p14:pc2",
+      "ai-eng:p16:pc0",
+      "ai-eng:p20:pc0",
+      "ai-eng:p26:pc12",
+      "ai-eng:p26:pc14",
+      "ai-eng:p40:pc3",
+      "ai-eng:p40:pc4",
+      "ai-eng:p40:pc5",
+      "ai-eng:p40:pc6",
+      "ai-eng:p40:pc8",
+      "ai-eng:p52:pc0",
+      "ai-eng:p59:pc1",
+      "ai-eng:p59:pc6",
+      "ai-eng:p59:pc12",
+      "ai-eng:p59:pc13",
+      "ai-eng:p59:pc14",
+      "ai-eng:p71:pc1",
+      "ai-eng:p112:pc12",
+      "ai-eng:p112:pc13",
+      "ai-eng:p112:pc15",
+      "ai-eng:p135:pc2",
+      "ai-eng:p138:pc3",
+      "ai-eng:p138:pc4",
+      "ai-eng:p142:pc0",
+      "ai-eng:p160:pc3",
+      "ai-eng:p160:pc6",
+      "ai-eng:p160:pc7",
+      "ai-eng:p184:pc13",
+      "ai-eng:p184:pc14",
+      "ai-eng:p203:pc10",
+      "ai-eng:p203:pc13",
+      "ai-eng:p244:pc3",
+      "ai-eng:p244:pc9",
+      "ai-eng:p244:pc10",
+      "ai-eng:p244:pc11",
+      "ai-eng:p244:pc12",
+      "ai-eng:p259:pc0",
+      "ai-eng:p259:pc7",
+      "ai-eng:p259:pc13",
+      "ai-eng:p259:pc16",
+      "ai-eng:p277:pc0",
+      "ai-eng:p299:pc0",
+      "ai-eng:p299:pc1",
+      "ai-eng:p299:pc3",
+      "ai-eng:p299:pc4",
+      "ai-eng:p299:pc5",
+      "ai-eng:p299:pc6",
+      "ai-eng:p299:pc7",
+      "ai-eng:p299:pc8",
+      "ai-eng:p299:pc10",
+      "ai-eng:p299:pc14",
+      "ai-eng:p299:pc15",
+      "ai-eng:p299:pc16",
+      "ai-eng:p299:pc21",
+      "ai-eng:p299:pc22",
+      "ai-eng:p299:pc23",
+      "ai-eng:p299:pc25",
+      "ai-eng:p299:pc26",
+      "ai-eng:p324:pc0",
+      "ai-eng:p324:pc2",
+      "ai-eng:p329:pc0",
+      "ai-eng:p329:pc1",
+      "ai-eng:p356:pc21",
+      "ai-eng:p385:pc3",
+      "ai-eng:p389:pc1",
+      "ai-eng:p389:pc2",
+      "ai-eng:p389:pc4",
+      "ai-eng:p389:pc16",
+      "ai-eng:p389:pc17",
+      "ai-eng:p404:pc8",
+      "ai-eng:p420:pc2",
+      "ai-eng:p430:pc2",
+      "ai-eng:p430:pc3",
+      "ai-eng:p450:pc13",
+      "ai-eng:p473:pc0",
+      "ai-eng:p473:pc1",
+      "ai-eng:p473:pc2",
+      "ai-eng:p473:pc3",
+      "ai-eng:p473:pc11",
+      "ai-eng:p473:pc21",
+      "ai-eng:p473:pc23",
+      "ai-eng:p473:pc24",
+      "ai-eng:p473:pc25",
+      "ai-eng:p516:pc1"
+    ],
+    "support_spans": [
+      "Unlike other books that focus on tools or current trends that are constantly changing, Chip delivers timeless foundational knowledge.",
+      "RAG 253 RAG Architecture 256 Retrieval Algorithms 257 Retrieval Optimization 267 Table of Contents | vii RAG Beyond Texts 273 Agents 275 Agent Overview 276 Tools 278 Planning 281 Agent Failure Modes and Evaluation 298 Memory 300 Summary 305 7.",
+      "Tools become outdated quickly, but fundamentals should last longer.3 Reading AI Engineering (AIE) with Designing Machine Learning Systems (DMLS) AIE can be a companion to DMLS.",
+      "3 Teaching a course on how to use TensorFlow in 2017 taught me a painful lesson about how quickly tools and tutorials become outdated.",
+      "While it mentions specific tools and includes pseudocode snippets to illustrate certain concepts, it doesn’t teach you how to use a tool.",
+      "The repository contains additional resources about AI engineering, including important papers and helpful tools."
+    ],
+    "confidence": 0.96
+  },
+  {
+    "canonical_id": "architecture:user",
+    "layer": "architecture",
+    "label": "User",
+    "aliases": [
+      "human",
+      "humans",
+      "users"
+    ],
+    "kind": "actor",
+    "description": "Canonical actor grounded in book evidence: AI Engineering Architecture and User Feedback.",
+    "chapter_refs": [
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "Acknowledgments",
+        "page_number": 22
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "The Rise of AI Engineering",
+        "page_number": 26
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "Foundation Model Use Cases",
+        "page_number": 40
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "Planning AI Applications",
+        "page_number": 52
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "The AI Engineering Stack",
+        "page_number": 59
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 1,
+        "chapter_title": "Introduction to Building AI Applications with Foundation Models",
+        "section": "Summary",
+        "page_number": 71
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 2,
+        "chapter_title": "Understanding Foundation Models",
+        "section": "Training Data",
+        "page_number": 74
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 2,
+        "chapter_title": "Understanding Foundation Models",
+        "section": "Modeling",
+        "page_number": 82
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 2,
+        "chapter_title": "Understanding Foundation Models",
+        "section": "Post-Training",
+        "page_number": 102
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 2,
+        "chapter_title": "Understanding Foundation Models",
+        "section": "Sampling",
+        "page_number": 112
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 2,
+        "chapter_title": "Understanding Foundation Models",
+        "section": "Summary",
+        "page_number": 135
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 3,
+        "chapter_title": "Evaluation Methodology",
+        "section": "Challenges of Evaluating Foundation Models",
+        "page_number": 138
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 3,
+        "chapter_title": "Evaluation Methodology",
+        "section": "Understanding Language Modeling Metrics",
+        "page_number": 142
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 3,
+        "chapter_title": "Evaluation Methodology",
+        "section": "Exact Evaluation",
+        "page_number": 149
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 3,
+        "chapter_title": "Evaluation Methodology",
+        "section": "AI as a Judge",
+        "page_number": 160
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 3,
+        "chapter_title": "Evaluation Methodology",
+        "section": "Ranking Models with Comparative Evaluation",
+        "page_number": 172
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 3,
+        "chapter_title": "Evaluation Methodology",
+        "section": "Summary",
+        "page_number": 180
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 4,
+        "chapter_title": "Evaluate AI Systems",
+        "section": "Evaluation Criteria",
+        "page_number": 184
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 4,
+        "chapter_title": "Evaluate AI Systems",
+        "section": "Model Selection",
+        "page_number": 203
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 4,
+        "chapter_title": "Evaluate AI Systems",
+        "section": "Design Your Evaluation Pipeline",
+        "page_number": 224
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 4,
+        "chapter_title": "Evaluate AI Systems",
+        "section": "Summary",
+        "page_number": 232
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 5,
+        "chapter_title": "Prompt Engineering",
+        "section": "Introduction to Prompting",
+        "page_number": 236
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 5,
+        "chapter_title": "Prompt Engineering",
+        "section": "Prompt Engineering Best Practices",
+        "page_number": 244
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 5,
+        "chapter_title": "Prompt Engineering",
+        "section": "Defensive Prompt Engineering",
+        "page_number": 259
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 5,
+        "chapter_title": "Prompt Engineering",
+        "section": "Summary",
+        "page_number": 275
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "RAG",
+        "page_number": 277
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "Agents",
+        "page_number": 299
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "Memory",
+        "page_number": 324
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 7,
+        "chapter_title": "Finetuning",
+        "section": "Finetuning Overview",
+        "page_number": 332
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 7,
+        "chapter_title": "Finetuning",
+        "section": "When to Finetune",
+        "page_number": 335
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 7,
+        "chapter_title": "Finetuning",
+        "section": "Finetuning Techniques",
+        "page_number": 356
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 7,
+        "chapter_title": "Finetuning",
+        "section": "Summary",
+        "page_number": 385
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 8,
+        "chapter_title": "Dataset Engineering",
+        "section": "Data Curation",
+        "page_number": 389
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 8,
+        "chapter_title": "Dataset Engineering",
+        "section": "Data Augmentation and Synthesis",
+        "page_number": 404
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 8,
+        "chapter_title": "Dataset Engineering",
+        "section": "Data Processing",
+        "page_number": 420
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 8,
+        "chapter_title": "Dataset Engineering",
+        "section": "Summary",
+        "page_number": 427
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 9,
+        "chapter_title": "Inference Optimization",
+        "section": "Understanding Inference Optimization",
+        "page_number": 430
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 9,
+        "chapter_title": "Inference Optimization",
+        "section": "Inference Optimization",
+        "page_number": 450
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "AI Engineering Architecture",
+        "page_number": 473
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "User Feedback",
+        "page_number": 498
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "Summary",
+        "page_number": 516
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "Building Applications with Foundation Models",
+        "page_number": 5
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "Navigating This Book",
+        "page_number": 18
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "Conventions Used in This Book",
+        "page_number": 19
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": null,
+        "chapter_title": null,
+        "section": "Using Code Examples",
+        "page_number": 20
+      }
+    ],
+    "source_chunk_ids": [
+      "ai-eng:p5:pc3",
+      "ai-eng:p5:pc4",
+      "ai-eng:p18:pc0",
+      "ai-eng:p19:pc0",
+      "ai-eng:p19:pc1",
+      "ai-eng:p20:pc0",
+      "ai-eng:p22:pc1",
+      "ai-eng:p26:pc3",
+      "ai-eng:p26:pc4",
+      "ai-eng:p26:pc6",
+      "ai-eng:p26:pc7",
+      "ai-eng:p26:pc8",
+      "ai-eng:p26:pc12",
+      "ai-eng:p26:pc13",
+      "ai-eng:p40:pc1",
+      "ai-eng:p40:pc4",
+      "ai-eng:p40:pc6",
+      "ai-eng:p40:pc7",
+      "ai-eng:p40:pc8",
+      "ai-eng:p40:pc9",
+      "ai-eng:p40:pc10",
+      "ai-eng:p40:pc11",
+      "ai-eng:p40:pc12",
+      "ai-eng:p52:pc0",
+      "ai-eng:p52:pc2",
+      "ai-eng:p52:pc3",
+      "ai-eng:p52:pc4",
+      "ai-eng:p52:pc5",
+      "ai-eng:p52:pc6",
+      "ai-eng:p52:pc7",
+      "ai-eng:p59:pc9",
+      "ai-eng:p59:pc12",
+      "ai-eng:p59:pc13",
+      "ai-eng:p71:pc2",
+      "ai-eng:p74:pc0",
+      "ai-eng:p82:pc14",
+      "ai-eng:p82:pc16",
+      "ai-eng:p82:pc18",
+      "ai-eng:p82:pc21",
+      "ai-eng:p82:pc22",
+      "ai-eng:p102:pc0",
+      "ai-eng:p102:pc1",
+      "ai-eng:p102:pc2",
+      "ai-eng:p102:pc3",
+      "ai-eng:p102:pc4",
+      "ai-eng:p102:pc5",
+      "ai-eng:p102:pc6",
+      "ai-eng:p102:pc7",
+      "ai-eng:p102:pc8",
+      "ai-eng:p112:pc5",
+      "ai-eng:p112:pc7",
+      "ai-eng:p112:pc8",
+      "ai-eng:p112:pc11",
+      "ai-eng:p112:pc12",
+      "ai-eng:p112:pc18",
+      "ai-eng:p112:pc19",
+      "ai-eng:p112:pc22",
+      "ai-eng:p112:pc23",
+      "ai-eng:p135:pc0",
+      "ai-eng:p135:pc1",
+      "ai-eng:p138:pc0",
+      "ai-eng:p138:pc2",
+      "ai-eng:p142:pc8",
+      "ai-eng:p149:pc3",
+      "ai-eng:p149:pc4",
+      "ai-eng:p149:pc7",
+      "ai-eng:p149:pc8",
+      "ai-eng:p149:pc11",
+      "ai-eng:p160:pc0",
+      "ai-eng:p160:pc1",
+      "ai-eng:p160:pc2",
+      "ai-eng:p160:pc3",
+      "ai-eng:p160:pc6",
+      "ai-eng:p160:pc8",
+      "ai-eng:p160:pc9",
+      "ai-eng:p160:pc10",
+      "ai-eng:p160:pc11",
+      "ai-eng:p160:pc13",
+      "ai-eng:p172:pc0",
+      "ai-eng:p172:pc1",
+      "ai-eng:p172:pc2",
+      "ai-eng:p172:pc3",
+      "ai-eng:p172:pc4",
+      "ai-eng:p172:pc6",
+      "ai-eng:p172:pc7",
+      "ai-eng:p172:pc8",
+      "ai-eng:p172:pc9",
+      "ai-eng:p180:pc0",
+      "ai-eng:p180:pc1",
+      "ai-eng:p184:pc0",
+      "ai-eng:p184:pc6",
+      "ai-eng:p184:pc8",
+      "ai-eng:p184:pc9",
+      "ai-eng:p184:pc10",
+      "ai-eng:p184:pc11",
+      "ai-eng:p184:pc12",
+      "ai-eng:p184:pc13",
+      "ai-eng:p184:pc14",
+      "ai-eng:p184:pc18",
+      "ai-eng:p184:pc19",
+      "ai-eng:p184:pc20",
+      "ai-eng:p184:pc21",
+      "ai-eng:p184:pc22",
+      "ai-eng:p184:pc23",
+      "ai-eng:p203:pc2",
+      "ai-eng:p203:pc4",
+      "ai-eng:p203:pc5",
+      "ai-eng:p203:pc7",
+      "ai-eng:p203:pc8",
+      "ai-eng:p203:pc9",
+      "ai-eng:p203:pc10",
+      "ai-eng:p203:pc12",
+      "ai-eng:p203:pc13",
+      "ai-eng:p203:pc16",
+      "ai-eng:p203:pc17",
+      "ai-eng:p203:pc24",
+      "ai-eng:p224:pc1",
+      "ai-eng:p224:pc3",
+      "ai-eng:p224:pc4",
+      "ai-eng:p224:pc5",
+      "ai-eng:p224:pc6",
+      "ai-eng:p224:pc7",
+      "ai-eng:p224:pc8",
+      "ai-eng:p232:pc0",
+      "ai-eng:p232:pc2",
+      "ai-eng:p232:pc3",
+      "ai-eng:p236:pc4",
+      "ai-eng:p236:pc5",
+      "ai-eng:p236:pc6",
+      "ai-eng:p236:pc7",
+      "ai-eng:p244:pc0",
+      "ai-eng:p244:pc1",
+      "ai-eng:p244:pc3",
+      "ai-eng:p244:pc5",
+      "ai-eng:p244:pc6",
+      "ai-eng:p244:pc7",
+      "ai-eng:p244:pc8",
+      "ai-eng:p259:pc0",
+      "ai-eng:p259:pc1",
+      "ai-eng:p259:pc2",
+      "ai-eng:p259:pc3",
+      "ai-eng:p259:pc4",
+      "ai-eng:p259:pc5",
+      "ai-eng:p259:pc6",
+      "ai-eng:p259:pc8",
+      "ai-eng:p259:pc9",
+      "ai-eng:p259:pc12",
+      "ai-eng:p259:pc13",
+      "ai-eng:p259:pc14",
+      "ai-eng:p259:pc15",
+      "ai-eng:p259:pc16",
+      "ai-eng:p275:pc0",
+      "ai-eng:p275:pc1",
+      "ai-eng:p277:pc0",
+      "ai-eng:p277:pc1",
+      "ai-eng:p277:pc3",
+      "ai-eng:p277:pc4",
+      "ai-eng:p277:pc13",
+      "ai-eng:p277:pc14",
+      "ai-eng:p277:pc20",
+      "ai-eng:p277:pc21",
+      "ai-eng:p277:pc25",
+      "ai-eng:p299:pc1",
+      "ai-eng:p299:pc2",
+      "ai-eng:p299:pc3",
+      "ai-eng:p299:pc6",
+      "ai-eng:p299:pc8",
+      "ai-eng:p299:pc10",
+      "ai-eng:p299:pc11",
+      "ai-eng:p299:pc12",
+      "ai-eng:p299:pc14",
+      "ai-eng:p299:pc15",
+      "ai-eng:p299:pc16",
+      "ai-eng:p299:pc17",
+      "ai-eng:p299:pc19",
+      "ai-eng:p299:pc21",
+      "ai-eng:p299:pc22",
+      "ai-eng:p299:pc23",
+      "ai-eng:p324:pc0",
+      "ai-eng:p324:pc1",
+      "ai-eng:p324:pc2",
+      "ai-eng:p324:pc4",
+      "ai-eng:p324:pc5",
+      "ai-eng:p332:pc0",
+      "ai-eng:p332:pc1",
+      "ai-eng:p332:pc3",
+      "ai-eng:p335:pc2",
+      "ai-eng:p356:pc4",
+      "ai-eng:p356:pc5",
+      "ai-eng:p356:pc18",
+      "ai-eng:p385:pc0",
+      "ai-eng:p389:pc1",
+      "ai-eng:p389:pc2",
+      "ai-eng:p389:pc3",
+      "ai-eng:p389:pc4",
+      "ai-eng:p389:pc5",
+      "ai-eng:p389:pc6",
+      "ai-eng:p389:pc7",
+      "ai-eng:p389:pc8",
+      "ai-eng:p389:pc9",
+      "ai-eng:p389:pc14",
+      "ai-eng:p389:pc15",
+      "ai-eng:p404:pc1",
+      "ai-eng:p404:pc2",
+      "ai-eng:p404:pc3",
+      "ai-eng:p404:pc8",
+      "ai-eng:p404:pc9",
+      "ai-eng:p404:pc11",
+      "ai-eng:p404:pc12",
+      "ai-eng:p404:pc16",
+      "ai-eng:p404:pc17",
+      "ai-eng:p404:pc18",
+      "ai-eng:p404:pc19",
+      "ai-eng:p420:pc6",
+      "ai-eng:p427:pc1",
+      "ai-eng:p427:pc2",
+      "ai-eng:p430:pc0",
+      "ai-eng:p430:pc5",
+      "ai-eng:p430:pc6",
+      "ai-eng:p430:pc7",
+      "ai-eng:p430:pc8",
+      "ai-eng:p430:pc9",
+      "ai-eng:p430:pc11",
+      "ai-eng:p430:pc13",
+      "ai-eng:p430:pc14",
+      "ai-eng:p450:pc2",
+      "ai-eng:p450:pc14",
+      "ai-eng:p450:pc15",
+      "ai-eng:p450:pc16",
+      "ai-eng:p450:pc17",
+      "ai-eng:p473:pc0",
+      "ai-eng:p473:pc1",
+      "ai-eng:p473:pc2",
+      "ai-eng:p473:pc3",
+      "ai-eng:p473:pc4",
+      "ai-eng:p473:pc5",
+      "ai-eng:p473:pc6",
+      "ai-eng:p473:pc7",
+      "ai-eng:p473:pc8",
+      "ai-eng:p473:pc9",
+      "ai-eng:p473:pc10",
+      "ai-eng:p473:pc11",
+      "ai-eng:p473:pc12",
+      "ai-eng:p473:pc13",
+      "ai-eng:p473:pc14",
+      "ai-eng:p473:pc15",
+      "ai-eng:p473:pc17",
+      "ai-eng:p473:pc18",
+      "ai-eng:p473:pc19",
+      "ai-eng:p473:pc20",
+      "ai-eng:p473:pc21",
+      "ai-eng:p473:pc22",
+      "ai-eng:p473:pc23",
+      "ai-eng:p473:pc24",
+      "ai-eng:p498:pc0",
+      "ai-eng:p498:pc1",
+      "ai-eng:p498:pc2",
+      "ai-eng:p498:pc3",
+      "ai-eng:p498:pc4",
+      "ai-eng:p498:pc5",
+      "ai-eng:p498:pc6",
+      "ai-eng:p498:pc7",
+      "ai-eng:p498:pc8",
+      "ai-eng:p498:pc9",
+      "ai-eng:p498:pc10",
+      "ai-eng:p498:pc11",
+      "ai-eng:p498:pc12",
+      "ai-eng:p498:pc13",
+      "ai-eng:p498:pc14",
+      "ai-eng:p498:pc15",
+      "ai-eng:p498:pc16",
+      "ai-eng:p498:pc17",
+      "ai-eng:p516:pc0",
+      "ai-eng:p516:pc1"
+    ],
+    "support_spans": [
+      "AI Engineering Architecture and User Feedback.",
+      "Add Agent Patterns 463 Monitoring and Observability 465 AI Pipeline Orchestration 472 User Feedback 474 Extracting Conversational Feedback 475 Feedback Design 480 Feedback Limitations 490 Summary 492 Epilogue.",
+      "Chapter 2 analyzes the making of a foundation model and the design decisions with significant impacts on downstream applications, including its training data recipe, model architectures and scales, and how the model is trained to align to human pref‐ erence.",
+      "The second part of the chapter is more product- focused, with discussions on how to design a user feedback system that helps you col‐ lect useful feedback while maintaining a good user experience.",
+      "lect useful feedback while maintaining a good user experience.",
+      "Constant width bold Shows commands or other text that should be typed literally by the user."
+    ],
+    "confidence": 0.96
+  },
+  {
+    "canonical_id": "architecture:vector_store",
+    "layer": "architecture",
+    "label": "Vector Store",
+    "aliases": [
+      "vector database",
+      "vector index"
+    ],
+    "kind": "datastore",
+    "description": "Canonical datastore grounded in book evidence: The database where the generated embeddings are stored is called a vector database.",
+    "chapter_refs": [
+      {
+        "book": "AI Engineering",
+        "chapter": 6,
+        "chapter_title": "RAG and Agents",
+        "section": "RAG",
+        "page_number": 277
+      },
+      {
+        "book": "AI Engineering",
+        "chapter": 10,
+        "chapter_title": "AI Engineering Architecture and User Feedback",
+        "section": "AI Engineering Architecture",
+        "page_number": 473
+      }
+    ],
+    "source_chunk_ids": [
+      "ai-eng:p277:pc9",
+      "ai-eng:p277:pc10",
+      "ai-eng:p277:pc12",
+      "ai-eng:p277:pc14",
+      "ai-eng:p277:pc23",
+      "ai-eng:p277:pc24",
+      "ai-eng:p473:pc2",
+      "ai-eng:p473:pc13",
+      "ai-eng:p473:pc19"
+    ],
+    "support_spans": [
+      "The database where the generated embeddings are stored is called a vector database.",
+      "vector database stores vectors.",
+      "Even though vector databases emerged as their own category with the rise of RAG, any database that can store vectors can be called a vector database.",
+      "It’s not uncommon to see a company’s vector database spending be one-fifth or even half of their spending on model APIs.",
+      "• If it’s a vector database, what embedding models and vector search algorithms does it support?",
+      "Generate CLIP embeddings for all your data, both texts and images, and store them in a vector database."
+    ],
+    "confidence": 0.95
+  }
+]

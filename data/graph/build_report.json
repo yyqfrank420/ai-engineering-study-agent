@@ -1,0 +1,14 @@
+{
+  "built_at": "2026-05-10T15:05:08.747890+00:00",
+  "source_parent_docs": "data/faiss/parent_docs.pkl",
+  "parent_chunk_count": 603,
+  "node_candidate_count": 3280,
+  "verified_node_candidate_count": 3280,
+  "canonical_concept_count": 53,
+  "canonical_architecture_count": 16,
+  "edge_candidate_count": 280,
+  "verified_edge_candidate_count": 259,
+  "canonical_edge_count": 64,
+  "relation_count": 19,
+  "verifier": "deterministic-source-span-and-registry"
+}

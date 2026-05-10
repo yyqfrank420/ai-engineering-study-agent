@@ -11,6 +11,16 @@ def _dump_metadata(metadata: dict | None) -> str | None:
     return json.dumps(metadata, sort_keys=True)
 
 
+def _load_metadata(value: str | None) -> dict:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _list_recent(table: str, columns: str, *, since_epoch: float, user_id: str | None = None) -> list[dict]:
     """Query recent rows from a telemetry table, optionally filtered by user."""
     where = "created_at_epoch >= ?"
@@ -66,7 +76,10 @@ _HTTP_LOG_COLUMNS = (
 
 
 def list_recent_http_request_logs(*, since_epoch: float, user_id: str | None = None) -> list[dict]:
-    return _list_recent("http_request_logs", _HTTP_LOG_COLUMNS, since_epoch=since_epoch, user_id=user_id)
+    rows = _list_recent("http_request_logs", _HTTP_LOG_COLUMNS, since_epoch=since_epoch, user_id=user_id)
+    for row in rows:
+        row["metadata"] = _load_metadata(row.pop("metadata_json", None))
+    return rows
 
 
 def record_llm_telemetry(
@@ -117,4 +130,7 @@ _LLM_TELEMETRY_COLUMNS = (
 
 
 def list_recent_llm_telemetry(*, since_epoch: float, user_id: str | None = None) -> list[dict]:
-    return _list_recent("llm_telemetry", _LLM_TELEMETRY_COLUMNS, since_epoch=since_epoch, user_id=user_id)
+    rows = _list_recent("llm_telemetry", _LLM_TELEMETRY_COLUMNS, since_epoch=since_epoch, user_id=user_id)
+    for row in rows:
+        row["metadata"] = _load_metadata(row.pop("metadata_json", None))
+    return rows

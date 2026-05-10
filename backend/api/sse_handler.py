@@ -31,6 +31,7 @@ from agent.tools.graph_worker_tools.generate_graph_tool import generate_graph
 from agent.tools.rag_worker_tools.get_section_tool import make_get_section_tool
 from agent.tools.rag_worker_tools.rag_search_tool import make_rag_search_tool
 from config import settings
+from observability import change_active_chat_streams, record_agent_duration, record_cancel, record_timeout
 from storage import message_store, runtime_state_store, thread_store
 from storage.profile_store import upsert_profile
 
@@ -49,6 +50,7 @@ class ChatRequest(BaseModel):
     complexity: str = "auto"
     graph_mode: str = "auto"
     research_enabled: bool = False
+    client_request_id: str | None = None
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -72,6 +74,7 @@ class NodeSelectedRequest(BaseModel):
     node_id: str
     title: str
     description: str
+    client_request_id: str | None = None
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -95,6 +98,10 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
     upsert_profile(user_id, user["email"] or f"{user_id}@unknown.local")
     thread_id = body.thread_id
     content = body.content
+    request_state = getattr(request, "state", None)
+    if request_state is not None:
+        request_state.thread_id = thread_id
+        request_state.client_request_id = body.client_request_id
     thread = thread_store.get_thread(user_id, thread_id)
     if thread is None:
         return sse_error("Thread not found")
@@ -114,11 +121,11 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
     if limit_error:
         return sse_error(limit_error)
 
-    if not check_prompt_injection(content):
-        return sse_error("Message blocked by security filter")
-
     if not knowledge_base_ready(request):
         return sse_error("Knowledge base is still loading. Please try again in a moment.")
+
+    if not check_prompt_injection(content):
+        return sse_error("Message blocked by security filter")
 
     # ── Build tools bound to the loaded FAISS index ────────────────────────────
     rag_search_tool  = make_rag_search_tool(request.app.state.vectorstore, request.app.state.parent_docs)
@@ -133,7 +140,8 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
         queue: asyncio.Queue[dict] = asyncio.Queue()
         done_sent = False
 
-        request_id = str(uuid.uuid4())
+        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        started_at = time.perf_counter()
 
         async def send(event: dict) -> None:
             nonlocal done_sent
@@ -173,6 +181,7 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
             "user_id":           user_id,
             "user_email":        user["email"] or f"{user_id}@unknown.local",
             "request_id":        request_id,
+            "client_request_id": body.client_request_id,
             "user_message":      content,
             "history":           history,
             "complexity":        body.complexity,
@@ -192,6 +201,7 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
         }
 
         agent_task = asyncio.create_task(run_agent(state, rag_tools, graph_tools, node_detail_tools))
+        change_active_chat_streams(1)
 
         try:
             # Drain queue until agent finishes AND queue is empty.
@@ -205,22 +215,30 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
                 except asyncio.TimeoutError:
                     if await request.is_disconnected():
                         agent_task.cancel()
+                        record_cancel()
                         return
                     if agent_task.done() and queue.empty():
                         break
                     elapsed = asyncio.get_event_loop().time() - loop_start
                     if elapsed > settings.agent_timeout_s:
                         agent_task.cancel()
+                        record_timeout()
                         yield sse({"type": "error", "content": "Response timed out — please try again"})
                         yield sse({"type": "done"})
                         return
         except asyncio.CancelledError:
             agent_task.cancel()
+            record_cancel()
             raise
         finally:
+            change_active_chat_streams(-1)
             if agent_task.cancelled():
                 with suppress(asyncio.CancelledError):
                     await agent_task
+            record_agent_duration(
+                max(1, int((time.perf_counter() - started_at) * 1000)),
+                route="/api/chat",
+            )
 
         # Surface any unhandled agent exception as an SSE error event
         if not agent_task.cancelled():
@@ -273,7 +291,7 @@ async def use_search_tool_endpoint(body: SearchToolRequest, user=Depends(get_cur
 
 
 @router.post("/node-selected")
-async def node_selected_endpoint(body: NodeSelectedRequest, user=Depends(get_current_user)):
+async def node_selected_endpoint(body: NodeSelectedRequest, request: Request, user=Depends(get_current_user)):
     """
     Generate 3 suggested follow-up questions for a clicked graph node.
     Streams a single suggested_questions event then a done event.
@@ -281,6 +299,8 @@ async def node_selected_endpoint(body: NodeSelectedRequest, user=Depends(get_cur
     user_id = user["id"]
     upsert_profile(user_id, user["email"] or f"{user_id}@unknown.local")
     thread_id = body.thread_id
+    request.state.thread_id = thread_id
+    request.state.client_request_id = body.client_request_id
     node_title = body.title
     node_description = body.description
     thread = thread_store.get_thread(user_id, thread_id)

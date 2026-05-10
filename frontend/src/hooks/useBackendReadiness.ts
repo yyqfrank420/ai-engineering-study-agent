@@ -1,10 +1,22 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { AuthSession } from '../types';
+import { trackEvent } from '../services/analytics';
 import { prepareBackend } from '../services/api';
 
 export type BackendReadiness = 'unknown' | 'preparing' | 'ready' | 'error';
 
-const PREPARE_BYPASS = import.meta.env.VITE_DEV_BYPASS_AUTH === 'true' || import.meta.env.DEV;
+const IS_TEST_ENV =
+  import.meta.env.MODE === 'test' ||
+  import.meta.env.VITEST === 'true' ||
+  (typeof navigator !== 'undefined' && navigator.userAgent.includes('jsdom'));
+
+const PREPARE_BYPASS =
+  !IS_TEST_ENV &&
+  (
+    import.meta.env.VITE_DEV_BYPASS_AUTH === 'true' ||
+    import.meta.env.DEV
+  );
+const DEFAULT_READINESS: BackendReadiness = PREPARE_BYPASS ? 'ready' : 'unknown';
 
 // Messages for each startup step
 const STEP_MESSAGES: Record<string, string> = {
@@ -22,38 +34,29 @@ const INDEX_ROTATION = [
 ];
 
 export function useBackendReadiness(authSession: AuthSession | null) {
-  const [backendReadiness, setBackendReadiness] = useState<BackendReadiness>(
-    PREPARE_BYPASS ? 'ready' : 'unknown',
-  );
-  const [prepareMessage, setPrepareMessage] = useState<string | null>(null);
+  const [readinessState, setReadinessState] = useState<{
+    userId: string | null;
+    readiness: BackendReadiness;
+    message: string | null;
+  }>({
+    userId: null,
+    readiness: DEFAULT_READINESS,
+    message: null,
+  });
   const preparingForUserRef = useRef<string | null>(null);
-  const activeUserIdRef = useRef<string | null>(null);
   const rotationIndexRef = useRef(0);
 
-  useEffect(() => {
-    if (!authSession) {
-      activeUserIdRef.current = null;
-      setBackendReadiness(PREPARE_BYPASS ? 'ready' : 'unknown');
-      setPrepareMessage(null);
-      preparingForUserRef.current = null;
-      return;
-    }
-
-    if (activeUserIdRef.current === authSession.user.id) {
-      return;
-    }
-    activeUserIdRef.current = authSession.user.id;
-    preparingForUserRef.current = null;
-    setBackendReadiness(PREPARE_BYPASS ? 'ready' : 'unknown');
-    setPrepareMessage(null);
-  }, [authSession]);
+  const stateBelongsToUser = !!authSession && readinessState.userId === authSession.user.id;
+  const backendReadiness = stateBelongsToUser ? readinessState.readiness : DEFAULT_READINESS;
+  const prepareMessage = stateBelongsToUser ? readinessState.message : null;
 
   const prepareBackendNow = useCallback(async () => {
     if (!authSession) return;
-    if (preparingForUserRef.current === authSession.user.id) return;
-    preparingForUserRef.current = authSession.user.id;
-    setBackendReadiness('preparing');
-    setPrepareMessage('Waking up backend…');
+    const userId = authSession.user.id;
+    if (preparingForUserRef.current === userId) return;
+    preparingForUserRef.current = userId;
+    setReadinessState({ userId, readiness: 'preparing', message: 'Waking up backend…' });
+    void trackEvent('prepare_clicked', { backend_readiness_state: backendReadiness }, authSession);
 
     let pollInterval: number | null = null;
     let rotationTimer: number | null = null;
@@ -68,19 +71,42 @@ export function useBackendReadiness(authSession: AuthSession | null) {
       }
     };
 
+    const markPrepareFailed = (err: unknown) => {
+      preparingForUserRef.current = null;
+      setReadinessState({
+        userId,
+        readiness: 'error',
+        message: err instanceof Error ? err.message : 'Backend unavailable — please reload.',
+      });
+      void trackEvent(
+        'prepare_failed',
+        {
+          backend_readiness_state: 'error',
+          error_code: err instanceof Error ? err.message : 'prepare_failed',
+        },
+        authSession,
+      );
+      cleanup();
+    };
+
     // Poll /api/prepare to get current step and rotate messages if on "index" step
     const pollPrepare = async () => {
       try {
         const result = await prepareBackend();
         if (result.status === 'ready') {
-          setBackendReadiness('ready');
-          setPrepareMessage(null);
+          preparingForUserRef.current = null;
+          setReadinessState({ userId, readiness: 'ready', message: null });
+          void trackEvent('prepare_succeeded', { backend_readiness_state: 'ready' }, authSession);
           cleanup();
           return true; // done
         }
       } catch (err) {
         if (err instanceof Error) {
-          currentStep = (err as any).step || 'unknown';
+          const step = (err as Error & { step?: string }).step;
+          if (!step) {
+            throw err;
+          }
+          currentStep = step;
           const stepMsg = STEP_MESSAGES[currentStep];
 
           if (currentStep === 'index') {
@@ -88,7 +114,11 @@ export function useBackendReadiness(authSession: AuthSession | null) {
             if (rotationTimer === null) {
               rotationIndexRef.current = 0;
               const rotateMessage = () => {
-                setPrepareMessage(INDEX_ROTATION[rotationIndexRef.current % INDEX_ROTATION.length]);
+                setReadinessState({
+                  userId,
+                  readiness: 'preparing',
+                  message: INDEX_ROTATION[rotationIndexRef.current % INDEX_ROTATION.length],
+                });
                 rotationIndexRef.current += 1;
               };
               rotateMessage();
@@ -100,7 +130,11 @@ export function useBackendReadiness(authSession: AuthSession | null) {
               window.clearInterval(rotationTimer);
               rotationTimer = null;
             }
-            setPrepareMessage(stepMsg || 'Warming up backend…');
+            setReadinessState({
+              userId,
+              readiness: 'preparing',
+              message: stepMsg || 'Warming up backend…',
+            });
           }
         }
       }
@@ -115,25 +149,25 @@ export function useBackendReadiness(authSession: AuthSession | null) {
 
       // Poll every 500ms until ready
       pollInterval = window.setInterval(async () => {
-        if (await pollPrepare()) {
-          if (pollInterval !== null) {
-            window.clearInterval(pollInterval);
+        try {
+          if (await pollPrepare()) {
+            if (pollInterval !== null) {
+              window.clearInterval(pollInterval);
+            }
           }
+        } catch (err) {
+          markPrepareFailed(err);
         }
       }, 500);
     } catch (err) {
-      preparingForUserRef.current = null;
-      setBackendReadiness('error');
-      setPrepareMessage(err instanceof Error ? err.message : 'Backend unavailable — please reload.');
-      cleanup();
+      markPrepareFailed(err);
     }
-  }, [authSession]);
+  }, [authSession, backendReadiness]);
 
   const clearPreparedCache = useCallback(() => {
     if (!authSession) return;
     preparingForUserRef.current = null;
-    setBackendReadiness(PREPARE_BYPASS ? 'ready' : 'unknown');
-    setPrepareMessage(null);
+    setReadinessState({ userId: authSession.user.id, readiness: DEFAULT_READINESS, message: null });
   }, [authSession]);
 
   return {

@@ -98,7 +98,9 @@ export class SSEClient {
     opts?: { complexity?: ComplexityLevel; graphMode?: GraphMode; researchEnabled?: boolean },
     clientRequestId = Math.random().toString(36).slice(2),
   ): Promise<boolean> {
-    this._chatAbort = new AbortController();
+    this._chatAbort?.abort();
+    const controller = new AbortController();
+    this._chatAbort = controller;
     try {
       const response = await fetch(`${API_BASE}/api/chat`, {
         method: 'POST',
@@ -112,8 +114,9 @@ export class SSEClient {
           complexity:       opts?.complexity       ?? 'auto',
           graph_mode:       opts?.graphMode        ?? 'auto',
           research_enabled: opts?.researchEnabled  ?? false,
+          client_request_id: clientRequestId,
         }),
-        signal: this._chatAbort.signal,
+        signal: controller.signal,
       });
       return await consumeSSEStream(response, this.eventHandlers, {
         kind: 'chat',
@@ -123,7 +126,9 @@ export class SSEClient {
       if (err instanceof Error && err.name === 'AbortError') return false;
       throw err;
     } finally {
-      this._chatAbort = null;
+      if (this._chatAbort === controller) {
+        this._chatAbort = null;
+      }
     }
   }
 
@@ -156,6 +161,7 @@ export class SSEClient {
         node_id: nodeId,
         title,
         description,
+        client_request_id: clientRequestId,
       }),
     });
     return await consumeSSEStream(response, this.eventHandlers, {

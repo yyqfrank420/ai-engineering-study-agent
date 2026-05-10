@@ -20,6 +20,11 @@ class GraphNode(TypedDict):
     description: str        # 1-sentence responsibility summary (graph worker)
     tier: str | None        # "public" | "private" | None (concept graphs omit this)
     detail: str | None      # enriched book content (Node Detail Workers, Phase 3)
+    layer: NotRequired[str]
+    canonical_id: NotRequired[str]
+    confidence: NotRequired[float]
+    evidence_chunk_ids: NotRequired[list[str]]
+    book_refs: NotRequired[list[str]]
 
 
 class GraphEdge(TypedDict):
@@ -29,6 +34,10 @@ class GraphEdge(TypedDict):
     technology: str         # transport + format: "HTTPS/JSON", "gRPC/Protobuf", "Kafka"
     sync: str               # "sync" | "async"
     description: str        # 1 sentence: what data flows here
+    edge_id: NotRequired[str]
+    relation: NotRequired[str]
+    confidence: NotRequired[float]
+    supporting_chunk_ids: NotRequired[list[str]]
 
 
 class GraphStep(TypedDict):
@@ -60,6 +69,8 @@ class Chunk(TypedDict):
     chapter_title: str | None
     section: str | None
     page_number: int
+    parent_chunk_index: NotRequired[int]
+    parent_chunk_id: NotRequired[str]
 
 
 class AgentState(TypedDict):
@@ -79,6 +90,7 @@ class AgentState(TypedDict):
     # Set by Orchestrator in Phase 0: "memory" (fast path) or "search" (fan out)
     route: str
     request_id: str
+    client_request_id: str | None
 
     # ── Worker outputs ────────────────────────────────────────────────────────
     rag_chunks: list[Chunk]         # populated by RAG Worker (Phase 1)

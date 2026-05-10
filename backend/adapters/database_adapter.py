@@ -10,16 +10,26 @@ import sqlite3
 from contextlib import contextmanager
 from typing import Any
 
-import psycopg
-from psycopg.rows import dict_row
-
 from config import settings
+
+
+class _PsycopgProxy:
+    def connect(self, *args, **kwargs):
+        import psycopg as real_psycopg
+        from psycopg.rows import dict_row
+
+        kwargs.setdefault("row_factory", dict_row)
+        return real_psycopg.connect(*args, **kwargs)
+
+
+psycopg = _PsycopgProxy()
 
 POSTGRES_REQUIRED_TABLES = (
     "profiles",
     "chat_threads",
     "chat_messages",
     "request_events",
+    "product_analytics_events",
     "search_tool_requests",
     "http_request_logs",
     "llm_telemetry",
@@ -83,6 +93,22 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_request_events_user_type_created
                 ON request_events(user_id, event_type, created_at_epoch);
 
+            CREATE TABLE IF NOT EXISTS product_analytics_events (
+                id TEXT PRIMARY KEY,
+                user_id TEXT REFERENCES profiles(id),
+                anonymous_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                properties_json TEXT,
+                created_at_epoch REAL NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_product_analytics_events_created
+                ON product_analytics_events(created_at_epoch);
+            CREATE INDEX IF NOT EXISTS idx_product_analytics_events_type_created
+                ON product_analytics_events(event_type, created_at_epoch);
+            CREATE INDEX IF NOT EXISTS idx_product_analytics_events_actor_created
+                ON product_analytics_events(anonymous_id, created_at_epoch);
+
             CREATE TABLE IF NOT EXISTS search_tool_requests (
                 request_id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL REFERENCES profiles(id),
@@ -140,7 +166,7 @@ def init_db() -> None:
 @contextmanager
 def _connect():
     if settings.use_postgres:
-        conn = psycopg.connect(settings.supabase_db_url, row_factory=dict_row)
+        conn = psycopg.connect(settings.supabase_db_url)
         try:
             yield conn
             conn.commit()
@@ -188,7 +214,7 @@ def fetchone(query: str, params: tuple[Any, ...] = ()) -> dict | None:
         return dict(row) if row else None
 
 
-def _validate_postgres_schema(conn: psycopg.Connection) -> None:
+def _validate_postgres_schema(conn) -> None:
     public_tables = {
         row["tablename"]
         for row in conn.execute(

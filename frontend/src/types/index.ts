@@ -40,6 +40,10 @@ export interface GraphNode {
   lane?: 'main' | 'bottom';  // vertical swim lane: main (default) or bottom (observability/monitoring)
   detail: string | null;      // enriched book content (Node Detail Worker, async)
   book_refs?: string[];       // book citations (Node Detail Worker, async)
+  layer?: 'concept' | 'architecture';
+  canonical_id?: string;
+  confidence?: number;
+  evidence_chunk_ids?: string[];
 }
 
 export interface GraphEdge {
@@ -50,6 +54,10 @@ export interface GraphEdge {
   sync: 'sync' | 'async';    // solid line = sync, dashed line = async
   description: string;        // 1 sentence: what data flows over this connection
   type?: 'loop';              // loop = hidden feedback arc, revealed on hover of source node
+  edge_id?: string;
+  relation?: string;
+  confidence?: number;
+  supporting_chunk_ids?: string[];
 }
 
 export interface GraphStep {
@@ -253,4 +261,134 @@ export interface RetrievalNotice {
 
 export interface GraphNotice {
   message: string;
+}
+
+// ── Analytics / dashboard ───────────────────────────────────────────────────
+
+export type AnalyticsEventName =
+  | 'auth_viewed'
+  | 'otp_requested'
+  | 'otp_verified'
+  | 'google_signin_started'
+  | 'prepare_clicked'
+  | 'prepare_succeeded'
+  | 'prepare_failed'
+  | 'thread_created'
+  | 'thread_selected'
+  | 'thread_deleted'
+  | 'chat_sent'
+  | 'chat_stream_started'
+  | 'chat_stream_completed'
+  | 'chat_stream_failed'
+  | 'chat_stopped'
+  | 'node_selected'
+  | 'expand_graph_clicked'
+  | 'search_tool_requested'
+  | 'mode_changed';
+
+export interface AnalyticsEventProperties {
+  thread_id?: string;
+  client_request_id?: string;
+  complexity?: ComplexityLevel;
+  graph_mode?: GraphMode;
+  research_enabled?: boolean;
+  backend_readiness_state?: string;
+  has_selected_text_context?: boolean;
+  provider_notice_shown?: boolean;
+  error_code?: string;
+  node_id?: string;
+  node_label?: string;
+  mode?: string;
+  value?: string | number | boolean;
+  request_id?: string;
+}
+
+export interface DashboardOverviewResponse {
+  window_hours: number;
+  kpis: {
+    dau: number;
+    wau: number;
+    prepares: number;
+    chats_sent: number;
+    chats_completed: number;
+    chats_failed: number;
+    stop_rate: number;
+    search_tool_request_rate: number;
+    avg_chat_latency_ms: number | null;
+  };
+  providers: Record<string, number>;
+}
+
+export interface DashboardTrendPoint {
+  start_epoch: number;
+  label: string;
+  chat_sent: number;
+  chat_completed: number;
+  chat_failed: number;
+  avg_chat_latency_ms: number | null;
+  completion_rate: number;
+  provider_usage: Record<string, number>;
+}
+
+export interface DashboardTrendsResponse {
+  bucket: 'day' | 'hour';
+  points: DashboardTrendPoint[];
+}
+
+export interface DashboardFunnelStep {
+  event_type: string;
+  actors: number;
+  conversion_from_previous: number | null;
+}
+
+export interface DashboardFunnelResponse {
+  window_days: number;
+  steps: DashboardFunnelStep[];
+}
+
+export interface DashboardRequestRow {
+  path?: string;
+  status_code?: number;
+  latency_ms?: number;
+  created_at_epoch: number;
+  request_id?: string | null;
+  trace_id?: string | null;
+  client_request_id?: string | null;
+}
+
+export interface DashboardModeBreakdown {
+  label: string;
+  count: number;
+}
+
+export interface DashboardFallbackRow {
+  operation: string;
+  provider: string;
+  model: string;
+  created_at_epoch: number;
+  duration_ms?: number;
+  request_id?: string | null;
+  trace_id?: string | null;
+}
+
+export interface DashboardFailuresResponse {
+  recent_failed_requests: DashboardRequestRow[];
+  slow_requests: DashboardRequestRow[];
+  provider_fallbacks: DashboardFallbackRow[];
+  most_used_modes: DashboardModeBreakdown[];
+}
+
+export interface DashboardLLMOperation {
+  operation: string;
+  provider: string;
+  model: string;
+  calls: number;
+  avg_duration_ms: number;
+  fallback_rate: number;
+  error_rate: number;
+}
+
+export interface DashboardLLMPerformanceResponse {
+  operations: DashboardLLMOperation[];
+  recent_fallbacks: DashboardFallbackRow[];
 }

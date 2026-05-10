@@ -23,6 +23,8 @@ COPY backend/ ./
 # ensure_faiss_artifacts() skips the download if these files are already present.
 # Total size ~7MB — acceptable to bake into the image.
 COPY data/faiss/ /data/faiss/
+COPY data/graph/ /data/graph/
+COPY data/graph_schema/ /data/graph_schema/
 
 EXPOSE 8080
 

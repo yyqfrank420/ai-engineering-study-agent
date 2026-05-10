@@ -186,6 +186,10 @@ async def orchestrator_route(state: AgentState) -> AgentState:
             "orchestrator_route",
             user_id=state.get("user_id"),
             thread_id=state.get("session_id"),
+            metadata={
+                "request_id": state.get("request_id"),
+                "client_request_id": state.get("client_request_id"),
+            },
         ),
         send=send,
     )
@@ -229,6 +233,10 @@ async def quick_synthesise(state: AgentState) -> AgentState:
             "quick_synthesise",
             user_id=state.get("user_id"),
             thread_id=state.get("session_id"),
+            metadata={
+                "request_id": state.get("request_id"),
+                "client_request_id": state.get("client_request_id"),
+            },
         ),
         send=send,
         stream_deltas=True,
@@ -299,7 +307,11 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
             "orchestrator_synthesise",
             user_id=state.get("user_id"),
             thread_id=state.get("session_id"),
-            metadata={"route": state.get("route", "")},
+            metadata={
+                "route": state.get("route", ""),
+                "request_id": state.get("request_id"),
+                "client_request_id": state.get("client_request_id"),
+            },
         ),
         send=send,
         stream_deltas=True,

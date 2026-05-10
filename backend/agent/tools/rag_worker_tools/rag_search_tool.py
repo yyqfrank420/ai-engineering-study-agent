@@ -19,6 +19,7 @@ from langchain_core.tools import tool
 
 
 from rag.faiss_retriever import retrieve
+from graph.ids import parent_chunk_id_from_metadata
 
 
 def make_rag_search_tool(vectorstore: Any, parent_docs: list):
@@ -46,6 +47,8 @@ def make_rag_search_tool(vectorstore: Any, parent_docs: list):
                 "chapter_title": doc.metadata.get("chapter_title"),
                 "section": doc.metadata.get("section"),
                 "page_number": doc.metadata.get("page_number"),
+                "parent_chunk_index": doc.metadata.get("parent_chunk_index"),
+                "parent_chunk_id": parent_chunk_id_from_metadata(doc.metadata),
             }
             for doc in docs
         ]

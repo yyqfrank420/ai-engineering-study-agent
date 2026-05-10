@@ -2,218 +2,25 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_graph_worker_prompt_includes_rag_evidence_and_concept_bias(monkeypatch):
+async def test_graph_worker_uses_canonical_artifacts_without_llm(monkeypatch, tmp_path):
+    from tests.test_canonical_graph import SCHEMA_DIR, _write_parent_docs
+    from graph.artifacts import load_canonical_graph
+    from graph.build import build_canonical_graph
     import agent.nodes.graph_worker as graph_worker
-
-    captured = {}
-
-    async def fake_stream_response(*, model, system, messages, thinking_budget, temperature=None, top_p=None, top_k=None):
-        captured["model"] = model
-        captured["system"] = system
-        captured["messages"] = messages
-        captured["thinking_budget"] = thinking_budget
-        captured["temperature"] = temperature
-        captured["top_p"] = top_p
-        captured["top_k"] = top_k
-        yield ("text", "NO_GRAPH")
-
     import agent.stream_utils as stream_utils_mod
-    monkeypatch.setattr(stream_utils_mod, "stream_response", fake_stream_response)
 
-    events = []
+    parent_docs_path = tmp_path / "parent_docs.pkl"
+    output_dir = tmp_path / "graph"
+    _write_parent_docs(parent_docs_path)
+    build_canonical_graph(parent_docs_path, output_dir, SCHEMA_DIR)
+    artifacts = load_canonical_graph(output_dir)
 
-    async def send(event):
-        events.append(event)
+    async def fail_stream_response(**_kwargs):
+        raise AssertionError("canonical graph worker must not call the LLM")
+        yield ("text", "")
 
-    state = {
-        "send": send,
-        "user_message": "Explain PEFT and LoRA for beginners",
-        "graph_data": None,
-        "complexity": "auto",
-        "research_context": "",
-        "rag_chunks": [
-            {
-                "chapter": 7,
-                "page_number": 356,
-                "chapter_title": "Training and adaptation",
-                "section": "Parameter-efficient fine-tuning",
-                "text": "Parameter-efficient fine-tuning (PEFT) updates a small subset of weights instead of the whole model. LoRA is a popular PEFT method.",
-            }
-        ],
-    }
-
-    result = await graph_worker.graph_worker_node(state, tools=[])
-
-    assert events[0] == {"type": "worker_status", "worker": "graph", "status": "Checking graph…"}
-    assert result["graph_data"] is None
-    assert "Use the retrieved book evidence as the source of truth." in captured["system"]
-    assert 'If in doubt, choose "concept".' in captured["system"]
-    assert "If the exact product is out of book but the underlying pattern is in book, graph the pattern." in captured["system"]
-    assert "Do NOT drift into random enterprise boxes like VPCs" in captured["system"]
-    assert 'Use type "control" for policy/security enforcement nodes' in captured["system"]
-    assert 'Good control nodes: "Access Control", "Policy Filter", "Input Guardrails"' in captured["system"]
-    assert '"control"   — policy/security enforcement' in captured["system"]
-    assert "Do NOT add a return edge back to the client." in captured["system"]
-    assert captured["temperature"] == graph_worker.settings.graph_temperature
-    assert captured["top_p"] == graph_worker.settings.graph_top_p
-    assert captured["top_k"] == graph_worker.settings.graph_top_k
-    assert "Retrieved book evidence:" in captured["messages"][0]["content"]
-    assert "Parameter-efficient fine-tuning" in captured["messages"][0]["content"]
-
-
-@pytest.mark.asyncio
-async def test_graph_worker_prompt_tightens_decision_nodes_for_guardrail_flows(monkeypatch):
-    import agent.nodes.graph_worker as graph_worker
-
-    captured = {}
-
-    async def fake_stream_response(*, model, system, messages, thinking_budget, temperature=None, top_p=None, top_k=None):
-        captured["system"] = system
-        yield ("text", "NO_GRAPH")
-
-    import agent.stream_utils as stream_utils_mod
-    monkeypatch.setattr(stream_utils_mod, "stream_response", fake_stream_response)
-
-    events = []
-
-    async def send(event):
-        events.append(event)
-
-    state = {
-        "send": send,
-        "user_message": "Show the full defensive prompt engineering flow and call out the two decision nodes.",
-        "graph_data": None,
-        "complexity": "auto",
-        "research_context": "",
-        "rag_chunks": [
-            {
-                "chapter": 10,
-                "page_number": 452,
-                "chapter_title": "Security and guardrails",
-                "section": "Prompt defenses",
-                "text": "Input guardrails, instruction hierarchy, routing logic, and output guardrails work together in a staged defense pipeline.",
-            }
-        ],
-    }
-
-    await graph_worker.graph_worker_node(state, tools=[])
-
-    assert "TASK-SPECIFIC OVERRIDE:" in captured["system"]
-    assert "Use control nodes for guardrails, policy engines, access control, and validators." in captured["system"]
-    assert 'Use type "decision" only for explicit technical choices, routing points, approval gates,' in captured["system"]
-    assert 'Do NOT label ordinary concepts or enforcement controls as decisions just because they influence later steps.' in captured["system"]
-    assert '"Prompt Threats", "Instruction Hierarchy", "Fine-Tuned Model", and "Output Guardrails"' in captured["system"]
-    assert 'If the request is mostly about logical stages, requirements, controls, or decisions,' in captured["system"]
-
-
-@pytest.mark.asyncio
-async def test_graph_worker_retries_when_no_graph_exists_and_model_returns_no_graph(monkeypatch):
-    import agent.nodes.graph_worker as graph_worker
-
-    calls = []
-
-    async def fake_stream_response(*, model, system, messages, thinking_budget, temperature=None, top_p=None, top_k=None):
-        calls.append(system)
-        if len(calls) == 1:
-            yield ("text", "NO_GRAPH")
-        else:
-            yield (
-                "text",
-                '{"action":"replace","graph_type":"concept","title":"Open Agent Stack","nodes":[{"id":"model_api","label":"Model API","type":"service","technology":"Llama","description":"Core model brain","tier":null}],"edges":[],"sequence":[]}',
-            )
-
-    import agent.stream_utils as stream_utils_mod
-    monkeypatch.setattr(stream_utils_mod, "stream_response", fake_stream_response)
-
-    events = []
-
-    async def send(event):
-        events.append(event)
-
-    state = {
-        "send": send,
-        "user_message": "How do we build an open-source alternative to Amazon AgentCore?",
-        "graph_data": None,
-        "complexity": "auto",
-        "research_context": "",
-        "rag_chunks": [
-            {
-                "chapter": 10,
-                "page_number": 473,
-                "chapter_title": "Agents",
-                "section": "Agent architecture",
-                "text": "An agent system needs a model, tools, planning logic, and guardrails around execution.",
-            }
-        ],
-    }
-
-    result = await graph_worker.graph_worker_node(state, tools=[])
-
-    assert len(calls) == 2
-    assert "Do NOT respond with NO_GRAPH" in calls[1]
-    assert result["graph_data"]["title"] == "Open Agent Stack"
-    assert result["graph_data"]["version"]
-
-
-@pytest.mark.asyncio
-async def test_graph_worker_ignores_non_object_json_before_valid_object(monkeypatch):
-    import agent.nodes.graph_worker as graph_worker
-
-    async def fake_stream_response(*, model, system, messages, thinking_budget, temperature=None, top_p=None, top_k=None):
-        yield (
-            "text",
-            '[{"noise": true}] {"action":"replace","graph_type":"concept","title":"RAG Flow","nodes":[{"id":"retriever","label":"Retriever","type":"service","technology":"FAISS","description":"Finds relevant chunks","tier":null}],"edges":[],"sequence":[]}',
-        )
-
-    import agent.stream_utils as stream_utils_mod
-    monkeypatch.setattr(stream_utils_mod, "stream_response", fake_stream_response)
-
-    events = []
-
-    async def send(event):
-        events.append(event)
-
-    state = {
-        "send": send,
-        "user_message": "Explain retrieval-augmented generation",
-        "graph_data": None,
-        "complexity": "auto",
-        "research_context": "",
-        "rag_chunks": [
-            {
-                "chapter": 10,
-                "page_number": 473,
-                "chapter_title": "Agents",
-                "section": "RAG",
-                "text": "RAG retrieves relevant information and passes it to the model before generation.",
-            }
-        ],
-    }
-
-    result = await graph_worker.graph_worker_node(state, tools=[])
-
-    assert result["graph_data"]["title"] == "RAG Flow"
-    assert result["graph_data"]["version"]
-
-
-@pytest.mark.asyncio
-async def test_graph_worker_replaces_existing_graph_when_model_requests_new_chat(monkeypatch):
-    import agent.nodes.graph_worker as graph_worker
-
-    calls = []
-
-    async def fake_stream_response(*, model, system, messages, thinking_budget, temperature=None, top_p=None, top_k=None):
-        calls.append(system)
-        if len(calls) == 1:
-            yield ("text", '{"action":"new_chat"}')
-        else:
-            yield (
-                "text",
-                '{"action":"replace","graph_type":"concept","title":"Training Flow","nodes":[{"id":"pretrain","label":"Pretraining","type":"service","technology":"Transformer","description":"Builds the base model from broad data.","tier":null}],"edges":[],"sequence":[]}',
-            )
-
-    import agent.stream_utils as stream_utils_mod
-    monkeypatch.setattr(stream_utils_mod, "stream_response", fake_stream_response)
+    monkeypatch.setattr(stream_utils_mod, "stream_response", fail_stream_response)
+    monkeypatch.setattr(graph_worker, "load_canonical_graph_cached", lambda: artifacts)
 
     events = []
 
@@ -224,38 +31,55 @@ async def test_graph_worker_replaces_existing_graph_when_model_requests_new_chat
         "send": send,
         "user_id": "user-1",
         "session_id": "thread-1",
-        "user_message": "Draw me a training pipeline for a small language model instead.",
-        "graph_data": {
-            "title": "RAG Flow",
-            "nodes": [{"id": "retriever", "label": "Retriever", "type": "service", "technology": "FAISS", "description": "Finds relevant chunks", "tier": None}],
-            "edges": [],
-            "sequence": [],
-        },
+        "user_message": "Explain retrieval augmented generation",
+        "graph_data": None,
         "complexity": "auto",
         "research_context": "",
-        "graph_notice_sent": False,
-        "rag_chunks": [
-            {
-                "chapter": 7,
-                "page_number": 332,
-                "chapter_title": "Training",
-                "section": "Pre-training",
-                "text": "Pre-training and fine-tuning are distinct phases in model development.",
-            }
-        ],
+        "rag_chunks": [{"parent_chunk_id": "ai-eng:p42:pc0", "text": ""}],
     }
 
     result = await graph_worker.graph_worker_node(state, tools=[])
 
-    assert "Do NOT tell them to start a new chat." in calls[1]
-    assert result["graph_notice_sent"] is False
-    assert result["graph_data"]["title"] == "Training Flow"
+    assert events[0] == {"type": "worker_status", "worker": "graph", "status": "Selecting graph…"}
+    assert result["graph_data"]["graph_type"] == "concept"
     assert result["graph_data"]["version"]
-    assert not any(event["type"] == "graph_notice" for event in events)
+    assert all(node.get("canonical_id") for node in result["graph_data"]["nodes"])
 
 
 @pytest.mark.asyncio
-async def test_node_detail_prompt_forbids_bullets_and_equations(monkeypatch):
+async def test_graph_worker_abstains_without_canonical_support(monkeypatch, tmp_path):
+    from tests.test_canonical_graph import SCHEMA_DIR, _write_parent_docs
+    from graph.artifacts import load_canonical_graph
+    from graph.build import build_canonical_graph
+    import agent.nodes.graph_worker as graph_worker
+
+    parent_docs_path = tmp_path / "parent_docs.pkl"
+    output_dir = tmp_path / "graph"
+    _write_parent_docs(parent_docs_path)
+    build_canonical_graph(parent_docs_path, output_dir, SCHEMA_DIR)
+    artifacts = load_canonical_graph(output_dir)
+    monkeypatch.setattr(graph_worker, "load_canonical_graph_cached", lambda: artifacts)
+
+    async def send(_event):
+        pass
+
+    result = await graph_worker.graph_worker_node(
+        {
+            "send": send,
+            "user_message": "Explain an unsupported concept",
+            "graph_data": None,
+            "complexity": "auto",
+            "research_context": "",
+            "rag_chunks": [{"parent_chunk_id": "ai-eng:p999:pc0", "text": ""}],
+        },
+        tools=[],
+    )
+
+    assert result["graph_data"] is None
+
+
+@pytest.mark.asyncio
+async def test_node_detail_prompt_prefers_canonical_evidence(monkeypatch):
     import agent.nodes.node_detail_worker as node_detail_worker
 
     captured = {}
@@ -292,6 +116,7 @@ async def test_node_detail_prompt_forbids_bullets_and_equations(monkeypatch):
         "technology": "PyTorch",
         "description": "Adds low-rank adapters",
         "tier": None,
+        "evidence_chunk_ids": ["ai-eng:p356:pc0"],
     }
     edges = [{"source": "trainer", "target": "lora", "label": "applies adapters"}]
 
@@ -303,6 +128,7 @@ async def test_node_detail_prompt_forbids_bullets_and_equations(monkeypatch):
     assert "If the book evidence is thin" in captured["system"]
     assert "Never invent citations" in captured["system"]
     assert captured["temperature"] == node_detail_worker.settings.node_detail_temperature
+    assert "Canonical evidence chunks: ai-eng:p356:pc0" in captured["messages"][0]["content"]
     assert "Connections:" in captured["messages"][0]["content"]
     assert events[-1]["type"] == "node_detail"
     assert events[-1]["book_refs"] == ["(Chapter 7, p.356)"]

@@ -90,7 +90,7 @@ function SegRow<T extends string>({
         containerStyle={segContainerStyle}
         dividerStyle={thinDivStyle}
         optionStyle={segRowOptionStyle}
-        optionWrapper={(children, _i) => (
+        optionWrapper={(children) => (
           <span style={{ display: 'flex', alignItems: 'stretch', flex: 1 }}>
             {children}
           </span>

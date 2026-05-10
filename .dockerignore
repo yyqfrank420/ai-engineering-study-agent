@@ -12,6 +12,11 @@ ingestion
 # Exclude data except the FAISS index (bundled into image)
 data
 !data/faiss
+!data/faiss/**
+!data/graph
+!data/graph/**
+!data/graph_schema
+!data/graph_schema/**
 render.yaml
 
 backend/.env

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useBackendReadiness } from '../useBackendReadiness';
 
 vi.mock('../../services/api', () => ({
+  captureAnalyticsEvent: vi.fn().mockResolvedValue(undefined),
   prepareBackend: vi.fn(),
 }));
 

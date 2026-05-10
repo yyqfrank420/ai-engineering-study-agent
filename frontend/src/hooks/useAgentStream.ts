@@ -19,6 +19,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { sseClient } from '../services/sse';
+import { trackEvent } from '../services/analytics';
 import type {
   AuthSession,
   ComplexityLevel,
@@ -71,8 +72,19 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
   const activeChatStreamIdRef = useRef<string | null>(null);
   const activeNodeStreamIdRef = useRef<string | null>(null);
   const userAbortedChatRef = useRef(false);
+  const authSessionRef = useRef<AuthSession | null>(authSession);
   const graphDataRef = useRef<GraphData | null>(null);
   const selectedNodeRef = useRef<SelectedNode | null>(null);
+  const activeChatTerminalRef = useRef<string | null>(null);
+  const activeChatAnalyticsRef = useRef<{
+    threadId: string;
+    clientRequestId: string;
+    complexity: ComplexityLevel;
+    graphMode: GraphMode;
+    researchEnabled: boolean;
+    backendReadinessState?: string;
+    hasSelectedTextContext?: boolean;
+  } | null>(null);
 
   // Caches suggested questions per node ID so repeat clicks skip the LLM call
   const suggestionsCacheRef = useRef<Map<string, string[]>>(new Map());
@@ -90,6 +102,8 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
     activeChatStreamIdRef.current = null;
     activeNodeStreamIdRef.current = null;
     userAbortedChatRef.current = false;
+    activeChatAnalyticsRef.current = null;
+    activeChatTerminalRef.current = null;
     setWorkerStatus(IDLE_WORKER_STATUS);
     setRetrievalNotice(null);
     setGraphNotice(null);
@@ -98,15 +112,12 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
   }, []);
 
   useEffect(() => {
-    const offEvent = sseClient.onEvent(handleEvent);
-    return () => { offEvent(); };
-  // handleEvent is stable (useCallback with [] deps) so this runs once
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
     resetThreadView();
   }, [activeThreadId, resetThreadView]);
+
+  useEffect(() => {
+    authSessionRef.current = authSession;
+  }, [authSession]);
 
   useEffect(() => {
     graphDataRef.current = graphData;
@@ -170,6 +181,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
 
       case 'done':
         if (meta.kind === 'chat') {
+          const analytics = activeChatAnalyticsRef.current;
           if (streamingIdRef.current) {
             const id = streamingIdRef.current;
             setMessages(prev => prev.map(m =>
@@ -181,6 +193,22 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
           setRetrievalNotice(null);
           setProviderNotice(null);
           setStreamStatus('connected');
+          if (analytics) {
+            activeChatTerminalRef.current = analytics.clientRequestId;
+            void trackEvent(
+              'chat_stream_completed',
+              {
+                thread_id: analytics.threadId,
+                client_request_id: analytics.clientRequestId,
+                complexity: analytics.complexity,
+                graph_mode: analytics.graphMode,
+                research_enabled: analytics.researchEnabled,
+                backend_readiness_state: analytics.backendReadinessState,
+                has_selected_text_context: analytics.hasSelectedTextContext,
+              },
+              authSessionRef.current,
+            );
+          }
         }
         break;
 
@@ -259,6 +287,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
 
       case 'error':
         if (meta.kind === 'chat') {
+          const analytics = activeChatAnalyticsRef.current;
           if (streamingIdRef.current) {
             const id = streamingIdRef.current;
             setMessages(prev => prev.map(m =>
@@ -274,10 +303,32 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
           setRetrievalNotice(null);
           setProviderNotice(null);
           setStreamStatus('connected');
+          if (analytics) {
+            activeChatTerminalRef.current = analytics.clientRequestId;
+            void trackEvent(
+              'chat_stream_failed',
+              {
+                thread_id: analytics.threadId,
+                client_request_id: analytics.clientRequestId,
+                complexity: analytics.complexity,
+                graph_mode: analytics.graphMode,
+                research_enabled: analytics.researchEnabled,
+                backend_readiness_state: analytics.backendReadinessState,
+                has_selected_text_context: analytics.hasSelectedTextContext,
+                error_code: event.content.slice(0, 80),
+              },
+              authSessionRef.current,
+            );
+          }
         }
         break;
     }
   }, []);
+
+  useEffect(() => {
+    const offEvent = sseClient.onEvent(handleEvent);
+    return () => { offEvent(); };
+  }, [handleEvent]);
 
   const sendMessage = useCallback((
     content: string,
@@ -286,6 +337,8 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
       graphMode?: GraphMode;
       researchEnabled?: boolean;
       displayContent?: string;
+      backendReadinessState?: string;
+      hasSelectedTextContext?: boolean;
     },
   ) => {
     if (!authSession || !activeThreadId) {
@@ -307,6 +360,43 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
     userAbortedChatRef.current = false;
     const clientRequestId = makeId();
     activeChatStreamIdRef.current = clientRequestId;
+    activeChatTerminalRef.current = null;
+    const analytics = {
+      threadId: activeThreadId,
+      clientRequestId,
+      complexity: opts?.complexity ?? 'auto',
+      graphMode: opts?.graphMode ?? 'auto',
+      researchEnabled: opts?.researchEnabled ?? false,
+      backendReadinessState: opts?.backendReadinessState,
+      hasSelectedTextContext: opts?.hasSelectedTextContext,
+    };
+    activeChatAnalyticsRef.current = analytics;
+    void trackEvent(
+      'chat_sent',
+      {
+        thread_id: analytics.threadId,
+        client_request_id: analytics.clientRequestId,
+        complexity: analytics.complexity,
+        graph_mode: analytics.graphMode,
+        research_enabled: analytics.researchEnabled,
+        backend_readiness_state: analytics.backendReadinessState,
+        has_selected_text_context: analytics.hasSelectedTextContext,
+      },
+      authSession,
+    );
+    void trackEvent(
+      'chat_stream_started',
+      {
+        thread_id: analytics.threadId,
+        client_request_id: analytics.clientRequestId,
+        complexity: analytics.complexity,
+        graph_mode: analytics.graphMode,
+        research_enabled: analytics.researchEnabled,
+        backend_readiness_state: analytics.backendReadinessState,
+        has_selected_text_context: analytics.hasSelectedTextContext,
+      },
+      authSession,
+    );
 
     sseClient.sendMessage(authSession, activeThreadId, content, opts, clientRequestId).then(sawDone => {
       if (!sawDone && !userAbortedChatRef.current && activeChatStreamIdRef.current === clientRequestId) {
@@ -324,9 +414,31 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
           isStreaming: false,
         }]);
         setWorkerStatus(IDLE_WORKER_STATUS);
+        setRetrievalNotice(null);
+        setProviderNotice(null);
         setStreamStatus('connected');
+        if (activeChatTerminalRef.current !== clientRequestId) {
+          activeChatTerminalRef.current = clientRequestId;
+          void trackEvent(
+            'chat_stream_failed',
+            {
+              thread_id: analytics.threadId,
+              client_request_id: analytics.clientRequestId,
+              complexity: analytics.complexity,
+              graph_mode: analytics.graphMode,
+              research_enabled: analytics.researchEnabled,
+              backend_readiness_state: analytics.backendReadinessState,
+              has_selected_text_context: analytics.hasSelectedTextContext,
+              error_code: 'stream_closed',
+            },
+            authSession,
+          );
+        }
       }
     }).catch(err => {
+      if (activeChatStreamIdRef.current !== clientRequestId) {
+        return;
+      }
       // Network-level failure (not an SSE error event)
       if (streamingIdRef.current) {
         const id = streamingIdRef.current;
@@ -340,12 +452,34 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
         content: `Connection error: ${err.message}`, isStreaming: false,
       }]);
       setWorkerStatus(IDLE_WORKER_STATUS);
+      setRetrievalNotice(null);
+      setProviderNotice(null);
       setStreamStatus('connected');
+      if (activeChatTerminalRef.current !== clientRequestId) {
+        activeChatTerminalRef.current = clientRequestId;
+        void trackEvent(
+          'chat_stream_failed',
+          {
+            thread_id: analytics.threadId,
+            client_request_id: analytics.clientRequestId,
+            complexity: analytics.complexity,
+            graph_mode: analytics.graphMode,
+            research_enabled: analytics.researchEnabled,
+            backend_readiness_state: analytics.backendReadinessState,
+            has_selected_text_context: analytics.hasSelectedTextContext,
+            error_code: err.message,
+          },
+          authSession,
+        );
+      }
     }).finally(() => {
       if (activeChatStreamIdRef.current === clientRequestId) {
         activeChatStreamIdRef.current = null;
       }
       userAbortedChatRef.current = false;
+      if (activeChatAnalyticsRef.current?.clientRequestId === clientRequestId) {
+        activeChatAnalyticsRef.current = null;
+      }
     });
   }, [activeThreadId, authSession]);
 
@@ -355,6 +489,14 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
     }
 
     setRetrievalNotice({ ...retrievalNotice, requested: true });
+    void trackEvent(
+      'search_tool_requested',
+      {
+        thread_id: activeThreadId,
+        request_id: retrievalNotice.requestId,
+      },
+      authSession,
+    );
     try {
       const result = await sseClient.useSearchTool(authSession, activeThreadId, retrievalNotice.requestId);
       if (!result.ok) {
@@ -398,6 +540,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
   }, [activeThreadId, authSession]);
 
   const stopGeneration = useCallback(() => {
+    const analytics = activeChatAnalyticsRef.current;
     userAbortedChatRef.current = true;
     sseClient.stopGeneration();
     // Finalise any streaming message so it renders as complete
@@ -411,7 +554,23 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
     setWorkerStatus(IDLE_WORKER_STATUS);
     setProviderNotice(null);
     setStreamStatus('connected');
-  }, []);
+    if (analytics) {
+      activeChatTerminalRef.current = analytics.clientRequestId;
+      void trackEvent(
+        'chat_stopped',
+        {
+          thread_id: analytics.threadId,
+          client_request_id: analytics.clientRequestId,
+          complexity: analytics.complexity,
+          graph_mode: analytics.graphMode,
+          research_enabled: analytics.researchEnabled,
+          backend_readiness_state: analytics.backendReadinessState,
+          has_selected_text_context: analytics.hasSelectedTextContext,
+        },
+        authSession,
+      );
+    }
+  }, [authSession]);
 
   return {
     messages,

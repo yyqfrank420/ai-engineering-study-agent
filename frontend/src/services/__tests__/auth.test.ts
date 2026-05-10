@@ -27,6 +27,17 @@ import { supabase } from '../supabase';
 
 // Cast supabase.auth.signInWithOAuth to a typed mock for cleaner assertions
 const mockSignInWithOAuth = vi.mocked(supabase.auth.signInWithOAuth);
+type OAuthResponse = Awaited<ReturnType<typeof supabase.auth.signInWithOAuth>>;
+
+const oauthErrorResponse = (error: Error): OAuthResponse => ({
+  data: { url: null, provider: 'google' },
+  error: error as NonNullable<OAuthResponse['error']>,
+});
+
+const malformedOAuthResponseWithoutUrl = (): OAuthResponse => ({
+  data: { url: null, provider: 'google' },
+  error: null,
+} as unknown as OAuthResponse);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -71,23 +82,20 @@ describe('signInWithGoogle', () => {
 
   it('throws when Supabase returns an error', async () => {
     const supabaseError = new Error('OAuth provider not enabled');
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mockSignInWithOAuth.mockResolvedValueOnce({ data: { url: null, provider: 'google' }, error: supabaseError } as any);
+    mockSignInWithOAuth.mockResolvedValueOnce(oauthErrorResponse(supabaseError));
 
     await expect(signInWithGoogle()).rejects.toThrow('OAuth provider not enabled');
   });
 
   it('throws when Supabase returns no URL and no error', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mockSignInWithOAuth.mockResolvedValueOnce({ data: { url: null, provider: 'google' }, error: null } as any);
+    mockSignInWithOAuth.mockResolvedValueOnce(malformedOAuthResponseWithoutUrl());
 
     await expect(signInWithGoogle()).rejects.toThrow('Failed to start Google sign-in');
   });
 
   it('does not call window.location.assign when Supabase returns an error', async () => {
     const supabaseError = new Error('OAuth provider not enabled');
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mockSignInWithOAuth.mockResolvedValueOnce({ data: { url: null, provider: 'google' }, error: supabaseError } as any);
+    mockSignInWithOAuth.mockResolvedValueOnce(oauthErrorResponse(supabaseError));
 
     await expect(signInWithGoogle()).rejects.toThrow();
     expect(window.location.assign).not.toHaveBeenCalled();

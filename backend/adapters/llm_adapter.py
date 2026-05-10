@@ -23,6 +23,7 @@ import anthropic
 import openai
 
 from config import settings
+from observability import current_trace_context, record_llm_metrics
 from storage.telemetry_store import record_llm_telemetry
 
 # ── Clients (lazy-initialised and reused) ────────────────────────────────────
@@ -188,6 +189,7 @@ async def stream_response(
 
     def _record(status: str, *, error_type: str | None = None) -> None:
         details = telemetry or {}
+        trace_context = current_trace_context()
         try:
             record_llm_telemetry(
                 operation=details.get("operation", "unknown"),
@@ -206,11 +208,23 @@ async def stream_response(
                     "temperature": temperature,
                     "top_p": top_p,
                     "top_k": top_k,
+                    "request_id": details.get("metadata", {}).get("request_id"),
+                    "client_request_id": details.get("metadata", {}).get("client_request_id"),
+                    "trace_id": trace_context.get("trace_id"),
+                    "span_id": trace_context.get("span_id"),
                     **(details.get("metadata") or {}),
                 },
             )
         except Exception as exc:
             print(f"[llm] Telemetry write failed: {type(exc).__name__}: {exc}")
+        record_llm_metrics(
+            operation=details.get("operation", "unknown"),
+            provider=final_provider,
+            model=final_model,
+            duration_ms=max(1, int((time.perf_counter() - started_at) * 1000)),
+            used_fallback=used_fallback,
+            status=status,
+        )
 
     for attempt in range(1, settings.llm_max_retries + 1):
         tokens_yielded = False

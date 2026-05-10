@@ -159,9 +159,7 @@ export function ThreadSidebar({
   // Fetch once when backend first becomes ready
   useEffect(() => {
     if (backendReady) fetchThreads();
-  // fetchThreads is stable so this only runs when backendReady changes
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [backendReady]);
+  }, [backendReady, fetchThreads]);
 
   const handleDelete = useCallback(async (threadId: string) => {
     if (!authSession) return;

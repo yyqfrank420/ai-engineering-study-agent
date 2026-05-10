@@ -1,4 +1,16 @@
-import type { AuthSession, GraphData, ThreadDetail, ThreadSummary } from '../types';
+import type {
+  AnalyticsEventName,
+  AnalyticsEventProperties,
+  AuthSession,
+  DashboardFailuresResponse,
+  DashboardFunnelResponse,
+  DashboardLLMPerformanceResponse,
+  DashboardOverviewResponse,
+  DashboardTrendsResponse,
+  GraphData,
+  ThreadDetail,
+  ThreadSummary,
+} from '../types';
 import { API_BASE } from './config';
 
 async function authedFetch(path: string, session: AuthSession, init?: RequestInit): Promise<Response> {
@@ -83,4 +95,62 @@ export async function prepareBackend(): Promise<PrepareResponse> {
     throw error;
   }
   return data as PrepareResponse;
+}
+
+export async function captureAnalyticsEvent(
+  eventType: AnalyticsEventName,
+  anonymousId: string,
+  properties: AnalyticsEventProperties,
+  session?: AuthSession | null,
+): Promise<void> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (session) {
+    headers.Authorization = `Bearer ${session.access_token}`;
+  }
+  const response = await fetch(`${API_BASE}/api/analytics/capture`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      anonymous_id: anonymousId,
+      event_type: eventType,
+      properties,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to capture analytics event');
+  }
+}
+
+async function fetchInternal<T>(path: string, session: AuthSession): Promise<T> {
+  const response = await authedFetch(path, session);
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.detail ?? 'Internal dashboard request failed');
+  }
+  return response.json() as Promise<T>;
+}
+
+export function fetchDashboardOverview(session: AuthSession): Promise<DashboardOverviewResponse> {
+  return fetchInternal('/api/internal/dashboard/overview', session);
+}
+
+export function fetchDashboardTrends(
+  session: AuthSession,
+  bucket: 'day' | 'hour',
+): Promise<DashboardTrendsResponse> {
+  return fetchInternal(`/api/internal/dashboard/trends?bucket=${bucket}`, session);
+}
+
+export function fetchDashboardFunnel(session: AuthSession): Promise<DashboardFunnelResponse> {
+  return fetchInternal('/api/internal/dashboard/funnel', session);
+}
+
+export function fetchDashboardFailures(session: AuthSession): Promise<DashboardFailuresResponse> {
+  return fetchInternal('/api/internal/dashboard/failures', session);
+}
+
+export function fetchDashboardLLMPerformance(session: AuthSession): Promise<DashboardLLMPerformanceResponse> {
+  return fetchInternal('/api/internal/dashboard/llm-performance', session);
 }

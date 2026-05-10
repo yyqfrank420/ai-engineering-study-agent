@@ -4,7 +4,7 @@
 //          SequenceBar. Manages which node popup is open.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import type { AuthSession, GraphData, GraphNode, GraphViewState, SelectedNode } from '../../types';
 import { useGraph } from '../../hooks/useGraph';
 import { graphStructureKey } from '../../utils/graphStructureKey';
@@ -54,10 +54,11 @@ export function GraphCanvas({
   sourceTexts,
 }: GraphCanvasProps) {
   const { currentStep, totalSteps, hasSequence, activeNodeIds, stepDescription, goToStep } = useGraph(graphData, animateSequence);
-  const [sequenceDismissed, setSequenceDismissed] = useState(false);
-  const viewStateCacheRef = useRef(new Map<string, GraphViewState>());
+  const [sequenceDismissal, setSequenceDismissal] = useState<{ key: string; dismissed: boolean } | null>(null);
+  const [viewStateCache, setViewStateCache] = useState<Record<string, GraphViewState>>({});
   const [pendingPersistViewState, setPendingPersistViewState] = useState<GraphViewState | null>(null);
   const graphContentKey = useMemo(() => graphStructureKey(graphData), [graphData]);
+  const sequenceDismissed = sequenceDismissal?.key === graphContentKey && sequenceDismissal.dismissed;
   const graphViewKey = useMemo(() => {
     if (!graphData || !activeThreadId) return null;
     return [
@@ -71,18 +72,7 @@ export function GraphCanvas({
       graphData.sequence.map((step) => `${step.step}:${step.nodes.join(',')}`).join('|'),
     ].join('::');
   }, [activeThreadId, graphData]);
-  const persistedViewState = graphViewKey ? viewStateCacheRef.current.get(graphViewKey) ?? graphData?.view_state ?? null : null;
-
-  // Reset dismissed state only when the graph structure changes, not when
-  // async node-detail enrichment swaps the object reference.
-  useEffect(() => { setSequenceDismissed(false); }, [graphContentKey]);
-
-  useEffect(() => {
-    if (!graphViewKey || !graphData?.view_state) return;
-    if (!viewStateCacheRef.current.has(graphViewKey)) {
-      viewStateCacheRef.current.set(graphViewKey, graphData.view_state);
-    }
-  }, [graphData, graphViewKey]);
+  const persistedViewState = graphViewKey ? viewStateCache[graphViewKey] ?? graphData?.view_state ?? null : null;
 
   useEffect(() => {
     if (!authSession || !activeThreadId || !graphData || !pendingPersistViewState) {
@@ -140,7 +130,7 @@ export function GraphCanvas({
         {/* Re-open sequence bar when dismissed */}
         {hasSequence && sequenceDismissed && (
           <button
-            onClick={() => setSequenceDismissed(false)}
+            onClick={() => setSequenceDismissal({ key: graphContentKey, dismissed: false })}
             title="Show walkthrough steps"
             style={{
               marginLeft: 'auto',
@@ -170,11 +160,11 @@ export function GraphCanvas({
           initialViewState={persistedViewState ?? undefined}
           onViewStateChange={(viewState) => {
             if (!graphViewKey) return;
-            const existingViewState = viewStateCacheRef.current.get(graphViewKey) ?? graphData.view_state ?? null;
+            const existingViewState = viewStateCache[graphViewKey] ?? graphData.view_state ?? null;
             if (sameGraphViewState(existingViewState, viewState)) {
               return;
             }
-            viewStateCacheRef.current.set(graphViewKey, viewState);
+            setViewStateCache(prev => ({ ...prev, [graphViewKey]: viewState }));
             setPendingPersistViewState(viewState);
           }}
         />
@@ -205,7 +195,10 @@ export function GraphCanvas({
           totalSteps={totalSteps}
           stepDescription={stepDescription}
           onStepChange={goToStep}
-          onDismiss={() => { goToStep(-1); setSequenceDismissed(true); }}
+          onDismiss={() => {
+            goToStep(-1);
+            setSequenceDismissal({ key: graphContentKey, dismissed: true });
+          }}
         />
       )}
     </div>

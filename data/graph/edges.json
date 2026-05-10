@@ -1,0 +1,1174 @@
+[
+  {
+    "edge_id": "architecture:application__calls__architecture:orchestrator",
+    "layer": "architecture",
+    "source_id": "architecture:application",
+    "target_id": "architecture:orchestrator",
+    "relation": "calls",
+    "supporting_chunk_ids": [
+      "ai-eng:p473:pc23",
+      "ai-eng:p473:pc25",
+      "ai-eng:p498:pc0"
+    ],
+    "support_spans": [
+      "AI Pipeline Orchestration An AI application can get fairly complex, consisting of multiple models, retrieving data from many databases, and having access to a wide range of tools.",
+      "Because retrieval and tool use are common application pat‐ terns, many RAG and agent frameworks are also orchestration tools.",
+      "As you advance to the later stages of your application development process, you might decide that an orchestrator can make your life easier."
+    ],
+    "confidence": 0.735
+  },
+  {
+    "edge_id": "architecture:guardrail_service__implements__concept:guardrails",
+    "layer": "cross_layer",
+    "source_id": "architecture:guardrail_service",
+    "target_id": "concept:guardrails",
+    "relation": "implements",
+    "supporting_chunk_ids": [
+      "ai-eng:p275:pc0",
+      "ai-eng:p473:pc6",
+      "ai-eng:p473:pc7"
+    ],
+    "support_spans": [
+      "For example, a guardrail can check if an output contains PII or toxic informa‐ tion.",
+      "Guardrail solutions that you can use out of the box include Meta’s Purple Llama, NVIDIA’s NeMo Guard‐ rails, Azure’s PyRIT, Azure’s AI content filters, the Perspective API, and OpenAI’s content moderation API.",
+      "gateways also provide guardrail functionalities, as discussed in the next section."
+    ],
+    "confidence": 0.735
+  },
+  {
+    "edge_id": "architecture:orchestrator__calls__architecture:tool_service",
+    "layer": "architecture",
+    "source_id": "architecture:orchestrator",
+    "target_id": "architecture:tool_service",
+    "relation": "calls",
+    "supporting_chunk_ids": [
+      "ai-eng:p138:pc3",
+      "ai-eng:p138:pc4",
+      "ai-eng:p473:pc23",
+      "ai-eng:p473:pc24",
+      "ai-eng:p473:pc25"
+    ],
+    "support_spans": [
+      "To further demonstrate how the investment in evaluation lags behind other areas in the AI space, the number of tools for evaluation is small compared to the number of tools for modeling and training and AI orchestration, as shown in Figure 3-3.",
+      "the AI space, the number of tools for evaluation is small compared to the number of tools for modeling and training and AI orchestration, as shown in Figure 3-3.",
+      "AI Pipeline Orchestration An AI application can get fairly complex, consisting of multiple models, retrieving data from many databases, and having access to a wide range of tools.",
+      "Components definition You need to tell the orchestrator what components your system uses, including different models, external data sources for retrieval, and tools that your system can use.",
+      "There are many AI orchestration tools, including LangChain, LlamaIndex, Flowise, Langflow, and Haystack."
+    ],
+    "confidence": 0.805
+  },
+  {
+    "edge_id": "architecture:retriever_service__implements__concept:retrieval",
+    "layer": "cross_layer",
+    "source_id": "architecture:retriever_service",
+    "target_id": "concept:retrieval",
+    "relation": "implements",
+    "supporting_chunk_ids": [
+      "ai-eng:p277:pc1",
+      "ai-eng:p277:pc3",
+      "ai-eng:p277:pc9",
+      "ai-eng:p277:pc13",
+      "ai-eng:p277:pc14",
+      "ai-eng:p277:pc16",
+      "ai-eng:p277:pc17",
+      "ai-eng:p277:pc20",
+      "ai-eng:p277:pc22",
+      "ai-eng:p277:pc23",
+      "ai-eng:p277:pc24",
+      "ai-eng:p299:pc4",
+      "ai-eng:p329:pc0"
+    ],
+    "support_spans": [
+      "With RAG, only the information most relevant to the query, as determined by the retriever, is retrieved and input into the model.",
+      "RAG Architecture A RAG system has two components: a retriever that retrieves information from external memory sources and a generator that generates a response based on the retrieved information.",
+      "Retriever: fetch k data chunks whose embeddings are closest to the query embed‐ ding, as determined by the retriever.",
+      "You can finetune the embedding model and the retriever, either separately, together, or in conjunction with the generative model.",
+      "The quality of a retriever should also be evaluated in the context of the whole RAG system.",
+      "First, a cheap, less precise retriever, such as a term-based system, fetches candidates."
+    ],
+    "confidence": 0.91
+  },
+  {
+    "edge_id": "architecture:user__sends_to__architecture:application",
+    "layer": "architecture",
+    "source_id": "architecture:user",
+    "target_id": "architecture:application",
+    "relation": "sends_to",
+    "supporting_chunk_ids": [
+      "ai-eng:p18:pc0",
+      "ai-eng:p26:pc12",
+      "ai-eng:p52:pc2",
+      "ai-eng:p52:pc5",
+      "ai-eng:p59:pc9",
+      "ai-eng:p59:pc12",
+      "ai-eng:p59:pc13",
+      "ai-eng:p102:pc5",
+      "ai-eng:p138:pc0",
+      "ai-eng:p160:pc1",
+      "ai-eng:p160:pc3",
+      "ai-eng:p172:pc1",
+      "ai-eng:p203:pc4",
+      "ai-eng:p203:pc8",
+      "ai-eng:p224:pc3",
+      "ai-eng:p224:pc4",
+      "ai-eng:p224:pc5",
+      "ai-eng:p224:pc6",
+      "ai-eng:p232:pc2",
+      "ai-eng:p236:pc4",
+      "ai-eng:p259:pc0",
+      "ai-eng:p259:pc1",
+      "ai-eng:p277:pc21",
+      "ai-eng:p389:pc7",
+      "ai-eng:p389:pc14",
+      "ai-eng:p430:pc0",
+      "ai-eng:p430:pc7",
+      "ai-eng:p473:pc0",
+      "ai-eng:p473:pc3",
+      "ai-eng:p473:pc10",
+      "ai-eng:p473:pc19",
+      "ai-eng:p473:pc21",
+      "ai-eng:p473:pc22",
+      "ai-eng:p498:pc1",
+      "ai-eng:p498:pc2",
+      "ai-eng:p498:pc4",
+      "ai-eng:p498:pc6",
+      "ai-eng:p498:pc7",
+      "ai-eng:p498:pc8",
+      "ai-eng:p498:pc11",
+      "ai-eng:p498:pc13",
+      "ai-eng:p498:pc15",
+      "ai-eng:p516:pc1"
+    ],
+    "support_spans": [
+      "Chapter 2 analyzes the making of a foundation model and the design decisions with significant impacts on downstream applications, including its training data recipe, model architectures and scales, and how the model is trained to align to human pref‐ erence.",
+      "This makes AI more useful for more aspects of life, vastly increasing both the user base and the demand for AI applications.",
+      "The role of AI and humans in the application What role AI plays in the AI product influences the application’s development and its requirements.",
+      "Planning AI Applications | 31 of open source models, gearing your solution toward users who want to host models in-house.",
+      "As users are getting notoriously impatient, getting AI applications’ latency down to the 100 ms latency expected for a typical internet application is a huge challenge.",
+      "AI interface means creating an interface for end users to interact with your AI applications."
+    ],
+    "confidence": 0.91
+  },
+  {
+    "edge_id": "architecture:vector_store__supports__concept:vector_database",
+    "layer": "cross_layer",
+    "source_id": "architecture:vector_store",
+    "target_id": "concept:vector_database",
+    "relation": "supports",
+    "supporting_chunk_ids": [
+      "ai-eng:p277:pc9",
+      "ai-eng:p277:pc10",
+      "ai-eng:p277:pc12",
+      "ai-eng:p277:pc14",
+      "ai-eng:p277:pc23",
+      "ai-eng:p277:pc24",
+      "ai-eng:p473:pc2",
+      "ai-eng:p473:pc13",
+      "ai-eng:p473:pc19"
+    ],
+    "support_spans": [
+      "The database where the generated embeddings are stored is called a vector database.",
+      "vector database stores vectors.",
+      "Even though vector databases emerged as their own category with the rise of RAG, any database that can store vectors can be called a vector database.",
+      "It’s not uncommon to see a company’s vector database spending be one-fifth or even half of their spending on model APIs.",
+      "• If it’s a vector database, what embedding models and vector search algorithms does it support?",
+      "Generate CLIP embeddings for all your data, both texts and images, and store them in a vector database."
+    ],
+    "confidence": 0.91
+  },
+  {
+    "edge_id": "concept:agent__compares_with__concept:foundation_model",
+    "layer": "concept",
+    "source_id": "concept:agent",
+    "target_id": "concept:foundation_model",
+    "relation": "compares_with",
+    "supporting_chunk_ids": [
+      "ai-eng:p299:pc13"
+    ],
+    "support_spans": [
+      "Agents | 285 Foundation Model (FM) Versus Reinforcement Learning (RL) Planners The agent is a core concept in RL, which is defined in Wikipedia as a field “concerned with how an intelligent agent ought to take actions in a dynamic environment in order to maximize the cumulative reward.” RL agents and FM agents are similar in many ways."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:agent__depends_on__concept:planning",
+    "layer": "concept",
+    "source_id": "concept:agent",
+    "target_id": "concept:planning",
+    "relation": "depends_on",
+    "supporting_chunk_ids": [
+      "ai-eng:p299:pc3",
+      "ai-eng:p299:pc23",
+      "ai-eng:p299:pc24"
+    ],
+    "support_spans": [
+      "Given an environment, the success of an agent in an environment depends on the tool inventory it has access to and the strength of its AI planner.",
+      "Agents | 297 Earlier in this section, we mentioned that the success of an agent in an environment depends on its tool inventory and its planning capabilities."
+    ],
+    "confidence": 0.735
+  },
+  {
+    "edge_id": "concept:agent__depends_on__concept:tool_use",
+    "layer": "concept",
+    "source_id": "concept:agent",
+    "target_id": "concept:tool_use",
+    "relation": "depends_on",
+    "supporting_chunk_ids": [
+      "ai-eng:p52:pc0",
+      "ai-eng:p259:pc7",
+      "ai-eng:p299:pc0",
+      "ai-eng:p299:pc1",
+      "ai-eng:p299:pc3",
+      "ai-eng:p299:pc4",
+      "ai-eng:p299:pc6",
+      "ai-eng:p299:pc10",
+      "ai-eng:p299:pc14",
+      "ai-eng:p299:pc16",
+      "ai-eng:p299:pc21",
+      "ai-eng:p299:pc22",
+      "ai-eng:p299:pc23",
+      "ai-eng:p299:pc25",
+      "ai-eng:p299:pc26",
+      "ai-eng:p324:pc0",
+      "ai-eng:p329:pc0",
+      "ai-eng:p329:pc1",
+      "ai-eng:p473:pc25"
+    ],
+    "support_spans": [
+      "AIs that can plan and use tools are called agents.",
+      "Since the number of tools a model can use is vast, as shown in “Agents” on page 275, these attacks can take many shapes and forms.",
+      "This section will start with an overview of agents, and then continue with two aspects that determine the capabilities of an agent: tools and planning.",
+      "The set of actions an AI agent can perform is augmented by the tools it has access to.",
+      "• Higher stakes: with access to tools, agents are capable of performing more impactful tasks, but any failure could have more severe consequences.",
+      "The set of tools an agent has access to is its tool inventory."
+    ],
+    "confidence": 0.91
+  },
+  {
+    "edge_id": "concept:batching__improves__concept:cost",
+    "layer": "concept",
+    "source_id": "concept:batching",
+    "target_id": "concept:cost",
+    "relation": "improves",
+    "supporting_chunk_ids": [
+      "ai-eng:p430:pc5",
+      "ai-eng:p450:pc14"
+    ],
+    "support_spans": [
+      "For example, as of this writing, both Google Gemini and OpenAI offer batch APIs at a 50% cost 410 | Chapter 9: Inference Optimization reduction and significantly higher turnaround time, i.e., in the order of hours instead of seconds or minutes.6 Online APIs might still batch requests together as long as it doesn’t significantly impact latency, as discussed in “Batching” on page 440.",
+      "Batching One of the easiest ways to reduce your cost is batching."
+    ],
+    "confidence": 0.7
+  },
+  {
+    "edge_id": "concept:batching__improves__concept:latency",
+    "layer": "concept",
+    "source_id": "concept:batching",
+    "target_id": "concept:latency",
+    "relation": "improves",
+    "supporting_chunk_ids": [
+      "ai-eng:p430:pc10"
+    ],
+    "support_spans": [
+      "Techniques like batching can improve throughput but reduce latency."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:caching__improves__concept:latency",
+    "layer": "concept",
+    "source_id": "concept:caching",
+    "target_id": "concept:latency",
+    "relation": "improves",
+    "supporting_chunk_ids": [
+      "ai-eng:p5:pc3",
+      "ai-eng:p5:pc4",
+      "ai-eng:p277:pc9",
+      "ai-eng:p450:pc17",
+      "ai-eng:p450:pc18",
+      "ai-eng:p473:pc1",
+      "ai-eng:p473:pc11"
+    ],
+    "support_spans": [
+      "Reduce Latency with Caches 460 Step 5.",
+      "Real-world semantic retrieval systems might contain other components, such as a reranker to rerank all retrieved candidates, and caches to reduce latency.8 With embedding-based retrieval, we again encounter embeddings, which are dis‐ cussed in Chapter 3.",
+      "Inference Optimization | 443 For applications with long system prompts, prompt caching can significantly reduce both latency and cost.",
+      "Anthropic offers prompt caching that promises up to 90% cost savings (the longer the cached context, the higher the savings) and up to 75% latency reduction.",
+      "Optimize for latency and costs with caching.",
+      "Reduce Latency with Caches Caching has long been integral to software applications to reduce latency and cost."
+    ],
+    "confidence": 0.875
+  },
+  {
+    "edge_id": "concept:caching__part_of__concept:memory",
+    "layer": "concept",
+    "source_id": "concept:caching",
+    "target_id": "concept:memory",
+    "relation": "part_of",
+    "supporting_chunk_ids": [
+      "ai-eng:p430:pc20"
+    ],
+    "support_spans": [
+      "These caches are part of the broader on-chip memory, which also includes other components like register files and shared memory."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:caching__compares_with__concept:tokenization",
+    "layer": "concept",
+    "source_id": "concept:caching",
+    "target_id": "concept:tokenization",
+    "relation": "compares_with",
+    "supporting_chunk_ids": [
+      "ai-eng:p450:pc18"
+    ],
+    "support_spans": [
+      "As of this writing, Google Gemini offers this functionality, with cached input tokens given a 75% discount compared to regular input tokens, but you’ll have to pay extra for cache storage (as of writing, $1.00/one million tokens per hour)."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:chunking__feeds_into__concept:retrieval",
+    "layer": "concept",
+    "source_id": "concept:chunking",
+    "target_id": "concept:retrieval",
+    "relation": "feeds_into",
+    "supporting_chunk_ids": [
+      "ai-eng:p277:pc17",
+      "ai-eng:p277:pc18",
+      "ai-eng:p277:pc22",
+      "ai-eng:p473:pc2"
+    ],
+    "support_spans": [
+      "Four tactics discussed here are chunking strategy, reranking, query rewriting, and contextual retrieval.",
+      "This is an important consideration because the chunking strategy you use can significantly impact the performance of your retrieval system.",
+      "For example, the article on how to reset your password can be augmented with queries like “How to reset password?”, “I forgot my password”, “I can’t log in”, or even “Help, I can’t find my account”.9 If a document is split into multiple chunks, some chunks might lack the necessary context to help the retriever understand what the chunk is about.",
+      "Different frameworks also differ in their retrieval algorithms and other retrieval con‐ figurations, like chunk sizes."
+    ],
+    "confidence": 0.77
+  },
+  {
+    "edge_id": "concept:cost__compares_with__concept:latency",
+    "layer": "concept",
+    "source_id": "concept:cost",
+    "target_id": "concept:latency",
+    "relation": "compares_with",
+    "supporting_chunk_ids": [
+      "ai-eng:p244:pc6"
+    ],
+    "support_spans": [
+      "How small each subtask should be depends on each use case and the performance, cost, and latency trade-off you’re comfortable with."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:embedding_model__feeds_into__concept:embeddings",
+    "layer": "concept",
+    "source_id": "concept:embedding_model",
+    "target_id": "concept:embeddings",
+    "relation": "feeds_into",
+    "supporting_chunk_ids": [
+      "ai-eng:p26:pc9",
+      "ai-eng:p26:pc10",
+      "ai-eng:p149:pc10",
+      "ai-eng:p277:pc9",
+      "ai-eng:p277:pc13",
+      "ai-eng:p277:pc19",
+      "ai-eng:p277:pc23",
+      "ai-eng:p277:pc24",
+      "ai-eng:p473:pc13"
+    ],
+    "support_spans": [
+      "CLIP is an embedding model, trained to produce joint embeddings of both texts and images.",
+      "Multimodal embedding models like CLIP are the back‐ bones of generative multimodal models, such as Flamingo, LLaVA, and Gemini (pre‐ viously Bard).",
+      "There are also proprietary embedding models provided as APIs.14 Table 3-2 shows the embedding sizes of some popular models.",
+      "Embedding model: convert the query into an embedding using the same embed‐ ding model used during indexing.",
+      "You can finetune the embedding model and the retriever, either separately, together, or in conjunction with the generative model.",
+      "For the embedding-based approach, the chunk size also shouldn’t exceed the embedding model’s context limit."
+    ],
+    "confidence": 0.91
+  },
+  {
+    "edge_id": "concept:evaluation__evaluates__concept:agent",
+    "layer": "concept",
+    "source_id": "concept:evaluation",
+    "target_id": "concept:agent",
+    "relation": "evaluates",
+    "supporting_chunk_ids": [
+      "ai-eng:p299:pc19",
+      "ai-eng:p299:pc23"
+    ],
+    "support_spans": [
+      "When evaluating an agent framework, check what control flows it supports.",
+      "When evaluating an agent framework, evaluate what planners and tools it supports."
+    ],
+    "confidence": 0.7
+  },
+  {
+    "edge_id": "concept:evaluation__compares_with__concept:benchmark",
+    "layer": "concept",
+    "source_id": "concept:evaluation",
+    "target_id": "concept:benchmark",
+    "relation": "compares_with",
+    "supporting_chunk_ids": [
+      "ai-eng:p203:pc26"
+    ],
+    "support_spans": [
+      "Relative difference in GPT-3’s performance when evaluating using only the clean sample compared to evaluating using the whole benchmark."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:evaluation__evaluates__concept:foundation_model",
+    "layer": "concept",
+    "source_id": "concept:evaluation",
+    "target_id": "concept:foundation_model",
+    "relation": "evaluates",
+    "supporting_chunk_ids": [
+      "ai-eng:p59:pc10",
+      "ai-eng:p138:pc0",
+      "ai-eng:p138:pc2",
+      "ai-eng:p138:pc3",
+      "ai-eng:p138:pc4"
+    ],
+    "support_spans": [
+      "The challenges of evaluating foundation models are discussed in Chapter 3.",
+      "Before diving into evaluation methods, it’s important to acknowledge the challenges of evaluating foundation models.",
+      "Evaluating foundation models is especially challenging because they are open-ended, and I’ll cover best practices for how to tackle these.",
+      "At the same time, publicly available evaluation benchmarks have proven to be inade‐ quate for evaluating foundation models.",
+      "Challenges of Evaluating Foundation Models | 115 The good news is that the new challenges of evaluation have prompted many new",
+      "Challenges of Evaluating Foundation Models | 115 The good news is that the new challenges of evaluation have prompted many new methods and benchmarks."
+    ],
+    "confidence": 0.805
+  },
+  {
+    "edge_id": "concept:evaluation__evaluates__concept:generation",
+    "layer": "concept",
+    "source_id": "concept:evaluation",
+    "target_id": "concept:generation",
+    "relation": "evaluates",
+    "supporting_chunk_ids": [
+      "ai-eng:p149:pc0",
+      "ai-eng:p149:pc1",
+      "ai-eng:p184:pc5"
+    ],
+    "support_spans": [
+      "Note that this section focuses on evaluating open-ended responses (arbitrary text generation) as opposed to close-ended responses (such as classification).",
+      "Popular benchmarks for evaluating AI’s code generation capabilities, such as OpenAI’s HumanEval and Google’s MBPP (Mostly Basic Python Problems Dataset) use functional correctness as their metrics.",
+      "They aren’t ideal for evaluating generation capabilities such as summarization, translation, and essay writing."
+    ],
+    "confidence": 0.735
+  },
+  {
+    "edge_id": "concept:evaluation__evaluates__concept:retrieval",
+    "layer": "concept",
+    "source_id": "concept:evaluation",
+    "target_id": "concept:retrieval",
+    "relation": "evaluates",
+    "supporting_chunk_ids": [
+      "ai-eng:p232:pc2",
+      "ai-eng:p277:pc22",
+      "ai-eng:p277:pc23"
+    ],
+    "support_spans": [
+      "Chapter 6 explores evaluating retrieval and agentic systems, while Chapters 7 and 9 focus on calculating a model’s memory usage, latency, and costs.",
+      "Evaluating Retrieval Solutions",
+      "Evaluating Retrieval Solutions Here are some key factors to keep in mind when evaluating a retrieval solution: • What retrieval mechanisms does it support?"
+    ],
+    "confidence": 0.735
+  },
+  {
+    "edge_id": "concept:evaluation__compares_with__concept:tool_use",
+    "layer": "concept",
+    "source_id": "concept:evaluation",
+    "target_id": "concept:tool_use",
+    "relation": "compares_with",
+    "supporting_chunk_ids": [
+      "ai-eng:p138:pc3"
+    ],
+    "support_spans": [
+      "To further demonstrate how the investment in evaluation lags behind other areas in the AI space, the number of tools for evaluation is small compared to the number of tools for modeling and training and AI orchestration, as shown in Figure 3-3."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:evaluation__evaluates__concept:tool_use",
+    "layer": "concept",
+    "source_id": "concept:evaluation",
+    "target_id": "concept:tool_use",
+    "relation": "evaluates",
+    "supporting_chunk_ids": [
+      "ai-eng:p299:pc23"
+    ],
+    "support_spans": [
+      "When evaluating an agent framework, evaluate what planners and tools it supports."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:fine_tuning__improves__concept:cost",
+    "layer": "concept",
+    "source_id": "concept:fine_tuning",
+    "target_id": "concept:cost",
+    "relation": "improves",
+    "supporting_chunk_ids": [
+      "ai-eng:p59:pc5"
+    ],
+    "support_spans": [
+      "In general, finetuning techniques are more com‐ plicated and require more data, but they can improve your model’s quality, latency, and cost significantly."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:fine_tuning__depends_on__concept:embeddings",
+    "layer": "concept",
+    "source_id": "concept:fine_tuning",
+    "target_id": "concept:embeddings",
+    "relation": "depends_on",
+    "supporting_chunk_ids": [
+      "ai-eng:p332:pc3"
+    ],
+    "support_spans": [
+      "Long-context finetuning typically requires modifying the model’s architecture, such as adjusting the positional embeddings."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:fine_tuning__compares_with__concept:memory",
+    "layer": "concept",
+    "source_id": "concept:fine_tuning",
+    "target_id": "concept:memory",
+    "relation": "compares_with",
+    "supporting_chunk_ids": [
+      "ai-eng:p329:pc2"
+    ],
+    "support_spans": [
+      "Compared to prompt-based methods, finetuning incurs a much higher memory foot‐ print."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:fine_tuning__depends_on__concept:memory",
+    "layer": "concept",
+    "source_id": "concept:fine_tuning",
+    "target_id": "concept:memory",
+    "relation": "depends_on",
+    "supporting_chunk_ids": [
+      "ai-eng:p329:pc2",
+      "ai-eng:p356:pc1"
+    ],
+    "support_spans": [
+      "At the scale of today’s foundation models, naive finetuning often requires more memory than what’s available on a single GPU.",
+      "• Full finetuning this model with the Adam optimizer, also in a 16-bit format, requires an additional 7B × 3 × 2 bytes = 42 GB of memory."
+    ],
+    "confidence": 0.7
+  },
+  {
+    "edge_id": "concept:fine_tuning__depends_on__concept:model_serving",
+    "layer": "concept",
+    "source_id": "concept:fine_tuning",
+    "target_id": "concept:model_serving",
+    "relation": "depends_on",
+    "supporting_chunk_ids": [
+      "ai-eng:p356:pc27"
+    ],
+    "support_spans": [
+      "With LoRA, you only need to serve a single full model, whereas full finetuning requires serving multiple full models."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:fine_tuning__improves__concept:quality",
+    "layer": "concept",
+    "source_id": "concept:fine_tuning",
+    "target_id": "concept:quality",
+    "relation": "improves",
+    "supporting_chunk_ids": [
+      "ai-eng:p59:pc5",
+      "ai-eng:p335:pc0"
+    ],
+    "support_spans": [
+      "In general, finetuning techniques are more com‐ plicated and require more data, but they can improve your model’s quality, latency, and cost significantly.",
+      "Reasons to Finetune The primary reason for finetuning is to improve a model’s quality, in terms of both general capabilities and task-specific capabilities."
+    ],
+    "confidence": 0.7
+  },
+  {
+    "edge_id": "concept:generation__depends_on__concept:caching",
+    "layer": "concept",
+    "source_id": "concept:generation",
+    "target_id": "concept:caching",
+    "relation": "depends_on",
+    "supporting_chunk_ids": [
+      "ai-eng:p450:pc8"
+    ],
+    "support_spans": [
+      "Because generating a token requires computing the attention scores with all previous tokens, the number of attention computations grows exponentially with sequence length.22 The KV cache size, on the other hand, grows linearly with sequence length."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:generation__compares_with__concept:embeddings",
+    "layer": "concept",
+    "source_id": "concept:generation",
+    "target_id": "concept:embeddings",
+    "relation": "compares_with",
+    "supporting_chunk_ids": [
+      "ai-eng:p277:pc14"
+    ],
+    "support_spans": [
+      "Since much of RAG latency comes from output generation, especially for long outputs, the added latency by query embedding generation and vector search might be minimal compared to the total RAG latency."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:generation__depends_on__concept:fine_tuning",
+    "layer": "concept",
+    "source_id": "concept:generation",
+    "target_id": "concept:fine_tuning",
+    "relation": "depends_on",
+    "supporting_chunk_ids": [
+      "ai-eng:p335:pc8"
+    ],
+    "support_spans": [
+      "Semantic parsing is a category of tasks whose success hinges on the model’s ability to generate outputs in the expected format and, therefore, often requires finetuning."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:generation__depends_on__concept:tokenization",
+    "layer": "concept",
+    "source_id": "concept:generation",
+    "target_id": "concept:tokenization",
+    "relation": "depends_on",
+    "supporting_chunk_ids": [
+      "ai-eng:p450:pc7",
+      "ai-eng:p450:pc8"
+    ],
+    "support_spans": [
+      "Attention mechanism optimization Recall from Chapter 2 that generating the next token requires the key and value vec‐ tors for all previous tokens.",
+      "This means that the following applies: • Generating token x requires the key and value vectors for tokens x , x , …, x .",
+      "t 1 2 t – 1 • Generating token x requires the key and value vectors for tokens x , x , …,x , t + 1 1 2 t – 1 x.",
+      "Because generating a token requires computing the attention scores with all previous tokens, the number of attention computations grows exponentially with sequence length.22 The KV cache size, on the other hand, grows linearly with sequence length."
+    ],
+    "confidence": 0.7
+  },
+  {
+    "edge_id": "concept:guardrails__constrains__concept:generation",
+    "layer": "concept",
+    "source_id": "concept:guardrails",
+    "target_id": "concept:generation",
+    "relation": "constrains",
+    "supporting_chunk_ids": [
+      "ai-eng:p203:pc13"
+    ],
+    "support_spans": [
+      "To protect their users and themselves from potential lawsuits, model providers use safety guardrails such as blocking requests to tell racist jokes or generate photos of real people."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:hallucination__risks__concept:quality",
+    "layer": "concept",
+    "source_id": "concept:hallucination",
+    "target_id": "concept:quality",
+    "relation": "risks",
+    "supporting_chunk_ids": [
+      "ai-eng:p335:pc8"
+    ],
+    "support_spans": [
+      "Finetuning, on the other hand, helps your model understand and follow syntaxes and styles.5 While finetuning can potentially reduce hallucinations if done with enough high-quality data, it can also worsen hallucinations if the data quality is low."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:latency__applies_to__architecture:model_server",
+    "layer": "cross_layer",
+    "source_id": "concept:latency",
+    "target_id": "architecture:model_server",
+    "relation": "applies_to",
+    "supporting_chunk_ids": [
+      "ai-eng:p430:pc6"
+    ],
+    "support_spans": [
+      "Let’s say that your inference server can serve only a maxi‐ mum of X requests/second without latency degradation, you have to serve Y requests/second, and Y is larger than X."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:latency__compares_with__concept:cost",
+    "layer": "concept",
+    "source_id": "concept:latency",
+    "target_id": "concept:cost",
+    "relation": "compares_with",
+    "supporting_chunk_ids": [
+      "ai-eng:p299:pc10"
+    ],
+    "support_spans": [
+      "This is another latency/cost trade-off, as generating multiple plans simultaneously will incur extra costs."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:low_rank_adaptation__part_of__concept:parameter_efficient_fine_tuning",
+    "layer": "concept",
+    "source_id": "concept:low_rank_adaptation",
+    "target_id": "concept:parameter_efficient_fine_tuning",
+    "relation": "part_of",
+    "supporting_chunk_ids": [
+      "ai-eng:p356:pc4",
+      "ai-eng:p356:pc14",
+      "ai-eng:p385:pc1",
+      "ai-eng:p389:pc10"
+    ],
+    "support_spans": [
+      "The next section will give an overview of these techniques before diving deeper into the most common PEFT technique: LoRA.",
+      "PEFT frameworks—such as Hugging Face’s PEFT, Axolotl, unsloth, and LitGPT—likely support LoRA for popular base models right out of the box.",
+      "After giving an overview of PEFT, the chapter zoomed into LoRA—why and how it works.",
+      "Other than data quality and data diversity, three other factors influence how much data you need: Finetuning techniques Full finetuning promises to give the best performance, but it requires orders of magnitude more data than PEFT methods like LoRA."
+    ],
+    "confidence": 0.77
+  },
+  {
+    "edge_id": "concept:memory__compares_with__concept:low_rank_adaptation",
+    "layer": "concept",
+    "source_id": "concept:memory",
+    "target_id": "concept:low_rank_adaptation",
+    "relation": "compares_with",
+    "supporting_chunk_ids": [
+      "ai-eng:p356:pc14"
+    ],
+    "support_spans": [
+      "However, as illustrated in Table 7-6, the memory of a LoRA adapter is minimal compared to the memory of the model’s weights.",
+      "The memory needed by LoRA weights compared to that needed by the model’s weights."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:moderation__improves__concept:safety",
+    "layer": "concept",
+    "source_id": "concept:moderation",
+    "target_id": "concept:safety",
+    "relation": "improves",
+    "supporting_chunk_ids": [
+      "ai-eng:p184:pc14"
+    ],
+    "support_spans": [
+      "properly.5 These model providers also need to develop moderation tools to keep their models safe, and some of them expose their moderation tools for external use."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:offline_evaluation__part_of__concept:evaluation",
+    "layer": "concept",
+    "source_id": "concept:offline_evaluation",
+    "target_id": "concept:evaluation",
+    "relation": "part_of",
+    "supporting_chunk_ids": [
+      "ai-eng:p180:pc0"
+    ],
+    "support_spans": [
+      "For offline evaluation, it can be a great addition to evaluation benchmarks."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:online_evaluation__part_of__concept:evaluation",
+    "layer": "concept",
+    "source_id": "concept:online_evaluation",
+    "target_id": "concept:evaluation",
+    "relation": "part_of",
+    "supporting_chunk_ids": [
+      "ai-eng:p180:pc0"
+    ],
+    "support_spans": [
+      "For online evaluation, it can be complementary to A/B testing."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:parameter_efficient_fine_tuning__part_of__concept:fine_tuning",
+    "layer": "concept",
+    "source_id": "concept:parameter_efficient_fine_tuning",
+    "target_id": "concept:fine_tuning",
+    "relation": "part_of",
+    "supporting_chunk_ids": [
+      "ai-eng:p329:pc2",
+      "ai-eng:p343:pc1",
+      "ai-eng:p356:pc3",
+      "ai-eng:p356:pc4",
+      "ai-eng:p356:pc6",
+      "ai-eng:p385:pc1",
+      "ai-eng:p389:pc10",
+      "ai-eng:p389:pc16",
+      "ai-eng:p389:pc17"
+    ],
+    "support_spans": [
+      "A memory-efficient approach that has become dominant in the finetuning space is PEFT (parameter-efficient finetuning).",
+      "Reducing the number of trainable parameters is the motivation for PEFT, parameter-efficient finetuning.",
+      "The idea of PEFT (parameter-efficient finetuning) was introduced by Houlsby et al.",
+      "While full finetuning may need tens of thousands to millions of examples to achieve notable quality improvements, some PEFT methods can deliver strong performance with just a few thousand examples.",
+      "The number of issues corresponding to different finetuning techniques from the GitHub repository huggingface/peft.",
+      "For example, PEFT reduces finetuning’s memory requirements by reducing the number of trainable parameters."
+    ],
+    "confidence": 0.91
+  },
+  {
+    "edge_id": "concept:planning__part_of__concept:agent",
+    "layer": "concept",
+    "source_id": "concept:planning",
+    "target_id": "concept:agent",
+    "relation": "part_of",
+    "supporting_chunk_ids": [
+      "ai-eng:p299:pc0",
+      "ai-eng:p299:pc2",
+      "ai-eng:p299:pc3",
+      "ai-eng:p299:pc6",
+      "ai-eng:p299:pc8",
+      "ai-eng:p299:pc10",
+      "ai-eng:p299:pc11",
+      "ai-eng:p299:pc14",
+      "ai-eng:p299:pc15",
+      "ai-eng:p299:pc20",
+      "ai-eng:p299:pc23",
+      "ai-eng:p299:pc24",
+      "ai-eng:p299:pc25",
+      "ai-eng:p299:pc26",
+      "ai-eng:p329:pc0",
+      "ai-eng:p329:pc1"
+    ],
+    "support_spans": [
+      "This section will start with an overview of agents, and then continue with two aspects that determine the capabilities of an agent: tools and planning.",
+      "In an AI agent, AI is the brain that processes the information it receives, including the task and feedback from the environment, plans a sequence of actions to achieve this task, and determines whether the task has been accomplished.",
+      "Given an environment, the success of an agent in an environment depends on the tool inventory it has access to and the strength of its AI planner.",
+      "Given a text request, the agent’s AI planner decides whether to invoke text generation, image generation, or both.",
+      "Planning At the heart of a foundation model agent is the model responsible for solving a task.",
+      "If you consider each component an agent, this is a multi-agent system.12 To speed up the process, instead of generating plans sequentially, you can generate several plans in parallel and ask the evaluator to pick the most promising one."
+    ],
+    "confidence": 0.91
+  },
+  {
+    "edge_id": "concept:prompt_engineering__compares_with__concept:fine_tuning",
+    "layer": "concept",
+    "source_id": "concept:prompt_engineering",
+    "target_id": "concept:fine_tuning",
+    "relation": "compares_with",
+    "supporting_chunk_ids": [
+      "ai-eng:p299:pc6"
+    ],
+    "support_spans": [
+      "Tool use can significantly boost a model’s performance compared to just prompting or even finetuning."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:prompt_engineering__improves__concept:quality",
+    "layer": "concept",
+    "source_id": "concept:prompt_engineering",
+    "target_id": "concept:quality",
+    "relation": "improves",
+    "supporting_chunk_ids": [
+      "ai-eng:p184:pc19"
+    ],
+    "support_spans": [
+      "Roleplaying as a prompt engineering technique to improve the quality of a model’s outputs, as discussed in Chapter 5 7 There haven’t been many comprehensive studies of the distribution of instructions people are using founda‐ tion models for."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:prompt_injection__risks__concept:safety",
+    "layer": "concept",
+    "source_id": "concept:prompt_injection",
+    "target_id": "concept:safety",
+    "relation": "risks",
+    "supporting_chunk_ids": [
+      "ai-eng:p259:pc3"
+    ],
+    "support_spans": [
+      "Jailbreaking and Prompt Injection Jailbreaking a model means trying to subvert a model’s safety features."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:quality__depends_on__concept:generation",
+    "layer": "concept",
+    "source_id": "concept:quality",
+    "target_id": "concept:generation",
+    "relation": "depends_on",
+    "supporting_chunk_ids": [
+      "ai-eng:p18:pc0"
+    ],
+    "support_spans": [
+      "Given a query, the quality of a model’s response depends on the following aspects (outside of the model’s generation setting): • The instructions for how the model should behave • The context the model can use to respond to the query"
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:quantization__improves__concept:cost",
+    "layer": "concept",
+    "source_id": "concept:quantization",
+    "target_id": "concept:cost",
+    "relation": "improves",
+    "supporting_chunk_ids": [
+      "ai-eng:p343:pc13"
+    ],
+    "support_spans": [
+      "Quantization also speeds up computation, which further reduces costs."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:quantization__compares_with__concept:precision",
+    "layer": "concept",
+    "source_id": "concept:quantization",
+    "target_id": "concept:precision",
+    "relation": "compares_with",
+    "supporting_chunk_ids": [
+      "ai-eng:p343:pc9"
+    ],
+    "support_spans": [
+      "Quantization Versus Reduced Precision Strictly speaking, it’s quantization only if the target format is integer."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:recall__evaluates__concept:retrieval",
+    "layer": "concept",
+    "source_id": "concept:recall",
+    "target_id": "concept:retrieval",
+    "relation": "evaluates",
+    "supporting_chunk_ids": [
+      "ai-eng:p277:pc13"
+    ],
+    "support_spans": [
+      "You then compute the precision and recall score of the retriever on this evaluation set."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:reliability__depends_on__concept:embeddings",
+    "layer": "concept",
+    "source_id": "concept:reliability",
+    "target_id": "concept:embeddings",
+    "relation": "depends_on",
+    "supporting_chunk_ids": [
+      "ai-eng:p149:pc9"
+    ],
+    "support_spans": [
+      "However, the reliability of semantic similarity depends on the quality of the underlying embedding algorithm."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:reliability__compares_with__concept:latency",
+    "layer": "concept",
+    "source_id": "concept:reliability",
+    "target_id": "concept:latency",
+    "relation": "compares_with",
+    "supporting_chunk_ids": [
+      "ai-eng:p473:pc5"
+    ],
+    "support_spans": [
+      "One is the reliability versus latency trade-off."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:retrieval__depends_on__concept:embeddings",
+    "layer": "concept",
+    "source_id": "concept:retrieval",
+    "target_id": "concept:embeddings",
+    "relation": "depends_on",
+    "supporting_chunk_ids": [
+      "ai-eng:p277:pc4",
+      "ai-eng:p277:pc5",
+      "ai-eng:p277:pc7",
+      "ai-eng:p277:pc8",
+      "ai-eng:p277:pc10",
+      "ai-eng:p277:pc12",
+      "ai-eng:p277:pc13",
+      "ai-eng:p277:pc14",
+      "ai-eng:p277:pc15",
+      "ai-eng:p277:pc16",
+      "ai-eng:p277:pc19",
+      "ai-eng:p329:pc0",
+      "ai-eng:p343:pc0",
+      "ai-eng:p473:pc12"
+    ],
+    "support_spans": [
+      "I’ll start with two common retrieval mechanisms: term-based retrieval and embedding- based retrieval.",
+      "Embedding-based retrieval is typically considered dense, as embeddings are generally dense vectors.",
+      "Longer RAG | 259 documents are more likely to contain a given term and have higher term frequency values.6 BM25 and its variances (BM25+, BM25F) are still widely used in the industry and serve as formidable baselines to compare against modern, more sophisticated retrieval algorithms, such as embedding-based retrieval, discussed next.7 One process I glossed over is tokenization, the process of breaking a query into indi‐ vidual terms.",
+      "Embedding-based retrieval Term-based retrieval computes relevance at a lexical level rather than a semantic level.",
+      "Vector search is common in any application that uses embeddings: search, recommendation, data organization, information retrieval, clustering, fraud detection, and more.",
+      "RAG | 263 Comparing retrieval algorithms Due to the long history of retrieval, its many mature solutions make both term-based and embedding-based retrieval relatively easy to start."
+    ],
+    "confidence": 0.91
+  },
+  {
+    "edge_id": "concept:retrieval__feeds_into__concept:generation",
+    "layer": "concept",
+    "source_id": "concept:retrieval",
+    "target_id": "concept:generation",
+    "relation": "feeds_into",
+    "supporting_chunk_ids": [
+      "ai-eng:p5:pc5",
+      "ai-eng:p26:pc10",
+      "ai-eng:p26:pc11",
+      "ai-eng:p277:pc0",
+      "ai-eng:p277:pc1",
+      "ai-eng:p277:pc14",
+      "ai-eng:p277:pc17",
+      "ai-eng:p299:pc0",
+      "ai-eng:p450:pc5",
+      "ai-eng:p473:pc9"
+    ],
+    "support_spans": [
+      "Retrieval-augmented generation (RAG) applications are built upon retrieval technol‐ ogy that has powered search and recommender systems since long before the term RAG was coined.",
+      "Using a database to supplement the instructions is called retrieval- augmented generation (RAG).",
+      "The term retrieval-augmented generation was coined in “Retrieval-Augmented Gen‐ eration for Knowledge-Intensive NLP Tasks” (Lewis et al., 2020).",
+      "Ultimately, a retriever is good if it helps the system generate high-quality answers.",
+      "You can use multiple retrievers to fetch candidates at the same time, then combine these dif‐ ferent rankings together to generate a final ranking.",
+      "In this section, we’ve discussed how tools such as retrievers and SQL executors can enable models to handle more queries and generate higher-quality responses."
+    ],
+    "confidence": 0.91
+  },
+  {
+    "edge_id": "concept:retrieval__improves__concept:quality",
+    "layer": "concept",
+    "source_id": "concept:retrieval",
+    "target_id": "concept:quality",
+    "relation": "improves",
+    "supporting_chunk_ids": [
+      "ai-eng:p277:pc14"
+    ],
+    "support_spans": [
+      "Ultimately, a retriever is good if it helps the system generate high-quality answers."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:retrieval_augmented_generation__compares_with__concept:embeddings",
+    "layer": "concept",
+    "source_id": "concept:retrieval_augmented_generation",
+    "target_id": "concept:embeddings",
+    "relation": "compares_with",
+    "supporting_chunk_ids": [
+      "ai-eng:p277:pc14"
+    ],
+    "support_spans": [
+      "Since much of RAG latency comes from output generation, especially for long outputs, the added latency by query embedding generation and vector search might be minimal compared to the total RAG latency."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:retrieval_augmented_generation__compares_with__concept:generation",
+    "layer": "concept",
+    "source_id": "concept:retrieval_augmented_generation",
+    "target_id": "concept:generation",
+    "relation": "compares_with",
+    "supporting_chunk_ids": [
+      "ai-eng:p277:pc14"
+    ],
+    "support_spans": [
+      "Since much of RAG latency comes from output generation, especially for long outputs, the added latency by query embedding generation and vector search might be minimal compared to the total RAG latency."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:retrieval_augmented_generation__compares_with__concept:retrieval",
+    "layer": "concept",
+    "source_id": "concept:retrieval_augmented_generation",
+    "target_id": "concept:retrieval",
+    "relation": "compares_with",
+    "supporting_chunk_ids": [
+      "ai-eng:p277:pc4"
+    ],
+    "support_spans": [
+      "RAG | 257 Sparse Versus Dense Retrieval In the literature, you might encounter the division of retrieval algorithms into the fol‐ lowing categories: sparse versus dense."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:retrieval_augmented_generation__depends_on__concept:retrieval",
+    "layer": "concept",
+    "source_id": "concept:retrieval_augmented_generation",
+    "target_id": "concept:retrieval",
+    "relation": "depends_on",
+    "supporting_chunk_ids": [
+      "ai-eng:p5:pc5",
+      "ai-eng:p26:pc10",
+      "ai-eng:p26:pc11",
+      "ai-eng:p184:pc12",
+      "ai-eng:p244:pc3",
+      "ai-eng:p259:pc8",
+      "ai-eng:p277:pc0",
+      "ai-eng:p277:pc1",
+      "ai-eng:p277:pc3",
+      "ai-eng:p277:pc4",
+      "ai-eng:p277:pc7",
+      "ai-eng:p277:pc12",
+      "ai-eng:p277:pc14",
+      "ai-eng:p277:pc22",
+      "ai-eng:p277:pc24",
+      "ai-eng:p299:pc1",
+      "ai-eng:p324:pc1",
+      "ai-eng:p324:pc3",
+      "ai-eng:p329:pc0",
+      "ai-eng:p343:pc0",
+      "ai-eng:p473:pc19",
+      "ai-eng:p473:pc25"
+    ],
+    "support_spans": [
+      "Retrieval-augmented generation (RAG) applications are built upon retrieval technol‐ ogy that has powered search and recommender systems since long before the term RAG was coined.",
+      "Using a database to supplement the instructions is called retrieval- augmented generation (RAG).",
+      "Factual consistency is a crucial evaluation criteria for RAG, retrieval-augmented gen‐ eration, systems.",
+      "Context construction tools include data retrieval, such as in a RAG pipeline, and web search.",
+      "The same type of attack can be performed on RAG, retrieval-augmented genera‐ tion, systems.",
+      "The term retrieval-augmented generation was coined in “Retrieval-Augmented Gen‐ eration for Knowledge-Intensive NLP Tasks” (Lewis et al., 2020)."
+    ],
+    "confidence": 0.91
+  },
+  {
+    "edge_id": "concept:tool_use__compares_with__concept:evaluation",
+    "layer": "concept",
+    "source_id": "concept:tool_use",
+    "target_id": "concept:evaluation",
+    "relation": "compares_with",
+    "supporting_chunk_ids": [
+      "ai-eng:p138:pc4"
+    ],
+    "support_spans": [
+      "the AI space, the number of tools for evaluation is small compared to the number of tools for modeling and training and AI orchestration, as shown in Figure 3-3."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:tool_use__compares_with__concept:fine_tuning",
+    "layer": "concept",
+    "source_id": "concept:tool_use",
+    "target_id": "concept:fine_tuning",
+    "relation": "compares_with",
+    "supporting_chunk_ids": [
+      "ai-eng:p299:pc6"
+    ],
+    "support_spans": [
+      "Tool use can significantly boost a model’s performance compared to just prompting or even finetuning."
+    ],
+    "confidence": 0.665
+  },
+  {
+    "edge_id": "concept:tool_use__compares_with__concept:prompt_engineering",
+    "layer": "concept",
+    "source_id": "concept:tool_use",
+    "target_id": "concept:prompt_engineering",
+    "relation": "compares_with",
+    "supporting_chunk_ids": [
+      "ai-eng:p299:pc6"
+    ],
+    "support_spans": [
+      "Tool use can significantly boost a model’s performance compared to just prompting or even finetuning."
+    ],
+    "confidence": 0.665
+  }
+]

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { AuthSession } from '../types';
+import { identifyAnalyticsUser, initAnalytics, resetAnalytics } from '../services/analytics';
 import { getStoredSession, onAuthSessionChange } from '../services/auth';
 
 const DEV_BYPASS = import.meta.env.VITE_DEV_BYPASS_AUTH === 'true';
@@ -14,13 +15,13 @@ const DEV_SESSION: AuthSession | null = DEV_BYPASS
   : null;
 
 export function useAuthSession() {
-  const [authSession, setAuthSession] = useState<AuthSession | null>(null);
-  const [authReady, setAuthReady] = useState(false);
+  const [authSession, setAuthSession] = useState<AuthSession | null>(DEV_SESSION);
+  const [authReady, setAuthReady] = useState(Boolean(DEV_SESSION));
 
   useEffect(() => {
+    initAnalytics();
+
     if (DEV_SESSION) {
-      setAuthSession(DEV_SESSION);
-      setAuthReady(true);
       return;
     }
 
@@ -34,6 +35,14 @@ export function useAuthSession() {
       setAuthReady(true);
     });
   }, []);
+
+  useEffect(() => {
+    if (authSession) {
+      identifyAnalyticsUser(authSession);
+      return;
+    }
+    resetAnalytics();
+  }, [authSession]);
 
   const handleAuthenticated = useCallback((session: AuthSession) => {
     setAuthSession(session);

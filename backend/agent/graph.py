@@ -28,6 +28,7 @@ from agent.pipeline_steps import (
     run_search_phase,
 )
 from agent.state import AgentState
+from observability import start_span
 
 
 async def run_agent(
@@ -57,32 +58,40 @@ async def run_agent(
     """
 
     # ── Phase 0: Route ────────────────────────────────────────────────────────
-    state = await orchestrator_route(state)
+    with start_span("agent.orchestrator_route", attributes={"app.request_id": state.get("request_id")}):
+        state = await orchestrator_route(state)
 
     # Simple factual questions skip RAG + graph entirely — answered by Haiku directly
     if state["route"] == "simple":
-        return await quick_synthesise(state)
+        with start_span("agent.quick_synthesise", attributes={"app.route": state["route"]}):
+            return await quick_synthesise(state)
 
     research_enabled = state.get("research_enabled", False)
 
     # ── Phase 1a: RAG + research in parallel ──────────────────────────────────
     if research_enabled:
-        state = await run_parallel_research_phase(state, rag_tools)
+        with start_span("agent.parallel_research_phase", attributes={"app.research_enabled": True}):
+            state = await run_parallel_research_phase(state, rag_tools)
         search_tool_wait_task = None
     else:
-        state, search_tool_wait_task = await run_search_phase(state, rag_tools)
+        with start_span("agent.rag_phase", attributes={"app.graph_mode": state.get("graph_mode", "auto")}):
+            state, search_tool_wait_task = await run_search_phase(state, rag_tools)
 
     # ── Phase 1b: Graph worker ────────────────────────────────────────────────
-    state = await apply_graph_worker(state, graph_tools)
+    with start_span("agent.graph_phase", attributes={"app.graph_mode": state.get("graph_mode", "auto")}):
+        state = await apply_graph_worker(state, graph_tools)
 
     # If the user explicitly asked for broader context before synthesis,
     # rerun the graph worker so the diagram and final answer reflect the same evidence bundle.
-    state = await maybe_expand_with_search_tool(state, graph_tools, search_tool_wait_task)
+    with start_span("agent.search_tool_wait", attributes={"app.has_search_tool_wait": bool(search_tool_wait_task)}):
+        state = await maybe_expand_with_search_tool(state, graph_tools, search_tool_wait_task)
 
     # ── Phase 2: Synthesise + stream ──────────────────────────────────────────
-    state = await orchestrator_synthesise(state)
+    with start_span("agent.synthesis_phase", attributes={"app.route": state.get("route", "")}):
+        state = await orchestrator_synthesise(state)
 
     # ── Phase 3: Async node enrichment (non-blocking) ─────────────────────────
-    maybe_start_node_enrichment(state, node_detail_tools)
+    with start_span("agent.node_enrichment_phase"):
+        maybe_start_node_enrichment(state, node_detail_tools)
 
     return state

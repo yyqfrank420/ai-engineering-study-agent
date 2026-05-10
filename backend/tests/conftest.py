@@ -28,6 +28,14 @@ def force_sqlite_mode(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def skip_prompt_injection_model(monkeypatch):
+    # Unit tests should not load llm-guard's external model; dedicated tests can
+    # override this if they need scanner behavior.
+    monkeypatch.setattr("api.chat_guards.check_prompt_injection", lambda _text: True)
+    monkeypatch.setattr("api.sse_handler.check_prompt_injection", lambda _text: True)
+
+
+@pytest.fixture(autouse=True)
 def clear_rate_limits():
     from api.auth_route import (
         _internal_login_failures,
@@ -43,6 +51,7 @@ def clear_rate_limits():
     _internal_login_failures.clear()
     try:
         execute("DELETE FROM request_events")
+        execute("DELETE FROM product_analytics_events")
         execute("DELETE FROM search_tool_requests")
         execute("DELETE FROM http_request_logs")
         execute("DELETE FROM llm_telemetry")
@@ -55,6 +64,7 @@ def clear_rate_limits():
     _internal_login_failures.clear()
     try:
         execute("DELETE FROM request_events")
+        execute("DELETE FROM product_analytics_events")
         execute("DELETE FROM search_tool_requests")
         execute("DELETE FROM http_request_logs")
         execute("DELETE FROM llm_telemetry")

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AuthSession } from '../types';
+import { trackEvent } from '../services/analytics';
 import { createThread, fetchLatestThread, fetchThread } from '../services/api';
 import {
   clearThreadSnapshot,
@@ -63,9 +64,17 @@ export function useThreadSession({
       setThreadError(null);
 
       try {
-        const detail = threadId
-          ? await fetchThread(session, threadId)
-          : await fetchLatestThread(session);
+        let detail: Awaited<ReturnType<typeof fetchThread>>;
+        try {
+          detail = threadId
+            ? await fetchThread(session, threadId)
+            : await fetchLatestThread(session);
+        } catch (error) {
+          if (requestSeq !== threadRequestSeqRef.current) {
+            return;
+          }
+          throw error;
+        }
         if (requestSeq !== threadRequestSeqRef.current) {
           return;
         }
@@ -198,6 +207,7 @@ export function useThreadSession({
       activeThreadIdRef.current = detail.thread.id;
       setThreadTitle(detail.thread.title);
       localStorage.setItem(storageKeyForThread(authSession.user.id), detail.thread.id);
+      void trackEvent('thread_created', { thread_id: detail.thread.id }, authSession);
       setThreadSnapshot({
         title: detail.thread.title,
         messages: mapThreadMessages(detail.messages),
@@ -217,6 +227,7 @@ export function useThreadSession({
       }
 
       clearSelection();
+      void trackEvent('thread_selected', { thread_id: threadId }, authSession);
       loadThread(authSession, threadId).catch(console.error);
     },
     [authSession, backendReady, clearSelection, loadThread],
@@ -229,6 +240,7 @@ export function useThreadSession({
       }
 
       clearThreadSnapshot(authSession.user.id, threadId);
+      void trackEvent('thread_deleted', { thread_id: threadId }, authSession);
 
       if (threadId !== activeThreadId || !backendReady) {
         return;

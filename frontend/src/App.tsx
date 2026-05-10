@@ -1,6 +1,7 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { GraphNode } from './types';
+import { trackEvent } from './services/analytics';
 import { useAgentStream } from './hooks/useAgentStream';
 import { TitleBar } from './components/Layout/TitleBar';
 import { SplitPane } from './components/Layout/SplitPane';
@@ -29,10 +30,19 @@ const GraphCanvas = lazy(() =>
 const MessageList = lazy(() =>
   import('./components/Chat/MessageList').then(module => ({ default: module.MessageList })),
 );
+const InternalDashboard = lazy(() =>
+  import('./components/InternalDashboard').then(module => ({ default: module.InternalDashboard })),
+);
+
+type AppRoute = 'chat' | 'internal-dashboard';
+
+function resolveRouteFromHash(): AppRoute {
+  return window.location.hash === '#/internal/dashboard' ? 'internal-dashboard' : 'chat';
+}
 
 export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [graphRevealed, setGraphRevealed] = useState(false);
+  const [appRoute, setAppRoute] = useState<AppRoute>(resolveRouteFromHash);
   const { authReady, handleAuthenticated, setAuthSession, authSession } = useAuthSession();
   const {
     selectionSuggestion,
@@ -86,20 +96,19 @@ export default function App() {
   const [complexity,      setComplexity]      = useState<ComplexityLevel>('auto');
   const [graphMode,       setGraphMode]       = useState<GraphMode>('auto');
   const [researchEnabled, setResearchEnabled] = useState(false);
+  const previousModeKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      setAppRoute(resolveRouteFromHash());
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
 
   useEffect(() => {
     hydrateThread(threadSnapshot);
   }, [hydrateThread, threadSnapshot]);
-
-  useEffect(() => {
-    setGraphRevealed(false);
-  }, [activeThreadId]);
-
-  useEffect(() => {
-    if (messages.length > 0 || !!graphData) {
-      setGraphRevealed(true);
-    }
-  }, [graphData, messages.length]);
 
   const handleLogout = useCallback(async () => {
     if (authSession) {
@@ -131,12 +140,14 @@ export default function App() {
       graphMode,
       researchEnabled,
       displayContent: content,
+      backendReadinessState: backendReadiness,
+      hasSelectedTextContext: selectionReferenceActive && !!selectionSuggestion,
     });
   }, [backendReadiness, clearSelection, complexity, graphMode, researchEnabled, selectionReferenceActive, selectionSuggestion, sendMessage]);
 
   // isGenerating: LLM is actively streaming — show Stop button
   const isGenerating = messages.some(m => m.isStreaming);
-  // isStreaming: any busy state — used to disable sidebar/new-chat during loads
+  // isStreaming: busy state used to disable sidebar/new-chat during loads
   const isStreaming = isGenerating || loadingThread;
   const composerLocked = streamStatus === 'generating' || loadingThread;
   const sendLocked = composerLocked || backendReadiness !== 'ready' || !activeThreadId;
@@ -145,6 +156,11 @@ export default function App() {
 
   const handleNodeClick = (node: GraphNode) => {
     setSelectedNode({ node, suggestions: [] });
+    void trackEvent('node_selected', {
+      thread_id: activeThreadId ?? undefined,
+      node_id: node.id,
+      node_label: node.label,
+    }, authSession);
     sendNodeSelected(node.id, node.label, node.detail ?? node.description ?? '');
   };
 
@@ -157,6 +173,15 @@ export default function App() {
   const handleExpandGraph = useCallback((node: GraphNode) => {
     clearSelection();
     setSelectedNode(null);
+    void trackEvent('expand_graph_clicked', {
+      thread_id: activeThreadId ?? undefined,
+      node_id: node.id,
+      node_label: node.label,
+      complexity,
+      graph_mode: 'on',
+      research_enabled: researchEnabled,
+      backend_readiness_state: backendReadiness,
+    }, authSession);
     sendMessage(
       [
         `Expand the current graph around ${node.label}.`,
@@ -171,9 +196,11 @@ export default function App() {
         graphMode: 'on',
         researchEnabled,
         displayContent: `Expand graph around ${node.label}`,
+        backendReadinessState: backendReadiness,
+        hasSelectedTextContext: false,
       },
     );
-  }, [clearSelection, complexity, researchEnabled, sendMessage]);
+  }, [activeThreadId, authSession, backendReadiness, clearSelection, complexity, researchEnabled, sendMessage, setSelectedNode]);
 
   const effectiveThreadTitle = useMemo(
     () => threadTitle || 'New chat',
@@ -207,11 +234,39 @@ export default function App() {
     setSidebarOpen(open => !open);
   }, []);
 
+  const openDashboard = useCallback(() => {
+    window.location.hash = '/internal/dashboard';
+    setAppRoute('internal-dashboard');
+  }, []);
+
+  const openChat = useCallback(() => {
+    window.location.hash = '';
+    setAppRoute('chat');
+  }, []);
+
+  useEffect(() => {
+    const modeKey = `${complexity}|${graphMode}|${researchEnabled ? 'research-on' : 'research-off'}`;
+    const previousModeKey = previousModeKeyRef.current;
+    previousModeKeyRef.current = modeKey;
+    if (previousModeKey === null || previousModeKey === modeKey) {
+      return;
+    }
+    void trackEvent(
+      'mode_changed',
+      {
+        mode: 'composer',
+        value: modeKey,
+      },
+      authSession,
+    );
+  }, [authSession, complexity, graphMode, researchEnabled]);
+
   if (!authReady) {
     return <div style={loadingScreenStyle}>Loading session…</div>;
   }
 
-  const showGraphPane = graphRevealed;
+  const showGraphPane = messages.length > 0 || !!graphData;
+  const dashboardActive = appRoute === 'internal-dashboard' && !!authSession;
 
   return (
     <div style={{ position: 'relative', height: '100vh', overflow: 'hidden' }}>
@@ -243,119 +298,131 @@ export default function App() {
         streamStatus={streamStatus}
         providerNotice={providerNotice}
         userEmail={authSession?.user.email ?? ''}
-        threadTitle={effectiveThreadTitle}
+        threadTitle={dashboardActive ? 'Internal dashboard' : effectiveThreadTitle}
         sidebarOpen={sidebarOpen}
+        showDashboardLink={!!authSession}
+        dashboardActive={dashboardActive}
         onToggleSidebar={handleToggleSidebar}
+        onOpenDashboard={openDashboard}
+        onOpenChat={openChat}
         onLogout={handleLogout}
       />
 
       {/* Main body: sidebar + split pane side-by-side */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        <ThreadSidebar
-          authSession={authSession}
-          activeThreadId={activeThreadId}
-          backendReady={isBackendReady}
-          onNewChat={handleNewChat}
-          onSelectThread={handleSelectThread}
-          onDeleteThread={handleDeleteThread}
-          isLoading={isStreaming}
-          isOpen={sidebarOpen}
-        />
-        <SplitPane
-          graphVisible={showGraphPane}
-          left={
-            <Suspense fallback={<div style={panelFallbackStyle}>Loading graph…</div>}>
-              <GraphCanvas
-                graphData={graphData}
-                animateSequence={streamStatus === 'generating'}
-                authSession={authSession}
-                activeThreadId={activeThreadId}
-                onNodeClick={handleNodeClick}
-                onTellMeMore={handleTellMeMore}
-                onExpandGraph={handleExpandGraph}
-                selectedNode={selectedNode}
-                onClosePopup={() => setSelectedNode(null)}
-                sourceTexts={[latestAssistantText]}
-              />
-            </Suspense>
-          }
-          right={
-            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-              {threadError && (
-                <div style={{
-                  margin: '1rem',
-                  padding: '0.75rem 1rem',
-                  borderRadius: '8px',
-                  background: 'rgba(248,81,73,0.08)',
-                  border: '1px solid rgba(248,81,73,0.2)',
-                  color: '#f85149',
-                  fontSize: '0.8rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: '0.75rem',
-                  flexShrink: 0,
-                }}>
-                  <span>Backend unreachable: {threadError}</span>
-                  <button
-                    onClick={retryLatestThread}
-                    style={{
-                      background: 'rgba(248,81,73,0.12)',
-                      border: '1px solid rgba(248,81,73,0.3)',
-                      borderRadius: '6px',
+        {dashboardActive && authSession ? (
+          <Suspense fallback={<div style={panelFallbackStyle}>Loading dashboard…</div>}>
+            <InternalDashboard authSession={authSession} />
+          </Suspense>
+        ) : (
+          <>
+            <ThreadSidebar
+              authSession={authSession}
+              activeThreadId={activeThreadId}
+              backendReady={isBackendReady}
+              onNewChat={handleNewChat}
+              onSelectThread={handleSelectThread}
+              onDeleteThread={handleDeleteThread}
+              isLoading={isStreaming}
+              isOpen={sidebarOpen}
+            />
+            <SplitPane
+              graphVisible={showGraphPane}
+              left={
+                <Suspense fallback={<div style={panelFallbackStyle}>Loading graph…</div>}>
+                  <GraphCanvas
+                    graphData={graphData}
+                    animateSequence={streamStatus === 'generating'}
+                    authSession={authSession}
+                    activeThreadId={activeThreadId}
+                    onNodeClick={handleNodeClick}
+                    onTellMeMore={handleTellMeMore}
+                    onExpandGraph={handleExpandGraph}
+                    selectedNode={selectedNode}
+                    onClosePopup={() => setSelectedNode(null)}
+                    sourceTexts={[latestAssistantText]}
+                  />
+                </Suspense>
+              }
+              right={
+                <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+                  {threadError && (
+                    <div style={{
+                      margin: '1rem',
+                      padding: '0.75rem 1rem',
+                      borderRadius: '8px',
+                      background: 'rgba(248,81,73,0.08)',
+                      border: '1px solid rgba(248,81,73,0.2)',
                       color: '#f85149',
-                      fontSize: '0.75rem',
-                      padding: '3px 10px',
-                      cursor: 'pointer',
+                      fontSize: '0.8rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '0.75rem',
                       flexShrink: 0,
-                    }}
-                  >
-                    Retry
-                  </button>
+                    }}>
+                      <span>Backend unreachable: {threadError}</span>
+                      <button
+                        onClick={retryLatestThread}
+                        style={{
+                          background: 'rgba(248,81,73,0.12)',
+                          border: '1px solid rgba(248,81,73,0.3)',
+                          borderRadius: '6px',
+                          color: '#f85149',
+                          fontSize: '0.75rem',
+                          padding: '3px 10px',
+                          cursor: 'pointer',
+                          flexShrink: 0,
+                        }}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  )}
+                  <Suspense fallback={<div style={panelFallbackStyle}>Loading conversation…</div>}>
+                    <MessageList messages={messages} />
+                  </Suspense>
+                  <ThinkingIndicator workerStatus={workerStatus} />
+                  <RetrievalNoticeBar
+                    notice={retrievalNotice}
+                    onUseSearchTool={requestSearchTool}
+                  />
+                  <RetrievalNoticeBar
+                    notice={graphNotice}
+                  />
+                  <ContextBar
+                    selectedNode={selectedNode}
+                    onSendMessage={handleSend}
+                    onClear={() => setSelectedNode(null)}
+                  />
+                  <ChatInput
+                    onSend={handleSend}
+                    onStop={stopGeneration}
+                    onPrepare={prepareBackendNow}
+                    threadId={activeThreadId}
+                    isGenerating={isGenerating}
+                    disabled={composerLocked}
+                    sendDisabled={sendLocked}
+                    showPrepare={showPrepare}
+                    prepareDisabled={prepareDisabled}
+                    prepareMessage={prepareMessage}
+                    complexity={complexity}
+                    graphMode={graphMode}
+                    researchEnabled={researchEnabled}
+                    onComplexityChange={setComplexity}
+                    onGraphModeChange={setGraphMode}
+                    onResearchChange={setResearchEnabled}
+                    selectionSuggestion={selectionSuggestion}
+                    selectionReferenceActive={selectionReferenceActive}
+                    onUseSelection={activateSelectionReference}
+                    onDismissSelection={dismissSelection}
+                    onClearSelectionReference={clearSelectionReference}
+                  />
                 </div>
-              )}
-              <Suspense fallback={<div style={panelFallbackStyle}>Loading conversation…</div>}>
-                <MessageList messages={messages} />
-              </Suspense>
-              <ThinkingIndicator workerStatus={workerStatus} />
-              <RetrievalNoticeBar
-                notice={retrievalNotice}
-                onUseSearchTool={requestSearchTool}
-              />
-              <RetrievalNoticeBar
-                notice={graphNotice}
-              />
-              <ContextBar
-                selectedNode={selectedNode}
-                onSendMessage={handleSend}
-                onClear={() => setSelectedNode(null)}
-              />
-              <ChatInput
-                onSend={handleSend}
-                onStop={stopGeneration}
-                onPrepare={prepareBackendNow}
-                threadId={activeThreadId}
-                isGenerating={isGenerating}
-                disabled={composerLocked}
-                sendDisabled={sendLocked}
-                showPrepare={showPrepare}
-                prepareDisabled={prepareDisabled}
-                prepareMessage={prepareMessage}
-                complexity={complexity}
-                graphMode={graphMode}
-                researchEnabled={researchEnabled}
-                onComplexityChange={setComplexity}
-                onGraphModeChange={setGraphMode}
-                onResearchChange={setResearchEnabled}
-                selectionSuggestion={selectionSuggestion}
-                selectionReferenceActive={selectionReferenceActive}
-                onUseSelection={activateSelectionReference}
-                onDismissSelection={dismissSelection}
-                onClearSelectionReference={clearSelectionReference}
-              />
-            </div>
-          }
-        />
+              }
+            />
+          </>
+        )}
       </div>
     </div>
     </div>

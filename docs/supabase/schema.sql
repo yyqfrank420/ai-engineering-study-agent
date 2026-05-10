@@ -33,6 +33,15 @@ create table if not exists public.request_events (
   created_at_epoch double precision not null
 );
 
+create table if not exists public.product_analytics_events (
+  id uuid primary key,
+  user_id uuid references public.profiles(id) on delete cascade,
+  anonymous_id text not null,
+  event_type text not null,
+  properties_json text,
+  created_at_epoch double precision not null
+);
+
 create table if not exists public.search_tool_requests (
   request_id uuid primary key,
   user_id uuid not null references public.profiles(id) on delete cascade,
@@ -80,6 +89,15 @@ create index if not exists idx_chat_messages_thread_created
 create index if not exists idx_request_events_user_type_created
   on public.request_events(user_id, event_type, created_at_epoch desc);
 
+create index if not exists idx_product_analytics_events_created
+  on public.product_analytics_events(created_at_epoch desc);
+
+create index if not exists idx_product_analytics_events_type_created
+  on public.product_analytics_events(event_type, created_at_epoch desc);
+
+create index if not exists idx_product_analytics_events_actor_created
+  on public.product_analytics_events(anonymous_id, created_at_epoch desc);
+
 create index if not exists idx_search_tool_requests_user_thread
   on public.search_tool_requests(user_id, thread_id);
 
@@ -99,6 +117,7 @@ alter table public.profiles enable row level security;
 alter table public.chat_threads enable row level security;
 alter table public.chat_messages enable row level security;
 alter table public.request_events enable row level security;
+alter table public.product_analytics_events enable row level security;
 alter table public.search_tool_requests enable row level security;
 alter table public.http_request_logs enable row level security;
 alter table public.llm_telemetry enable row level security;

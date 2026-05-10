@@ -22,6 +22,10 @@ const TYPE_BG: Record<string, string> = Object.fromEntries(
   Object.entries(TYPE_STYLE).map(([k, v]) => [k, v.fill]),
 );
 
+function edgeEndpointId(endpoint: GraphEdge['source'] | GraphEdge['target']): string {
+  return endpoint;
+}
+
 interface NodeDetailPopupProps {
   node: GraphNode;
   edges: GraphEdge[];   // full graph edges — used to derive connections
@@ -32,8 +36,8 @@ interface NodeDetailPopupProps {
 
 export function NodeDetailPopup({ node, edges, onClose, onTellMeMore, onExpandGraph }: NodeDetailPopupProps) {
   // Derive which nodes this node connects to/from
-  const outgoing = edges.filter(e => e.source === node.id || (e.source as any)?.id === node.id);
-  const incoming = edges.filter(e => e.target === node.id || (e.target as any)?.id === node.id);
+  const outgoing = edges.filter(e => edgeEndpointId(e.source) === node.id);
+  const incoming = edges.filter(e => edgeEndpointId(e.target) === node.id);
   const showExpandGraph = node.type !== 'decision';
 
   return (

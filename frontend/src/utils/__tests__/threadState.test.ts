@@ -16,7 +16,7 @@ describe('thread snapshot helpers', () => {
       title: 'Thread title',
       messages: [
         { id: 'm1', role: 'user', content: 'hello', isStreaming: false },
-        { id: 'm2', role: 'assistant', content: 'world', isStreaming: true },
+        { id: 'm2', role: 'assistant', content: 'world', isStreaming: false },
       ],
       graphData: null,
     });
@@ -25,7 +25,7 @@ describe('thread snapshot helpers', () => {
       title: 'Thread title',
       messages: [
         { id: 'm1', role: 'user', content: 'hello', isStreaming: false },
-        { id: 'm2', role: 'assistant', content: 'world', isStreaming: true },
+        { id: 'm2', role: 'assistant', content: 'world', isStreaming: false },
       ],
       graphData: null,
     });

@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
+import { trackEvent } from '../../services/analytics';
 import { requestOtp, signInWithGoogle, verifyOtp } from '../../services/auth';
 import type { AuthSession } from '../../types';
 import { TurnstileWidget } from './TurnstileWidget';
@@ -19,9 +20,14 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
   const [emailFocused, setEmailFocused] = useState(false);
   const [codeFocused, setCodeFocused]   = useState(false);
 
+  useEffect(() => {
+    void trackEvent('auth_viewed');
+  }, []);
+
   const submitEmail = async () => {
     setLoading(true);
     setError(null);
+    void trackEvent('otp_requested', { value: captchaRequired ? 'captcha_required' : 'direct' });
     try {
       const result = await requestOtp(email, captchaToken ?? undefined);
       if (result.captcha_required) {
@@ -46,6 +52,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
       const session = await verifyOtp(email, code, captchaToken ?? undefined);
       setCaptchaRequired(false);
       setCaptchaToken(null);
+      void trackEvent('otp_verified', {}, session);
       onAuthenticated(session);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to verify code';
@@ -61,6 +68,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
   const submitGoogle = async () => {
     setLoading(true);
     setError(null);
+    void trackEvent('google_signin_started');
     try {
       await signInWithGoogle();
     } catch (err) {
