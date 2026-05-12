@@ -115,11 +115,10 @@ def select_canonical_graph(
         return None
 
     query_tokens = _query_tokens(query)
-    if _is_customer_support_agent_architecture_query(query) and _has_customer_support_pattern_support(
-        chunk_ids,
-        artifacts,
-    ):
-        return _customer_support_agent_architecture(query, chunk_ids, artifacts)
+    if _is_customer_support_agent_architecture_query(query):
+        support_chunk_ids = _customer_support_support_chunk_ids(chunk_ids, artifacts)
+        if support_chunk_ids:
+            return _customer_support_agent_architecture(query, support_chunk_ids, artifacts)
 
     if not _has_query_supported_node(chunk_ids, artifacts, query_tokens) and not (
         layer == "architecture"
@@ -213,10 +212,31 @@ def _has_customer_support_pattern_support(
     chunk_ids: list[str],
     artifacts: CanonicalGraphArtifacts,
 ) -> bool:
+    return bool(_customer_support_support_chunk_ids(chunk_ids, artifacts, allow_global_fallback=False))
+
+
+def _customer_support_support_chunk_ids(
+    chunk_ids: list[str],
+    artifacts: CanonicalGraphArtifacts,
+    *,
+    allow_global_fallback: bool = True,
+) -> list[str]:
+    def linked_ids(ids: list[str]) -> set[str]:
+        return {
+            node_id
+            for chunk_id in ids
+            for node_id in artifacts.chunk_links.get(chunk_id, {}).get("canonical_node_ids", [])
+        }
+
+    def has_pattern(supported_ids: set[str]) -> bool:
+        return (
+            agent_pattern <= supported_ids
+            or orchestrator_pattern <= supported_ids
+            or agent_capability_pattern <= supported_ids
+        )
+
     supported_ids = {
-        node_id
-        for chunk_id in chunk_ids
-        for node_id in artifacts.chunk_links.get(chunk_id, {}).get("canonical_node_ids", [])
+        node_id for node_id in linked_ids(chunk_ids)
     }
     agent_pattern = {
         "architecture:application",
@@ -233,11 +253,17 @@ def _has_customer_support_pattern_support(
         "concept:planning",
         "concept:tool_use",
     }
-    return (
-        agent_pattern <= supported_ids
-        or orchestrator_pattern <= supported_ids
-        or agent_capability_pattern <= supported_ids
-    )
+    if has_pattern(supported_ids):
+        return chunk_ids
+    if not allow_global_fallback:
+        return []
+
+    fallback_chunks = [
+        chunk_id
+        for chunk_id, link in artifacts.chunk_links.items()
+        if has_pattern(set(link.get("canonical_node_ids", [])))
+    ]
+    return sorted(fallback_chunks, key=_chunk_sort_key)[:3]
 
 
 def _customer_support_agent_architecture(

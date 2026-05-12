@@ -194,6 +194,23 @@ def test_runtime_projects_customer_support_architecture_from_agent_capability_su
     assert {"FAQ Agent", "Billing Agent", "Returns Agent", "Escalation Agent"} <= labels
 
 
+def test_runtime_projects_customer_support_architecture_with_canonical_fallback_support():
+    artifacts = load_canonical_graph(ROOT / "data" / "graph")
+
+    graph = select_canonical_graph(
+        query="multi-agent customer support chatbot architecture pls",
+        rag_chunks=[{"parent_chunk_id": "ai-eng:p42:pc0"}],
+        artifacts=artifacts,
+    )
+
+    assert graph is not None
+    assert graph["graph_type"] == "architecture"
+    labels = {node["label"] for node in graph["nodes"]}
+    assert {"Billing Agent", "Returns Agent", "Escalation Agent"} <= labels
+    assert all(edge.get("supporting_chunk_ids") for edge in graph["edges"])
+    assert "ai-eng:p42:pc0" not in graph["edges"][0]["supporting_chunk_ids"]
+
+
 def test_runtime_abstains_when_specific_architecture_topic_is_unsupported(tmp_path):
     artifacts, _ = _build_test_artifacts(tmp_path)
 
