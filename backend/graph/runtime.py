@@ -228,7 +228,16 @@ def _has_customer_support_pattern_support(
         "architecture:orchestrator",
         "architecture:tool_service",
     }
-    return agent_pattern <= supported_ids or orchestrator_pattern <= supported_ids
+    agent_capability_pattern = {
+        "concept:agent",
+        "concept:planning",
+        "concept:tool_use",
+    }
+    return (
+        agent_pattern <= supported_ids
+        or orchestrator_pattern <= supported_ids
+        or agent_capability_pattern <= supported_ids
+    )
 
 
 def _customer_support_agent_architecture(

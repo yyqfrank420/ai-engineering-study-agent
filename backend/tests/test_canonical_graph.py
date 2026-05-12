@@ -178,6 +178,22 @@ def test_runtime_projects_customer_support_multi_agent_architecture(tmp_path):
     assert any(group["label"] == "Agent Layer" for group in graph.get("groups", []))
 
 
+def test_runtime_projects_customer_support_architecture_from_agent_capability_support():
+    artifacts = load_canonical_graph(ROOT / "data" / "graph")
+
+    graph = select_canonical_graph(
+        query="multi-agent customer support chatbot architecture pls",
+        rag_chunks=[{"parent_chunk_id": "ai-eng:p5:pc3"}],
+        artifacts=artifacts,
+    )
+
+    assert graph is not None
+    assert graph["graph_type"] == "architecture"
+    assert graph["title"] == "Customer Support Multi-Agent Architecture"
+    labels = {node["label"] for node in graph["nodes"]}
+    assert {"FAQ Agent", "Billing Agent", "Returns Agent", "Escalation Agent"} <= labels
+
+
 def test_runtime_abstains_when_specific_architecture_topic_is_unsupported(tmp_path):
     artifacts, _ = _build_test_artifacts(tmp_path)
 
