@@ -151,6 +151,33 @@ def test_runtime_selects_architecture_from_explicit_architecture_query(tmp_path)
     assert graph.get("groups")
 
 
+def test_runtime_projects_customer_support_multi_agent_architecture(tmp_path):
+    artifacts, _ = _build_test_artifacts(tmp_path)
+
+    graph = select_canonical_graph(
+        query="multi-agent customer support chatbot architecture with all agents",
+        rag_chunks=[{"parent_chunk_id": "ai-eng:p473:pc0"}],
+        artifacts=artifacts,
+    )
+
+    assert graph is not None
+    assert graph["graph_type"] == "architecture"
+    labels = {node["label"] for node in graph["nodes"]}
+    assert {
+        "Orchestrator",
+        "FAQ Agent",
+        "Billing Agent",
+        "Returns Agent",
+        "Escalation Agent",
+        "Tool Service",
+        "Human Support",
+    } <= labels
+    assert graph["title"] == "Customer Support Multi-Agent Architecture"
+    assert any(edge["source"] == "intent_router" and edge["target"] == "billing_agent" for edge in graph["edges"])
+    assert all(edge.get("supporting_chunk_ids") for edge in graph["edges"])
+    assert any(group["label"] == "Agent Layer" for group in graph.get("groups", []))
+
+
 def test_runtime_abstains_when_specific_architecture_topic_is_unsupported(tmp_path):
     artifacts, _ = _build_test_artifacts(tmp_path)
 

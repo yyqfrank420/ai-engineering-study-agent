@@ -1,4 +1,5 @@
 import uuid
+from typing import Any
 
 from agent.state import AgentState, GraphData
 from graph.artifacts import load_canonical_graph_cached
@@ -19,7 +20,7 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
     try:
         artifacts = load_canonical_graph_cached()
         graph = select_canonical_graph(
-            query=state.get("user_message", ""),
+            query=_graph_query(state),
             rag_chunks=state.get("rag_chunks", []),
             artifacts=artifacts,
         )
@@ -35,3 +36,48 @@ def _attach_graph_version(graph: GraphData | None) -> GraphData | None:
     stamped = dict(graph)
     stamped["version"] = str(uuid.uuid4())
     return stamped
+
+
+def _graph_query(state: AgentState) -> str:
+    message = state.get("user_message", "")
+    if not _looks_like_graph_followup(message):
+        return message
+
+    prior_user_messages = [
+        str(turn.get("content", ""))
+        for turn in state.get("history", [])[-8:]
+        if turn.get("role") == "user" and turn.get("content")
+    ]
+    graph_context = _existing_graph_context(state.get("graph_data"))
+    return " ".join([*prior_user_messages[-3:], graph_context, message]).strip() or message
+
+
+def _looks_like_graph_followup(message: str) -> bool:
+    text = message.lower()
+    return any(
+        phrase in text
+        for phrase in (
+            "expand",
+            "all agents",
+            "sub-agent",
+            "subagent",
+            "more detail",
+            "go deeper",
+            "add nodes",
+            "add each",
+            "show all",
+        )
+    )
+
+
+def _existing_graph_context(graph_data: dict[str, Any] | None) -> str:
+    if not graph_data:
+        return ""
+    labels = [
+        str(node.get("label", ""))
+        for node in (graph_data.get("nodes") or [])[:8]
+        if node.get("label")
+    ]
+    title = str(graph_data.get("title") or "")
+    graph_type = str(graph_data.get("graph_type") or "")
+    return " ".join(part for part in [title, graph_type, *labels] if part)

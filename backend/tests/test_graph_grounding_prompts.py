@@ -79,6 +79,51 @@ async def test_graph_worker_abstains_without_canonical_support(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
+async def test_graph_worker_keeps_architecture_topic_for_agent_followup(monkeypatch, tmp_path):
+    from tests.test_canonical_graph import SCHEMA_DIR, _write_parent_docs
+    from graph.artifacts import load_canonical_graph
+    from graph.build import build_canonical_graph
+    import agent.nodes.graph_worker as graph_worker
+
+    parent_docs_path = tmp_path / "parent_docs.pkl"
+    output_dir = tmp_path / "graph"
+    _write_parent_docs(parent_docs_path)
+    build_canonical_graph(parent_docs_path, output_dir, SCHEMA_DIR)
+    artifacts = load_canonical_graph(output_dir)
+    monkeypatch.setattr(graph_worker, "load_canonical_graph_cached", lambda: artifacts)
+
+    async def send(_event):
+        pass
+
+    result = await graph_worker.graph_worker_node(
+        {
+            "send": send,
+            "user_message": "expand on all the agents",
+            "history": [
+                {
+                    "role": "user",
+                    "content": "multi-agent customer support chatbot architecture pls",
+                }
+            ],
+            "graph_data": None,
+            "complexity": "auto",
+            "research_context": "",
+            "rag_chunks": [{"parent_chunk_id": "ai-eng:p473:pc0", "text": ""}],
+        },
+        tools=[],
+    )
+
+    graph = result["graph_data"]
+    assert graph is not None
+    assert graph["graph_type"] == "architecture"
+    assert {node["label"] for node in graph["nodes"]} >= {
+        "Billing Agent",
+        "Returns Agent",
+        "Escalation Agent",
+    }
+
+
+@pytest.mark.asyncio
 async def test_node_detail_prompt_prefers_canonical_evidence(monkeypatch):
     import agent.nodes.node_detail_worker as node_detail_worker
 

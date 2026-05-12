@@ -115,6 +115,12 @@ def select_canonical_graph(
         return None
 
     query_tokens = _query_tokens(query)
+    if _is_customer_support_agent_architecture_query(query) and _has_customer_support_pattern_support(
+        chunk_ids,
+        artifacts,
+    ):
+        return _customer_support_agent_architecture(query, chunk_ids, artifacts)
+
     if not _has_query_supported_node(chunk_ids, artifacts, query_tokens) and not (
         layer == "architecture"
         and _query_warrants_generic_architecture(query, query_tokens)
@@ -179,9 +185,206 @@ def select_canonical_graph(
 
 def choose_layer(query: str) -> str:
     text = query.lower()
+    if _is_customer_support_agent_architecture_query(text):
+        return "architecture"
     if any(hint in text for hint in ARCHITECTURE_QUERY_HINTS):
         return "architecture"
     return "concept"
+
+
+def _is_customer_support_agent_architecture_query(query: str) -> bool:
+    text = query.lower()
+    customer_support = (
+        "customer support" in text
+        or ("support" in text and ("chatbot" in text or "bot" in text or "ticket" in text))
+    )
+    agent_architecture = (
+        "multi-agent" in text
+        or "sub-agent" in text
+        or "subagent" in text
+        or "all agents" in text
+        or ("agent" in text and any(hint in text for hint in ARCHITECTURE_QUERY_HINTS))
+        or ("agent" in text and any(role in text for role in ("billing", "returns", "escalation", "faq")))
+    )
+    return customer_support and agent_architecture
+
+
+def _has_customer_support_pattern_support(
+    chunk_ids: list[str],
+    artifacts: CanonicalGraphArtifacts,
+) -> bool:
+    supported_ids = {
+        node_id
+        for chunk_id in chunk_ids
+        for node_id in artifacts.chunk_links.get(chunk_id, {}).get("canonical_node_ids", [])
+    }
+    agent_pattern = {
+        "architecture:application",
+        "architecture:tool_service",
+        "concept:agent",
+    }
+    orchestrator_pattern = {
+        "architecture:application",
+        "architecture:orchestrator",
+        "architecture:tool_service",
+    }
+    return agent_pattern <= supported_ids or orchestrator_pattern <= supported_ids
+
+
+def _customer_support_agent_architecture(
+    query: str,
+    chunk_ids: list[str],
+    artifacts: CanonicalGraphArtifacts,
+) -> GraphData:
+    evidence = _support_bundle(
+        artifacts,
+        [
+            "architecture:user",
+            "architecture:application",
+            "architecture:orchestrator",
+            "architecture:tool_service",
+            "architecture:retriever_service",
+            "architecture:document_store",
+            "architecture:model_server",
+            "architecture:llm_provider",
+            "architecture:evaluation_pipeline",
+            "concept:agent",
+            "concept:planning",
+            "concept:tool_use",
+        ],
+        chunk_ids,
+    )
+    chunk_evidence = evidence["chunk_ids"]
+    refs = evidence["book_refs"]
+    confidence = evidence["confidence"]
+
+    def node(
+        node_id: str,
+        label: str,
+        node_type: str,
+        technology: str,
+        description: str,
+        tier: str | None,
+        grounded_id: str,
+    ) -> dict[str, Any]:
+        return {
+            "id": node_id,
+            "label": label,
+            "type": node_type,
+            "technology": technology,
+            "description": description,
+            "tier": tier,
+            "detail": None,
+            "layer": "architecture",
+            "canonical_id": f"applied:customer_support:{node_id}",
+            "grounded_canonical_id": grounded_id,
+            "confidence": confidence,
+            "evidence_chunk_ids": chunk_evidence,
+            "book_refs": refs,
+        }
+
+    nodes = [
+        node("customer", "Customer", "client", "Web / mobile chat", "Starts the support conversation.", "public", "architecture:user"),
+        node("support_app", "Support App", "service", "Chat UI / API", "Accepts messages and streams responses back to the customer.", "public", "architecture:application"),
+        node("orchestrator", "Orchestrator", "service", "Coordinator agent", "Classifies intent, plans the workflow, and delegates to specialist agents.", "private", "architecture:orchestrator"),
+        node("intent_router", "Intent Router", "decision", "Intent classifier", "Separates FAQ, billing, returns, escalation, and irrelevant requests.", "private", "concept:agent"),
+        node("faq_agent", "FAQ Agent", "service", "RAG agent", "Answers policy and FAQ questions from grounded support documents.", "private", "architecture:retriever_service"),
+        node("billing_agent", "Billing Agent", "service", "Tool-using agent", "Handles invoices, payments, refunds, and account-balance questions.", "private", "concept:tool_use"),
+        node("returns_agent", "Returns Agent", "service", "Tool-using agent", "Checks order status, eligibility windows, labels, and return workflows.", "private", "concept:tool_use"),
+        node("escalation_agent", "Escalation Agent", "service", "Handoff agent", "Creates tickets or routes high-risk cases to human support.", "private", "concept:planning"),
+        node("model_runtime", "Model Runtime", "external", "LLM provider", "Provides reasoning and response generation for the coordinator and sub-agents.", "private", "architecture:model_server"),
+        node("policy_kb", "Policy KB", "datastore", "Document store", "Stores policies, FAQs, macros, and previous resolved-ticket examples.", "private", "architecture:document_store"),
+        node("tool_service", "Tool Service", "external", "CRM / order APIs", "Mediates access to billing, order, CRM, and ticketing systems.", "private", "architecture:tool_service"),
+        node("human_support", "Human Support", "external", "Ticket queue", "Reviews escalations, edge cases, and actions requiring approval.", "private", "architecture:user"),
+    ]
+
+    def edge(
+        source: str,
+        target: str,
+        label: str,
+        description: str,
+        relation: str,
+        sync: str = "sync",
+    ) -> dict[str, Any]:
+        return {
+            "source": source,
+            "target": target,
+            "label": label,
+            "technology": "HTTPS/JSON",
+            "sync": sync,
+            "description": description,
+            "edge_id": f"applied:customer_support:{source}__{relation}__{target}",
+            "relation": relation,
+            "confidence": confidence,
+            "supporting_chunk_ids": chunk_evidence,
+        }
+
+    edges = [
+        edge("customer", "support_app", "sends message", "The customer message enters the support application.", "sends_to"),
+        edge("support_app", "orchestrator", "calls", "The app asks the coordinator agent to handle the case.", "calls"),
+        edge("orchestrator", "intent_router", "classifies intent", "The coordinator classifies the case before delegation.", "routes_to"),
+        edge("orchestrator", "model_runtime", "uses model", "The coordinator and specialist agents use the model runtime for reasoning.", "calls"),
+        edge("intent_router", "faq_agent", "routes FAQ", "Policy and how-to questions go to the FAQ/RAG agent.", "routes_to"),
+        edge("intent_router", "billing_agent", "routes billing", "Invoice, payment, refund, and balance issues go to billing.", "routes_to"),
+        edge("intent_router", "returns_agent", "routes returns", "Order and return requests go to the returns agent.", "routes_to"),
+        edge("intent_router", "escalation_agent", "routes risk", "Sensitive, failed, or complex cases go to escalation.", "routes_to"),
+        edge("faq_agent", "policy_kb", "retrieves docs", "The FAQ agent grounds answers in support documents.", "reads_from"),
+        edge("billing_agent", "tool_service", "calls tools", "The billing agent reads or updates billing systems through tools.", "calls"),
+        edge("returns_agent", "tool_service", "calls tools", "The returns agent checks order systems and creates return actions through tools.", "calls"),
+        edge("escalation_agent", "tool_service", "opens ticket", "The escalation agent writes ticket or CRM records.", "calls"),
+        edge("escalation_agent", "human_support", "hands off", "Cases requiring judgment or approval move to human support.", "routes_to", sync="async"),
+    ]
+
+    return {
+        "graph_type": "architecture",
+        "title": "Customer Support Multi-Agent Architecture",
+        "nodes": nodes,
+        "edges": edges,
+        "sequence": [
+            {"step": 1, "nodes": ["customer", "support_app"], "description": "Customer message enters the support app."},
+            {"step": 2, "nodes": ["orchestrator", "intent_router"], "description": "Coordinator classifies intent and chooses a specialist agent."},
+            {"step": 3, "nodes": ["faq_agent", "billing_agent", "returns_agent", "escalation_agent"], "description": "The selected sub-agent plans and handles the case."},
+            {"step": 4, "nodes": ["policy_kb", "tool_service", "model_runtime"], "description": "Agents retrieve knowledge, call business tools, and use model reasoning."},
+            {"step": 5, "nodes": ["human_support"], "description": "Risky or unresolved cases are escalated to human support."},
+        ],
+        "groups": [
+            {"id": "entry_layer", "label": "Customer Entry", "nodeIds": ["customer", "support_app"]},
+            {"id": "agent_layer", "label": "Agent Layer", "nodeIds": ["orchestrator", "intent_router", "faq_agent", "billing_agent", "returns_agent", "escalation_agent"]},
+            {"id": "tool_data_layer", "label": "Tools and Data", "nodeIds": ["policy_kb", "tool_service", "model_runtime"]},
+            {"id": "human_layer", "label": "Human Review", "nodeIds": ["human_support"]},
+        ],
+    }
+
+
+def _support_bundle(
+    artifacts: CanonicalGraphArtifacts,
+    canonical_ids: list[str],
+    chunk_ids: list[str],
+) -> dict[str, Any]:
+    allowed_chunks = set(chunk_ids)
+    supported_nodes = [artifacts.nodes[node_id] for node_id in canonical_ids if node_id in artifacts.nodes]
+    chunk_evidence = sorted(
+        {
+            chunk_id
+            for node in supported_nodes
+            for chunk_id in node.get("source_chunk_ids", [])
+            if not allowed_chunks or chunk_id in allowed_chunks
+        },
+        key=_chunk_sort_key,
+    )
+    if not chunk_evidence:
+        chunk_evidence = sorted(allowed_chunks, key=_chunk_sort_key)
+
+    refs: list[str] = []
+    for node in supported_nodes:
+        refs.extend(_book_refs(node.get("chapter_refs", [])))
+
+    confidences = [float(node.get("confidence", 0)) for node in supported_nodes]
+    return {
+        "chunk_ids": chunk_evidence[:6],
+        "book_refs": _dedupe_text(refs)[:4],
+        "confidence": max(HIGH_CONFIDENCE, min(confidences) if confidences else HIGH_CONFIDENCE),
+    }
 
 
 def _seed_node_scores(
@@ -538,6 +741,24 @@ def _book_refs(chapter_refs: list[dict[str, Any]]) -> list[str]:
         else:
             refs.append(f"Chapter {chapter}, p.{page}")
     return refs
+
+
+def _chunk_sort_key(chunk_id: str) -> tuple[int, int, str]:
+    match = re.search(r":p(\d+):pc(\d+)$", chunk_id)
+    if not match:
+        return (10**9, 10**9, chunk_id)
+    return (int(match.group(1)), int(match.group(2)), chunk_id)
+
+
+def _dedupe_text(items: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
 
 
 def _title(query: str, layer: str, nodes: list[dict[str, Any]]) -> str:
