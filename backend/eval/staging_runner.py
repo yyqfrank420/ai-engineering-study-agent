@@ -192,6 +192,17 @@ def extract_graph_data(events: list[dict]) -> dict | None:
     return graph_events[-1].get("data")
 
 
+def extract_graph_node_labels(graph_data: dict | None) -> set[str]:
+    if not graph_data:
+        return set()
+    labels: set[str] = set()
+    for node in graph_data.get("nodes") or []:
+        label = node.get("label")
+        if isinstance(label, str):
+            labels.add(label)
+    return labels
+
+
 def detect_route(events: list[dict]) -> str:
     workers = extract_workers(events)
     if "rag" in workers:
@@ -336,6 +347,34 @@ def evaluate_expectation(step: StagingStep, run: dict, case_state: dict) -> list
 
     if expect.graph_emitted is not None and (graph_data is not None) != expect.graph_emitted:
         failures.append(f"graph_emitted expected {expect.graph_emitted}, got {graph_data is not None}")
+
+    if (
+        expect.graph_type is not None
+        or expect.graph_title_contains is not None
+        or expect.graph_node_labels_include
+        or expect.graph_node_labels_exclude
+    ):
+        if graph_data is None:
+            failures.append("graph quality expectations were set but no graph_data was emitted")
+        else:
+            if expect.graph_type is not None and graph_data.get("graph_type") != expect.graph_type:
+                failures.append(f"graph_type expected {expect.graph_type}, got {graph_data.get('graph_type')}")
+
+            if expect.graph_title_contains is not None:
+                title = graph_data.get("title") or ""
+                if expect.graph_title_contains.lower() not in title.lower():
+                    failures.append(
+                        f"graph title expected to contain '{expect.graph_title_contains}', got '{title}'"
+                    )
+
+            labels = extract_graph_node_labels(graph_data)
+            for label in expect.graph_node_labels_include:
+                if label not in labels:
+                    failures.append(f"graph missing node label '{label}'")
+
+            for label in expect.graph_node_labels_exclude:
+                if label in labels:
+                    failures.append(f"graph unexpectedly included node label '{label}'")
 
     for worker in expect.workers_include:
         if worker not in workers:

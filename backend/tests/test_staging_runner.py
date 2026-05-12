@@ -5,6 +5,7 @@ from eval.staging_runner import (
     detect_route,
     evaluate_expectation,
     extract_graph_data,
+    extract_graph_node_labels,
     extract_response_text,
     extract_worker_statuses,
     extract_workers,
@@ -110,7 +111,21 @@ def test_resolve_node_selected_payload_uses_first_graph_node():
 def test_staging_suite_covers_multiple_categories():
     categories = {case.category for case in STAGING_CASES}
 
-    assert {"happy_path", "memory_followup", "research_mode", "edge_cases", "real_workflow"} <= categories
+    assert {"happy_path", "memory_followup", "research_mode", "edge_cases", "real_workflow", "graph_quality"} <= categories
+
+
+def test_staging_suite_has_customer_support_graph_quality_gate():
+    graph_quality_case = next(case for case in STAGING_CASES if case.id == "S10")
+
+    assert graph_quality_case.category == "graph_quality"
+    first_expect = graph_quality_case.steps[0].expect
+    followup_expect = graph_quality_case.steps[1].expect
+    assert first_expect.graph_type == "architecture"
+    assert "Billing Agent" in first_expect.graph_node_labels_include
+    assert "Returns Agent" in first_expect.graph_node_labels_include
+    assert "Escalation Agent" in first_expect.graph_node_labels_include
+    assert "Tool Use" in first_expect.graph_node_labels_exclude
+    assert "Billing Agent" in followup_expect.graph_node_labels_include
 
 
 def test_extract_helpers_return_expected_values():
@@ -124,7 +139,88 @@ def test_extract_helpers_return_expected_values():
     assert extract_workers(events) == {"orchestrator"}
     assert extract_worker_statuses(events) == ["Routing"]
     assert extract_graph_data(events)["title"] == "Graph"
+    assert extract_graph_node_labels({"nodes": [{"label": "Retriever"}, {"id": "missing-label"}]}) == {"Retriever"}
     assert extract_response_text(events) == "Hello world"
+
+
+def test_evaluate_expectation_checks_graph_quality_contract():
+    step = StagingStep(
+        kind="chat",
+        description="graph quality gate",
+        expect=StepExpectation(
+            graph_emitted=True,
+            graph_type="architecture",
+            graph_title_contains="Customer Support",
+            graph_node_labels_include=["Billing Agent", "Returns Agent"],
+            graph_node_labels_exclude=["Tool Use", "Planning"],
+        ),
+    )
+    run = {
+        "status_code": 200,
+        "events": [
+            {
+                "type": "graph_data",
+                "data": {
+                    "title": "Customer Support Multi-Agent Architecture",
+                    "graph_type": "architecture",
+                    "nodes": [
+                        {"label": "Billing Agent"},
+                        {"label": "Returns Agent"},
+                        {"label": "Tool Service"},
+                    ],
+                    "edges": [],
+                    "sequence": [],
+                },
+            }
+        ],
+        "json_body": None,
+        "body_text": "",
+    }
+
+    assert evaluate_expectation(step, run, {}) == []
+
+
+def test_evaluate_expectation_rejects_generic_customer_support_graph():
+    step = StagingStep(
+        kind="chat",
+        description="bad graph quality gate",
+        expect=StepExpectation(
+            graph_emitted=True,
+            graph_type="architecture",
+            graph_title_contains="Customer Support",
+            graph_node_labels_include=["Billing Agent", "Returns Agent", "Escalation Agent"],
+            graph_node_labels_exclude=["Tool Use", "Planning", "Evaluation"],
+        ),
+    )
+    run = {
+        "status_code": 200,
+        "events": [
+            {
+                "type": "graph_data",
+                "data": {
+                    "title": "Agent Architecture",
+                    "graph_type": "concept",
+                    "nodes": [
+                        {"label": "Agent"},
+                        {"label": "Tool Use"},
+                        {"label": "Planning"},
+                        {"label": "Evaluation"},
+                    ],
+                    "edges": [],
+                    "sequence": [],
+                },
+            }
+        ],
+        "json_body": None,
+        "body_text": "",
+    }
+
+    failures = evaluate_expectation(step, run, {})
+
+    assert "graph_type expected architecture, got concept" in failures
+    assert "graph title expected to contain 'Customer Support', got 'Agent Architecture'" in failures
+    assert "graph missing node label 'Billing Agent'" in failures
+    assert "graph unexpectedly included node label 'Tool Use'" in failures
 
 
 def test_count_visible_threads_excludes_eval_thread():

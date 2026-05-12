@@ -8,6 +8,10 @@ class StepExpectation:
     has_error_event: bool | None = False
     error_contains: str | None = None
     graph_emitted: bool | None = None
+    graph_type: str | None = None
+    graph_title_contains: str | None = None
+    graph_node_labels_include: list[str] = field(default_factory=list)
+    graph_node_labels_exclude: list[str] = field(default_factory=list)
     workers_include: list[str] = field(default_factory=list)
     workers_exclude: list[str] = field(default_factory=list)
     response_min_length: int | None = None
@@ -329,5 +333,75 @@ STAGING_CASES: list[StagingCase] = [
             ),
         ],
         cleanup_thread=False,
+    ),
+    StagingCase(
+        id="S10",
+        category="graph_quality",
+        description="Customer-support multi-agent requests should produce a concrete architecture graph.",
+        steps=[
+            StagingStep(
+                kind="chat",
+                description="Create a customer-support multi-agent architecture graph.",
+                payload={
+                    "content": "multi-agent customer support chatbot architecture pls",
+                    "complexity": "prototype",
+                    "graph_mode": "auto",
+                    "research_enabled": False,
+                },
+                expect=StepExpectation(
+                    route="search",
+                    graph_emitted=True,
+                    graph_type="architecture",
+                    graph_title_contains="Customer Support",
+                    graph_node_labels_include=[
+                        "Orchestrator",
+                        "Intent Router",
+                        "FAQ Agent",
+                        "Billing Agent",
+                        "Returns Agent",
+                        "Escalation Agent",
+                        "Tool Service",
+                        "Policy KB",
+                        "Human Support",
+                    ],
+                    graph_node_labels_exclude=[
+                        "Agent",
+                        "Tool Use",
+                        "Planning",
+                        "Evaluation",
+                    ],
+                    workers_include=["rag", "graph"],
+                ),
+            ),
+            StagingStep(
+                kind="chat",
+                description="Expand the same graph without losing the customer-support topic.",
+                payload={
+                    "content": "expand on all the agents",
+                    "complexity": "prototype",
+                    "graph_mode": "auto",
+                    "research_enabled": False,
+                },
+                expect=StepExpectation(
+                    route="search",
+                    graph_emitted=True,
+                    graph_type="architecture",
+                    graph_title_contains="Customer Support",
+                    graph_node_labels_include=[
+                        "FAQ Agent",
+                        "Billing Agent",
+                        "Returns Agent",
+                        "Escalation Agent",
+                        "Human Support",
+                    ],
+                    graph_node_labels_exclude=[
+                        "Tool Use",
+                        "Planning",
+                        "Evaluation",
+                    ],
+                    workers_include=["rag", "graph"],
+                ),
+            ),
+        ],
     ),
 ]
