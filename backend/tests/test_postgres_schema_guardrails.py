@@ -121,12 +121,16 @@ def test_schema_apply_script_runs_alembic_migrations():
 def test_main_deploy_applies_schema_before_backend_rollout():
     workflow = Path(".github/workflows/deploy.yml").read_text(encoding="utf-8")
 
-    assert "if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.ci-required.result == 'success'" in workflow
+    assert (
+        "if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' "
+        "&& needs['ci-required'].result == 'success'"
+    ) in workflow
     assert "needs: [detect-changes, ci-required, apply-supabase-schema]" in workflow
-    assert "needs.apply-supabase-schema.result == 'success'" in workflow
-    assert "needs.apply-supabase-schema.result == 'skipped'" not in workflow
-    assert "needs.detect-changes.outputs.backend == 'true'" in workflow
-    assert "needs.detect-changes.outputs.analytics == 'true'" in workflow
+    assert "needs['apply-supabase-schema'].result == 'success'" in workflow
+    assert "needs['apply-supabase-schema'].result == 'skipped'" not in workflow
+    assert "needs['detect-changes'].outputs.backend == 'true'" in workflow
+    assert "needs['detect-changes'].outputs.analytics == 'true'" in workflow
+    assert "needs['detect-changes'].outputs['infra-db'] == 'true'" in workflow
 
 
 def test_alembic_migrations_cover_required_postgres_tables():
