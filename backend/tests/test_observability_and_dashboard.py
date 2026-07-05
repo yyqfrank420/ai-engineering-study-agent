@@ -71,6 +71,11 @@ def test_internal_dashboard_allowlist_and_overview(temp_data_dir, monkeypatch):
             )
             assert captured.status_code == 200
 
+        from analytics import events
+
+        if events._queue is not None:
+            client.portal.call(events._queue.join)
+
         response = client.get(
             "/api/internal/dashboard/overview",
             headers={"Authorization": f"Bearer {insider_token}"},
@@ -120,7 +125,7 @@ def test_analytics_capture_survives_storage_write_failure(temp_data_dir, monkeyp
     from main import create_app
 
     monkeypatch.setattr(
-        "api.analytics_route.record_product_analytics_event",
+        "analytics.events.record_product_analytics_event",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("database unavailable")),
     )
     app = create_app(load_resources=False)

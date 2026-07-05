@@ -3,13 +3,26 @@ from __future__ import annotations
 import asyncio
 import time
 from contextlib import suppress
+from dataclasses import dataclass
 from typing import Any
 
 from config import settings
 from storage.analytics_event_store import record_analytics_event
-from storage.models import AnalyticsEventWrite
+from storage.models import AnalyticsEventWrite, ProductAnalyticsEventWrite
+from storage.product_analytics_store import record_product_analytics_event
+from storage.profile_store import upsert_profile
 
-_queue: asyncio.Queue[AnalyticsEventWrite | None] | None = None
+
+@dataclass(frozen=True)
+class ProductAnalyticsEventJob:
+    event: ProductAnalyticsEventWrite
+    user_email: str | None = None
+
+
+AnalyticsQueueItem = AnalyticsEventWrite | ProductAnalyticsEventJob
+
+
+_queue: asyncio.Queue[AnalyticsQueueItem | None] | None = None
 _worker_task: asyncio.Task | None = None
 _dropped_events = 0
 
@@ -94,31 +107,71 @@ def enqueue_analytics_event(
         print(f"[analytics] Invalid event dropped: {type(exc).__name__}: {exc}")
         return False
 
-    if _queue is None:
-        return _write_event_safely(event)
+    return _enqueue_or_write(event, f"{event.event_category}.{event.event_name}")
+
+
+def enqueue_product_analytics_event(
+    *,
+    anonymous_id: str,
+    event_type: str,
+    user_id: str | None = None,
+    user_email: str | None = None,
+    properties: dict[str, Any] | None = None,
+    created_at_epoch: float | None = None,
+) -> bool:
+    global _dropped_events
 
     try:
-        _queue.put_nowait(event)
+        event = ProductAnalyticsEventWrite.model_validate(
+            {
+                "anonymous_id": anonymous_id,
+                "event_type": event_type,
+                "user_id": user_id,
+                "properties": properties or {},
+                "created_at_epoch": time.time() if created_at_epoch is None else created_at_epoch,
+            }
+        )
+    except Exception as exc:
+        _dropped_events += 1
+        print(f"[analytics] Invalid product event dropped: {type(exc).__name__}: {exc}")
+        return False
+
+    return _enqueue_or_write(
+        ProductAnalyticsEventJob(event=event, user_email=user_email),
+        f"product.{event.event_type}",
+    )
+
+
+def _enqueue_or_write(item: AnalyticsQueueItem, label: str) -> bool:
+    global _dropped_events
+
+    if _queue is None:
+        return _write_item_safely(item)
+    try:
+        _queue.put_nowait(item)
         return True
     except asyncio.QueueFull:
         _dropped_events += 1
-        print(
-            "[analytics] Event queue full; dropping event "
-            f"{event.event_category}.{event.event_name}"
-        )
+        print(f"[analytics] Event queue full; dropping event {label}")
         return False
 
 
 async def _analytics_worker() -> None:
     assert _queue is not None
     while True:
-        event = await _queue.get()
+        item = await _queue.get()
         try:
-            if event is None:
+            if item is None:
                 return
-            await asyncio.to_thread(_write_event_safely, event)
+            await asyncio.to_thread(_write_item_safely, item)
         finally:
             _queue.task_done()
+
+
+def _write_item_safely(item: AnalyticsQueueItem) -> bool:
+    if isinstance(item, ProductAnalyticsEventJob):
+        return _write_product_event_safely(item)
+    return _write_event_safely(item)
 
 
 def _write_event_safely(event: AnalyticsEventWrite) -> bool:
@@ -129,6 +182,20 @@ def _write_event_safely(event: AnalyticsEventWrite) -> bool:
         print(
             "[analytics] Event write failed: "
             f"{event.event_category}.{event.event_name} {type(exc).__name__}: {exc}"
+        )
+        return False
+
+
+def _write_product_event_safely(job: ProductAnalyticsEventJob) -> bool:
+    try:
+        if job.event.user_id and job.user_email:
+            upsert_profile(job.event.user_id, job.user_email)
+        record_product_analytics_event(**job.event.model_dump())
+        return True
+    except Exception as exc:
+        print(
+            "[analytics] Product event write failed: "
+            f"product.{job.event.event_type} {type(exc).__name__}: {exc}"
         )
         return False
 

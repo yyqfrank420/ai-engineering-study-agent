@@ -7,10 +7,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from analytics.events import enqueue_analytics_event
+from analytics.events import enqueue_analytics_event, enqueue_product_analytics_event
 from api.internal_access import get_optional_user
-from storage.product_analytics_store import record_product_analytics_event
-from storage.profile_store import upsert_profile
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
@@ -132,20 +130,15 @@ async def capture_analytics_event(
         raise HTTPException(status_code=429, detail="Too many analytics events")
     attempts.append(now)
 
-    try:
-        if user:
-            upsert_profile(user["id"], user.get("email") or f"{user['id']}@unknown.local")
-        record_product_analytics_event(
-            anonymous_id=body.anonymous_id,
-            user_id=user["id"] if user else None,
-            event_type=body.event_type,
-            properties=_sanitize_properties(body.properties),
-            created_at_epoch=now,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        print(f"[analytics] Product analytics write failed: {type(exc).__name__}: {exc}")
+    properties = _sanitize_properties(body.properties)
+    enqueue_product_analytics_event(
+        anonymous_id=body.anonymous_id,
+        user_id=user["id"] if user else None,
+        user_email=(user.get("email") or f"{user['id']}@unknown.local") if user else None,
+        event_type=body.event_type,
+        properties=properties,
+        created_at_epoch=now,
+    )
     enqueue_analytics_event(
         event_name=body.event_type,
         event_category="product",
@@ -153,7 +146,7 @@ async def capture_analytics_event(
         anonymous_id=body.anonymous_id,
         request_id=(body.properties or {}).get("request_id"),
         client_request_id=(body.properties or {}).get("client_request_id"),
-        properties=_sanitize_properties(body.properties),
+        properties=properties,
         created_at_epoch=now,
     )
     return {"ok": True}
