@@ -54,8 +54,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=int(os.getenv("STAGING_EVAL_CONCURRENCY", "2")),
+        default=int(os.getenv("STAGING_EVAL_CONCURRENCY", "1")),
         help="Maximum staging cases to run at once",
+    )
+    parser.add_argument(
+        "--attempts",
+        type=int,
+        default=int(os.getenv("STAGING_EVAL_ATTEMPTS", "1")),
+        help="Attempts per staging case; increase only for manual transient-failure checks",
     )
     parser.add_argument("--keep-threads", action="store_true", help="Do not auto-delete eval threads")
     return parser
@@ -342,6 +348,8 @@ def evaluate_expectation(step: StagingStep, run: dict, case_state: dict) -> list
 
     if expect.has_error_event is not None and bool(error_events) != expect.has_error_event:
         failures.append(f"has_error_event expected {expect.has_error_event}, got {bool(error_events)}")
+        if error_text:
+            failures.append(f"error event: {error_text[:500]}")
 
     if expect.error_contains and expect.error_contains not in (error_text or run.get("body_text", "")):
         failures.append(f"error did not contain '{expect.error_contains}'")
@@ -655,7 +663,8 @@ async def main() -> None:
         case_label = f"[bold]{case.id}[/]" if _console is not None else case.id
         _console_print(f"Running {case_label} {case.description}")
         result = None
-        for attempt in range(1, 3):
+        attempts = max(1, args.attempts)
+        for attempt in range(1, attempts + 1):
             result = await run_case(
                 None,
                 args.base_url,
@@ -668,11 +677,11 @@ async def main() -> None:
                 pass_message = f"[green]PASS[/] ({elapsed:.1f}s)" if _console is not None else f"PASS ({elapsed:.1f}s)"
                 _console_print(f"{pass_message}\n")
                 return result
-            if attempt == 1:
+            if attempt < attempts:
                 retry_message = (
-                    f"[yellow]{case.id} FAIL (attempt 1/2, retrying...)[/]"
+                    f"[yellow]{case.id} FAIL (attempt {attempt}/{attempts}, retrying...)[/]"
                     if _console is not None
-                    else f"{case.id} FAIL (attempt 1/2, retrying...)"
+                    else f"{case.id} FAIL (attempt {attempt}/{attempts}, retrying...)"
                 )
                 _console_print(retry_message)
         elapsed = time.perf_counter() - started_at

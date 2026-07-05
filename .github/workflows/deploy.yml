@@ -28,6 +28,8 @@ env:
   # Blocking live evals spend real model tokens. Keep this to a representative
   # smoke set; run the full staging suite manually when prompts/pipeline change.
   STAGING_EVAL_CASES: S1 S4 S7 S8 S10
+  STAGING_EVAL_CONCURRENCY: "1"
+  STAGING_EVAL_ATTEMPTS: "1"
   # Full image path: <region>-docker.pkg.dev/<project>/<repo>/<image>:<sha>
   IMAGE: europe-west2-docker.pkg.dev/project-c170fa55-f0d5-4d83-bfe/agent-backend/agent-backend
 

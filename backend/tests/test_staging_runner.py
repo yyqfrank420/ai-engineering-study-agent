@@ -18,6 +18,7 @@ from eval.staging_runner import (
     select_cases,
 )
 import asyncio
+from pathlib import Path
 import urllib.request
 
 
@@ -146,6 +147,26 @@ def test_staging_runner_cli_case_filter_overrides_environment(monkeypatch):
     assert [case.id for case in select_cases(args)] == ["S4"]
 
 
+def test_staging_runner_defaults_to_serial_single_attempt_execution(monkeypatch):
+    monkeypatch.delenv("STAGING_EVAL_CONCURRENCY", raising=False)
+    monkeypatch.delenv("STAGING_EVAL_ATTEMPTS", raising=False)
+
+    args = build_parser().parse_args([])
+
+    assert args.concurrency == 1
+    assert args.attempts == 1
+
+
+def test_staging_runner_allows_manual_parallel_retry_override(monkeypatch):
+    monkeypatch.setenv("STAGING_EVAL_CONCURRENCY", "3")
+    monkeypatch.setenv("STAGING_EVAL_ATTEMPTS", "2")
+
+    args = build_parser().parse_args([])
+
+    assert args.concurrency == 3
+    assert args.attempts == 2
+
+
 def test_blocking_staging_smoke_set_covers_risky_paths_without_excess_llm_calls():
     cases_by_id = {case.id: case for case in STAGING_CASES}
     smoke_cases = [cases_by_id[case_id] for case_id in BLOCKING_STAGING_CASE_IDS]
@@ -161,6 +182,13 @@ def test_blocking_staging_smoke_set_covers_risky_paths_without_excess_llm_calls(
         if step.kind == "chat" and not step.expect.has_error_event
     ]
     assert len(model_backed_chat_steps) <= 4
+
+
+def test_ci_staging_eval_is_serial_and_single_attempt():
+    workflow = Path(".github/workflows/deploy.yml").read_text(encoding="utf-8")
+
+    assert 'STAGING_EVAL_CONCURRENCY: "1"' in workflow
+    assert 'STAGING_EVAL_ATTEMPTS: "1"' in workflow
 
 
 def test_extract_helpers_return_expected_values():
@@ -256,6 +284,25 @@ def test_evaluate_expectation_rejects_generic_customer_support_graph():
     assert "graph title expected to contain 'Customer Support', got 'Agent Architecture'" in failures
     assert "graph missing node label 'Billing Agent'" in failures
     assert "graph unexpectedly included node label 'Tool Use'" in failures
+
+
+def test_evaluate_expectation_reports_unexpected_sse_error_text():
+    step = StagingStep(
+        kind="chat",
+        description="unexpected error",
+        expect=StepExpectation(has_error_event=False),
+    )
+    run = {
+        "status_code": 200,
+        "events": [{"type": "error", "content": "Another response is already running."}],
+        "json_body": None,
+        "body_text": "",
+    }
+
+    failures = evaluate_expectation(step, run, {})
+
+    assert "has_error_event expected False, got True" in failures
+    assert "error event: Another response is already running." in failures
 
 
 def test_count_visible_threads_excludes_eval_thread():
