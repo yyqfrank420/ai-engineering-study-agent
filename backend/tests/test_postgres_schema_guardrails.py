@@ -118,6 +118,15 @@ def test_schema_apply_script_runs_alembic_migrations():
     assert "psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f" not in script
 
 
+def test_main_deploy_applies_schema_before_backend_rollout():
+    workflow = Path(".github/workflows/deploy.yml").read_text(encoding="utf-8")
+
+    assert "needs: [detect-changes, ci-required, apply-supabase-schema]" in workflow
+    assert "needs.apply-supabase-schema.result == 'success'" in workflow
+    assert "needs.detect-changes.outputs.backend == 'true'" in workflow
+    assert "needs.detect-changes.outputs.analytics == 'true'" in workflow
+
+
 def test_alembic_migrations_cover_required_postgres_tables():
     migration_text = "\n".join(
         path.read_text(encoding="utf-8")

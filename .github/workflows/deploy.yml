@@ -582,7 +582,7 @@ jobs:
     name: Apply Supabase schema
     runs-on: ubuntu-latest
     needs: [detect-changes, ci-required]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.detect-changes.outputs.infra-db == 'true' && needs.ci-required.result == 'success'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && (needs.detect-changes.outputs.infra-db == 'true' || needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.analytics == 'true') && needs.ci-required.result == 'success'
 
     permissions:
       contents: read
