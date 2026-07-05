@@ -32,17 +32,22 @@ env:
   IMAGE: europe-west2-docker.pkg.dev/project-c170fa55-f0d5-4d83-bfe/agent-backend/agent-backend
 
 jobs:
-  # ── 0. Check if changes are docs-only (skip heavy jobs if true) ──────────────
-  check-docs-only:
-    name: Check if docs-only change
+  # ── 0. Classify changed files so branch CI only runs the useful buckets ─────
+  detect-changes:
+    name: Detect changed buckets
     runs-on: ubuntu-latest
     outputs:
-      docs-only: ${{ steps.check.outputs.docs-only }}
+      docs-only: ${{ steps.detect.outputs.docs-only }}
+      frontend: ${{ steps.detect.outputs.frontend }}
+      backend: ${{ steps.detect.outputs.backend }}
+      infra-db: ${{ steps.detect.outputs.infra-db }}
+      analytics: ${{ steps.detect.outputs.analytics }}
+      e2e: ${{ steps.detect.outputs.e2e }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - id: check
+      - id: detect
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             git fetch origin "${{ github.base_ref }}" --depth=1
@@ -56,21 +61,69 @@ jobs:
             fi
           fi
 
-          # Treat markdown-only documentation edits as docs-only.
-          # Keep non-markdown files under docs/ deploy-relevant (for example docs/supabase/schema.sql).
+          frontend=false
+          backend=false
+          infra_db=false
+          analytics=false
+          e2e=false
+
           if [ -n "$files" ] && echo "$files" | grep -qvE '^(README\.md|docs/.*\.md|.*\.md)$'; then
-            echo "docs-only=false" >> $GITHUB_OUTPUT
+            docs_only=false
           else
-            echo "docs-only=true" >> $GITHUB_OUTPUT
+            docs_only=true
           fi
+
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+
+            case "$file" in
+              .github/workflows/*|scripts/prepush_check.sh)
+                frontend=true
+                backend=true
+                infra_db=true
+                analytics=true
+                ;;
+              backend/api/analytics_route.py|backend/api/internal_dashboard_route.py|backend/storage/product_analytics_store.py|backend/storage/telemetry_store.py|backend/observability.py|backend/tests/test_internal_dashboard_routes.py|backend/tests/test_observability_and_dashboard.py|backend/tests/test_internal_auth_and_telemetry.py|frontend/src/services/analytics*|frontend/src/components/InternalDashboard*)
+                analytics=true
+                case "$file" in
+                  frontend/*) frontend=true ;;
+                esac
+                ;;
+              frontend/*)
+                frontend=true
+                ;;
+              backend/adapters/database_adapter.py|backend/db/*|backend/db/**/*|docs/supabase/*|alembic.ini|scripts/apply_supabase_schema.sh|scripts/configure_main_branch_protection.sh|backend/tests/test_postgres_schema_guardrails.py)
+                backend=true
+                infra_db=true
+                ;;
+              backend/*|scripts/run_staging_eval.py|scripts/validate_canonical_graph_artifacts.py|backend/requirements.txt|pytest.ini)
+                backend=true
+                ;;
+            esac
+          done <<< "$files"
+
+          # Every PR gets E2E smoke coverage. Other buckets remain path-filtered
+          # so PR time stays close to the touched surface area.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            e2e=true
+          fi
+
+          {
+            echo "docs-only=$docs_only"
+            echo "frontend=$frontend"
+            echo "backend=$backend"
+            echo "infra-db=$infra_db"
+            echo "analytics=$analytics"
+            echo "e2e=$e2e"
+          } >> "$GITHUB_OUTPUT"
 
   # ── 1. Backend tests ────────────────────────────────────────────────────────
   test-backend:
     name: Test backend (${{ matrix.group }})
     runs-on: ubuntu-latest
     timeout-minutes: 8
-    needs: [check-docs-only]
-    if: needs.check-docs-only.outputs.docs-only == 'false'
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.backend == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -148,8 +201,8 @@ jobs:
     name: Validate canonical graph artifacts
     runs-on: ubuntu-latest
     timeout-minutes: 8
-    needs: [check-docs-only]
-    if: needs.check-docs-only.outputs.docs-only == 'false'
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.backend == 'true'
     defaults:
       run:
         working-directory: .
@@ -171,13 +224,129 @@ jobs:
           PYTHONPATH: backend
         run: python scripts/validate_canonical_graph_artifacts.py
 
+  test-infra-db:
+    name: Test infra / DB schema
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.infra-db == 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Validate schema tooling
+        run: |
+          bash -n scripts/apply_supabase_schema.sh
+          python -m compileall -q backend/db/migrations
+
+      - name: Run DB guardrail tests
+        env:
+          ANTHROPIC_API_KEY: test-disabled
+          OPENAI_API_KEY: ""
+          SUPABASE_URL: https://ci-dummy.supabase.co
+          SUPABASE_ANON_KEY: ci-dummy
+          SUPABASE_DB_URL: ""
+          SUPABASE_JWT_ISSUER: https://ci-dummy.supabase.co/auth/v1
+          SUPABASE_JWT_SECRET: ci-dummy-secret-at-least-32-characters-long
+          TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
+          FAISS_ARTIFACT_URL: https://ci-dummy.example.com/faiss.tar.gz
+          FAISS_ARTIFACT_SHA256: 0000000000000000000000000000000000000000000000000000000000000000
+          FRONTEND_ORIGIN: http://localhost:5173
+        run: pytest backend/tests/test_postgres_schema_guardrails.py backend/tests/test_storage_integrity.py --tb=short -q
+
+  test-analytics:
+    name: Test analytics / OLAP surfaces
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.analytics == 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Run analytics checks
+        env:
+          ANTHROPIC_API_KEY: test-disabled
+          OPENAI_API_KEY: ""
+          SUPABASE_URL: https://ci-dummy.supabase.co
+          SUPABASE_ANON_KEY: ci-dummy
+          SUPABASE_DB_URL: ""
+          SUPABASE_JWT_ISSUER: https://ci-dummy.supabase.co/auth/v1
+          SUPABASE_JWT_SECRET: ci-dummy-secret-at-least-32-characters-long
+          TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
+          FAISS_ARTIFACT_URL: https://ci-dummy.example.com/faiss.tar.gz
+          FAISS_ARTIFACT_SHA256: 0000000000000000000000000000000000000000000000000000000000000000
+          FRONTEND_ORIGIN: http://localhost:5173
+          VITE_API_URL: https://ci-placeholder.run.app
+        run: |
+          log_dir="$(mktemp -d)"
+          trap 'rm -rf "$log_dir"' EXIT
+
+          pytest backend/tests/test_internal_dashboard_routes.py \
+            backend/tests/test_observability_and_dashboard.py \
+            backend/tests/test_internal_auth_and_telemetry.py \
+            backend/tests/test_storage_integrity.py \
+            --tb=short -q >"$log_dir/backend.log" 2>&1 &
+          backend_pid="$!"
+
+          (cd frontend && npx vitest run src/services/analytics.test.ts src/components/InternalDashboard.test.tsx) \
+            >"$log_dir/frontend.log" 2>&1 &
+          frontend_pid="$!"
+
+          status=0
+          if wait "$backend_pid"; then
+            echo "[ok] analytics backend"
+          else
+            status=1
+            echo "[fail] analytics backend"
+            cat "$log_dir/backend.log"
+          fi
+
+          if wait "$frontend_pid"; then
+            echo "[ok] analytics frontend"
+          else
+            status=1
+            echo "[fail] analytics frontend"
+            cat "$log_dir/frontend.log"
+          fi
+
+          exit "$status"
+
   # ── 2. Frontend build check ─────────────────────────────────────────────────
   test-frontend:
     name: Check frontend
     runs-on: ubuntu-latest
     timeout-minutes: 8
-    needs: [check-docs-only]
-    if: needs.check-docs-only.outputs.docs-only == 'false'
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.frontend == 'true'
 
     steps:
       - uses: actions/checkout@v4
@@ -249,11 +418,119 @@ jobs:
 
           exit "$status"
 
+  test-e2e:
+    name: E2E app smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.e2e == 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          npm ci --prefix frontend --prefer-offline --no-audit --no-fund
+
+      - name: Run PR E2E smoke checks
+        env:
+          ANTHROPIC_API_KEY: test-disabled
+          OPENAI_API_KEY: ""
+          SUPABASE_URL: https://ci-dummy.supabase.co
+          SUPABASE_ANON_KEY: ci-dummy
+          SUPABASE_DB_URL: ""
+          SUPABASE_JWT_ISSUER: https://ci-dummy.supabase.co/auth/v1
+          SUPABASE_JWT_SECRET: ci-dummy-secret-at-least-32-characters-long
+          TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
+          FAISS_ARTIFACT_URL: https://ci-dummy.example.com/faiss.tar.gz
+          FAISS_ARTIFACT_SHA256: 0000000000000000000000000000000000000000000000000000000000000000
+          FRONTEND_ORIGIN: http://localhost:5173
+          VITE_API_URL: https://ci-placeholder.run.app
+        run: |
+          log_dir="$(mktemp -d)"
+          trap 'rm -rf "$log_dir"' EXIT
+
+          pytest backend/tests/test_thread_routes_integration.py \
+            backend/tests/test_system_workflows.py \
+            backend/tests/test_api_security.py \
+            --tb=short -q >"$log_dir/backend-e2e.log" 2>&1 &
+          backend_pid="$!"
+
+          npm --prefix frontend run build >"$log_dir/frontend-build.log" 2>&1 &
+          frontend_pid="$!"
+
+          status=0
+          if wait "$backend_pid"; then
+            echo "[ok] backend e2e smoke"
+          else
+            status=1
+            echo "[fail] backend e2e smoke"
+            cat "$log_dir/backend-e2e.log"
+          fi
+
+          if wait "$frontend_pid"; then
+            echo "[ok] frontend production build"
+          else
+            status=1
+            echo "[fail] frontend production build"
+            cat "$log_dir/frontend-build.log"
+          fi
+
+          exit "$status"
+
+  ci-required:
+    name: CI required
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - detect-changes
+      - test-backend
+      - validate-canonical-artifacts
+      - test-infra-db
+      - test-analytics
+      - test-frontend
+      - test-e2e
+    steps:
+      - name: Check required CI buckets
+        env:
+          NEEDS_JSON: ${{ toJson(needs) }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          bad = {
+              name: data["result"]
+              for name, data in needs.items()
+              if data["result"] in {"failure", "cancelled"}
+          }
+          if bad:
+              print("Required CI bucket failed:", bad, file=sys.stderr)
+              raise SystemExit(1)
+
+          print("All required CI buckets passed or were intentionally skipped.")
+          PY
+
   verify-frontend-vercel-build:
     name: Verify frontend Vercel build
     runs-on: ubuntu-latest
-    needs: [check-docs-only]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docs-only.outputs.docs-only == 'false'
+    needs: [detect-changes, ci-required]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.detect-changes.outputs.frontend == 'true' && needs.ci-required.result == 'success'
 
     steps:
       - uses: actions/checkout@v4
@@ -302,8 +579,8 @@ jobs:
   apply-supabase-schema:
     name: Apply Supabase schema
     runs-on: ubuntu-latest
-    needs: [check-docs-only, test-backend, validate-canonical-artifacts]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docs-only.outputs.docs-only == 'false'
+    needs: [detect-changes, ci-required]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.detect-changes.outputs.infra-db == 'true' && needs.ci-required.result == 'success'
 
     permissions:
       contents: read
@@ -321,10 +598,17 @@ jobs:
       - name: Set up gcloud CLI
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Install psql
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install schema tooling
         run: |
           sudo apt-get update
           sudo apt-get install -y postgresql-client
+          pip install -r backend/requirements.txt
 
       - name: Load Supabase DB URL from Secret Manager
         run: |
@@ -343,8 +627,8 @@ jobs:
   deploy-backend-candidate:
     name: Build, push, deploy backend candidate
     runs-on: ubuntu-latest
-    needs: [apply-supabase-schema]   # schema must be current before deploy
-    if: needs.apply-supabase-schema.result == 'success'
+    needs: [detect-changes, ci-required, apply-supabase-schema]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && (needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.analytics == 'true' || needs.detect-changes.outputs.infra-db == 'true') && needs.ci-required.result == 'success' && (needs.apply-supabase-schema.result == 'success' || needs.apply-supabase-schema.result == 'skipped')
 
     permissions:
       contents: read
@@ -404,8 +688,8 @@ jobs:
   staging-eval:
     name: Run staging eval on backend candidate
     runs-on: ubuntu-latest
-    needs: [check-docs-only, deploy-backend-candidate]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docs-only.outputs.docs-only == 'false'
+    needs: [detect-changes, deploy-backend-candidate]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.deploy-backend-candidate.result == 'success'
     timeout-minutes: 8
 
     permissions:
@@ -511,8 +795,8 @@ jobs:
   promote-backend:
     name: Promote backend candidate
     runs-on: ubuntu-latest
-    needs: [check-docs-only, staging-eval]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docs-only.outputs.docs-only == 'false'
+    needs: [detect-changes, staging-eval]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.staging-eval.result == 'success'
 
     permissions:
       contents: read
@@ -538,8 +822,8 @@ jobs:
   deploy-frontend:
     name: Deploy frontend to Vercel
     runs-on: ubuntu-latest
-    needs: [check-docs-only, promote-backend, test-frontend, verify-frontend-vercel-build]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docs-only.outputs.docs-only == 'false' && needs.promote-backend.result == 'success' && needs.test-frontend.result == 'success' && needs.verify-frontend-vercel-build.result == 'success'
+    needs: [detect-changes, ci-required, promote-backend, verify-frontend-vercel-build]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.detect-changes.outputs.frontend == 'true' && needs.ci-required.result == 'success' && needs.verify-frontend-vercel-build.result == 'success' && (needs.promote-backend.result == 'success' || needs.promote-backend.result == 'skipped')
 
     steps:
       - uses: actions/checkout@v4

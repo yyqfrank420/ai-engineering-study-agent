@@ -253,7 +253,7 @@ def _validate_postgres_schema(conn) -> None:
             """
         ).fetchall()
     }
-    tables_without_rls = sorted(public_tables - rls_enabled_tables)
+    tables_without_rls = sorted(set(POSTGRES_REQUIRED_TABLES) - rls_enabled_tables)
 
     policies_by_table: dict[str, set[str]] = {}
     for row in conn.execute(
@@ -285,5 +285,5 @@ def _validate_postgres_schema(conn) -> None:
     raise RuntimeError(
         "Postgres schema is not ready for production; "
         + "; ".join(problems)
-        + ". Apply docs/supabase/schema.sql before starting the app."
+        + ". Run Alembic migrations before starting the app: bash scripts/apply_supabase_schema.sh."
     )

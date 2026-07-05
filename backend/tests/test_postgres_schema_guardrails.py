@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from adapters import database_adapter
 from adapters.database_adapter import init_db
 from config import settings
@@ -92,3 +94,32 @@ def test_init_db_in_postgres_mode_fails_when_rls_is_missing(monkeypatch):
     assert conn.committed is False
     assert conn.rolled_back is True
     assert conn.closed is True
+
+
+def test_postgres_schema_error_points_to_alembic(monkeypatch):
+    conn = _FakeConnection(tables=set(), rls_tables=set(), policies={})
+    _patch_postgres_connection(monkeypatch, conn)
+
+    try:
+        init_db()
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("init_db() should fail when required Postgres tables are missing")
+
+    assert "bash scripts/apply_supabase_schema.sh" in message
+    assert "docs/supabase/schema.sql" not in message
+
+
+def test_schema_apply_script_runs_alembic_migrations():
+    script = Path("scripts/apply_supabase_schema.sh").read_text(encoding="utf-8")
+
+    assert "alembic -c \"$ROOT_DIR/alembic.ini\" upgrade head" in script
+    assert "psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f" not in script
+
+
+def test_initial_alembic_migration_covers_required_postgres_tables():
+    migration = Path("backend/db/migrations/versions/20260705_0001_initial_supabase_schema.py").read_text(encoding="utf-8")
+
+    for table_name in database_adapter.POSTGRES_REQUIRED_TABLES:
+        assert f"public.{table_name}" in migration

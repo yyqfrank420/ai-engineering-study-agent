@@ -89,6 +89,24 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
         allow_headers=["*"],
     )
 
+    def apply_response_headers(response, request_id: str | None = None):
+        if request_id:
+            response.headers["X-Request-Id"] = request_id
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        return response
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception):
+        print(f"[error] Unhandled request failed: {type(exc).__name__}: {exc}")
+        return apply_response_headers(
+            JSONResponse(status_code=500, content={"detail": "Internal server error"}),
+            getattr(request.state, "request_id", None),
+        )
+
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
         started_at = time.perf_counter()
@@ -116,9 +134,12 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
             except ValueError:
                 body_size = 0
             if body_size > settings.max_request_body_bytes:
-                return JSONResponse(
-                    status_code=413,
-                    content={"detail": "Request body too large"},
+                return apply_response_headers(
+                    JSONResponse(
+                        status_code=413,
+                        content={"detail": "Request body too large"},
+                    ),
+                    request.state.request_id,
                 )
 
         with start_span(
@@ -177,14 +198,7 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
                 except Exception as exc:
                     print(f"[telemetry] HTTP request log failed: {type(exc).__name__}: {exc}")
 
-        if response is not None:
-            response.headers["X-Request-Id"] = request.state.request_id
-            response.headers.setdefault("X-Content-Type-Options", "nosniff")
-            response.headers.setdefault("X-Frame-Options", "DENY")
-            response.headers.setdefault("Referrer-Policy", "no-referrer")
-            response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-            response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
-        return response
+        return apply_response_headers(response, request.state.request_id) if response is not None else response
 
     app.include_router(health_router)
     app.include_router(auth_router)

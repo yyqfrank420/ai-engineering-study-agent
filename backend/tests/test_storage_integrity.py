@@ -109,6 +109,23 @@ def test_product_analytics_round_trips_properties_and_ignores_bad_json(temp_data
     assert rows[3]["properties"] == {"thread_id": "thread-1", "nested": {"ok": True}}
 
 
+def test_product_analytics_rejects_invalid_event_shape(temp_data_dir):
+    init_db()
+
+    try:
+        product_analytics_store.record_product_analytics_event(
+            anonymous_id="",
+            event_type="chat_sent",
+            created_at_epoch=20,
+        )
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("analytics events should require a non-empty anonymous_id")
+
+    assert "anonymous_id" in message
+
+
 def test_telemetry_logs_round_trip_metadata_and_filter_by_user(temp_data_dir):
     init_db()
 
@@ -168,3 +185,24 @@ def test_telemetry_ignores_non_dict_metadata(temp_data_dir):
     )
 
     assert telemetry_store.list_recent_http_request_logs(since_epoch=0)[0]["metadata"] == {}
+
+
+def test_telemetry_rejects_invalid_numeric_fields(temp_data_dir):
+    init_db()
+
+    try:
+        telemetry_store.record_llm_telemetry(
+            operation="synthesis",
+            provider="anthropic",
+            model="claude",
+            status="success",
+            duration_ms=-1,
+            output_chars=42,
+            used_fallback=False,
+        )
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("LLM telemetry should reject negative durations")
+
+    assert "duration_ms" in message

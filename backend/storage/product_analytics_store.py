@@ -4,6 +4,7 @@ import uuid
 from typing import Any
 
 from adapters.database_adapter import execute, fetchall
+from storage.models import ProductAnalyticsEventRow, ProductAnalyticsEventWrite
 
 
 def _dump_properties(properties: dict[str, Any] | None) -> str | None:
@@ -30,6 +31,15 @@ def record_product_analytics_event(
     properties: dict[str, Any] | None = None,
     created_at_epoch: float | None = None,
 ) -> None:
+    event = ProductAnalyticsEventWrite.model_validate(
+        {
+            "anonymous_id": anonymous_id,
+            "event_type": event_type,
+            "user_id": user_id,
+            "properties": properties,
+            "created_at_epoch": time.time() if created_at_epoch is None else created_at_epoch,
+        }
+    )
     execute(
         """
         INSERT INTO product_analytics_events (
@@ -39,11 +49,11 @@ def record_product_analytics_event(
         """,
         (
             str(uuid.uuid4()),
-            user_id,
-            anonymous_id,
-            event_type,
-            _dump_properties(properties),
-            created_at_epoch or time.time(),
+            event.user_id,
+            event.anonymous_id,
+            event.event_type,
+            _dump_properties(event.properties),
+            event.created_at_epoch,
         ),
     )
 
@@ -58,6 +68,8 @@ def list_recent_product_analytics_events(*, since_epoch: float) -> list[dict[str
         """,
         (since_epoch,),
     )
+    normalized: list[dict[str, Any]] = []
     for row in rows:
         row["properties"] = _load_properties(row.pop("properties_json", None))
-    return rows
+        normalized.append(ProductAnalyticsEventRow.model_validate(row).model_dump())
+    return normalized

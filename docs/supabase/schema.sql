@@ -1,3 +1,7 @@
+-- Reference snapshot of the current Supabase schema.
+-- Deployments apply backend/db/migrations with Alembic; update this file only
+-- when refreshing a human-readable schema snapshot.
+
 begin;
 
 create table if not exists public.profiles (

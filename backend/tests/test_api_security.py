@@ -106,6 +106,9 @@ def test_large_request_body_rejected_before_route(monkeypatch):
 
     assert response.status_code == 413
     assert response.json()["detail"] == "Request body too large"
+    assert response.headers["x-request-id"]
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
 
 
 def test_invalid_content_length_is_treated_as_zero(monkeypatch):
@@ -212,6 +215,9 @@ def test_request_exception_records_500_metrics(monkeypatch):
         response = client.get("/boom")
 
     assert response.status_code == 500
+    assert response.json() == {"detail": "Internal server error"}
+    assert response.headers["x-request-id"]
+    assert response.headers["x-content-type-options"] == "nosniff"
 
 
 def test_prepare_returns_503_when_faiss_not_loaded():
