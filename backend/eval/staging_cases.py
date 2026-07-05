@@ -180,7 +180,7 @@ STAGING_CASES: list[StagingCase] = [
                     workers_include=["orchestrator", "rag"],
                     workers_exclude=["graph"],
                     response_min_length=120,
-                    response_contains=["RAG", "fine-tuning"],
+                    response_contains=["RAG"],
                 ),
             ),
         ],

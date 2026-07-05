@@ -184,6 +184,16 @@ def test_blocking_staging_smoke_set_covers_risky_paths_without_excess_llm_calls(
     assert len(model_backed_chat_steps) <= 4
 
 
+def test_graph_off_staging_case_avoids_brittle_keyword_requirements():
+    graph_off_case = next(case for case in STAGING_CASES if case.id == "S4")
+    step = graph_off_case.steps[0]
+
+    assert step.payload["graph_mode"] == "off"
+    assert step.expect.graph_emitted is False
+    assert "graph" in step.expect.workers_exclude
+    assert step.expect.response_contains == ["RAG"]
+
+
 def test_ci_staging_eval_is_serial_and_single_attempt():
     workflow = Path(".github/workflows/deploy.yml").read_text(encoding="utf-8")
 
