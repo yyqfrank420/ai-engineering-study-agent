@@ -115,6 +115,10 @@ def test_schema_apply_script_runs_alembic_migrations():
     script = Path("scripts/apply_supabase_schema.sh").read_text(encoding="utf-8")
 
     assert "alembic -c \"$ROOT_DIR/alembic.ini\" upgrade head" in script
+    assert "WITH required_tables(name)" in script
+    assert "alembic_version" not in script
+    for table_name in database_adapter.POSTGRES_REQUIRED_TABLES:
+        assert f"('{table_name}')" in script
     assert "psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f" not in script
 
 

@@ -22,13 +22,27 @@ alembic -c "$ROOT_DIR/alembic.ini" upgrade head
 
 missing_rls="$(
   psql "$SUPABASE_DB_URL" -At -v ON_ERROR_STOP=1 <<'SQL'
-SELECT c.relname
-FROM pg_class AS c
+WITH required_tables(name) AS (
+  VALUES
+    ('profiles'),
+    ('chat_threads'),
+    ('chat_messages'),
+    ('request_events'),
+    ('product_analytics_events'),
+    ('search_tool_requests'),
+    ('active_streams'),
+    ('http_request_logs'),
+    ('llm_telemetry'),
+    ('analytics_events')
+)
+SELECT r.name
+FROM required_tables AS r
+JOIN pg_class AS c ON c.relname = r.name
 JOIN pg_namespace AS n ON n.oid = c.relnamespace
 WHERE n.nspname = 'public'
   AND c.relkind = 'r'
   AND NOT c.relrowsecurity
-ORDER BY c.relname;
+ORDER BY r.name;
 SQL
 )"
 
