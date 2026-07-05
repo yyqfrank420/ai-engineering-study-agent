@@ -225,13 +225,51 @@ class TestResearchWorkerResilience:
 
         assert result["research_context"] == ""
 
-    def test_build_queries_uses_current_year_instead_of_hard_coded_year(self):
-        from datetime import datetime, timezone
+    def test_build_queries_uses_current_year_instead_of_hard_coded_year(self, monkeypatch):
+        from datetime import datetime
 
-        from agent.nodes.research_worker import _build_queries
+        import agent.nodes.research_worker as rw
 
-        queries = _build_queries("RAG pipeline")
+        class _FrozenDateTime:
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2032, 1, 1, tzinfo=tz)
+
+        monkeypatch.setattr(rw, "datetime", _FrozenDateTime)
+
+        queries = rw._build_queries("RAG pipeline")
 
         assert queries[0] == "RAG pipeline architecture"
         assert queries[1] == "RAG pipeline best practices"
-        assert queries[2] == f"RAG pipeline implementation {datetime.now(timezone.utc).year}"
+        assert queries[2] == "RAG pipeline implementation 2032"
+
+    def test_run_ddg_searches_continues_after_single_query_failure(self, monkeypatch):
+        import sys
+        import types
+        from agent.nodes.research_worker import _run_ddg_searches
+
+        calls = []
+
+        class _DDGS:
+            def __init__(self, timeout):
+                self.timeout = timeout
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def text(self, query, max_results):
+                calls.append((query, max_results))
+                if query == "bad":
+                    raise RuntimeError("search failed")
+                return [{"href": f"https://example.com/{query}", "title": query, "body": "body"}]
+
+        monkeypatch.setitem(sys.modules, "duckduckgo_search", types.SimpleNamespace(DDGS=_DDGS))
+
+        assert _run_ddg_searches(["good", "bad", "later"], 2) == [
+            {"href": "https://example.com/good", "title": "good", "body": "body"},
+            {"href": "https://example.com/later", "title": "later", "body": "body"},
+        ]
+        assert calls == [("good", 2), ("bad", 2), ("later", 2)]

@@ -2,6 +2,7 @@ from types import SimpleNamespace
 import asyncio
 import uuid
 
+import pytest
 from fastapi.testclient import TestClient
 
 from adapters.database_adapter import init_db
@@ -61,7 +62,83 @@ def test_internal_login_rejects_wrong_password(temp_data_dir, monkeypatch):
         )
 
     assert response.status_code == 401
-    assert "Invalid internal login password" in response.text
+    assert "Invalid internal login credentials" in response.text
+
+
+def test_internal_login_can_be_disabled(monkeypatch):
+    from main import create_app
+
+    monkeypatch.setattr(settings, "internal_test_password", "")
+    app = create_app(load_resources=False)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/auth/internal-login",
+            json={"email": "friend@example.com", "password": "anything"},
+        )
+
+    assert response.status_code == 404
+
+
+def test_internal_login_rate_limits_after_failures(monkeypatch):
+    from main import create_app
+
+    monkeypatch.setattr(settings, "supabase_jwt_secret", "x" * 32)
+    monkeypatch.setattr(settings, "supabase_jwt_issuer", "https://project.supabase.co/auth/v1")
+    monkeypatch.setattr(settings, "supabase_jwt_audience", "authenticated")
+    monkeypatch.setattr(settings, "internal_test_attempt_limit", 1)
+    monkeypatch.setattr(settings, "internal_test_attempt_window_s", 60)
+    monkeypatch.setattr(settings, "internal_test_password", "expected-secret")
+    monkeypatch.setattr(settings, "internal_test_email_allowlist_raw", "friend@example.com")
+    app = create_app(load_resources=False)
+
+    with TestClient(app) as client:
+        first = client.post(
+            "/api/auth/internal-login",
+            json={"email": "friend@example.com", "password": "wrong-secret"},
+        )
+        second = client.post(
+            "/api/auth/internal-login",
+            json={"email": "friend@example.com", "password": "expected-secret"},
+        )
+
+    assert first.status_code == 401
+    assert second.status_code == 429
+
+
+def test_internal_login_requires_jwt_secret(monkeypatch):
+    from fastapi import HTTPException
+    from api import auth_route
+
+    monkeypatch.setattr(settings, "supabase_jwt_secret", "")
+    monkeypatch.setattr(settings, "supabase_jwt_issuer", "https://project.supabase.co/auth/v1")
+
+    with pytest.raises(HTTPException) as exc_info:
+        auth_route._mint_internal_session("friend@example.com")
+
+    assert exc_info.value.status_code == 500
+    assert "not configured" in exc_info.value.detail
+
+
+def test_internal_login_uses_generic_error_for_unlisted_email(temp_data_dir, monkeypatch):
+    from main import create_app
+
+    monkeypatch.setattr(settings, "supabase_jwt_secret", "x" * 32)
+    monkeypatch.setattr(settings, "supabase_jwt_issuer", "https://project.supabase.co/auth/v1")
+    monkeypatch.setattr(settings, "supabase_jwt_audience", "authenticated")
+    monkeypatch.setattr(settings, "internal_test_password", "expected-secret")
+    monkeypatch.setattr(settings, "internal_test_email_allowlist_raw", "friend@example.com")
+
+    app = create_app(load_resources=False)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/auth/internal-login",
+            json={"email": "outsider@example.com", "password": "expected-secret"},
+        )
+
+    assert response.status_code == 401
+    assert "Invalid internal login credentials" in response.text
 
 
 def test_internal_login_reuses_existing_profile_id_for_same_email(temp_data_dir, monkeypatch):
@@ -129,6 +206,110 @@ def test_request_logging_middleware_records_http_request(temp_data_dir):
     assert logs
     assert logs[0]["path"] == "/api/prepare"
     assert logs[0]["status_code"] == 503
+
+
+def test_request_logging_middleware_survives_log_write_failure(monkeypatch):
+    from main import create_app
+
+    monkeypatch.setattr("main.record_http_request_log", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("no log")))
+    app = create_app(load_resources=False)
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+
+
+def test_auth_routes_validate_email_shape():
+    from main import create_app
+
+    app = create_app(load_resources=False)
+
+    with TestClient(app) as client:
+        response = client.post("/api/auth/request-otp", json={"email": "bad"})
+
+    assert response.status_code == 422
+
+
+def test_request_otp_allows_suspicious_request_with_valid_captcha(monkeypatch):
+    from main import create_app
+    import api.auth_route as auth_route
+
+    monkeypatch.setattr(settings, "otp_request_per_email_limit", 1)
+    monkeypatch.setattr(settings, "otp_request_per_ip_limit", 100)
+    calls = []
+
+    async def fake_request_email_otp(email):
+        calls.append(email)
+
+    async def fake_verify_turnstile(token, ip):
+        return token == "pass" and ip
+
+    monkeypatch.setattr(auth_route, "request_email_otp", fake_request_email_otp)
+    monkeypatch.setattr(auth_route, "verify_turnstile", fake_verify_turnstile)
+    app = create_app(load_resources=False)
+
+    with TestClient(app) as client:
+        first = client.post("/api/auth/request-otp", json={"email": "FRIEND@example.com"})
+        second = client.post(
+            "/api/auth/request-otp",
+            json={"email": "friend@example.com", "captcha_token": "pass"},
+        )
+
+    assert first.json() == {"ok": True, "captcha_required": False}
+    assert second.json() == {"ok": True, "captcha_required": False}
+    assert calls == ["friend@example.com", "friend@example.com"]
+
+
+def test_verify_otp_records_failure_requires_captcha_and_clears_on_success(monkeypatch):
+    from fastapi import HTTPException
+    from main import create_app
+    import api.auth_route as auth_route
+
+    monkeypatch.setattr(settings, "otp_verify_failure_limit", 1)
+    monkeypatch.setattr(settings, "otp_verify_window_s", 60)
+    attempts = []
+    upserts = []
+
+    async def fake_verify_email_otp(email, token):
+        attempts.append(token)
+        if token == "bad":
+            raise HTTPException(status_code=401, detail="bad token")
+        if token == "missing-user":
+            return {"user": {}, "access_token": "a", "refresh_token": "r", "expires_in": 60}
+        return {
+            "user": {"id": "user-1", "email": email},
+            "access_token": "a",
+            "refresh_token": "r",
+            "expires_in": 60,
+            "token_type": "bearer",
+        }
+
+    async def fake_verify_turnstile(token, ip):
+        return token == "pass" and ip
+
+    monkeypatch.setattr(auth_route, "verify_email_otp", fake_verify_email_otp)
+    monkeypatch.setattr(auth_route, "verify_turnstile", fake_verify_turnstile)
+    monkeypatch.setattr(auth_route, "upsert_profile", lambda user_id, email: upserts.append((user_id, email)))
+    app = create_app(load_resources=False)
+
+    with TestClient(app) as client:
+        bad = client.post("/api/auth/verify-otp", json={"email": "friend@example.com", "token": "bad"})
+        captcha_required = client.post("/api/auth/verify-otp", json={"email": "friend@example.com", "token": "good"})
+        missing_user = client.post(
+            "/api/auth/verify-otp",
+            json={"email": "friend@example.com", "token": "missing-user", "captcha_token": "pass"},
+        )
+        good = client.post(
+            "/api/auth/verify-otp",
+            json={"email": "friend@example.com", "token": "good", "captcha_token": "pass"},
+        )
+
+    assert bad.status_code == 401
+    assert captcha_required.json() == {"ok": False, "captcha_required": True}
+    assert missing_user.status_code == 400
+    assert good.json()["session"]["user"] == {"id": "user-1", "email": "friend@example.com"}
+    assert upserts == [("user-1", "friend@example.com")]
 
 
 def test_latest_thread_endpoint_auto_creates_first_thread(temp_data_dir):
@@ -216,6 +397,7 @@ def test_stream_response_limits_concurrent_anthropic_streams(temp_data_dir, monk
 
     active = 0
     max_active = 0
+    gates: dict[str, asyncio.Event] = {}
 
     class _SlowAnthropicStream:
         def __init__(self):
@@ -227,11 +409,11 @@ def test_stream_response_limits_concurrent_anthropic_streams(temp_data_dir, monk
             nonlocal active, max_active
             active += 1
             max_active = max(max_active, active)
+            gates["entered"].set()
             return self
 
         async def __aexit__(self, exc_type, exc, tb):
             nonlocal active
-            await asyncio.sleep(0.01)
             active -= 1
             return False
 
@@ -239,7 +421,7 @@ def test_stream_response_limits_concurrent_anthropic_streams(temp_data_dir, monk
             return self
 
         async def __anext__(self):
-            await asyncio.sleep(0.01)
+            await gates["release"].wait()
             try:
                 return next(self._events)
             except StopIteration as exc:
@@ -263,7 +445,18 @@ def test_stream_response_limits_concurrent_anthropic_streams(temp_data_dir, monk
             pass
 
     async def _run_concurrently():
-        await asyncio.gather(_collect_one(), _collect_one(), _collect_one())
+        gates["entered"] = asyncio.Event()
+        gates["release"] = asyncio.Event()
+        tasks = [
+            asyncio.create_task(_collect_one()),
+            asyncio.create_task(_collect_one()),
+            asyncio.create_task(_collect_one()),
+        ]
+
+        await asyncio.wait_for(gates["entered"].wait(), timeout=1)
+        assert active == 1
+        gates["release"].set()
+        await asyncio.gather(*tasks)
 
     asyncio.run(_run_concurrently())
 

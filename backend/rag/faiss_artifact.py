@@ -35,7 +35,10 @@ def ensure_faiss_artifacts() -> Path:
         temp_dir = Path(temp_dir_str)
         archive_path = temp_dir / _artifact_filename(artifact_url)
         _download_artifact(artifact_url, archive_path)
-        _verify_checksum(archive_path, settings.faiss_artifact_sha256.strip())
+        expected_sha256 = settings.faiss_artifact_sha256.strip()
+        if not expected_sha256:
+            raise ValueError("FAISS_ARTIFACT_SHA256 is required when downloading FAISS artifacts")
+        _verify_checksum(archive_path, expected_sha256)
         extracted_dir = temp_dir / "extracted"
         extracted_dir.mkdir()
         _extract_archive(archive_path, extracted_dir)

@@ -5,7 +5,6 @@ import { createThread, fetchLatestThread, fetchThread } from '../services/api';
 import {
   clearThreadSnapshot,
   mapThreadMessages,
-  readThreadSnapshot,
   storageKeyForThread,
   type ThreadSnapshot,
 } from '../utils/threadState';
@@ -35,13 +34,11 @@ export function useThreadSession({
   // (which change the authSession object reference without changing the user)
   // do not trigger a full reload and wipe live streamed state.
   const loadedUserIdRef = useRef<string | null>(null);
-  const hydratedSnapshotUserIdRef = useRef<string | null>(null);
   const activeThreadIdRef = useRef<string | null>(null);
   const threadRequestSeqRef = useRef(0);
 
   const resetThreadState = useCallback(() => {
     loadedUserIdRef.current = null;
-    hydratedSnapshotUserIdRef.current = null;
     activeThreadIdRef.current = null;
     setActiveThreadId(null);
     setThreadTitle('New chat');
@@ -111,37 +108,46 @@ export function useThreadSession({
     [],
   );
 
+  const createFreshThread = useCallback(
+    async (session: AuthSession, { clearDraftState = true }: { clearDraftState?: boolean } = {}) => {
+      const requestSeq = ++threadRequestSeqRef.current;
+      if (clearDraftState) {
+        clearSelection();
+        clearActiveThreadView();
+      }
+      localStorage.removeItem(storageKeyForThread(session.user.id));
+      setLoadingThread(true);
+      setThreadError(null);
+
+      try {
+        const detail = await createThread(session);
+        if (requestSeq !== threadRequestSeqRef.current) {
+          return;
+        }
+        setActiveThreadId(detail.thread.id);
+        activeThreadIdRef.current = detail.thread.id;
+        setThreadTitle(detail.thread.title);
+        localStorage.setItem(storageKeyForThread(session.user.id), detail.thread.id);
+        void trackEvent('thread_created', { thread_id: detail.thread.id }, session);
+        setThreadSnapshot({
+          title: detail.thread.title,
+          messages: mapThreadMessages(detail.messages),
+          graphData: normalizeGraphData(detail.thread.graph_data),
+        });
+      } finally {
+        if (requestSeq === threadRequestSeqRef.current) {
+          setLoadingThread(false);
+        }
+      }
+    },
+    [clearActiveThreadView, clearSelection],
+  );
+
   useEffect(() => {
     if (!authSession) {
       resetThreadState();
     }
   }, [authSession, resetThreadState]);
-
-  useEffect(() => {
-    if (!authSession) {
-      return;
-    }
-
-    if (hydratedSnapshotUserIdRef.current === authSession.user.id) {
-      return;
-    }
-    hydratedSnapshotUserIdRef.current = authSession.user.id;
-
-    const rememberedThreadId = localStorage.getItem(storageKeyForThread(authSession.user.id));
-    if (!rememberedThreadId) {
-      return;
-    }
-
-    const cachedSnapshot = readThreadSnapshot(authSession.user.id, rememberedThreadId);
-    if (!cachedSnapshot) {
-      return;
-    }
-
-    setActiveThreadId(rememberedThreadId);
-    activeThreadIdRef.current = rememberedThreadId;
-    setThreadTitle(cachedSnapshot.title);
-    setThreadSnapshot(cachedSnapshot);
-  }, [authSession]);
 
   useEffect(() => {
     // Reset everything only on sign-out — never on backend going not-ready.
@@ -161,64 +167,21 @@ export function useThreadSession({
     if (loadedUserIdRef.current === authSession.user.id) return;
     loadedUserIdRef.current = authSession.user.id;
 
-    const rememberedThreadId = localStorage.getItem(storageKeyForThread(authSession.user.id));
-
-    loadThread(authSession, rememberedThreadId).catch(async (error: unknown) => {
-      if (!rememberedThreadId) {
-        const message = error instanceof Error ? error.message : 'Could not connect to backend';
-        console.error('[thread] Failed to load latest thread:', message);
-        setThreadError(message);
-        clearActiveThreadView();
-        return;
-      }
-
-      localStorage.removeItem(storageKeyForThread(authSession.user.id));
+    createFreshThread(authSession, { clearDraftState: true }).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : 'Could not connect to backend';
-      console.error('[thread] Failed to load remembered thread, falling back to latest:', message);
-
-      try {
-        await loadThread(authSession, null);
-      } catch (fallbackError: unknown) {
-        const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : 'Could not connect to backend';
-        console.error('[thread] Failed to load latest thread after remembered-thread miss:', fallbackMessage);
-        setThreadError(fallbackMessage);
-        clearActiveThreadView();
-      }
+      console.error('[thread] Failed to create initial thread:', message);
+      setThreadError(message);
+      clearActiveThreadView();
     });
-  }, [authSession, backendReady, clearActiveThreadView, loadThread, resetThreadState]);
+  }, [authSession, backendReady, clearActiveThreadView, createFreshThread, resetThreadState]);
 
   const handleNewChat = useCallback(async () => {
     if (!authSession || !backendReady) {
       return;
     }
 
-    const requestSeq = ++threadRequestSeqRef.current;
-    clearSelection();
-    localStorage.removeItem(storageKeyForThread(authSession.user.id));
-    clearActiveThreadView();
-    setLoadingThread(true);
-
-    try {
-      const detail = await createThread(authSession);
-      if (requestSeq !== threadRequestSeqRef.current) {
-        return;
-      }
-      setActiveThreadId(detail.thread.id);
-      activeThreadIdRef.current = detail.thread.id;
-      setThreadTitle(detail.thread.title);
-      localStorage.setItem(storageKeyForThread(authSession.user.id), detail.thread.id);
-      void trackEvent('thread_created', { thread_id: detail.thread.id }, authSession);
-      setThreadSnapshot({
-        title: detail.thread.title,
-        messages: mapThreadMessages(detail.messages),
-        graphData: normalizeGraphData(detail.thread.graph_data),
-      });
-    } finally {
-      if (requestSeq === threadRequestSeqRef.current) {
-        setLoadingThread(false);
-      }
-    }
-  }, [authSession, backendReady, clearActiveThreadView, clearSelection]);
+    await createFreshThread(authSession);
+  }, [authSession, backendReady, createFreshThread]);
 
   const handleSelectThread = useCallback(
     (threadId: string) => {

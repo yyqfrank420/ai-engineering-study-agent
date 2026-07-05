@@ -69,6 +69,8 @@ function deferred<T>() {
 describe('useThreadSession', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(createThread).mockResolvedValue(makeThreadDetail('thread-initial', 'New chat') as never);
+    vi.mocked(fetchLatestThread).mockRejectedValue(new Error('not used'));
     localStorage.clear();
   });
 
@@ -77,7 +79,6 @@ describe('useThreadSession', () => {
   });
 
   it('clears the previous thread immediately when starting a new chat', async () => {
-    vi.mocked(fetchLatestThread).mockRejectedValueOnce(new Error('not used'));
     vi.mocked(fetchThread).mockResolvedValueOnce(
       makeThreadDetail(
         'thread-old',
@@ -89,9 +90,6 @@ describe('useThreadSession', () => {
         makeGraph('Old graph'),
       ),
     );
-
-    const createDeferred = deferred<ReturnType<typeof makeThreadDetail>>();
-    vi.mocked(createThread).mockReturnValueOnce(createDeferred.promise as never);
 
     const clearSelection = vi.fn();
     const { result } = renderHook(() => useThreadSession({
@@ -109,6 +107,9 @@ describe('useThreadSession', () => {
       expect(result.current.threadSnapshot.messages).toHaveLength(2);
       expect(result.current.threadSnapshot.graphData).not.toBeNull();
     });
+
+    const createDeferred = deferred<ReturnType<typeof makeThreadDetail>>();
+    vi.mocked(createThread).mockReturnValueOnce(createDeferred.promise as never);
 
     act(() => {
       result.current.handleNewChat();
@@ -137,9 +138,9 @@ describe('useThreadSession', () => {
     });
   });
 
-  it('loads the latest thread when the backend becomes ready without a remembered thread', async () => {
-    vi.mocked(fetchLatestThread).mockResolvedValueOnce(
-      makeThreadDetail('thread-latest', 'Latest chat'),
+  it('creates a new thread when the backend becomes ready', async () => {
+    vi.mocked(createThread).mockResolvedValueOnce(
+      makeThreadDetail('thread-new', 'New chat'),
     );
 
     const { result } = renderHook(() => useThreadSession({
@@ -149,19 +150,18 @@ describe('useThreadSession', () => {
     }));
 
     await waitFor(() => {
-      expect(fetchLatestThread).toHaveBeenCalledWith(TEST_SESSION);
-      expect(result.current.activeThreadId).toBe('thread-latest');
-      expect(result.current.threadTitle).toBe('Latest chat');
+      expect(createThread).toHaveBeenCalledWith(TEST_SESSION);
+      expect(fetchLatestThread).not.toHaveBeenCalled();
+      expect(result.current.activeThreadId).toBe('thread-new');
+      expect(result.current.threadTitle).toBe('New chat');
       expect(result.current.loadingThread).toBe(false);
     });
   });
 
-  it('falls back to the latest thread when the remembered thread is stale', async () => {
-    localStorage.setItem(storageKeyForThread(TEST_SESSION.user.id), 'thread-stale');
-
-    vi.mocked(fetchThread).mockRejectedValueOnce(new Error('Thread not found'));
-    vi.mocked(fetchLatestThread).mockResolvedValueOnce(
-      makeThreadDetail('thread-fallback', 'Recovered chat'),
+  it('starts on a new thread instead of restoring a remembered thread', async () => {
+    localStorage.setItem(storageKeyForThread(TEST_SESSION.user.id), 'thread-old');
+    vi.mocked(createThread).mockResolvedValueOnce(
+      makeThreadDetail('thread-new', 'New chat'),
     );
 
     const { result } = renderHook(() => useThreadSession({
@@ -171,16 +171,15 @@ describe('useThreadSession', () => {
     }));
 
     await waitFor(() => {
-      expect(fetchThread).toHaveBeenCalledWith(TEST_SESSION, 'thread-stale');
-      expect(fetchLatestThread).toHaveBeenCalledWith(TEST_SESSION);
-      expect(result.current.activeThreadId).toBe('thread-fallback');
-      expect(result.current.threadTitle).toBe('Recovered chat');
-      expect(localStorage.getItem(storageKeyForThread(TEST_SESSION.user.id))).toBe('thread-fallback');
+      expect(fetchThread).not.toHaveBeenCalled();
+      expect(fetchLatestThread).not.toHaveBeenCalled();
+      expect(result.current.activeThreadId).toBe('thread-new');
+      expect(result.current.threadTitle).toBe('New chat');
+      expect(localStorage.getItem(storageKeyForThread(TEST_SESSION.user.id))).toBe('thread-new');
     });
   });
 
   it('replaces the snapshot when switching to a thread with fewer messages', async () => {
-    vi.mocked(fetchLatestThread).mockRejectedValue(new Error('not used'));
     vi.mocked(fetchThread)
       .mockResolvedValueOnce(
         makeThreadDetail(
@@ -229,8 +228,6 @@ describe('useThreadSession', () => {
   });
 
   it('ignores stale thread responses that finish after a newer selection', async () => {
-    vi.mocked(fetchLatestThread).mockRejectedValue(new Error('not used'));
-
     const deferredA = deferred<ReturnType<typeof makeThreadDetail>>();
     const deferredB = deferred<ReturnType<typeof makeThreadDetail>>();
 
@@ -286,7 +283,6 @@ describe('useThreadSession', () => {
   });
 
   it('clears the deleted active thread before loading the fallback thread', async () => {
-    vi.mocked(fetchLatestThread).mockRejectedValueOnce(new Error('not used'));
     vi.mocked(fetchThread).mockResolvedValueOnce(
       makeThreadDetail(
         'thread-a',
@@ -341,6 +337,130 @@ describe('useThreadSession', () => {
       expect(result.current.activeThreadId).toBe('thread-b');
       expect(result.current.threadTitle).toBe('Thread B');
       expect(result.current.loadingThread).toBe(false);
+    });
+  });
+
+  it('does not create or select threads until auth and backend are ready', async () => {
+    const clearSelection = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ authSession, backendReady }) => useThreadSession({
+        authSession,
+        backendReady,
+        clearSelection,
+      }),
+      { initialProps: { authSession: null as typeof TEST_SESSION | null, backendReady: false } },
+    );
+
+    await act(async () => {
+      await result.current.handleNewChat();
+      result.current.handleSelectThread('thread-x');
+      result.current.handleDeleteThread('thread-x');
+      result.current.retryLatestThread();
+    });
+
+    expect(createThread).not.toHaveBeenCalled();
+    expect(fetchThread).not.toHaveBeenCalled();
+    expect(fetchLatestThread).not.toHaveBeenCalled();
+
+    rerender({ authSession: TEST_SESSION, backendReady: false });
+    await act(async () => {
+      await result.current.handleNewChat();
+      result.current.handleSelectThread('thread-x');
+      result.current.handleDeleteThread('thread-x');
+    });
+
+    expect(createThread).not.toHaveBeenCalled();
+    expect(fetchThread).not.toHaveBeenCalled();
+    expect(clearSelection).not.toHaveBeenCalled();
+  });
+
+  it('logs initial create errors and clears the optimistic view', async () => {
+    const clearSelection = vi.fn();
+    const error = new Error('create failed');
+    vi.mocked(createThread).mockRejectedValueOnce(error);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { result } = renderHook(() => useThreadSession({
+      authSession: TEST_SESSION,
+      backendReady: true,
+      clearSelection,
+    }));
+
+    await waitFor(() => {
+      expect(result.current.activeThreadId).toBeNull();
+      expect(result.current.loadingThread).toBe(false);
+    });
+
+    expect(clearSelection).toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledWith('[thread] Failed to create initial thread:', 'create failed');
+    consoleError.mockRestore();
+  });
+
+  it('keeps richer live state when reloading the same thread returns less data', async () => {
+    vi.mocked(fetchThread)
+      .mockResolvedValueOnce(
+        makeThreadDetail(
+          'thread-a',
+          'Thread A',
+          [
+            { id: 'a1', role: 'user', content: 'Question A' },
+            { id: 'a2', role: 'assistant', content: 'Answer A' },
+          ],
+          makeGraph('Graph A'),
+        ),
+      )
+      .mockResolvedValueOnce(makeThreadDetail('thread-a', 'Thread A', [], null));
+
+    const { result } = renderHook(() => useThreadSession({
+      authSession: TEST_SESSION,
+      backendReady: true,
+      clearSelection: vi.fn(),
+    }));
+
+    act(() => {
+      result.current.handleSelectThread('thread-a');
+    });
+
+    await waitFor(() => {
+      expect(result.current.threadSnapshot.messages).toHaveLength(2);
+      expect(result.current.threadSnapshot.graphData).not.toBeNull();
+    });
+
+    act(() => {
+      result.current.handleSelectThread('thread-a');
+    });
+
+    await waitFor(() => expect(fetchThread).toHaveBeenCalledTimes(2));
+    expect(result.current.threadSnapshot.messages).toHaveLength(2);
+    expect(result.current.threadSnapshot.graphData).not.toBeNull();
+  });
+
+  it('loads latest thread on retry and after deleting the active ready thread', async () => {
+    vi.mocked(fetchLatestThread)
+      .mockResolvedValueOnce(makeThreadDetail('latest-a', 'Latest A') as never)
+      .mockResolvedValueOnce(makeThreadDetail('latest-b', 'Latest B') as never);
+
+    const { result } = renderHook(() => useThreadSession({
+      authSession: TEST_SESSION,
+      backendReady: true,
+      clearSelection: vi.fn(),
+    }));
+
+    act(() => {
+      result.current.retryLatestThread();
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeThreadId).toBe('latest-a');
+    });
+
+    act(() => {
+      result.current.handleDeleteThread('latest-a');
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeThreadId).toBe('latest-b');
+      expect(localStorage.getItem(storageKeyForThread(TEST_SESSION.user.id))).toBe('latest-b');
     });
   });
 });

@@ -64,3 +64,21 @@ def test_ensure_faiss_artifacts_rejects_bad_checksum(temp_data_dir, monkeypatch,
 
     with pytest.raises(ValueError, match="checksum mismatch"):
         ensure_faiss_artifacts()
+
+
+def test_ensure_faiss_artifacts_requires_checksum_for_download(temp_data_dir, monkeypatch, tmp_path):
+    archive_path = tmp_path / "faiss-bundle.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as archive:
+        sample = tmp_path / "index.faiss"
+        sample.write_text("artifact")
+        archive.add(sample, arcname="index.faiss")
+
+    monkeypatch.setattr(settings, "faiss_artifact_url", "https://artifacts.example/faiss-bundle.tar.gz")
+    monkeypatch.setattr(settings, "faiss_artifact_sha256", "")
+    monkeypatch.setattr(
+        "rag.faiss_artifact._download_artifact",
+        lambda _url, destination: destination.write_bytes(archive_path.read_bytes()),
+    )
+
+    with pytest.raises(ValueError, match="FAISS_ARTIFACT_SHA256 is required"):
+        ensure_faiss_artifacts()

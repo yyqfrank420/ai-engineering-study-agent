@@ -13,31 +13,32 @@
 #          ("provider_switch", provider)
 # ─────────────────────────────────────────────────────────────────────────────
 
+from __future__ import annotations
+
 import asyncio
 from collections.abc import AsyncGenerator
 from functools import lru_cache
 import inspect
 import time
 
-import anthropic
-import openai
-
 from config import settings
-from observability import current_trace_context, record_llm_metrics
-from storage.telemetry_store import record_llm_telemetry
 
 # ── Clients (lazy-initialised and reused) ────────────────────────────────────
 
 
 @lru_cache(maxsize=1)
-def _get_anthropic_client() -> anthropic.AsyncAnthropic:
+def _get_anthropic_client():
+    import anthropic
+
     return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 
 @lru_cache(maxsize=1)
-def _get_openai_client() -> openai.AsyncOpenAI | None:
+def _get_openai_client():
     if not settings.openai_api_key:
         return None
+    import openai
+
     return openai.AsyncOpenAI(api_key=settings.openai_api_key)
 
 # Maps Anthropic model name → OpenAI fallback model name.
@@ -217,6 +218,9 @@ async def stream_response(
     final_model = model
 
     def _record(status: str, *, error_type: str | None = None) -> None:
+        from observability import current_trace_context, record_llm_metrics
+        from storage.telemetry_store import record_llm_telemetry
+
         details = telemetry or {}
         trace_context = current_trace_context()
         try:

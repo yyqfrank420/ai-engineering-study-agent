@@ -116,6 +116,27 @@ def test_analytics_capture_requires_auth_for_non_public_events(temp_data_dir, mo
         assert private_denied.status_code == 401
 
 
+def test_public_analytics_rate_limit_is_ip_based(temp_data_dir, monkeypatch):
+    from main import create_app
+    import api.analytics_route as analytics_route
+
+    monkeypatch.setattr(analytics_route, "_CAPTURE_LIMIT_PER_KEY", 1)
+    app = create_app(load_resources=False)
+
+    with TestClient(app) as client:
+        first = client.post(
+            "/api/analytics/capture",
+            json={"anonymous_id": "anon-1", "event_type": "auth_viewed", "properties": {}},
+        )
+        second = client.post(
+            "/api/analytics/capture",
+            json={"anonymous_id": "anon-2", "event_type": "auth_viewed", "properties": {}},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+
+
 def test_run_agent_records_phase_spans(monkeypatch):
     from agent.graph import run_agent
 
@@ -138,12 +159,15 @@ def test_run_agent_records_phase_spans(monkeypatch):
     async def fake_synth(state):
         return {**state, "response_text": "ok"}
 
+    async def fake_node_enrichment(state, tools):
+        return None
+
     monkeypatch.setattr("agent.graph.orchestrator_route", fake_route)
     monkeypatch.setattr("agent.graph.run_search_phase", fake_search_phase)
     monkeypatch.setattr("agent.graph.apply_graph_worker", fake_apply_graph)
     monkeypatch.setattr("agent.graph.maybe_expand_with_search_tool", fake_expand)
     monkeypatch.setattr("agent.graph.orchestrator_synthesise", fake_synth)
-    monkeypatch.setattr("agent.graph.maybe_start_node_enrichment", lambda state, tools: None)
+    monkeypatch.setattr("agent.graph.maybe_start_node_enrichment", fake_node_enrichment)
 
     async def _run():
         return await run_agent(

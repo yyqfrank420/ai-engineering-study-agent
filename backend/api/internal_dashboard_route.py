@@ -90,7 +90,9 @@ async def dashboard_trends(
     now = time.time()
     bucket_size_s = 3600 if bucket == "hour" else 86400
     bucket_count = 24 if bucket == "hour" else 7
-    since_epoch = now - bucket_size_s * bucket_count
+    current_bucket_start = _bucket_start(now, bucket_size_s)
+    first_bucket_start = current_bucket_start - bucket_size_s * (bucket_count - 1)
+    since_epoch = first_bucket_start
 
     events = list_recent_product_analytics_events(since_epoch=since_epoch)
     http_logs = list_recent_http_request_logs(since_epoch=since_epoch)
@@ -98,7 +100,7 @@ async def dashboard_trends(
 
     buckets: dict[int, dict[str, Any]] = {}
     for index in range(bucket_count):
-        start_epoch = _bucket_start(since_epoch, bucket_size_s) + index * bucket_size_s
+        start_epoch = first_bucket_start + index * bucket_size_s
         buckets[start_epoch] = {
             "start_epoch": start_epoch,
             "label": _bucket_label(start_epoch, bucket),

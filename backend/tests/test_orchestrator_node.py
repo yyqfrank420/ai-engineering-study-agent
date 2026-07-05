@@ -25,6 +25,15 @@ def test_synthesis_prompts_preserve_user_language():
     assert "same language as the user's latest message" in _QUICK_SYNTHESIS_SYSTEM
 
 
+def test_synthesis_prompts_answer_adjacent_applications_directly():
+    from agent.nodes.orchestrator_node import _QUICK_SYNTHESIS_SYSTEM, _SYNTHESIS_SYSTEM
+
+    assert "use the book as the foundation and give the best applied answer" in _SYNTHESIS_SYSTEM
+    assert "Do not lead with \"the book does not cover this\"" in _SYNTHESIS_SYSTEM
+    assert "marketing" in _SYNTHESIS_SYSTEM
+    assert "answer the application directly" in _QUICK_SYNTHESIS_SYSTEM
+
+
 @pytest.mark.asyncio
 async def test_orchestrator_route_includes_current_graph_context(monkeypatch):
     import agent.nodes.orchestrator_node as orchestrator
@@ -61,6 +70,32 @@ async def test_orchestrator_route_includes_current_graph_context(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "router_token,expected_route",
+    [
+        ("MEMORY", "memory"),
+        ("needs search", "search"),
+    ],
+)
+async def test_orchestrator_route_maps_router_tokens(monkeypatch, router_token, expected_route):
+    import agent.nodes.orchestrator_node as orchestrator
+
+    async def fake_stream_llm(**_kwargs):
+        return router_token
+
+    monkeypatch.setattr(orchestrator, "stream_llm", fake_stream_llm)
+
+    async def send(_event):
+        return None
+
+    result = await orchestrator.orchestrator_route(
+        {"send": send, "history": [], "user_message": "How do agents work?", "graph_data": None}
+    )
+
+    assert result["route"] == expected_route
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_route_forces_memory_for_prior_answer_followup(monkeypatch):
     import agent.nodes.orchestrator_node as orchestrator
 
@@ -88,6 +123,55 @@ async def test_orchestrator_route_forces_memory_for_prior_answer_followup(monkey
 
     assert result["route"] == "memory"
     assert events == [{"type": "worker_status", "worker": "orchestrator", "status": "Routing…"}]
+
+
+def test_memory_followup_heuristic_branches():
+    from agent.nodes.orchestrator_node import _is_memory_followup
+
+    history = [{"role": "assistant", "content": "prior answer"}]
+
+    assert not _is_memory_followup("summarize that", [])
+    assert not _is_memory_followup("   ", history)
+    assert _is_memory_followup("What you just said, but shorter", history)
+    assert _is_memory_followup("clarify that second option", history)
+    assert not _is_memory_followup("summarize transformers", history)
+
+
+@pytest.mark.asyncio
+async def test_quick_synthesise_streams_answer_and_existing_graph(monkeypatch):
+    import agent.nodes.orchestrator_node as orchestrator
+
+    captured = {}
+
+    async def fake_stream_llm(**kwargs):
+        captured.update(kwargs)
+        await kwargs["send"]({"type": "response_delta", "content": "fast"})
+        return "fast answer"
+
+    monkeypatch.setattr(orchestrator, "stream_llm", fake_stream_llm)
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    graph_data = {"title": "Existing", "nodes": [], "edges": []}
+    result = await orchestrator.quick_synthesise(
+        {
+            "send": send,
+            "history": [{"role": "user", "content": "prior"}],
+            "user_message": "Define RAG",
+            "graph_data": graph_data,
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        }
+    )
+
+    assert events[0]["status"] == "Looking it up…"
+    assert events[1] == {"type": "graph_data", "data": graph_data}
+    assert events[-1] == {"type": "done"}
+    assert captured["stream_deltas"] is True
+    assert captured["messages"][-1] == {"role": "user", "content": "Define RAG"}
+    assert result["response_text"] == "fast answer"
 
 
 def test_format_graph_context_summarises_nodes_edges_and_sequence():
@@ -124,6 +208,29 @@ def test_format_graph_context_summarises_nodes_edges_and_sequence():
     assert "- Retriever: FAISS | Finds relevant passages" in summary
     assert "- Retriever -> LLM: passes context" in summary
     assert "- step 1: Retriever — Search the book" in summary
+
+
+def test_graph_context_formatting_handles_empty_nodes_groups_and_lanes():
+    from agent.nodes.orchestrator_node import _format_graph_context, _format_route_graph_context
+
+    assert _format_graph_context({}) == "(no graph available)"
+    assert _format_route_graph_context({"title": "", "nodes": []}) == "Untitled graph — nodes: [(no nodes)]"
+
+    summary = _format_graph_context(
+        {
+            "title": "",
+            "nodes": [{"label": "Planner", "lane": "bottom", "tier": "control"}],
+            "edges": [{"source": "Planner", "target": "Tool"}],
+            "groups": [{"label": "Runtime", "nodeIds": ["Planner", "Tool"]}],
+            "sequence": [{"step": 1, "nodes": [], "description": ""}],
+        }
+    )
+
+    assert "Title: Untitled graph" in summary
+    assert "- Planner: bottom lane | control tier" in summary
+    assert "- Planner -> Tool: connects to" in summary
+    assert "- Runtime: Planner, Tool" in summary
+    assert "- step 1" in summary
 
 
 @pytest.mark.asyncio
@@ -188,7 +295,7 @@ async def test_orchestrator_synthesise_emits_status_and_includes_graph_context(m
     assert "<style>" in captured["system"]
     assert "use 3-5 short chunks" in captured["system"]
     assert "Each chunk should follow this pattern: `Topic: locator`" in captured["system"]
-    assert "End with `If you want, I can:`" in captured["system"]
+    assert "Add follow-up bullets only when they would help" in captured["system"]
     assert "If graph context is provided, anchor the explanation" in captured["system"]
     assert "Do not invent graph positions or edge directions" in captured["system"]
     assert captured["temperature"] == orchestrator.settings.synthesis_temperature

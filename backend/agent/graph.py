@@ -90,8 +90,8 @@ async def run_agent(
     with start_span("agent.synthesis_phase", attributes={"app.route": state.get("route", "")}):
         state = await orchestrator_synthesise(state)
 
-    # ── Phase 3: Async node enrichment (non-blocking) ─────────────────────────
+    # ── Phase 3: Node enrichment, streamed after the done event ───────────────
     with start_span("agent.node_enrichment_phase"):
-        maybe_start_node_enrichment(state, node_detail_tools)
+        await maybe_start_node_enrichment(state, node_detail_tools)
 
     return state

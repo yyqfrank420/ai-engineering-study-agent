@@ -15,6 +15,7 @@ import time
 import uuid
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from adapters.database_adapter import init_db
@@ -39,8 +40,11 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
         """
         configure_observability()
 
-        if os.getenv("K_SERVICE") and not settings.use_postgres:
-            raise RuntimeError("SUPABASE_DB_URL must be configured in Cloud Run; refusing SQLite fallback.")
+        if os.getenv("K_SERVICE"):
+            if not settings.use_postgres:
+                raise RuntimeError("SUPABASE_DB_URL must be configured in Cloud Run; refusing SQLite fallback.")
+            if settings.dev_bypass_auth:
+                raise RuntimeError("DEV_BYPASS_AUTH must be false in Cloud Run.")
 
         app.state.startup_step = "database"
         print("[startup] Initialising database…")
@@ -81,7 +85,7 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
         allow_origins=settings.cors_allowed_origins,
         allow_origin_regex=settings.vercel_origin_regex,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
 
@@ -104,6 +108,18 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
                     user_id = payload.get("sub")
                 except Exception:
                     user_id = None
+
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                body_size = int(content_length)
+            except ValueError:
+                body_size = 0
+            if body_size > settings.max_request_body_bytes:
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": "Request body too large"},
+                )
 
         with start_span(
             f"{request.method} {request.url.path}",
@@ -163,6 +179,11 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
 
         if response is not None:
             response.headers["X-Request-Id"] = request.state.request_id
+            response.headers.setdefault("X-Content-Type-Options", "nosniff")
+            response.headers.setdefault("X-Frame-Options", "DENY")
+            response.headers.setdefault("Referrer-Policy", "no-referrer")
+            response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+            response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
         return response
 
     app.include_router(health_router)

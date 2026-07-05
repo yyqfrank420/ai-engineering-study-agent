@@ -63,8 +63,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def select_cases(args: argparse.Namespace) -> list[StagingCase]:
     selected = STAGING_CASES
-    if args.case:
-        wanted = {case_id.upper() for case_id in args.case}
+    case_filters = args.case or os.getenv("STAGING_EVAL_CASES", "").split()
+    if case_filters:
+        wanted = {case_id.upper() for case_id in case_filters}
         selected = [case for case in selected if case.id.upper() in wanted]
     if args.category:
         wanted_categories = set(args.category)

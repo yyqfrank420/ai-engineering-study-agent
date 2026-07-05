@@ -11,7 +11,16 @@ import json
 import re
 
 
-_VALID_NODE_TYPES = {"client", "service", "datastore", "gateway", "network", "external"}
+_VALID_NODE_TYPES = {
+    "client",
+    "service",
+    "datastore",
+    "gateway",
+    "network",
+    "external",
+    "control",
+    "decision",
+}
 _VALID_SYNC_VALUES = {"sync", "async"}
 _NODE_REQUIRED = ("id", "label", "type", "technology", "description")
 _EDGE_REQUIRED = ("source", "target", "label", "technology", "sync", "description")

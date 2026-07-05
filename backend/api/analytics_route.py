@@ -73,7 +73,7 @@ def _capture_key(body: "AnalyticsCaptureRequest", request: Request, user: dict |
     if user and user.get("id"):
         return f"user:{user['id']}"
     client_ip = request.client.host if request.client else "unknown"
-    return f"anon:{client_ip}:{body.anonymous_id[:32]}"
+    return f"anon:{client_ip}"
 
 
 def _sanitize_properties(properties: dict[str, Any]) -> dict[str, Any]:

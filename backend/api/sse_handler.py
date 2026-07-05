@@ -27,15 +27,21 @@ from agent.state import AgentState
 from api.chat_guards import byte_len, check_prompt_injection, check_rate_limit, knowledge_base_ready
 from api.node_selected_service import stream_suggested_questions
 from api.sse_utils import sse, sse_error, streaming_response
-from agent.tools.graph_worker_tools.generate_graph_tool import generate_graph
-from agent.tools.rag_worker_tools.get_section_tool import make_get_section_tool
-from agent.tools.rag_worker_tools.rag_search_tool import make_rag_search_tool
 from config import settings
-from observability import change_active_chat_streams, record_agent_duration, record_cancel, record_timeout
 from storage import message_store, runtime_state_store, thread_store
 from storage.profile_store import upsert_profile
 
 router = APIRouter(prefix="/api")
+
+
+def _make_agent_tools(request: Request):
+    from agent.tools.graph_worker_tools.generate_graph_tool import generate_graph
+    from agent.tools.rag_worker_tools.get_section_tool import make_get_section_tool
+    from agent.tools.rag_worker_tools.rag_search_tool import make_rag_search_tool
+
+    rag_search_tool = make_rag_search_tool(request.app.state.vectorstore, request.app.state.parent_docs)
+    get_section_tool = make_get_section_tool(request.app.state.parent_docs)
+    return [rag_search_tool, get_section_tool], [generate_graph, get_section_tool], [rag_search_tool]
 
 
 # ── Request models ─────────────────────────────────────────────────────────────
@@ -127,14 +133,21 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
     if not check_prompt_injection(content):
         return sse_error("Message blocked by security filter")
 
+    stream_id = runtime_state_store.try_acquire_active_stream(
+        user_id,
+        "chat",
+        limit=settings.max_active_chat_streams_per_user,
+        ttl_s=settings.agent_timeout_s + 30,
+    )
+    if stream_id is None:
+        return sse_error("Another response is already running. Stop it or wait for it to finish.")
+
     # ── Build tools bound to the loaded FAISS index ────────────────────────────
-    rag_search_tool  = make_rag_search_tool(request.app.state.vectorstore, request.app.state.parent_docs)
-    get_section_tool = make_get_section_tool(request.app.state.parent_docs)
-    rag_tools        = [rag_search_tool, get_section_tool]
-    graph_tools      = [generate_graph, get_section_tool]
-    node_detail_tools = [rag_search_tool]
+    rag_tools, graph_tools, node_detail_tools = _make_agent_tools(request)
 
     async def stream():
+        from observability import change_active_chat_streams, record_agent_duration, record_cancel, record_timeout
+
         # Queue bridges the agent (which calls send()) and the SSE generator (which yields).
         # run_agent is launched as a task; we drain the queue while it runs.
         queue: asyncio.Queue[dict] = asyncio.Queue()
@@ -232,6 +245,7 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
             raise
         finally:
             change_active_chat_streams(-1)
+            runtime_state_store.release_active_stream(stream_id)
             if agent_task.cancelled():
                 with suppress(asyncio.CancelledError):
                     await agent_task
@@ -320,20 +334,32 @@ async def node_selected_endpoint(body: NodeSelectedRequest, request: Request, us
     if limit_error:
         return sse_error(limit_error, include_done=True)
 
+    stream_id = runtime_state_store.try_acquire_active_stream(
+        user_id,
+        "node-selected",
+        limit=settings.max_active_node_streams_per_user,
+        ttl_s=45,
+    )
+    if stream_id is None:
+        return sse_error("Too many node detail requests are already running", include_done=True)
+
     history = message_store.get_history(user_id, thread_id, limit=6)
 
     async def stream():
-        async for event in stream_suggested_questions(
-            node_title,
-            node_description,
-            history,
-            telemetry={
-                "operation": "node_selected_chips",
-                "user_id": user_id,
-                "thread_id": thread_id,
-                "metadata": {"node_id": body.node_id},
-            },
-        ):
-            yield sse(event)
+        try:
+            async for event in stream_suggested_questions(
+                node_title,
+                node_description,
+                history,
+                telemetry={
+                    "operation": "node_selected_chips",
+                    "user_id": user_id,
+                    "thread_id": thread_id,
+                    "metadata": {"node_id": body.node_id},
+                },
+            ):
+                yield sse(event)
+        finally:
+            runtime_state_store.release_active_stream(stream_id)
 
     return streaming_response(stream())

@@ -31,6 +31,7 @@ POSTGRES_REQUIRED_TABLES = (
     "request_events",
     "product_analytics_events",
     "search_tool_requests",
+    "active_streams",
     "http_request_logs",
     "llm_telemetry",
 )
@@ -39,6 +40,7 @@ POSTGRES_REQUIRED_POLICIES = {
     "profiles": {"profiles_select_own", "profiles_update_own"},
     "chat_threads": {"threads_all_own"},
     "chat_messages": {"messages_all_own"},
+    "active_streams": {"active_streams_all_own"},
 }
 
 
@@ -120,6 +122,17 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_search_tool_requests_user_thread
                 ON search_tool_requests(user_id, thread_id);
+
+            CREATE TABLE IF NOT EXISTS active_streams (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES profiles(id),
+                stream_type TEXT NOT NULL,
+                created_at_epoch REAL NOT NULL,
+                expires_at_epoch REAL NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_active_streams_user_type
+                ON active_streams(user_id, stream_type, expires_at_epoch);
 
             CREATE TABLE IF NOT EXISTS http_request_logs (
                 id TEXT PRIMARY KEY,

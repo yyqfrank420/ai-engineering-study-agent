@@ -185,17 +185,15 @@ async def internal_login(body: InternalLoginRequest, request: Request):
         raise HTTPException(status_code=404, detail="Not found")
 
     ip = request.client.host if request.client else "unknown"
-    limiter_key = f"{body.email}:{ip}"
+    limiter_key = f"internal-login:{ip}"
     if _is_internal_login_rate_limited(limiter_key):
         raise HTTPException(status_code=429, detail="Too many internal login attempts")
 
-    if body.email not in settings.internal_test_email_allowlist:
+    email_allowed = body.email in settings.internal_test_email_allowlist
+    password_valid = hmac.compare_digest(body.password, settings.internal_test_password)
+    if not email_allowed or not password_valid:
         _record_internal_failure(limiter_key)
-        raise HTTPException(status_code=403, detail="Email is not allowed for internal login")
-
-    if not hmac.compare_digest(body.password, settings.internal_test_password):
-        _record_internal_failure(limiter_key)
-        raise HTTPException(status_code=401, detail="Invalid internal login password")
+        raise HTTPException(status_code=401, detail="Invalid internal login credentials")
 
     session = _mint_internal_session(body.email)
     upsert_profile(session["user"]["id"], body.email)

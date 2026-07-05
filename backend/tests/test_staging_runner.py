@@ -1,6 +1,7 @@
-from eval.staging_cases import STAGING_CASES, StagingStep, StepExpectation
+from eval.staging_cases import BLOCKING_STAGING_CASE_IDS, STAGING_CASES, StagingStep, StepExpectation
 from eval.staging_runner import (
     _blocking_request,
+    build_parser,
     count_visible_threads,
     detect_route,
     evaluate_expectation,
@@ -14,6 +15,7 @@ from eval.staging_runner import (
     resolve_node_selected_payload,
     run_case,
     run_cases_with_concurrency,
+    select_cases,
 )
 import asyncio
 import urllib.request
@@ -126,6 +128,39 @@ def test_staging_suite_has_customer_support_graph_quality_gate():
     assert "Escalation Agent" in first_expect.graph_node_labels_include
     assert "Tool Use" in first_expect.graph_node_labels_exclude
     assert "Billing Agent" in followup_expect.graph_node_labels_include
+
+
+def test_staging_runner_defaults_case_filter_from_environment(monkeypatch):
+    monkeypatch.setenv("STAGING_EVAL_CASES", "S1 S10")
+
+    args = build_parser().parse_args([])
+
+    assert [case.id for case in select_cases(args)] == ["S1", "S10"]
+
+
+def test_staging_runner_cli_case_filter_overrides_environment(monkeypatch):
+    monkeypatch.setenv("STAGING_EVAL_CASES", "S1 S10")
+
+    args = build_parser().parse_args(["--case", "S4"])
+
+    assert [case.id for case in select_cases(args)] == ["S4"]
+
+
+def test_blocking_staging_smoke_set_covers_risky_paths_without_excess_llm_calls():
+    cases_by_id = {case.id: case for case in STAGING_CASES}
+    smoke_cases = [cases_by_id[case_id] for case_id in BLOCKING_STAGING_CASE_IDS]
+    categories = {case.category for case in smoke_cases}
+
+    assert categories == {"happy_path", "mode_controls", "edge_cases", "graph_quality"}
+    assert "S10" in BLOCKING_STAGING_CASE_IDS
+
+    model_backed_chat_steps = [
+        step
+        for case in smoke_cases
+        for step in case.steps
+        if step.kind == "chat" and not step.expect.has_error_event
+    ]
+    assert len(model_backed_chat_steps) <= 4
 
 
 def test_extract_helpers_return_expected_values():
@@ -369,6 +404,7 @@ def test_run_cases_with_concurrency_bounds_parallel_cases():
 
     active = 0
     max_active = 0
+    first_pair_started = asyncio.Event()
 
     cases = [
         StagingCase(id="S1", category="test", description="one", steps=[]),
@@ -380,7 +416,9 @@ def test_run_cases_with_concurrency_bounds_parallel_cases():
         nonlocal active, max_active
         active += 1
         max_active = max(max_active, active)
-        await asyncio.sleep(0.01)
+        if active == 2:
+            first_pair_started.set()
+        await first_pair_started.wait()
         active -= 1
         return {"id": case.id, "passed": True, "steps": []}
 

@@ -61,8 +61,8 @@ Backend:
 
 ```bash
 cd backend
-./.venv/bin/pytest -q
-uvicorn main:app --reload
+./.venv/bin/python -m pytest -q
+./.venv/bin/python -m uvicorn main:app --reload
 ```
 
 Frontend:
@@ -91,6 +91,7 @@ python scripts/run_staging_eval.py \
 ```
 
 The blocking deploy pipeline now uses the same harness against a tagged, no-traffic Cloud Run candidate revision before production traffic is promoted.
+By default, CI sets `STAGING_EVAL_CASES="S1 S4 S7 S8 S10"` so the live gate covers happy path, graph-off mode, preflight edge cases, and the complex customer-support graph quality flow without running every model-backed scenario. Unset `STAGING_EVAL_CASES` to run the full suite manually.
 
 ## Notes
 
