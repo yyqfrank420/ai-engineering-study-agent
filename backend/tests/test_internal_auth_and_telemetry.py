@@ -9,6 +9,7 @@ from adapters.database_adapter import init_db
 from adapters.llm_adapter import stream_response
 from config import settings
 from storage.profile_store import upsert_profile
+from storage.analytics_event_store import list_recent_analytics_events
 from storage.telemetry_store import list_recent_http_request_logs, list_recent_llm_telemetry
 
 
@@ -381,6 +382,7 @@ def test_stream_response_records_llm_telemetry(temp_data_dir, monkeypatch):
 
     text = asyncio.run(_collect())
     rows = list_recent_llm_telemetry(since_epoch=0)
+    analytics_rows = list_recent_analytics_events(since_epoch=0, event_category="llm")
 
     assert text == "Hello world"
     assert rows
@@ -388,6 +390,10 @@ def test_stream_response_records_llm_telemetry(temp_data_dir, monkeypatch):
     assert rows[0]["provider"] == "anthropic"
     assert rows[0]["status"] == "success"
     assert rows[0]["output_chars"] == len("Hello world")
+    assert analytics_rows
+    assert analytics_rows[0]["event_name"] == "llm_call_completed"
+    assert analytics_rows[0]["properties"]["operation"] == "unit_test_llm"
+    assert analytics_rows[0]["properties"]["output_chars"] == len("Hello world")
 
 
 def test_stream_response_limits_concurrent_anthropic_streams(temp_data_dir, monkeypatch):

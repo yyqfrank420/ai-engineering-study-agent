@@ -118,8 +118,11 @@ def test_schema_apply_script_runs_alembic_migrations():
     assert "psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f" not in script
 
 
-def test_initial_alembic_migration_covers_required_postgres_tables():
-    migration = Path("backend/db/migrations/versions/20260705_0001_initial_supabase_schema.py").read_text(encoding="utf-8")
+def test_alembic_migrations_cover_required_postgres_tables():
+    migration_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in Path("backend/db/migrations/versions").glob("*.py")
+    )
 
     for table_name in database_adapter.POSTGRES_REQUIRED_TABLES:
-        assert f"public.{table_name}" in migration
+        assert f"public.{table_name}" in migration_text

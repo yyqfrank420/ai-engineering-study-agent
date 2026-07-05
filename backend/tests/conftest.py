@@ -68,6 +68,7 @@ def clear_rate_limits():
         execute("DELETE FROM active_streams")
         execute("DELETE FROM http_request_logs")
         execute("DELETE FROM llm_telemetry")
+        execute("DELETE FROM analytics_events")
     except Exception:
         pass
     yield
@@ -83,5 +84,6 @@ def clear_rate_limits():
         execute("DELETE FROM active_streams")
         execute("DELETE FROM http_request_logs")
         execute("DELETE FROM llm_telemetry")
+        execute("DELETE FROM analytics_events")
     except Exception:
         pass

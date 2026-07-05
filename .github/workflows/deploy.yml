@@ -83,7 +83,7 @@ jobs:
                 infra_db=true
                 analytics=true
                 ;;
-              backend/api/analytics_route.py|backend/api/internal_dashboard_route.py|backend/storage/product_analytics_store.py|backend/storage/telemetry_store.py|backend/observability.py|backend/tests/test_internal_dashboard_routes.py|backend/tests/test_observability_and_dashboard.py|backend/tests/test_internal_auth_and_telemetry.py|frontend/src/services/analytics*|frontend/src/components/InternalDashboard*)
+              backend/analytics/*|backend/api/analytics_route.py|backend/api/internal_dashboard_route.py|backend/storage/analytics_event_store.py|backend/storage/product_analytics_store.py|backend/storage/telemetry_store.py|backend/observability.py|backend/tests/test_analytics_events.py|backend/tests/test_internal_dashboard_routes.py|backend/tests/test_observability_and_dashboard.py|backend/tests/test_internal_auth_and_telemetry.py|frontend/src/services/analytics*|frontend/src/components/InternalDashboard*)
                 analytics=true
                 case "$file" in
                   frontend/*) frontend=true ;;
@@ -151,6 +151,7 @@ jobs:
           - group: storage-security
             paths: >-
               backend/tests/test_database_adapter_postgres.py
+              backend/tests/test_analytics_events.py
               backend/tests/test_faiss_artifact.py
               backend/tests/test_faiss_artifact_security.py
               backend/tests/test_observability_core.py
@@ -261,7 +262,7 @@ jobs:
           FAISS_ARTIFACT_URL: https://ci-dummy.example.com/faiss.tar.gz
           FAISS_ARTIFACT_SHA256: 0000000000000000000000000000000000000000000000000000000000000000
           FRONTEND_ORIGIN: http://localhost:5173
-        run: pytest backend/tests/test_postgres_schema_guardrails.py backend/tests/test_storage_integrity.py --tb=short -q
+        run: pytest backend/tests/test_postgres_schema_guardrails.py backend/tests/test_storage_integrity.py backend/tests/test_analytics_events.py --tb=short -q
 
   test-analytics:
     name: Test analytics / OLAP surfaces
@@ -313,6 +314,7 @@ jobs:
           pytest backend/tests/test_internal_dashboard_routes.py \
             backend/tests/test_observability_and_dashboard.py \
             backend/tests/test_internal_auth_and_telemetry.py \
+            backend/tests/test_analytics_events.py \
             backend/tests/test_storage_integrity.py \
             --tb=short -q >"$log_dir/backend.log" 2>&1 &
           backend_pid="$!"

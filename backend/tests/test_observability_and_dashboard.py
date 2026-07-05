@@ -116,6 +116,29 @@ def test_analytics_capture_requires_auth_for_non_public_events(temp_data_dir, mo
         assert private_denied.status_code == 401
 
 
+def test_analytics_capture_survives_storage_write_failure(temp_data_dir, monkeypatch):
+    from main import create_app
+
+    monkeypatch.setattr(
+        "api.analytics_route.record_product_analytics_event",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+    )
+    app = create_app(load_resources=False)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/analytics/capture",
+            json={
+                "anonymous_id": "anon-1",
+                "event_type": "auth_viewed",
+                "properties": {"request_id": "request-1"},
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
 def test_public_analytics_rate_limit_is_ip_based(temp_data_dir, monkeypatch):
     from main import create_app
     import api.analytics_route as analytics_route

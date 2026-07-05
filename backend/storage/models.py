@@ -80,3 +80,26 @@ class LLMTelemetryRow(StorageModel):
     error_type: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at_epoch: float = Field(ge=0)
+
+
+class AnalyticsEventWrite(StorageModel):
+    event_name: str = Field(min_length=1, max_length=120)
+    event_category: str = Field(min_length=1, max_length=80)
+    user_id: str | None = None
+    anonymous_id: str | None = Field(default=None, max_length=128)
+    session_id: str | None = None
+    thread_id: str | None = None
+    request_id: str | None = None
+    trace_id: str | None = None
+    client_request_id: str | None = None
+    schema_version: int = Field(default=1, ge=1)
+    app_version: str = Field(default="0.1.0", min_length=1, max_length=40)
+    environment: str = Field(default="development", min_length=1, max_length=80)
+    numeric_value: float | None = None
+    unit: str | None = Field(default=None, max_length=40)
+    properties: dict[str, Any] = Field(default_factory=dict)
+    created_at_epoch: float = Field(ge=0)
+
+
+class AnalyticsEventRow(AnalyticsEventWrite):
+    id: str = Field(min_length=1)

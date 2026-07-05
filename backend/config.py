@@ -132,6 +132,8 @@ class Settings(BaseSettings):
     posthog_project_id: str = ""
     posthog_personal_api_key: str = ""
     internal_dashboard_allowlist_raw: str = ""
+    analytics_queue_max_size: int = 1000
+    analytics_event_schema_version: int = 1
 
     # ── Dev ───────────────────────────────────────────────────────────────────
     # Set to true in local .env only. NEVER enable in production.

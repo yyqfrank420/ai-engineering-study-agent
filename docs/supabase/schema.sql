@@ -65,7 +65,7 @@ create table if not exists public.active_streams (
 
 create table if not exists public.http_request_logs (
   id uuid primary key,
-  user_id uuid,
+  user_id text,
   method text not null,
   path text not null,
   status_code integer not null,
@@ -79,7 +79,7 @@ create table if not exists public.http_request_logs (
 create table if not exists public.llm_telemetry (
   id uuid primary key,
   user_id uuid,
-  thread_id uuid,
+  thread_id text,
   operation text not null,
   provider text not null,
   model text not null,
@@ -89,6 +89,26 @@ create table if not exists public.llm_telemetry (
   used_fallback boolean not null default false,
   error_type text,
   metadata_json text,
+  created_at_epoch double precision not null
+);
+
+create table if not exists public.analytics_events (
+  id uuid primary key,
+  event_name text not null,
+  event_category text not null,
+  user_id uuid,
+  anonymous_id text,
+  session_id text,
+  thread_id uuid,
+  request_id text,
+  trace_id text,
+  client_request_id text,
+  schema_version integer not null default 1,
+  app_version text not null default '0.1.0',
+  environment text not null default 'development',
+  numeric_value double precision,
+  unit text,
+  properties_json text,
   created_at_epoch double precision not null
 );
 
@@ -128,6 +148,18 @@ create index if not exists idx_llm_telemetry_created
 create index if not exists idx_llm_telemetry_user_created
   on public.llm_telemetry(user_id, created_at_epoch desc);
 
+create index if not exists idx_analytics_events_created
+  on public.analytics_events(created_at_epoch desc);
+
+create index if not exists idx_analytics_events_category_created
+  on public.analytics_events(event_category, created_at_epoch desc);
+
+create index if not exists idx_analytics_events_request
+  on public.analytics_events(request_id);
+
+create index if not exists idx_analytics_events_trace
+  on public.analytics_events(trace_id);
+
 alter table public.profiles enable row level security;
 alter table public.chat_threads enable row level security;
 alter table public.chat_messages enable row level security;
@@ -137,6 +169,7 @@ alter table public.search_tool_requests enable row level security;
 alter table public.active_streams enable row level security;
 alter table public.http_request_logs enable row level security;
 alter table public.llm_telemetry enable row level security;
+alter table public.analytics_events enable row level security;
 
 drop policy if exists "profiles_select_own" on public.profiles;
 create policy "profiles_select_own" on public.profiles

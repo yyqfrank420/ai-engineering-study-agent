@@ -1,5 +1,5 @@
 from adapters.database_adapter import execute, init_db
-from storage import product_analytics_store, runtime_state_store, telemetry_store
+from storage import analytics_event_store, product_analytics_store, runtime_state_store, telemetry_store
 
 
 def test_runtime_state_request_events_and_pruning(temp_data_dir):
@@ -206,3 +206,30 @@ def test_telemetry_rejects_invalid_numeric_fields(temp_data_dir):
         raise AssertionError("LLM telemetry should reject negative durations")
 
     assert "duration_ms" in message
+
+
+def test_generic_analytics_events_round_trip_shape_metrics(temp_data_dir):
+    init_db()
+
+    analytics_event_store.record_analytics_event(
+        event_name="stream_first_token",
+        event_category="stream",
+        user_id="user-1",
+        session_id="thread-1",
+        thread_id="thread-1",
+        request_id="request-1",
+        trace_id="trace-1",
+        client_request_id="client-1",
+        numeric_value=321,
+        unit="ms",
+        properties={"output_type": "chat_response", "nested": {"ok": True}},
+        created_at_epoch=20,
+    )
+
+    rows = analytics_event_store.list_recent_analytics_events(since_epoch=0)
+
+    assert len(rows) == 1
+    assert rows[0]["event_name"] == "stream_first_token"
+    assert rows[0]["event_category"] == "stream"
+    assert rows[0]["numeric_value"] == 321
+    assert rows[0]["properties"] == {"output_type": "chat_response", "nested": {"ok": True}}

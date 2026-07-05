@@ -63,6 +63,7 @@ groups+=(agent-rag-llm)
 
 run_backend_group storage-security \
   backend/tests/test_database_adapter_postgres.py \
+  backend/tests/test_analytics_events.py \
   backend/tests/test_faiss_artifact.py \
   backend/tests/test_faiss_artifact_security.py \
   backend/tests/test_observability_core.py \

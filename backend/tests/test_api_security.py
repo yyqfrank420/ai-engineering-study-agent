@@ -7,6 +7,7 @@ from api.sse_handler import ChatRequest, chat_endpoint
 from config import settings
 from main import create_app
 from storage import message_store, runtime_state_store
+from storage.analytics_event_store import list_recent_analytics_events
 from storage.profile_store import upsert_profile
 from storage.thread_store import create_thread, get_graph, get_thread
 
@@ -647,6 +648,14 @@ def test_chat_stream_persists_messages_and_graph(temp_data_dir, monkeypatch):
     assert saved_messages[1]["content"] == "Hello world"
     assert get_graph("user-1", thread["id"]) == {"title": "Study graph", "nodes": [], "edges": [], "sequence": []}
     assert get_thread("user-1", thread["id"])["title"] == "Teach me RAG"
+
+    analytics_rows = list_recent_analytics_events(since_epoch=0)
+    event_names = {row["event_name"] for row in analytics_rows}
+    assert {"stream_started", "stream_first_token", "stream_completed", "retrieval_quality"} <= event_names
+    completed = next(row for row in analytics_rows if row["event_name"] == "stream_completed")
+    assert completed["properties"]["answer_chars"] == len("Hello world")
+    assert completed["properties"]["response_delta_count"] == 2
+    assert completed["properties"]["graph_event_count"] == 1
 
 
 def test_chat_agent_error_emits_error_and_skips_persistence(temp_data_dir, monkeypatch):

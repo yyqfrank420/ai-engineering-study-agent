@@ -21,6 +21,7 @@ import time
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from analytics.events import enqueue_analytics_event, output_shape_from_final_state
 from adapters.supabase_auth_adapter import get_current_user
 from agent.graph import run_agent
 from agent.state import AgentState
@@ -108,29 +109,55 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
     if request_state is not None:
         request_state.thread_id = thread_id
         request_state.client_request_id = body.client_request_id
+    request_id = getattr(request_state, "request_id", str(uuid.uuid4()))
+
+    def record_chat_rejected(reason: str) -> None:
+        enqueue_analytics_event(
+            event_name="chat_rejected",
+            event_category="stream",
+            user_id=user_id,
+            session_id=thread_id,
+            thread_id=thread_id,
+            request_id=request_id,
+            client_request_id=body.client_request_id,
+            properties={
+                "reason": reason,
+                "complexity": body.complexity,
+                "graph_mode": body.graph_mode,
+                "research_enabled": body.research_enabled,
+            },
+        )
+
     thread = thread_store.get_thread(user_id, thread_id)
     if thread is None:
+        record_chat_rejected("thread_not_found")
         return sse_error("Thread not found")
 
     # ── Pre-flight checks (synchronous, before opening the stream) ─────────────
     if byte_len(content) > settings.max_message_bytes:
+        record_chat_rejected("message_too_large")
         return sse_error("Message too large (max 2KB)")
 
     if not content:
+        record_chat_rejected("empty_message")
         return sse_error("Empty message")
 
     message_count = message_store.count_messages(user_id, thread_id)
     if message_count + 2 > settings.max_messages_per_thread:
+        record_chat_rejected("message_limit")
         return sse_error("Thread message limit reached. Start a new chat to continue.")
 
     limit_error = check_rate_limit(user_id)
     if limit_error:
+        record_chat_rejected("rate_limited")
         return sse_error(limit_error)
 
     if not knowledge_base_ready(request):
+        record_chat_rejected("knowledge_base_not_ready")
         return sse_error("Knowledge base is still loading. Please try again in a moment.")
 
     if not check_prompt_injection(content):
+        record_chat_rejected("security_filter")
         return sse_error("Message blocked by security filter")
 
     stream_id = runtime_state_store.try_acquire_active_stream(
@@ -140,6 +167,7 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
         ttl_s=settings.agent_timeout_s + 30,
     )
     if stream_id is None:
+        record_chat_rejected("active_stream_limit")
         return sse_error("Another response is already running. Stop it or wait for it to finish.")
 
     # ── Build tools bound to the loaded FAISS index ────────────────────────────
@@ -155,6 +183,28 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
 
         request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
         started_at = time.perf_counter()
+        first_token_latency_ms: int | None = None
+        response_delta_count = 0
+        graph_event_count = 0
+        history = message_store.get_history(user_id, thread_id, limit=settings.max_messages_per_thread)
+        existing_graph = thread_store.get_graph(user_id, thread_id)
+
+        enqueue_analytics_event(
+            event_name="stream_started",
+            event_category="stream",
+            user_id=user_id,
+            session_id=thread_id,
+            thread_id=thread_id,
+            request_id=request_id,
+            client_request_id=body.client_request_id,
+            properties={
+                "stream_type": "chat",
+                "complexity": body.complexity,
+                "graph_mode": body.graph_mode,
+                "research_enabled": body.research_enabled,
+                "history_messages": len(history),
+            },
+        )
 
         async def send(event: dict) -> None:
             nonlocal done_sent
@@ -187,8 +237,6 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
             "status": "Question received — preparing context…",
         })
 
-        history = message_store.get_history(user_id, thread_id, limit=settings.max_messages_per_thread)
-        existing_graph = thread_store.get_graph(user_id, thread_id)
         state: AgentState = {
             "session_id":        thread_id,
             "user_id":           user_id,
@@ -224,11 +272,49 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=0.05)
+                    if event.get("type") == "response_delta":
+                        response_delta_count += 1
+                        if first_token_latency_ms is None:
+                            first_token_latency_ms = max(1, int((time.perf_counter() - started_at) * 1000))
+                            enqueue_analytics_event(
+                                event_name="stream_first_token",
+                                event_category="stream",
+                                user_id=user_id,
+                                session_id=thread_id,
+                                thread_id=thread_id,
+                                request_id=request_id,
+                                client_request_id=body.client_request_id,
+                                numeric_value=first_token_latency_ms,
+                                unit="ms",
+                                properties={
+                                    "stream_type": "chat",
+                                    "latency_ms": first_token_latency_ms,
+                                },
+                            )
+                    elif event.get("type") == "graph_data":
+                        graph_event_count += 1
                     yield sse(event)
                 except asyncio.TimeoutError:
                     if await request.is_disconnected():
                         agent_task.cancel()
                         record_cancel()
+                        enqueue_analytics_event(
+                            event_name="stream_cancelled",
+                            event_category="stream",
+                            user_id=user_id,
+                            session_id=thread_id,
+                            thread_id=thread_id,
+                            request_id=request_id,
+                            client_request_id=body.client_request_id,
+                            numeric_value=max(1, int((time.perf_counter() - started_at) * 1000)),
+                            unit="ms",
+                            properties={
+                                "stream_type": "chat",
+                                "first_token_latency_ms": first_token_latency_ms,
+                                "response_delta_count": response_delta_count,
+                                "graph_event_count": graph_event_count,
+                            },
+                        )
                         return
                     if agent_task.done() and queue.empty():
                         break
@@ -236,6 +322,23 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
                     if elapsed > settings.agent_timeout_s:
                         agent_task.cancel()
                         record_timeout()
+                        enqueue_analytics_event(
+                            event_name="stream_timeout",
+                            event_category="stream",
+                            user_id=user_id,
+                            session_id=thread_id,
+                            thread_id=thread_id,
+                            request_id=request_id,
+                            client_request_id=body.client_request_id,
+                            numeric_value=max(1, int((time.perf_counter() - started_at) * 1000)),
+                            unit="ms",
+                            properties={
+                                "stream_type": "chat",
+                                "first_token_latency_ms": first_token_latency_ms,
+                                "response_delta_count": response_delta_count,
+                                "graph_event_count": graph_event_count,
+                            },
+                        )
                         yield sse({"type": "error", "content": "Response timed out — please try again"})
                         yield sse({"type": "done"})
                         return
@@ -258,10 +361,29 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
         if not agent_task.cancelled():
             exc = agent_task.exception()
             if exc:
+                enqueue_analytics_event(
+                    event_name="stream_failed",
+                    event_category="stream",
+                    user_id=user_id,
+                    session_id=thread_id,
+                    thread_id=thread_id,
+                    request_id=request_id,
+                    client_request_id=body.client_request_id,
+                    numeric_value=max(1, int((time.perf_counter() - started_at) * 1000)),
+                    unit="ms",
+                    properties={
+                        "stream_type": "chat",
+                        "error_type": type(exc).__name__,
+                        "first_token_latency_ms": first_token_latency_ms,
+                        "response_delta_count": response_delta_count,
+                        "graph_event_count": graph_event_count,
+                    },
+                )
                 yield sse({"type": "error", "content": f"Server error: {str(exc)}"})
                 return
 
             final_state = agent_task.result()
+            output_shape = output_shape_from_final_state(final_state)
             try:
                 title = thread["title"]
                 if title == "New chat":
@@ -280,8 +402,64 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
                             ),
                         })
             except Exception as exc:
+                enqueue_analytics_event(
+                    event_name="stream_failed",
+                    event_category="stream",
+                    user_id=user_id,
+                    session_id=thread_id,
+                    thread_id=thread_id,
+                    request_id=request_id,
+                    client_request_id=body.client_request_id,
+                    properties={
+                        "stream_type": "chat",
+                        "error_type": "PersistenceError",
+                        "first_token_latency_ms": first_token_latency_ms,
+                        "response_delta_count": response_delta_count,
+                        "graph_event_count": graph_event_count,
+                        **output_shape,
+                    },
+                )
                 yield sse({"type": "error", "content": f"Persistence error: {str(exc)}"})
                 return
+
+            duration_ms = max(1, int((time.perf_counter() - started_at) * 1000))
+            enqueue_analytics_event(
+                event_name="stream_completed",
+                event_category="stream",
+                user_id=user_id,
+                session_id=thread_id,
+                thread_id=thread_id,
+                request_id=request_id,
+                client_request_id=body.client_request_id,
+                numeric_value=duration_ms,
+                unit="ms",
+                properties={
+                    "stream_type": "chat",
+                    "duration_ms": duration_ms,
+                    "first_token_latency_ms": first_token_latency_ms,
+                    "response_delta_count": response_delta_count,
+                    "graph_event_count": graph_event_count,
+                    **output_shape,
+                },
+            )
+            enqueue_analytics_event(
+                event_name="retrieval_quality",
+                event_category="quality_score",
+                user_id=user_id,
+                session_id=thread_id,
+                thread_id=thread_id,
+                request_id=request_id,
+                client_request_id=body.client_request_id,
+                numeric_value=1.0 if final_state.get("retrieval_relevance") == "strong" else 0.3,
+                unit="score",
+                properties={
+                    "score_name": "retrieval_relevance",
+                    "score_max": 1.0,
+                    "retrieval_relevance": final_state.get("retrieval_relevance"),
+                    "retrieval_chunk_count": output_shape["retrieval_chunk_count"],
+                    "route": final_state.get("route"),
+                },
+            )
 
             if not done_sent:
                 yield sse({"type": "done"})

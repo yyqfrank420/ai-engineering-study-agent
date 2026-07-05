@@ -18,6 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+from analytics.events import enqueue_analytics_event, start_analytics_worker, stop_analytics_worker
 from adapters.database_adapter import init_db
 from adapters.supabase_auth_adapter import verify_access_token
 from api.auth_route import router as auth_router
@@ -49,6 +50,7 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
         app.state.startup_step = "database"
         print("[startup] Initialising database…")
         init_db()
+        start_analytics_worker()
         if not hasattr(app.state, "vectorstore"):
             app.state.vectorstore = None
         if not hasattr(app.state, "parent_docs"):
@@ -71,6 +73,7 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
 
         yield
 
+        await stop_analytics_worker()
         print("[shutdown] Goodbye.")
 
     app = FastAPI(
@@ -128,12 +131,24 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
                     user_id = None
 
         content_length = request.headers.get("content-length")
+        body_size = 0
         if content_length:
             try:
                 body_size = int(content_length)
             except ValueError:
                 body_size = 0
             if body_size > settings.max_request_body_bytes:
+                enqueue_analytics_event(
+                    event_name="request_rejected",
+                    event_category="request",
+                    request_id=request.state.request_id,
+                    properties={
+                        "method": request.method,
+                        "path": request.url.path,
+                        "reason": "body_too_large",
+                        "body_size_bytes": body_size,
+                    },
+                )
                 return apply_response_headers(
                     JSONResponse(
                         status_code=413,
@@ -141,6 +156,18 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
                     ),
                     request.state.request_id,
                 )
+
+        enqueue_analytics_event(
+            event_name="request_started",
+            event_category="request",
+            request_id=request.state.request_id,
+            user_id=user_id,
+            properties={
+                "method": request.method,
+                "path": request.url.path,
+                "body_size_bytes": body_size,
+            },
+        )
 
         with start_span(
             f"{request.method} {request.url.path}",
@@ -197,6 +224,24 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
                     )
                 except Exception as exc:
                     print(f"[telemetry] HTTP request log failed: {type(exc).__name__}: {exc}")
+                enqueue_analytics_event(
+                    event_name="request_completed",
+                    event_category="request",
+                    user_id=user_id,
+                    request_id=request.state.request_id,
+                    trace_id=trace_context.get("trace_id"),
+                    client_request_id=getattr(request.state, "client_request_id", None),
+                    numeric_value=latency_ms,
+                    unit="ms",
+                    properties={
+                        "method": request.method,
+                        "path": request.url.path,
+                        "route": route_template,
+                        "status_code": status_code,
+                        "latency_ms": latency_ms,
+                        "thread_id": getattr(request.state, "thread_id", None),
+                    },
+                )
 
         return apply_response_headers(response, request.state.request_id) if response is not None else response
 

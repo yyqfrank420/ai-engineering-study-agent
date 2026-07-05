@@ -36,6 +36,27 @@ def _llm(operation: str, provider: str, model: str, *, ts: float = 1000.0, fallb
     }
 
 
+def _analytics(event_name: str, event_category: str, *, ts: float = 1000.0, value=None, properties=None, request_id="r1"):
+    return {
+        "event_name": event_name,
+        "event_category": event_category,
+        "user_id": "user-1",
+        "anonymous_id": None,
+        "session_id": "thread-1",
+        "thread_id": "thread-1",
+        "request_id": request_id,
+        "trace_id": "trace-1",
+        "client_request_id": None,
+        "schema_version": 1,
+        "app_version": "0.1.0",
+        "environment": "test",
+        "numeric_value": value,
+        "unit": "ms" if value is not None else None,
+        "properties": properties or {},
+        "created_at_epoch": ts,
+    }
+
+
 @pytest.fixture
 def dashboard_data(monkeypatch):
     now = 10_000.0
@@ -62,12 +83,42 @@ def dashboard_data(monkeypatch):
         _llm("synthesis", "openai", "gpt", ts=now - 20, fallback=True, status="error", duration=1300, metadata={"request_id": "r2", "trace_id": "t2"}),
         _llm("routing", "anthropic", "claude", ts=now - 10, duration=100),
     ]
+    analytics_rows = [
+        _analytics("stream_first_token", "stream", ts=now - 50, value=320),
+        _analytics("stream_first_token", "stream", ts=now - 20, value=900, request_id="r2"),
+        _analytics(
+            "stream_completed",
+            "stream",
+            ts=now - 40,
+            value=1400,
+            properties={"output_type": "chat_response", "graph_emitted": True, "retrieval_relevance": "strong"},
+        ),
+        _analytics(
+            "retrieval_quality",
+            "quality_score",
+            ts=now - 30,
+            value=0.3,
+            properties={"score_name": "retrieval_relevance", "retrieval_relevance": "weak"},
+            request_id="r3",
+        ),
+        _analytics(
+            "stream_failed",
+            "stream",
+            ts=now - 10,
+            properties={"error_type": "RuntimeError"},
+            request_id="r4",
+        ),
+    ]
 
     monkeypatch.setattr(dashboard.time, "time", lambda: now)
     monkeypatch.setattr(dashboard, "list_recent_product_analytics_events", lambda since_epoch: [row for row in events if row["created_at_epoch"] >= since_epoch])
     monkeypatch.setattr(dashboard, "list_recent_http_request_logs", lambda since_epoch: [row for row in http_logs if row["created_at_epoch"] >= since_epoch])
     monkeypatch.setattr(dashboard, "list_recent_llm_telemetry", lambda since_epoch: [row for row in llm_rows if row["created_at_epoch"] >= since_epoch])
-    return {"events": events, "http_logs": http_logs, "llm_rows": llm_rows}
+    monkeypatch.setattr(dashboard, "list_recent_analytics_events", lambda since_epoch, event_category=None: [
+        row for row in analytics_rows
+        if row["created_at_epoch"] >= since_epoch and (event_category is None or row["event_category"] == event_category)
+    ])
+    return {"events": events, "http_logs": http_logs, "llm_rows": llm_rows, "analytics_rows": analytics_rows}
 
 
 @pytest.mark.asyncio
@@ -84,6 +135,9 @@ async def test_dashboard_overview_computes_kpis(dashboard_data):
     assert payload["kpis"]["stop_rate"] == 0.5
     assert payload["kpis"]["search_tool_request_rate"] == 0.5
     assert payload["kpis"]["avg_chat_latency_ms"] == 1800
+    assert payload["kpis"]["avg_first_token_latency_ms"] == 610
+    assert payload["kpis"]["p95_first_token_latency_ms"] == 900
+    assert payload["kpis"]["quality_scores"] == 1
     assert payload["providers"] == {"anthropic": 2, "openai": 1}
 
 
@@ -158,4 +212,17 @@ async def test_dashboard_llm_performance_groups_by_operation_provider_model(dash
             "request_id": "r2",
             "trace_id": "t2",
         }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_self_improvement_surfaces_latency_scores_and_errors(dashboard_data):
+    payload = await dashboard.dashboard_self_improvement(_user={"email": "admin@example.com"})
+
+    assert payload["window_days"] == 7
+    assert payload["queues"]["slow_first_token"][0]["latency_ms"] == 900
+    assert payload["queues"]["low_quality_scores"][0]["score_name"] == "retrieval_relevance"
+    assert payload["queues"]["recent_operational_errors"][0]["event_name"] == "stream_failed"
+    assert payload["output_shapes"] == [
+        {"label": "chat_response / graph:True / retrieval:strong", "count": 1}
     ]
