@@ -1,4 +1,4 @@
-from eval.metrics import score_test_case
+from eval.metrics import score_schema, score_test_case
 from eval.test_cases import TestCase
 
 
@@ -76,3 +76,31 @@ def test_sse_error_case_checks_side_effect_absence():
     assert result["no_response_delta_pass"] is True
     assert result["no_graph_data_pass"] is True
     assert result["passed"] is True
+
+
+def test_schema_accepts_control_and_decision_node_types():
+    graph_data = {
+        "nodes": [
+            {
+                "id": "authz",
+                "label": "Authorization policy",
+                "type": "control",
+                "technology": "RBAC",
+                "description": "Controls access to protected routes.",
+            },
+            {
+                "id": "routing-choice",
+                "label": "Routing choice",
+                "type": "decision",
+                "technology": "Architecture decision",
+                "description": "Chooses between memory and search routes.",
+            },
+        ],
+        "edges": [],
+    }
+
+    result = score_schema(graph_data, {"node_types_valid": True})
+
+    assert result["node_types_valid"] is True
+    assert result["node_types_valid_pass"] is True
+    assert result["errors"] == []

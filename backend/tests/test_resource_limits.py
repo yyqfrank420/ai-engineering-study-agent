@@ -101,6 +101,46 @@ def test_thread_eviction_cascades_messages(temp_data_dir, monkeypatch):
     assert row[0] == 0, "Evicted thread's messages were not deleted"
 
 
+def test_thread_store_count_oldest_touch_and_delete_helpers(temp_data_dir, monkeypatch):
+    init_db()
+    from config import settings
+    monkeypatch.setattr(settings, "max_threads_per_user", 10)
+
+    user_id = make_user()
+    first = thread_store.create_thread(user_id, title="first")
+    second = thread_store.create_thread(user_id, title="second")
+    message_store.append(user_id, first["id"], "user", "hello")
+
+    assert thread_store.count_threads(user_id) == 2
+    assert thread_store.get_oldest_thread_id(user_id) in {first["id"], second["id"]}
+
+    thread_store.touch_thread(user_id, first["id"], title="renamed")
+    assert thread_store.get_thread(user_id, first["id"])["title"] == "renamed"
+
+    thread_store.touch_thread(user_id, second["id"])
+    assert thread_store.get_thread(user_id, second["id"]) is not None
+
+    thread_store.delete_thread(user_id, first["id"])
+    assert thread_store.get_thread(user_id, first["id"]) is None
+    assert message_store.get_messages(user_id, first["id"]) == []
+
+
+def test_thread_store_handles_corrupt_graph_json(temp_data_dir):
+    from adapters.database_adapter import execute
+
+    init_db()
+    user_id = make_user()
+    thread = thread_store.create_thread(user_id)
+    execute(
+        "UPDATE chat_threads SET graph_data = ? WHERE id = ? AND user_id = ?",
+        ("{not-json", thread["id"], user_id),
+    )
+
+    assert thread_store.get_thread(user_id, thread["id"])["graph_data"] is None
+    assert thread_store.get_latest_thread(user_id)["graph_data"] is None
+    assert thread_store.get_graph(user_id, thread["id"]) is None
+
+
 # ── Message cap ───────────────────────────────────────────────────────────────
 
 def test_message_cap_raises_429(temp_data_dir, monkeypatch):

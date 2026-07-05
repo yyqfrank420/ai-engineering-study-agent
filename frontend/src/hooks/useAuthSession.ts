@@ -3,7 +3,13 @@ import type { AuthSession } from '../types';
 import { identifyAnalyticsUser, initAnalytics, resetAnalytics } from '../services/analytics';
 import { getStoredSession, onAuthSessionChange } from '../services/auth';
 
-const DEV_BYPASS = import.meta.env.VITE_DEV_BYPASS_AUTH === 'true';
+const DEV_BYPASS_REQUESTED = import.meta.env.VITE_DEV_BYPASS_AUTH === 'true';
+
+if (import.meta.env.PROD && DEV_BYPASS_REQUESTED) {
+  throw new Error('VITE_DEV_BYPASS_AUTH must be false in production builds');
+}
+
+const DEV_BYPASS = import.meta.env.DEV && DEV_BYPASS_REQUESTED;
 
 const DEV_SESSION: AuthSession | null = DEV_BYPASS
   ? {

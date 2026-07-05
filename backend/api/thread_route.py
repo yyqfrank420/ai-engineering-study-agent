@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from adapters.supabase_auth_adapter import get_current_user
+from api.chat_guards import byte_len
+from config import settings
 from storage.message_store import get_messages
 from storage.profile_store import upsert_profile
 from storage.thread_store import create_thread, delete_thread, get_latest_thread, get_thread, list_threads, save_graph
@@ -28,7 +30,10 @@ async def list_threads_endpoint(user=Depends(get_current_user)):
 @router.post("")
 async def create_thread_endpoint(body: CreateThreadRequest, user=Depends(get_current_user)):
     upsert_profile(user["id"], user["email"] or f"{user['id']}@unknown.local")
-    thread = create_thread(user["id"], body.title.strip() or "New chat")
+    title = body.title.strip() or "New chat"
+    if byte_len(title) > settings.max_thread_title_bytes:
+        raise HTTPException(status_code=413, detail="Thread title too large")
+    thread = create_thread(user["id"], title)
     return {"thread": thread, "messages": []}
 
 

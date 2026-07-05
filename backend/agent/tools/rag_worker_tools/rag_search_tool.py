@@ -17,8 +17,6 @@ from langchain_core.tools import tool
 # vectorstore and parent_docs are injected at runtime via app.state
 # (set in main.py lifespan, passed to tools via tool factory functions)
 
-
-from rag.faiss_retriever import retrieve
 from graph.ids import parent_chunk_id_from_metadata
 
 
@@ -38,6 +36,8 @@ def make_rag_search_tool(vectorstore: Any, parent_docs: list):
             k:      Number of results to return (default 8)
             filter: Optional metadata filter e.g. {"chapter": 6}
         """
+        from rag.faiss_retriever import retrieve
+
         docs = retrieve(vectorstore, parent_docs, query, k=k, filter=filter)
         chunks = [
             {

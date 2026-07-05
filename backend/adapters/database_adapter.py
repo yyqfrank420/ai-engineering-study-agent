@@ -31,14 +31,17 @@ POSTGRES_REQUIRED_TABLES = (
     "request_events",
     "product_analytics_events",
     "search_tool_requests",
+    "active_streams",
     "http_request_logs",
     "llm_telemetry",
+    "analytics_events",
 )
 
 POSTGRES_REQUIRED_POLICIES = {
     "profiles": {"profiles_select_own", "profiles_update_own"},
     "chat_threads": {"threads_all_own"},
     "chat_messages": {"messages_all_own"},
+    "active_streams": {"active_streams_all_own"},
 }
 
 
@@ -121,6 +124,17 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_search_tool_requests_user_thread
                 ON search_tool_requests(user_id, thread_id);
 
+            CREATE TABLE IF NOT EXISTS active_streams (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES profiles(id),
+                stream_type TEXT NOT NULL,
+                created_at_epoch REAL NOT NULL,
+                expires_at_epoch REAL NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_active_streams_user_type
+                ON active_streams(user_id, stream_type, expires_at_epoch);
+
             CREATE TABLE IF NOT EXISTS http_request_logs (
                 id TEXT PRIMARY KEY,
                 user_id TEXT,
@@ -159,6 +173,35 @@ def init_db() -> None:
                 ON llm_telemetry(created_at_epoch);
             CREATE INDEX IF NOT EXISTS idx_llm_telemetry_user_created
                 ON llm_telemetry(user_id, created_at_epoch);
+
+            CREATE TABLE IF NOT EXISTS analytics_events (
+                id TEXT PRIMARY KEY,
+                event_name TEXT NOT NULL,
+                event_category TEXT NOT NULL,
+                user_id TEXT,
+                anonymous_id TEXT,
+                session_id TEXT,
+                thread_id TEXT,
+                request_id TEXT,
+                trace_id TEXT,
+                client_request_id TEXT,
+                schema_version INTEGER NOT NULL DEFAULT 1,
+                app_version TEXT NOT NULL DEFAULT '0.1.0',
+                environment TEXT NOT NULL DEFAULT 'development',
+                numeric_value REAL,
+                unit TEXT,
+                properties_json TEXT,
+                created_at_epoch REAL NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_analytics_events_created
+                ON analytics_events(created_at_epoch);
+            CREATE INDEX IF NOT EXISTS idx_analytics_events_category_created
+                ON analytics_events(event_category, created_at_epoch);
+            CREATE INDEX IF NOT EXISTS idx_analytics_events_request
+                ON analytics_events(request_id);
+            CREATE INDEX IF NOT EXISTS idx_analytics_events_trace
+                ON analytics_events(trace_id);
             """
         )
 
@@ -240,7 +283,7 @@ def _validate_postgres_schema(conn) -> None:
             """
         ).fetchall()
     }
-    tables_without_rls = sorted(public_tables - rls_enabled_tables)
+    tables_without_rls = sorted(set(POSTGRES_REQUIRED_TABLES) - rls_enabled_tables)
 
     policies_by_table: dict[str, set[str]] = {}
     for row in conn.execute(
@@ -272,5 +315,5 @@ def _validate_postgres_schema(conn) -> None:
     raise RuntimeError(
         "Postgres schema is not ready for production; "
         + "; ".join(problems)
-        + ". Apply docs/supabase/schema.sql before starting the app."
+        + ". Run Alembic migrations before starting the app: bash scripts/apply_supabase_schema.sh."
     )

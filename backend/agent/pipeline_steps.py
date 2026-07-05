@@ -124,7 +124,7 @@ async def maybe_expand_with_search_tool(
     return await apply_graph_worker(expanded_state, graph_tools)
 
 
-def maybe_start_node_enrichment(state: AgentState, node_detail_tools: list) -> None:
+async def maybe_start_node_enrichment(state: AgentState, node_detail_tools: list) -> None:
     graph_data = state.get("graph_data")
     if not graph_data or not graph_data.get("nodes"):
         return
@@ -133,12 +133,10 @@ def maybe_start_node_enrichment(state: AgentState, node_detail_tools: list) -> N
     if not rag_search_tool:
         return
 
-    asyncio.create_task(
-        enrich_all_nodes(
-            nodes=graph_data["nodes"],
-            edges=graph_data.get("edges", []),
-            rag_search_tool=rag_search_tool,
-            send=state["send"],
-            graph_version=graph_data.get("version"),
-        )
+    await enrich_all_nodes(
+        nodes=graph_data["nodes"],
+        edges=graph_data.get("edges", []),
+        rag_search_tool=rag_search_tool,
+        send=state["send"],
+        graph_version=graph_data.get("version"),
     )

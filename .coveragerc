@@ -1,0 +1,12 @@
+[run]
+source = backend
+
+[report]
+fail_under = 95
+show_missing = True
+skip_covered = False
+omit =
+    backend/tests/*
+    backend/eval/*
+    backend/graph/build.py
+    backend/rag/sentence_embedder.py

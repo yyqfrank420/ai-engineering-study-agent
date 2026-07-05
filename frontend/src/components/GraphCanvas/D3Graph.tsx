@@ -174,6 +174,9 @@ export function D3Graph({
   const initialViewStateRef = useRef(initialViewState);
   const [edgeTooltip, setEdgeTooltip] = useState<EdgeTooltip | null>(null);
   const structureKey = graphStructureKey(graphData);
+  const detailKey = graphData
+    ? graphData.nodes.map(node => `${node.id}:${node.detail ? '1' : '0'}`).join('|')
+    : 'null';
 
   useEffect(() => {
     graphDataRef.current = graphData;
@@ -673,6 +676,7 @@ export function D3Graph({
 
     // Loading shimmer bar (visible while node detail is not yet enriched)
     nodeSel.append('rect')
+      .attr('class', 'node-detail-shimmer')
       .attr('width', NODE_W - 32).attr('height', 2)
       .attr('x', -(NODE_W - 32) / 2).attr('y', NODE_H / 2 - 5)
       .attr('rx', 1)
@@ -905,6 +909,19 @@ export function D3Graph({
       renderStateRef.current = null;
     };
   }, [structureKey]);
+
+  useEffect(() => {
+    const renderState = renderStateRef.current;
+    if (!renderState || !graphData) return;
+
+    const detailById = new Map(graphData.nodes.map(node => [node.id, Boolean(node.detail)]));
+    renderState.nodeSel
+      .select<SVGRectElement>('rect.node-detail-shimmer')
+      .interrupt()
+      .transition()
+      .duration(180)
+      .attr('opacity', (d: RenderNode) => detailById.get(d.id) ? 0 : 0.7);
+  }, [detailKey, graphData]);
 
   useEffect(() => {
     const renderState = renderStateRef.current;

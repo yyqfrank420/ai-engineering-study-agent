@@ -182,7 +182,7 @@ async def main() -> None:
     except Exception:
         _console.print(
             f"[bold red]ERROR:[/] Backend not reachable at {args.base_url}\n"
-            "Run:  .venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000",
+            "Run:  .venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8000",
             style="red",
         )
         return

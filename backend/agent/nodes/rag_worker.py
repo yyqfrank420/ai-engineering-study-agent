@@ -59,7 +59,7 @@ def _assess_retrieval_relevance(query: str, rag_chunks: list[dict]) -> tuple[str
     if not rag_chunks:
         return (
             "weak",
-            "I did not find a strong match for this question in the book alone. You can use the search tool if you want broader context.",
+            "I did not find a direct book match, so I will apply the closest book patterns. You can use the search tool if you want broader context.",
         )
 
     query_terms = _meaningful_terms(query)
@@ -73,13 +73,13 @@ def _assess_retrieval_relevance(query: str, rag_chunks: list[dict]) -> tuple[str
     if len(rag_chunks) < 2 and coverage < 0.34:
         return (
             "weak",
-            "The book retrieval looks only loosely related here. You can bring in web search too if you want more context before I finish.",
+            "The book match is indirect, so I will map the nearest book concepts onto your question. You can use the search tool for broader context.",
         )
 
     if coverage < 0.2:
         return (
             "weak",
-            "I found only a weak match in the book for this question. You can use the search tool if you want me to widen the context.",
+            "I found an indirect book match, so I will use the closest book ideas as the foundation. You can use the search tool to widen the context.",
         )
 
     return ("strong", "")

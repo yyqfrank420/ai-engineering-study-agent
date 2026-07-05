@@ -405,3 +405,8 @@ STAGING_CASES: list[StagingCase] = [
         ],
     ),
 ]
+
+
+# Blocking CI/CD live evals spend real model tokens. Keep the default gate small
+# and representative; run all STAGING_CASES manually for prompt/pipeline releases.
+BLOCKING_STAGING_CASE_IDS = ["S1", "S4", "S7", "S8", "S10"]

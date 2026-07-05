@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 
 from api.internal_access import get_internal_dashboard_user
+from storage.analytics_event_store import list_recent_analytics_events
 from storage.product_analytics_store import list_recent_product_analytics_events
 from storage.telemetry_store import list_recent_http_request_logs, list_recent_llm_telemetry
 
@@ -49,6 +50,14 @@ def _event_count(rows: list[dict[str, Any]], event_type: str) -> int:
     return sum(1 for row in rows if row["event_type"] == event_type)
 
 
+def _percentile(values: list[float], percentile: float) -> int | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = min(len(ordered) - 1, max(0, int(round((len(ordered) - 1) * percentile))))
+    return int(ordered[index])
+
+
 @router.get("/overview")
 async def dashboard_overview(_user=Depends(get_internal_dashboard_user)):
     now = time.time()
@@ -56,6 +65,14 @@ async def dashboard_overview(_user=Depends(get_internal_dashboard_user)):
     events_7d = list_recent_product_analytics_events(since_epoch=now - 7 * 86400)
     http_1d = list_recent_http_request_logs(since_epoch=now - 86400)
     llm_1d = list_recent_llm_telemetry(since_epoch=now - 86400)
+    analytics_1d = list_recent_analytics_events(since_epoch=now - 86400)
+    first_token_latencies = [
+        float(row["numeric_value"])
+        for row in analytics_1d
+        if row["event_category"] == "stream"
+        and row["event_name"] == "stream_first_token"
+        and row.get("numeric_value") is not None
+    ]
 
     sent = _event_count(events_1d, "chat_sent")
     completed = _event_count(events_1d, "chat_stream_completed")
@@ -77,6 +94,9 @@ async def dashboard_overview(_user=Depends(get_internal_dashboard_user)):
             "avg_chat_latency_ms": int(
                 mean([row["latency_ms"] for row in http_1d if row["path"] == "/api/chat"])
             ) if any(row["path"] == "/api/chat" for row in http_1d) else None,
+            "avg_first_token_latency_ms": int(mean(first_token_latencies)) if first_token_latencies else None,
+            "p95_first_token_latency_ms": _percentile(first_token_latencies, 0.95),
+            "quality_scores": len([row for row in analytics_1d if row["event_category"] == "quality_score"]),
         },
         "providers": dict(Counter(row["provider"] for row in llm_1d)),
     }
@@ -90,7 +110,9 @@ async def dashboard_trends(
     now = time.time()
     bucket_size_s = 3600 if bucket == "hour" else 86400
     bucket_count = 24 if bucket == "hour" else 7
-    since_epoch = now - bucket_size_s * bucket_count
+    current_bucket_start = _bucket_start(now, bucket_size_s)
+    first_bucket_start = current_bucket_start - bucket_size_s * (bucket_count - 1)
+    since_epoch = first_bucket_start
 
     events = list_recent_product_analytics_events(since_epoch=since_epoch)
     http_logs = list_recent_http_request_logs(since_epoch=since_epoch)
@@ -98,7 +120,7 @@ async def dashboard_trends(
 
     buckets: dict[int, dict[str, Any]] = {}
     for index in range(bucket_count):
-        start_epoch = _bucket_start(since_epoch, bucket_size_s) + index * bucket_size_s
+        start_epoch = first_bucket_start + index * bucket_size_s
         buckets[start_epoch] = {
             "start_epoch": start_epoch,
             "label": _bucket_label(start_epoch, bucket),
@@ -292,5 +314,93 @@ async def dashboard_llm_performance(_user=Depends(get_internal_dashboard_user)):
                 "trace_id": row["metadata"].get("trace_id"),
             }
             for row in recent_fallbacks
+        ],
+    }
+
+
+@router.get("/self-improvement")
+async def dashboard_self_improvement(_user=Depends(get_internal_dashboard_user)):
+    now = time.time()
+    rows = list_recent_analytics_events(since_epoch=now - 7 * 86400)
+
+    first_token_latencies = [
+        row for row in rows
+        if row["event_category"] == "stream"
+        and row["event_name"] == "stream_first_token"
+        and row.get("numeric_value") is not None
+    ]
+    slow_first_token = sorted(
+        first_token_latencies,
+        key=lambda row: row["numeric_value"] or 0,
+        reverse=True,
+    )[:10]
+
+    quality_scores = [
+        row for row in rows
+        if row["event_category"] == "quality_score"
+        and row.get("numeric_value") is not None
+    ]
+    low_scores = sorted(
+        [row for row in quality_scores if float(row["numeric_value"] or 0) < 0.7],
+        key=lambda row: row["numeric_value"] or 0,
+    )[:10]
+
+    output_shapes = Counter()
+    for row in rows:
+        if row["event_category"] != "stream" or row["event_name"] != "stream_completed":
+            continue
+        props = row.get("properties") or {}
+        label = (
+            f"{props.get('output_type', 'unknown')} / "
+            f"graph:{props.get('graph_emitted', False)} / "
+            f"retrieval:{props.get('retrieval_relevance', 'unknown')}"
+        )
+        output_shapes[label] += 1
+
+    error_events = [
+        row for row in rows
+        if row["event_name"] in {"stream_failed", "stream_timeout", "stream_cancelled", "request_rejected"}
+    ]
+
+    return {
+        "window_days": 7,
+        "queues": {
+            "slow_first_token": [
+                {
+                    "latency_ms": int(row["numeric_value"] or 0),
+                    "request_id": row.get("request_id"),
+                    "trace_id": row.get("trace_id"),
+                    "thread_id": row.get("thread_id"),
+                    "created_at_epoch": row["created_at_epoch"],
+                }
+                for row in slow_first_token
+            ],
+            "low_quality_scores": [
+                {
+                    "score_name": row.get("properties", {}).get("score_name"),
+                    "score": row["numeric_value"],
+                    "request_id": row.get("request_id"),
+                    "trace_id": row.get("trace_id"),
+                    "thread_id": row.get("thread_id"),
+                    "properties": row.get("properties", {}),
+                    "created_at_epoch": row["created_at_epoch"],
+                }
+                for row in low_scores
+            ],
+            "recent_operational_errors": [
+                {
+                    "event_name": row["event_name"],
+                    "request_id": row.get("request_id"),
+                    "trace_id": row.get("trace_id"),
+                    "thread_id": row.get("thread_id"),
+                    "properties": row.get("properties", {}),
+                    "created_at_epoch": row["created_at_epoch"],
+                }
+                for row in sorted(error_events, key=lambda item: item["created_at_epoch"], reverse=True)[:10]
+            ],
+        },
+        "output_shapes": [
+            {"label": label, "count": count}
+            for label, count in output_shapes.most_common(10)
         ],
     }

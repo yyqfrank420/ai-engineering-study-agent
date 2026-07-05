@@ -2,10 +2,14 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SCHEMA_FILE="$ROOT_DIR/docs/supabase/schema.sql"
 
 if [[ -z "${SUPABASE_DB_URL:-}" ]]; then
   echo "SUPABASE_DB_URL is not set." >&2
+  exit 1
+fi
+
+if ! command -v alembic >/dev/null 2>&1; then
+  echo "alembic is required but was not found on PATH. Run: pip install -r backend/requirements.txt" >&2
   exit 1
 fi
 
@@ -14,7 +18,7 @@ if ! command -v psql >/dev/null 2>&1; then
   exit 1
 fi
 
-psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -f "$SCHEMA_FILE"
+alembic -c "$ROOT_DIR/alembic.ini" upgrade head
 
 missing_rls="$(
   psql "$SUPABASE_DB_URL" -At -v ON_ERROR_STOP=1 <<'SQL'

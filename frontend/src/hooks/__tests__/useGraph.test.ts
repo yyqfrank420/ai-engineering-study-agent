@@ -114,4 +114,59 @@ describe('useGraph', () => {
     expect(result.current.currentStep).toBe(0);
     expect([...result.current.activeNodeIds]).toEqual(['b-a']);
   });
+
+  it('supports manual step selection, clamping, and overview mode', async () => {
+    const { result } = renderHook(() => useGraph(graph('Graph A', 'a'), false));
+
+    await act(async () => {});
+    expect(result.current.currentStep).toBe(-1);
+    expect(result.current.hasSequence).toBe(true);
+
+    act(() => {
+      result.current.goToStep(99);
+    });
+    expect(result.current.currentStep).toBe(2);
+    expect([...result.current.activeNodeIds]).toEqual(['a-c']);
+    expect(result.current.stepDescription).toBe('Store persists.');
+
+    act(() => {
+      result.current.goToStep(-10);
+    });
+    expect(result.current.currentStep).toBe(0);
+
+    act(() => {
+      result.current.goToStep(-1);
+    });
+    expect(result.current.currentStep).toBe(-1);
+    expect([...result.current.activeNodeIds]).toEqual([]);
+  });
+
+  it('handles null graphs and single-step graphs without sequence playback', async () => {
+    const singleStepGraph = {
+      ...graph('Single', 's'),
+      sequence: [{ step: 1, nodes: ['s-a'], description: 'Only step.' }],
+    };
+    const { result, rerender } = renderHook(
+      ({ data }) => useGraph(data, true),
+      { initialProps: { data: null as GraphData | null } },
+    );
+
+    await act(async () => {});
+    expect(result.current.totalSteps).toBe(0);
+    expect(result.current.hasSequence).toBe(false);
+    expect(result.current.currentStep).toBe(-1);
+
+    act(() => {
+      result.current.goToStep(1);
+    });
+    expect(result.current.currentStep).toBe(-1);
+
+    await act(async () => {
+      rerender({ data: singleStepGraph });
+    });
+
+    expect(result.current.hasSequence).toBe(false);
+    expect(result.current.currentStep).toBe(-1);
+    expect(result.current.stepDescription).toBe('');
+  });
 });

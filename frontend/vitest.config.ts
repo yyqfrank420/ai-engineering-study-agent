@@ -16,5 +16,17 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: [],
+    pool: 'forks',
+    fileParallelism: true,
+    maxWorkers: 4,
+    coverage: {
+      provider: 'v8',
+      thresholds: {
+        statements: 93,
+        lines: 95,
+        functions: 95,
+        branches: 75,
+      },
+    },
   },
 });

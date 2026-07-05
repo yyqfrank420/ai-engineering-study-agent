@@ -13,31 +13,32 @@
 #          ("provider_switch", provider)
 # ─────────────────────────────────────────────────────────────────────────────
 
+from __future__ import annotations
+
 import asyncio
 from collections.abc import AsyncGenerator
 from functools import lru_cache
 import inspect
 import time
 
-import anthropic
-import openai
-
 from config import settings
-from observability import current_trace_context, record_llm_metrics
-from storage.telemetry_store import record_llm_telemetry
 
 # ── Clients (lazy-initialised and reused) ────────────────────────────────────
 
 
 @lru_cache(maxsize=1)
-def _get_anthropic_client() -> anthropic.AsyncAnthropic:
+def _get_anthropic_client():
+    import anthropic
+
     return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 
 @lru_cache(maxsize=1)
-def _get_openai_client() -> openai.AsyncOpenAI | None:
+def _get_openai_client():
     if not settings.openai_api_key:
         return None
+    import openai
+
     return openai.AsyncOpenAI(api_key=settings.openai_api_key)
 
 # Maps Anthropic model name → OpenAI fallback model name.
@@ -217,40 +218,69 @@ async def stream_response(
     final_model = model
 
     def _record(status: str, *, error_type: str | None = None) -> None:
+        from analytics.events import enqueue_analytics_event
+        from observability import current_trace_context, record_llm_metrics
+        from storage.telemetry_store import record_llm_telemetry
+
         details = telemetry or {}
         trace_context = current_trace_context()
+        duration_ms = max(1, int((time.perf_counter() - started_at) * 1000))
+        metadata = {
+            "message_count": len(messages),
+            "thinking_budget": thinking_budget,
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "request_id": details.get("metadata", {}).get("request_id"),
+            "client_request_id": details.get("metadata", {}).get("client_request_id"),
+            "trace_id": trace_context.get("trace_id"),
+            "span_id": trace_context.get("span_id"),
+            **(details.get("metadata") or {}),
+        }
         try:
             record_llm_telemetry(
                 operation=details.get("operation", "unknown"),
                 provider=final_provider,
                 model=final_model,
                 status=status,
-                duration_ms=max(1, int((time.perf_counter() - started_at) * 1000)),
+                duration_ms=duration_ms,
                 output_chars=output_chars,
                 used_fallback=used_fallback,
                 user_id=details.get("user_id"),
                 thread_id=details.get("thread_id"),
                 error_type=error_type,
-                metadata={
-                    "message_count": len(messages),
-                    "thinking_budget": thinking_budget,
-                    "temperature": temperature,
-                    "top_p": top_p,
-                    "top_k": top_k,
-                    "request_id": details.get("metadata", {}).get("request_id"),
-                    "client_request_id": details.get("metadata", {}).get("client_request_id"),
-                    "trace_id": trace_context.get("trace_id"),
-                    "span_id": trace_context.get("span_id"),
-                    **(details.get("metadata") or {}),
-                },
+                metadata=metadata,
             )
         except Exception as exc:
             print(f"[llm] Telemetry write failed: {type(exc).__name__}: {exc}")
+        enqueue_analytics_event(
+            event_name="llm_call_completed",
+            event_category="llm",
+            user_id=details.get("user_id"),
+            thread_id=details.get("thread_id"),
+            session_id=details.get("thread_id"),
+            request_id=metadata.get("request_id"),
+            trace_id=metadata.get("trace_id"),
+            client_request_id=metadata.get("client_request_id"),
+            numeric_value=duration_ms,
+            unit="ms",
+            properties={
+                "operation": details.get("operation", "unknown"),
+                "provider": final_provider,
+                "model": final_model,
+                "status": status,
+                "duration_ms": duration_ms,
+                "output_chars": output_chars,
+                "used_fallback": used_fallback,
+                "error_type": error_type,
+                "message_count": len(messages),
+            },
+        )
         record_llm_metrics(
             operation=details.get("operation", "unknown"),
             provider=final_provider,
             model=final_model,
-            duration_ms=max(1, int((time.perf_counter() - started_at) * 1000)),
+            duration_ms=duration_ms,
             used_fallback=used_fallback,
             status=status,
         )

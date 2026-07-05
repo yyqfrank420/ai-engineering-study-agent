@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 4096
     # Hard timeout on the whole agent run (seconds); yields a timeout error event
     agent_timeout_s: int = 120
+    # Backend-wide request body guard. Must exceed max_graph_data_bytes plus JSON envelope.
+    max_request_body_bytes: int = 600000
     # Sampling controls. Keep top_p / top_k unset unless you have a measured reason.
     # Anthropic extended thinking is incompatible with modified temperature or top_k.
     router_temperature: float = 0.0
@@ -130,6 +132,8 @@ class Settings(BaseSettings):
     posthog_project_id: str = ""
     posthog_personal_api_key: str = ""
     internal_dashboard_allowlist_raw: str = ""
+    analytics_queue_max_size: int = 1000
+    analytics_event_schema_version: int = 1
 
     # ── Dev ───────────────────────────────────────────────────────────────────
     # Set to true in local .env only. NEVER enable in production.
@@ -142,12 +146,17 @@ class Settings(BaseSettings):
     # Rate limiting (per user_id, sliding window)
     rate_limit_per_minute: int = 20
     rate_limit_per_hour: int = 100
+    # Per-user active LLM streams. Enforced through shared storage so Cloud Run
+    # instance scaling does not multiply spend limits.
+    max_active_chat_streams_per_user: int = 1
+    max_active_node_streams_per_user: int = 2
     # Max incoming chat message payload (bytes)
     max_message_bytes: int = 2048
-    # llm-guard PromptInjection rejection threshold (0–1)
+    # Local prompt-injection pattern score rejection threshold (0-1)
     prompt_injection_threshold: float = 0.85
     # Max combined title + description bytes for node follow-up generation
     max_node_text_bytes: int = 4096
+    max_thread_title_bytes: int = 160
     auth_session_hours: int = 24
     otp_request_window_s: int = 600
     otp_request_per_email_limit: int = 3

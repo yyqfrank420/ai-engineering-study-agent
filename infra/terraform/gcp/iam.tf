@@ -4,10 +4,13 @@ resource "google_project_iam_member" "artifact_registry_reader" {
   member  = "serviceAccount:${google_service_account.backend.email}"
 }
 
-resource "google_project_iam_member" "secret_accessor" {
-  project = var.project_id
-  role    = "roles/secretmanager.secretAccessor"
-  member  = "serviceAccount:${google_service_account.backend.email}"
+resource "google_secret_manager_secret_iam_member" "backend_secret_accessor" {
+  for_each = local.secret_bindings
+
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.app[each.key].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.backend.email}"
 }
 
 resource "google_cloud_run_v2_service_iam_member" "public_invoker" {

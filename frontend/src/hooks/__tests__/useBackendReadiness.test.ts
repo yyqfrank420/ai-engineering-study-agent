@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useBackendReadiness } from '../useBackendReadiness';
 
 vi.mock('../../services/api', () => ({
@@ -22,6 +22,11 @@ describe('useBackendReadiness', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('starts unknown for an authenticated production session until prepare succeeds', () => {
@@ -119,5 +124,76 @@ describe('useBackendReadiness', () => {
     });
 
     expect(prepareBackend).toHaveBeenCalledTimes(2);
+  });
+
+  it('does nothing without an auth session and can clear prepared cache', async () => {
+    vi.mocked(prepareBackend).mockResolvedValue({ status: 'ready', faiss_loaded: true });
+
+    const { result, rerender } = renderHook(
+      ({ session }) => useBackendReadiness(session),
+      { initialProps: { session: null as typeof TEST_SESSION | null } },
+    );
+
+    await act(async () => {
+      await result.current.prepareBackendNow();
+    });
+
+    expect(prepareBackend).not.toHaveBeenCalled();
+
+    rerender({ session: TEST_SESSION });
+    await act(async () => {
+      await result.current.prepareBackendNow();
+    });
+    await waitFor(() => expect(result.current.backendReadiness).toBe('ready'));
+
+    act(() => {
+      result.current.clearPreparedCache();
+    });
+
+    expect(result.current.backendReadiness).toBe('unknown');
+  });
+
+  it('polls startup steps and rotates index copy', async () => {
+    vi.useFakeTimers();
+    const indexError = Object.assign(new Error('warming'), { step: 'index' });
+    vi.mocked(prepareBackend).mockRejectedValue(indexError);
+
+    const { result } = renderHook(() => useBackendReadiness(TEST_SESSION));
+
+    await act(async () => {
+      await result.current.prepareBackendNow();
+    });
+
+    expect(result.current.backendReadiness).toBe('preparing');
+    expect(result.current.prepareMessage).toContain('cold-start');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+    expect(result.current.backendReadiness).toBe('preparing');
+    expect(result.current.prepareMessage).not.toBeNull();
+  });
+
+  it('shows non-index startup steps and fails from interval polling errors', async () => {
+    vi.useFakeTimers();
+    const databaseStep = Object.assign(new Error('warming'), { step: 'database' });
+    vi.mocked(prepareBackend)
+      .mockRejectedValueOnce(databaseStep)
+      .mockRejectedValueOnce(new Error('Backend gone'));
+
+    const { result } = renderHook(() => useBackendReadiness(TEST_SESSION));
+
+    await act(async () => {
+      await result.current.prepareBackendNow();
+    });
+
+    expect(result.current.prepareMessage).toBe('Initializing database…');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    expect(result.current.backendReadiness).toBe('error');
+    expect(result.current.prepareMessage).toBe('Backend gone');
   });
 });

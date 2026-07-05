@@ -1,3 +1,7 @@
+-- Reference snapshot of the current Supabase schema.
+-- Deployments apply backend/db/migrations with Alembic; update this file only
+-- when refreshing a human-readable schema snapshot.
+
 begin;
 
 create table if not exists public.profiles (
@@ -51,9 +55,17 @@ create table if not exists public.search_tool_requests (
   expires_at_epoch double precision not null
 );
 
+create table if not exists public.active_streams (
+  id uuid primary key,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  stream_type text not null,
+  created_at_epoch double precision not null,
+  expires_at_epoch double precision not null
+);
+
 create table if not exists public.http_request_logs (
   id uuid primary key,
-  user_id uuid,
+  user_id text,
   method text not null,
   path text not null,
   status_code integer not null,
@@ -67,7 +79,7 @@ create table if not exists public.http_request_logs (
 create table if not exists public.llm_telemetry (
   id uuid primary key,
   user_id uuid,
-  thread_id uuid,
+  thread_id text,
   operation text not null,
   provider text not null,
   model text not null,
@@ -77,6 +89,26 @@ create table if not exists public.llm_telemetry (
   used_fallback boolean not null default false,
   error_type text,
   metadata_json text,
+  created_at_epoch double precision not null
+);
+
+create table if not exists public.analytics_events (
+  id uuid primary key,
+  event_name text not null,
+  event_category text not null,
+  user_id uuid,
+  anonymous_id text,
+  session_id text,
+  thread_id uuid,
+  request_id text,
+  trace_id text,
+  client_request_id text,
+  schema_version integer not null default 1,
+  app_version text not null default '0.1.0',
+  environment text not null default 'development',
+  numeric_value double precision,
+  unit text,
+  properties_json text,
   created_at_epoch double precision not null
 );
 
@@ -101,6 +133,9 @@ create index if not exists idx_product_analytics_events_actor_created
 create index if not exists idx_search_tool_requests_user_thread
   on public.search_tool_requests(user_id, thread_id);
 
+create index if not exists idx_active_streams_user_type
+  on public.active_streams(user_id, stream_type, expires_at_epoch desc);
+
 create index if not exists idx_http_request_logs_created
   on public.http_request_logs(created_at_epoch desc);
 
@@ -113,14 +148,28 @@ create index if not exists idx_llm_telemetry_created
 create index if not exists idx_llm_telemetry_user_created
   on public.llm_telemetry(user_id, created_at_epoch desc);
 
+create index if not exists idx_analytics_events_created
+  on public.analytics_events(created_at_epoch desc);
+
+create index if not exists idx_analytics_events_category_created
+  on public.analytics_events(event_category, created_at_epoch desc);
+
+create index if not exists idx_analytics_events_request
+  on public.analytics_events(request_id);
+
+create index if not exists idx_analytics_events_trace
+  on public.analytics_events(trace_id);
+
 alter table public.profiles enable row level security;
 alter table public.chat_threads enable row level security;
 alter table public.chat_messages enable row level security;
 alter table public.request_events enable row level security;
 alter table public.product_analytics_events enable row level security;
 alter table public.search_tool_requests enable row level security;
+alter table public.active_streams enable row level security;
 alter table public.http_request_logs enable row level security;
 alter table public.llm_telemetry enable row level security;
+alter table public.analytics_events enable row level security;
 
 drop policy if exists "profiles_select_own" on public.profiles;
 create policy "profiles_select_own" on public.profiles
@@ -136,6 +185,10 @@ for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 drop policy if exists "messages_all_own" on public.chat_messages;
 create policy "messages_all_own" on public.chat_messages
+for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "active_streams_all_own" on public.active_streams;
+create policy "active_streams_all_own" on public.active_streams
 for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 commit;

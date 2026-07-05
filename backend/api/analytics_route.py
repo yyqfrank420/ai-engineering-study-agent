@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from analytics.events import enqueue_analytics_event
 from api.internal_access import get_optional_user
 from storage.product_analytics_store import record_product_analytics_event
 from storage.profile_store import upsert_profile
@@ -73,7 +74,7 @@ def _capture_key(body: "AnalyticsCaptureRequest", request: Request, user: dict |
     if user and user.get("id"):
         return f"user:{user['id']}"
     client_ip = request.client.host if request.client else "unknown"
-    return f"anon:{client_ip}:{body.anonymous_id[:32]}"
+    return f"anon:{client_ip}"
 
 
 def _sanitize_properties(properties: dict[str, Any]) -> dict[str, Any]:
@@ -143,4 +144,16 @@ async def capture_analytics_event(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        print(f"[analytics] Product analytics write failed: {type(exc).__name__}: {exc}")
+    enqueue_analytics_event(
+        event_name=body.event_type,
+        event_category="product",
+        user_id=user["id"] if user else None,
+        anonymous_id=body.anonymous_id,
+        request_id=(body.properties or {}).get("request_id"),
+        client_request_id=(body.properties or {}).get("client_request_id"),
+        properties=_sanitize_properties(body.properties),
+        created_at_epoch=now,
+    )
     return {"ok": True}

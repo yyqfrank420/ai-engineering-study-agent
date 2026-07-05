@@ -3,6 +3,7 @@ import time
 import uuid
 
 from adapters.database_adapter import execute, fetchall
+from storage.models import HttpRequestLogRow, HttpRequestLogWrite, LLMTelemetryRow, LLMTelemetryWrite
 
 
 def _dump_metadata(metadata: dict | None) -> str | None:
@@ -46,6 +47,19 @@ def record_http_request_log(
     metadata: dict | None = None,
     created_at_epoch: float | None = None,
 ) -> None:
+    log = HttpRequestLogWrite.model_validate(
+        {
+            "method": method,
+            "path": path,
+            "status_code": status_code,
+            "latency_ms": latency_ms,
+            "user_id": user_id,
+            "ip_address": ip_address,
+            "user_agent": user_agent,
+            "metadata": metadata,
+            "created_at_epoch": time.time() if created_at_epoch is None else created_at_epoch,
+        }
+    )
     execute(
         """
         INSERT INTO http_request_logs (
@@ -56,15 +70,15 @@ def record_http_request_log(
         """,
         (
             str(uuid.uuid4()),
-            user_id,
-            method,
-            path,
-            status_code,
-            latency_ms,
-            ip_address,
-            user_agent,
-            _dump_metadata(metadata),
-            created_at_epoch or time.time(),
+            log.user_id,
+            log.method,
+            log.path,
+            log.status_code,
+            log.latency_ms,
+            log.ip_address,
+            log.user_agent,
+            _dump_metadata(log.metadata),
+            log.created_at_epoch,
         ),
     )
 
@@ -77,9 +91,11 @@ _HTTP_LOG_COLUMNS = (
 
 def list_recent_http_request_logs(*, since_epoch: float, user_id: str | None = None) -> list[dict]:
     rows = _list_recent("http_request_logs", _HTTP_LOG_COLUMNS, since_epoch=since_epoch, user_id=user_id)
+    normalized: list[dict] = []
     for row in rows:
         row["metadata"] = _load_metadata(row.pop("metadata_json", None))
-    return rows
+        normalized.append(HttpRequestLogRow.model_validate(row).model_dump())
+    return normalized
 
 
 def record_llm_telemetry(
@@ -97,6 +113,22 @@ def record_llm_telemetry(
     metadata: dict | None = None,
     created_at_epoch: float | None = None,
 ) -> None:
+    telemetry = LLMTelemetryWrite.model_validate(
+        {
+            "operation": operation,
+            "provider": provider,
+            "model": model,
+            "status": status,
+            "duration_ms": duration_ms,
+            "output_chars": output_chars,
+            "used_fallback": used_fallback,
+            "user_id": user_id,
+            "thread_id": thread_id,
+            "error_type": error_type,
+            "metadata": metadata,
+            "created_at_epoch": time.time() if created_at_epoch is None else created_at_epoch,
+        }
+    )
     execute(
         """
         INSERT INTO llm_telemetry (
@@ -107,18 +139,18 @@ def record_llm_telemetry(
         """,
         (
             str(uuid.uuid4()),
-            user_id,
-            thread_id,
-            operation,
-            provider,
-            model,
-            status,
-            duration_ms,
-            output_chars,
-            used_fallback,
-            error_type,
-            _dump_metadata(metadata),
-            created_at_epoch or time.time(),
+            telemetry.user_id,
+            telemetry.thread_id,
+            telemetry.operation,
+            telemetry.provider,
+            telemetry.model,
+            telemetry.status,
+            telemetry.duration_ms,
+            telemetry.output_chars,
+            telemetry.used_fallback,
+            telemetry.error_type,
+            _dump_metadata(telemetry.metadata),
+            telemetry.created_at_epoch,
         ),
     )
 
@@ -131,6 +163,8 @@ _LLM_TELEMETRY_COLUMNS = (
 
 def list_recent_llm_telemetry(*, since_epoch: float, user_id: str | None = None) -> list[dict]:
     rows = _list_recent("llm_telemetry", _LLM_TELEMETRY_COLUMNS, since_epoch=since_epoch, user_id=user_id)
+    normalized: list[dict] = []
     for row in rows:
         row["metadata"] = _load_metadata(row.pop("metadata_json", None))
-    return rows
+        normalized.append(LLMTelemetryRow.model_validate(row).model_dump())
+    return normalized
