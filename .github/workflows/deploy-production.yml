@@ -29,6 +29,7 @@ jobs:
       ai-impact: ${{ steps.impact.outputs.ai-impact }}
       tree-sha: ${{ steps.identity.outputs.tree-sha }}
       commit-sha: ${{ steps.identity.outputs.commit-sha }}
+      corpus-status: ${{ steps.corpus.outputs.status }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,12 +41,18 @@ jobs:
         run: |
           echo "tree-sha=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
           echo "commit-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - id: corpus
+        name: Resolve corpus approval state
+        run: |
+          status="$(python3 -c 'import json; print(json.load(open("backend/eval/corpus/v1/cases.json"))["approval"]["status"])')"
+          case "$status" in pending_human_review|approved) ;; *) echo "Invalid corpus approval status." >&2; exit 1 ;; esac
+          echo "status=$status" >> "$GITHUB_OUTPUT"
 
   backend:
     name: Migrate, smoke, and promote approved digest
     runs-on: ubuntu-latest
     needs: prepare
-    if: needs.prepare.outputs.ai-impact == 'true'
+    if: needs.prepare.outputs.ai-impact == 'true' && needs.prepare.outputs.corpus-status == 'approved'
     timeout-minutes: 20
     environment: production
     permissions:
@@ -157,7 +164,7 @@ jobs:
     name: Deploy frontend to Vercel
     runs-on: ubuntu-latest
     needs: [prepare, backend]
-    if: always() && needs.prepare.result == 'success' && (needs.backend.result == 'success' || needs.backend.result == 'skipped')
+    if: always() && needs.prepare.result == 'success' && needs.prepare.outputs.corpus-status == 'approved' && (needs.backend.result == 'success' || needs.backend.result == 'skipped')
     environment: production
     steps:
       - uses: actions/checkout@v4

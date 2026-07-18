@@ -19,7 +19,11 @@ test is omitted or a stale path remains. Frontend and ingestion commands use
 glob-covering test runners, so newly tracked tests are automatically included.
 
 The stable branch checks are `CI required` and `Live eval required`. Both workflows
-listen to `pull_request`, trusted pushes, and `merge_group`. Run
+listen to `pull_request`, trusted pushes, and `merge_group`. While the seed corpus
+is pending human review, the live check succeeds with an explicit bootstrap result
+before installing browsers, authenticating to GCP, building images, mutating
+staging, or calling a model. Production rollout is likewise disabled until corpus
+approval. Run
 `scripts/configure_main_branch_protection.sh owner/repo` to inspect the current and
 proposed branch protection without writing. Add `--apply` only after reviewing the
 payload.

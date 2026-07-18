@@ -133,7 +133,25 @@ def test_pending_corpus_has_a_trusted_full_suite_bootstrap_path():
     assert "A pending corpus can be bootstrapped only by a manually dispatched full-suite run." in workflow
     assert 'gcloud artifacts docker tags delete "$IMAGE:$BOOTSTRAP_IMAGE_TAG"' in workflow
 
-    approval_state = workflow.index("name: Resolve corpus approval state")
+    approval_state = workflow.index("name: Resolve corpus approval state without installing dependencies")
+    dependency_setup = workflow.index("uses: actions/setup-python@v5")
     candidate_resolution = workflow.index("name: Resolve approved digest or build the one-time corpus candidate")
     browser_capture = workflow.index("name: Start frontend and capture journeys")
-    assert approval_state < candidate_resolution < browser_capture
+    assert approval_state < dependency_setup < candidate_resolution < browser_capture
+
+
+def test_pending_corpus_pr_skips_expensive_live_work_successfully():
+    workflow = (ROOT / ".github/workflows/live-eval.yml").read_text(encoding="utf-8")
+
+    assert "name: Pending corpus bootstrap guidance" in workflow
+    assert "needs.classify.outputs.corpus-status == 'approved'" in workflow
+    assert 'if [ "$CORPUS_STATUS" != approved ]; then' in workflow
+    corpus_state = workflow.index("name: Resolve corpus approval state without installing dependencies")
+    dependency_setup = workflow.index("uses: actions/setup-python@v5")
+    assert corpus_state < dependency_setup
+
+
+def test_pending_corpus_does_not_trigger_production_rollout():
+    workflow = (ROOT / ".github/workflows/deploy-production.yml").read_text(encoding="utf-8")
+
+    assert "needs.prepare.outputs.corpus-status == 'approved'" in workflow
