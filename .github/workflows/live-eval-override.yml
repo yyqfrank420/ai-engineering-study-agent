@@ -1,0 +1,100 @@
+name: Live eval manual override
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Failed live-eval run ID
+        required: true
+      commit_sha:
+        description: Full tested commit SHA
+        required: true
+      reviewer:
+        description: Reviewer (must equal authenticated actor)
+        required: true
+      reason:
+        description: Specific reason for overriding the automated result
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+env:
+  PROJECT_ID: project-c170fa55-f0d5-4d83-bfe
+  REGION: europe-west2
+  IMAGE: europe-west2-docker.pkg.dev/project-c170fa55-f0d5-4d83-bfe/agent-backend/agent-backend
+
+jobs:
+  override:
+    name: Live eval required
+    runs-on: ubuntu-latest
+    environment: staging-eval
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Validate and record authenticated override
+        env:
+          OVERRIDE_RUN_ID: ${{ inputs.run_id }}
+          OVERRIDE_COMMIT_SHA: ${{ inputs.commit_sha }}
+          OVERRIDE_REVIEWER: ${{ inputs.reviewer }}
+          OVERRIDE_REASON: ${{ inputs.reason }}
+        run: |
+          if [ "$GITHUB_SHA" != "$OVERRIDE_COMMIT_SHA" ]; then
+            echo "Dispatch this workflow from the tested commit's branch/ref; GITHUB_SHA must equal commit_sha." >&2
+            exit 1
+          fi
+          ./scripts/ci override \
+            --run-id "$OVERRIDE_RUN_ID" \
+            --commit-sha "$OVERRIDE_COMMIT_SHA" \
+            --reviewer "$OVERRIDE_REVIEWER" \
+            --reason "$OVERRIDE_REASON" \
+            --output artifacts/live-eval/manual-override.json
+      - name: Download the original run identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OVERRIDE_RUN_ID: ${{ inputs.run_id }}
+        run: gh run download "$OVERRIDE_RUN_ID" --name live-eval-artifacts --dir artifacts/original
+      - name: Verify original identity exactly matches this override
+        env:
+          OVERRIDE_RUN_ID: ${{ inputs.run_id }}
+          OVERRIDE_COMMIT_SHA: ${{ inputs.commit_sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+          expected_commit = os.environ["OVERRIDE_COMMIT_SHA"]
+          deployment = json.loads(Path("artifacts/original/deployment.json").read_text())
+          if str(deployment["run_id"]) != os.environ["OVERRIDE_RUN_ID"] or deployment["commit_sha"] != expected_commit:
+              raise SystemExit("Original run identity does not match override inputs")
+          tree_sha = subprocess.run(
+              ["git", "rev-parse", "HEAD^{tree}"],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout.strip()
+          if deployment["tree_sha"] != tree_sha:
+              raise SystemExit("Original run tree does not match the checked-out commit")
+          if not deployment.get("digest"):
+              raise SystemExit("Original run did not record an image digest")
+          Path("artifacts/live-eval/verified-deployment.json").write_text(json.dumps(deployment, indent=2) + "\n")
+          PY
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Publish the explicitly reviewed exact-tree approval
+        run: |
+          tree_sha="$(python -c 'import json; print(json.load(open("artifacts/live-eval/verified-deployment.json"))["tree_sha"])')"
+          digest="$(python -c 'import json; print(json.load(open("artifacts/live-eval/verified-deployment.json"))["digest"])')"
+          gcloud artifacts docker tags add "$IMAGE@$digest" "$IMAGE:approved-tree-$tree_sha" --quiet
+      - uses: actions/upload-artifact@v4
+        with:
+          name: live-eval-manual-override-${{ inputs.run_id }}
+          path: artifacts/live-eval
+          retention-days: 30

@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "offline_groups": [
+    {
+      "name": "api-integration",
+      "runtime": "python",
+      "commands": [
+        {
+          "name": "API and transport tests",
+          "argv": [
+            "python", "-m", "pytest", "--tb=short", "-q",
+            "backend/tests/test_api_security.py",
+            "backend/tests/test_chat_websocket.py",
+            "backend/tests/test_diagram_evaluation_channel.py",
+            "backend/tests/test_internal_auth_and_telemetry.py",
+            "backend/tests/test_internal_dashboard_routes.py",
+            "backend/tests/test_observability_and_dashboard.py",
+            "backend/tests/test_system_workflows.py",
+            "backend/tests/test_thread_routes_integration.py"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent-rag-llm",
+      "runtime": "python",
+      "commands": [
+        {
+          "name": "Agent, retrieval, and model-adapter tests",
+          "argv": [
+            "python", "-m", "pytest", "--tb=short", "-q",
+            "backend/tests/test_agent_tools.py",
+            "backend/tests/test_agent_workflow.py",
+            "backend/tests/test_architecture_playbook.py",
+            "backend/tests/test_explanation_blocks.py",
+            "backend/tests/test_graph_critic.py",
+            "backend/tests/test_graph_grounding_prompts.py",
+            "backend/tests/test_llm_adapter.py",
+            "backend/tests/test_mode_controls.py",
+            "backend/tests/test_node_selected_service.py",
+            "backend/tests/test_orchestrator_node.py",
+            "backend/tests/test_pipeline_steps.py",
+            "backend/tests/test_rag_retrieval.py",
+            "backend/tests/test_rag_worker.py",
+            "backend/tests/test_search_tool_flow.py"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "storage-security",
+      "runtime": "python",
+      "commands": [
+        {
+          "name": "Storage and security boundary tests",
+          "argv": [
+            "python", "-m", "pytest", "--tb=short", "-q",
+            "backend/tests/test_analytics_events.py",
+            "backend/tests/test_database_adapter_postgres.py",
+            "backend/tests/test_faiss_artifact.py",
+            "backend/tests/test_faiss_artifact_security.py",
+            "backend/tests/test_observability_core.py",
+            "backend/tests/test_postgres_schema_guardrails.py",
+            "backend/tests/test_resource_limits.py",
+            "backend/tests/test_runtime_dependencies.py",
+            "backend/tests/test_storage_integrity.py",
+            "backend/tests/test_storage_models.py",
+            "backend/tests/test_supabase_auth_adapter.py"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "eval-quality",
+      "runtime": "python",
+      "commands": [
+        {
+          "name": "Evaluation and graph contract tests",
+          "argv": [
+            "python", "-m", "pytest", "--tb=short", "-q",
+            "backend/tests/test_canonical_graph.py",
+            "backend/tests/test_eval_metrics.py",
+            "backend/tests/test_graph_artifacts_schema.py",
+            "backend/tests/test_staging_diagram_renderer.py",
+            "backend/tests/test_staging_runner.py",
+            "backend/tests/test_quality_corpus.py",
+            "backend/tests/test_semantic_gate.py"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "frontend",
+      "runtime": "node",
+      "commands": [
+        {"name": "Frontend lint", "cwd": "frontend", "argv": ["npm", "run", "lint"]},
+        {"name": "Frontend tests", "cwd": "frontend", "argv": ["npm", "run", "test"]},
+        {"name": "Frontend production build", "cwd": "frontend", "argv": ["npm", "run", "build"]},
+        {"name": "Frontend production dependency audit", "cwd": "frontend", "argv": ["npm", "audit", "--omit=dev", "--audit-level=moderate"]}
+      ]
+    },
+    {
+      "name": "ingestion-artifacts",
+      "runtime": "python",
+      "commands": [
+        {"name": "Hermetic ingestion tests", "cwd": "ingestion", "argv": ["python", "-m", "pytest", "test_ingestion.py", "--tb=short", "-q"]},
+        {"name": "Canonical graph artifact validation", "argv": ["python", "scripts/validate_canonical_graph_artifacts.py"]}
+      ]
+    },
+    {
+      "name": "static-security",
+      "runtime": "python",
+      "commands": [
+        {"name": "Ruff", "argv": ["python", "-m", "ruff", "check", "backend", "ingestion", "scripts", "ci"]},
+        {"name": "Bandit", "argv": ["python", "-m", "bandit", "-q", "-r", "backend/adapters", "backend/agent", "backend/analytics", "backend/api", "backend/eval", "backend/graph", "backend/rag", "backend/storage", "ingestion", "scripts", "-x", "backend/tests,ingestion/test_ingestion.py,ci/tests", "-s", "B101,B105"]},
+        {"name": "Backend dependency audit", "argv": ["python", "-m", "pip_audit", "-r", "backend/requirements.txt", "--progress-spinner", "off"]},
+        {"name": "Evaluation dependency audit", "argv": ["python", "-m", "pip_audit", "-r", "backend/requirements-eval.txt", "--progress-spinner", "off"]},
+        {"name": "Ingestion dependency audit", "argv": ["python", "-m", "pip_audit", "-r", "ingestion/requirements.txt", "--progress-spinner", "off"]}
+      ]
+    },
+    {
+      "name": "infra-migrations",
+      "runtime": "infra",
+      "commands": [
+        {"name": "Migration and staging isolation tests", "argv": ["python", "-m", "pytest", "backend/tests/test_staging_database.py", "backend/tests/test_postgres_schema_guardrails.py", "--tb=short", "-q"]},
+        {"name": "Compile migrations", "argv": ["python", "-m", "compileall", "-q", "backend/db/migrations"]},
+        {"name": "Terraform formatting", "argv": ["terraform", "fmt", "-check", "-recursive", "infra/terraform/gcp"]},
+        {"name": "Terraform initialization", "cwd": "infra/terraform/gcp", "argv": ["terraform", "init", "-backend=false", "-input=false"]},
+        {"name": "Terraform validation", "cwd": "infra/terraform/gcp", "argv": ["terraform", "validate"]}
+      ]
+    },
+    {
+      "name": "container",
+      "runtime": "docker",
+      "commands": [
+        {"name": "Backend image build", "argv": ["docker", "build", "--tag", "agent-backend:offline-check", "--file", "backend/Dockerfile", "."]}
+      ]
+    },
+    {
+      "name": "pipeline-policy",
+      "runtime": "python",
+      "commands": [
+        {"name": "CI manifest and policy tests", "argv": ["python", "-m", "pytest", "ci/tests", "--tb=short", "-q"]},
+        {"name": "CI manifest validation", "argv": ["./scripts/ci", "validate"]}
+      ]
+    }
+  ],
+  "test_tracking": {
+    "explicit_backend_glob": "backend/tests/test_*.py",
+    "explicit_backend_groups": ["api-integration", "agent-rag-llm", "storage-security", "eval-quality", "infra-migrations"],
+    "glob_covered": [
+      {"glob": "frontend/src/**/*.test.ts", "group": "frontend"},
+      {"glob": "frontend/src/**/*.test.tsx", "group": "frontend"},
+      {"glob": "ingestion/test_*.py", "group": "ingestion-artifacts"},
+      {"glob": "ci/tests/test_*.py", "group": "pipeline-policy"}
+    ]
+  },
+  "impact": {
+    "documentation": ["*.md", "docs/**", ".cursor/**"],
+    "visual_only": ["frontend/src/*.css", "frontend/src/**/*.css", "frontend/public/**"],
+    "ai": [
+      ".github/**", "ci/**", "scripts/ci", "scripts/ci_runner.py",
+      "scripts/run_staging_eval.py", "scripts/staging_database.py",
+      "backend/adapters/llm_adapter.py", "backend/agent/**", "backend/api/chat_*",
+      "backend/api/sse_*", "backend/api/node_selected_service.py", "backend/eval/**",
+      "backend/rag/**", "backend/db/**", "backend/storage/**", "backend/config.py",
+      "backend/requirements*.txt", "frontend/package*.json", "frontend/src/services/agentTransport*",
+      "frontend/src/hooks/useAgentStream*", "frontend/src/components/GraphCanvas/**",
+      "ingestion/**", "infra/**", "alembic.ini", "pytest.ini"
+    ]
+  },
+  "live": {
+    "suites": {
+      "pr": ["rag-grounding", "memory", "graph-off", "research", "node-followup", "graph-expansion", "applied-domain", "prompt-injection"],
+      "smoke": ["rag-grounding"],
+      "full": ["rag-grounding", "memory", "graph-off", "research", "node-followup", "graph-expansion", "applied-domain", "prompt-injection", "simple-explanation", "citations", "architecture-controls", "ambiguity", "typo", "long-context", "failure-recovery", "stream-reconnect", "persistence-cleanup", "graph-renderability", "instruction-conflict", "arbitrary-architecture"]
+    },
+    "budgets": {"pr_cases": 8, "application_calls": 50, "judge_calls": 16, "timeout_seconds": 900},
+    "artifacts_retention_days": 30
+  }
+}

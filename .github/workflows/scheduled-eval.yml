@@ -1,0 +1,176 @@
+name: Scheduled evaluation
+
+on:
+  schedule:
+    - cron: '23 2 * * *'
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Evaluation suite
+        required: true
+        default: nightly
+        type: choice
+        options: [nightly, full]
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: project-c170fa55-f0d5-4d83-bfe
+  REGION: europe-west2
+  STAGING_SERVICE: agent-backend-staging
+  IMAGE: europe-west2-docker.pkg.dev/project-c170fa55-f0d5-4d83-bfe/agent-backend/agent-backend
+
+jobs:
+  evaluate:
+    name: Rotating real-model corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    environment: staging-eval
+    concurrency:
+      group: staging-live-eval-global
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Select nightly rotation or weekly full corpus
+        env:
+          DISPATCH_SUITE: ${{ inputs.suite }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            suite="$DISPATCH_SUITE"
+          elif [ "$(date -u +%u)" = 7 ]; then
+            suite=full
+          else
+            suite=nightly
+          fi
+          case "$suite" in nightly|full) ;; *) echo "Unsupported suite." >&2; exit 1 ;; esac
+          echo "EVAL_SUITE=$suite" >> "$GITHUB_ENV"
+      - id: corpus
+        name: Resolve corpus approval state without installing dependencies
+        run: |
+          status="$(python3 -c 'import json; print(json.load(open("backend/eval/corpus/v1/cases.json"))["approval"]["status"])')"
+          case "$status" in pending_human_review|approved) ;; *) echo "Invalid corpus approval status." >&2; exit 1 ;; esac
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+      - name: Reject non-bootstrap pending runs before expensive setup
+        env:
+          CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
+        run: |
+          if [ "$CORPUS_STATUS" != approved ] && { [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || [ "$EVAL_SUITE" != full ]; }; then
+            echo "A pending corpus can be bootstrapped only by a manually dispatched full-suite run." >&2
+            exit 1
+          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: |
+          pip install -r backend/requirements.txt -r backend/requirements-eval.txt
+          python -m playwright install --with-deps chromium
+          npm ci --prefix frontend --prefer-offline --no-audit --no-fund
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Configure registry authentication
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+      - uses: docker/setup-buildx-action@v3
+      - name: Load staging credentials and reset isolated data
+        run: |
+          db_url="$(gcloud secrets versions access latest --secret=staging-supabase-db-url)"
+          password="$(gcloud secrets versions access latest --secret=internal-test-password)"
+          allowlist="$(gcloud secrets versions access latest --secret=internal-test-email-allowlist-raw)"
+          email="$(printf '%s\n' "$allowlist" | tr ',;' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d' | head -n1)"
+          echo "::add-mask::$db_url"; echo "::add-mask::$password"; echo "::add-mask::$email"
+          echo "SUPABASE_DB_URL=$db_url" >> "$GITHUB_ENV"
+          echo "DB_SCHEMA=staging" >> "$GITHUB_ENV"
+          echo "EVAL_INTERNAL_PASSWORD=$password" >> "$GITHUB_ENV"
+          echo "EVAL_EMAIL=$email" >> "$GITHUB_ENV"
+          DB_SCHEMA=staging SUPABASE_DB_URL="$db_url" python scripts/staging_database.py reset
+      - name: Resolve approved digest or build the one-time corpus candidate
+        env:
+          CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
+        run: |
+          tree_sha="$(git rev-parse 'HEAD^{tree}')"
+          if [ "$CORPUS_STATUS" = approved ]; then
+            digest="$(gcloud artifacts docker images describe "$IMAGE:approved-tree-$tree_sha" --format='value(image_summary.digest)')"
+            [ -n "$digest" ] || { echo "Approved corpus requires an existing exact-tree image approval." >&2; exit 1; }
+          else
+            if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || [ "$EVAL_SUITE" != full ]; then
+              echo "A pending corpus can be bootstrapped only by a manually dispatched full-suite run." >&2
+              exit 1
+            fi
+            commit_sha="$(git rev-parse HEAD)"
+            bootstrap_tag="corpus-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            docker buildx build \
+              --file backend/Dockerfile \
+              --cache-from "type=registry,ref=$IMAGE:buildcache" \
+              --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
+              --label "org.opencontainers.image.revision=$commit_sha" \
+              --tag "$IMAGE:$bootstrap_tag" \
+              --push .
+            digest="$(gcloud artifacts docker images describe "$IMAGE:$bootstrap_tag" --format='value(image_summary.digest)')"
+            [ -n "$digest" ] || { echo "Corpus bootstrap build did not produce an immutable digest." >&2; exit 1; }
+            echo "BOOTSTRAP_IMAGE_TAG=$bootstrap_tag" >> "$GITHUB_ENV"
+          fi
+          echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
+      - name: Deploy evaluation digest to a tagged staging revision
+        run: |
+          tag="scheduled-${GITHUB_RUN_ID}"
+          gcloud run deploy "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE@$IMAGE_DIGEST" --no-traffic --tag "$tag" --quiet
+          url="$(gcloud run services describe "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json | python -c 'import json,os,sys; d=json.load(sys.stdin); t="scheduled-"+os.environ["GITHUB_RUN_ID"]; print(next((x.get("url", "") for x in d.get("status",{}).get("traffic",[]) if x.get("tag")==t), ""))')"
+          [ -n "$url" ] || { echo "Cloud Run did not expose the tagged evaluation URL." >&2; exit 1; }
+          echo "CANDIDATE_URL=$url" >> "$GITHUB_ENV"
+          echo "REVISION_TAG=$tag" >> "$GITHUB_ENV"
+      - name: Start frontend and capture journeys
+        run: |
+          mkdir -p artifacts/live-eval
+          VITE_API_PROXY_TARGET="$CANDIDATE_URL" npm --prefix frontend run dev -- --host 127.0.0.1 --port 4173 > artifacts/live-eval/vite.log 2>&1 &
+          echo "VITE_PID=$!" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 30); do curl --fail --silent http://127.0.0.1:4173 > /dev/null && break; sleep 2; done
+          EVAL_BACKEND_URL="$CANDIDATE_URL" ./scripts/ci browser --suite "$EVAL_SUITE" --target http://127.0.0.1:4173 --output artifacts/live-eval/browser-results.json
+      - id: semantic
+        name: Generate semantic proposals or apply the approved gate
+        continue-on-error: true
+        env:
+          OPENAI_API_KEY: ${{ secrets.EVAL_JUDGE_API_KEY }}
+          CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
+        run: |
+          approval_args=()
+          if [ "$CORPUS_STATUS" = approved ]; then
+            approval_args+=(--require-approved-corpus)
+          fi
+          ./scripts/ci live --suite "$EVAL_SUITE" --target "$CANDIDATE_URL" --input artifacts/live-eval/browser-results.json --output artifacts/live-eval/live-results.json "${approval_args[@]}"
+      - name: Cleanup tagged revision
+        if: always()
+        run: |
+          [ -z "${VITE_PID:-}" ] || kill "$VITE_PID" || true
+          [ -z "${REVISION_TAG:-}" ] || gcloud run services update-traffic "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --remove-tags "$REVISION_TAG" --quiet || true
+          [ -z "${BOOTSTRAP_IMAGE_TAG:-}" ] || gcloud artifacts docker tags delete "$IMAGE:$BOOTSTRAP_IMAGE_TAG" --quiet || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scheduled-eval-${{ github.run_id }}
+          path: artifacts/live-eval
+          retention-days: 30
+      - name: Enforce approved scheduled corpus
+        if: always()
+        env:
+          CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
+          SEMANTIC_OUTCOME: ${{ steps.semantic.outcome }}
+        run: |
+          if [ "$CORPUS_STATUS" != approved ]; then
+            echo "Corpus is pending human review; this run produced non-blocking proposals."
+            exit 0
+          fi
+          if [ "$SEMANTIC_OUTCOME" != success ]; then
+            echo "Approved scheduled evaluation did not pass." >&2
+            exit 1
+          fi

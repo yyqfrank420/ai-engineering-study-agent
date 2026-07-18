@@ -140,3 +140,53 @@ def test_extract_tar_rejects_path_traversal(tmp_path):
 
     with pytest.raises(ValueError, match="Unsafe path"):
         _extract_archive(archive_path, tmp_path / "out")
+
+
+def test_download_rejects_artifact_over_size_limit(tmp_path, monkeypatch):
+    from rag import faiss_artifact
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_bytes(self):
+            yield b"1234"
+            yield b"5678"
+
+    monkeypatch.setattr(settings, "faiss_artifact_max_download_bytes", 6)
+    monkeypatch.setattr(faiss_artifact.httpx, "stream", lambda *args, **kwargs: _Response())
+
+    with pytest.raises(ValueError, match="download exceeds"):
+        faiss_artifact._download_artifact("https://example.com/faiss.tar.gz", tmp_path / "bundle")
+
+
+def test_extract_rejects_archive_expansion_over_limit(tmp_path, monkeypatch):
+    from rag.faiss_artifact import _extract_archive
+
+    archive_path = tmp_path / "large.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("index.faiss", "12345678")
+
+    monkeypatch.setattr(settings, "faiss_artifact_max_extracted_bytes", 4)
+    with pytest.raises(ValueError, match="expands beyond"):
+        _extract_archive(archive_path, tmp_path / "out")
+
+
+def test_copy_rejects_duplicate_required_files(tmp_path):
+    from rag.faiss_artifact import _copy_required_files
+
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (first / "index.faiss").write_bytes(b"one")
+    (second / "index.faiss").write_bytes(b"two")
+
+    with pytest.raises(ValueError, match="Duplicate index.faiss"):
+        _copy_required_files(tmp_path, tmp_path / "destination")

@@ -1,7 +1,24 @@
 import pytest
 import sys
+import hashlib
 
 from config import settings
+
+
+@pytest.fixture(autouse=True)
+def clear_cached_clients():
+    import adapters.llm_adapter as llm
+
+    _clear_client_caches(llm)
+    yield
+    _clear_client_caches(llm)
+
+
+def _clear_client_caches(llm):
+    for client_factory in (llm._get_anthropic_client, llm._get_openai_client):
+        clear = getattr(client_factory, "cache_clear", None)
+        if clear:
+            clear()
 
 
 class _Delta:
@@ -117,7 +134,8 @@ async def test_stream_response_success_records_thinking_text_and_done(monkeypatc
     telemetry_records, metric_records = _patch_llm_telemetry(monkeypatch)
 
     async def fake_anthropic_stream_once(kwargs):
-        assert kwargs["temperature"] == 0.2
+        assert kwargs["output_config"] == {"effort": "medium"}
+        assert "temperature" not in kwargs
         yield _Event("content_block_delta", _Delta("thinking_delta", thinking="plan"))
         yield _Event("content_block_delta", _Delta("text_delta", text="answer"))
 
@@ -137,7 +155,38 @@ async def test_stream_response_success_records_thinking_text_and_done(monkeypatc
     assert telemetry_records[0]["status"] == "success"
     assert telemetry_records[0]["output_chars"] == len("answer")
     assert telemetry_records[0]["metadata"]["trace_id"] == "trace-1"
+    assert telemetry_records[0]["metadata"]["prompt_sha256"] == hashlib.sha256(
+        b"system"
+    ).hexdigest()
+    assert telemetry_records[0]["metadata"]["input_tokens"] == 0
+    assert telemetry_records[0]["metadata"]["output_tokens"] == 0
+    assert telemetry_records[0]["metadata"]["provider_attempts"] == 1
     assert metric_records[0]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_stream_response_ignores_non_mapping_telemetry_metadata(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    monkeypatch.setattr(settings, "llm_max_retries", 1)
+    telemetry_records, _ = _patch_llm_telemetry(monkeypatch)
+
+    async def fake_anthropic_stream_once(_kwargs):
+        yield _Event("content_block_delta", _Delta("text_delta", text="answer"))
+
+    monkeypatch.setattr(llm, "_anthropic_stream_once", fake_anthropic_stream_once)
+
+    events = await _collect(
+        llm.stream_response(
+            model=settings.worker_model,
+            system="system",
+            messages=[{"role": "user", "content": "hi"}],
+            telemetry={"operation": "test", "metadata": None},
+        )
+    )
+
+    assert events == [("text", "answer"), ("done", "")]
+    assert telemetry_records[0]["metadata"]["request_id"] is None
 
 
 @pytest.mark.asyncio

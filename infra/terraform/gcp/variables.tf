@@ -15,6 +15,12 @@ variable "service_name" {
   default     = "agent-backend"
 }
 
+variable "staging_service_name" {
+  description = "Dedicated Cloud Run service used only for protected live evaluation."
+  type        = string
+  default     = "agent-backend-staging"
+}
+
 variable "artifact_registry_repository" {
   description = "Artifact Registry repository name."
   type        = string
@@ -36,6 +42,12 @@ variable "image_tag" {
 variable "frontend_origin" {
   description = "Allowed frontend origin for backend CORS."
   type        = string
+}
+
+variable "internal_dashboard_allowlist_raw" {
+  description = "Comma-separated email addresses allowed to access the internal dashboard."
+  type        = string
+  default     = ""
 }
 
 variable "cpu" {
@@ -80,6 +92,12 @@ variable "allow_unauthenticated" {
   default     = true
 }
 
+variable "retain_legacy_ci_access" {
+  description = "Temporary cutover switch for the deprecated broad GitHub Actions identity. Keep false after environment-scoped identities are configured."
+  type        = bool
+  default     = false
+}
+
 variable "faiss_artifact_timeout_s" {
   description = "Backend timeout for downloading the FAISS bundle."
   type        = number
@@ -90,19 +108,6 @@ variable "env_vars" {
   description = "Non-secret environment variables for the backend."
   type        = map(string)
   default     = {}
-}
-
-variable "secret_values" {
-  description = "Secret values keyed by backend env var name. Optional but Terraform-managed if supplied."
-  type        = map(string)
-  sensitive   = true
-  default     = {}
-}
-
-variable "enabled_secret_names" {
-  description = "Non-sensitive set of backend env var names whose secret versions should be created from secret_values."
-  type        = set(string)
-  default     = []
 }
 
 variable "container_image" {

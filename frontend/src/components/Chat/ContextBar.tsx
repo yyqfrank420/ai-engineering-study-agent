@@ -59,6 +59,7 @@ export function ContextBar({ selectedNode, onSendMessage, onClear }: ContextBarP
           {selectedNode.suggestions.map((q, i) => (
             <button
               key={i}
+              data-testid="suggested-question"
               onClick={() => onSendMessage(q)}
               style={{
                 padding:              '4px 10px',

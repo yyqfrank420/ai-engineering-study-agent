@@ -60,8 +60,8 @@ def score_routing(events: list[dict], expected: dict) -> dict[str, object]:
 
 def score_format(response_text: str, expected: dict) -> dict[str, object]:
     lines = response_text.strip().split("\n")
-    bullet_lines = [l for l in lines if l.strip().startswith("- ")]
-    numbered_lines = [l for l in lines if re.match(r"^\s*\d+\.\s", l)]
+    bullet_lines = [line for line in lines if line.strip().startswith("- ")]
+    numbered_lines = [line for line in lines if re.match(r"^\s*\d+\.\s", line)]
 
     raw_results = {
         "has_story_heading": "## Story" in response_text,

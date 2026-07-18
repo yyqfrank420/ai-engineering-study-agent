@@ -25,6 +25,7 @@ class GraphNode(TypedDict):
     confidence: NotRequired[float]
     evidence_chunk_ids: NotRequired[list[str]]
     book_refs: NotRequired[list[str]]
+    design_origin: NotRequired[str]
 
 
 class GraphEdge(TypedDict):
@@ -60,6 +61,9 @@ class GraphData(TypedDict):
     sequence: list[GraphStep]
     groups: NotRequired[list[GraphGroup]]  # semantic layer groupings (optional)
     version: NotRequired[str]              # fresh identifier per generated graph revision
+    design_origin: NotRequired[str]        # "applied" for user-specific generated designs
+    resolved_complexity: NotRequired[str]
+    assumptions: NotRequired[list[str]]
 
 
 class Chunk(TypedDict):
@@ -100,8 +104,17 @@ class AgentState(TypedDict):
     # True when the graph changed this turn — tells orchestrator to emit graph_data event
     graph_changed: bool
     graph_notice_sent: bool         # True when we've already warned that no graph could be produced
+    graph_review: NotRequired[dict[str, Any]]
+    graph_revision_count: NotRequired[int]
+    search_tool_wait_task: NotRequired[Any]
     # Web search results from research_worker (empty string if not run)
     research_context: str
+    # Static book-informed frame plus the one scenario-specific retrieval result.
+    evidence_bundle: NotRequired[dict[str, Any]]
+    is_applied_design: NotRequired[bool]
+    architect_plan: NotRequired[dict[str, Any]]
+    challenger_review: NotRequired[dict[str, Any]]
+    diagram_evaluation: NotRequired[dict[str, Any]]
 
     # ── Final outputs ─────────────────────────────────────────────────────────
     response_text: str              # synthesised response (Phase 2)
@@ -111,3 +124,4 @@ class AgentState(TypedDict):
     # Type: Callable[[dict], Awaitable[None]]
     send: Any
     await_search_tool_request: Any  # Callable[[str, float], Awaitable[bool]]
+    await_diagram_evaluation: NotRequired[Any]

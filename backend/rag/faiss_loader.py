@@ -10,9 +10,8 @@
 # Outputs: (FAISS vectorstore, list[Document] parent docs)
 # ─────────────────────────────────────────────────────────────────────────────
 
-import pickle
-from pathlib import Path
-
+# Artifact bundles are SHA-256 pinned before runtime deserialization.
+import pickle  # nosec B403
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 
@@ -47,6 +46,6 @@ def load_faiss() -> tuple[FAISS, list[Document]]:
     )
 
     with open(faiss_dir / "parent_docs.pkl", "rb") as f:
-        parent_docs: list[Document] = pickle.load(f)
+        parent_docs: list[Document] = pickle.load(f)  # nosec B301
 
     return vectorstore, parent_docs

@@ -1,84 +1,57 @@
-# LangGraph Migration Later
+# LangGraph Orchestration Decision
 
-Last updated: 2026-04-03
+Last updated: 2026-07-18
 
 ## Decision
 
-Do not migrate the backend orchestration to LangGraph before the first commit or first deploy.
+Use LangGraph for the agent workflow. Do not migrate the application to Google ADK.
 
-The current runtime is an explicit `asyncio` pipeline in `backend/agent/graph.py`. It is small enough to reason about, currently tested, and already integrated with:
+The earlier decision to keep a linear asyncio pipeline was correct while the runtime only routed,
+retrieved, generated, and synthesized once. It stopped being correct when the product required an
+independent quality gate, conditional revision, client steering, and future resumability. Those are
+workflow-state concerns rather than local concurrency concerns.
 
-- SSE streaming
-- stop/cancel behavior
-- Supabase-backed persistence
-- graph/no-graph fallback notices
-- optional research handoff
-- post-response node enrichment
+## Implemented Shape
 
-Swapping orchestration frameworks right now would be a high-risk refactor for anticipated complexity, not a fix for a current blocker.
+`backend/agent/graph.py` now defines explicit nodes and edges for:
 
-## Current Runtime Shape
+- routing and quick answers
+- context gathering
+- applied or canonical graph construction
+- optional search-tool expansion
+- independent design review
+- one bounded revision or diagram rejection
+- response synthesis
+- concept-node enrichment
 
-The backend currently runs this flow:
+Request-scoped tools remain closure-bound. The public `run_agent(state, tools...)` API and typed
+event stream are unchanged, which keeps the HTTP compatibility endpoint and the WebSocket transport
+independent of the orchestration engine.
 
-1. route
-2. retrieve book context
-3. optionally retrieve broader web context
-4. generate or update the graph
-5. synthesize and stream the response
-6. enrich graph nodes asynchronously
+## Why LangGraph Here
 
-This is still manageable as ordinary Python control flow.
+- The repository already uses LangChain packages and LangGraph was already a transitive dependency.
+- The existing `AgentState` maps directly to a state graph.
+- Conditional edges make the quality policy inspectable and testable.
+- The application remains model-provider neutral.
+- Migration is incremental; retrieval, generation, storage, and UI contracts did not need rewrites.
 
-## When LangGraph Starts Making Sense
+Google ADK 2 can express graph workflows, but adopting it here would also replace session, event,
+agent, and deployment conventions. That is a larger platform migration without a corresponding
+product benefit for this repository.
 
-Revisit the migration when one or more of these become real requirements:
+## Deliberate Non-Goal: Checkpointing Today
 
-- durable checkpointing / resume mid-run
-- multi-step retries with stateful recovery
-- human approval / interrupt steps
-- more complex conditional branching
-- long-running workflows across requests
-- multiple agent subflows that are hard to reason about linearly
-- richer light-GraphRAG or evaluation workflows with explicit state transitions
+No durable checkpointer is configured yet. `send`, `await_search_tool_request`, live tool objects,
+and transient asyncio tasks are request I/O handles and must never be serialized. A checkpointing
+phase should first move those values into LangGraph runtime context, define a reduced durable state,
+and then add a Postgres-backed saver with resume and idempotency tests.
 
-## Expected Benefits Later
+## Preserved Product Contracts
 
-If the app reaches that point, LangGraph would likely help with:
-
-- explicit node/edge orchestration instead of hand-managed control flow
-- better visibility into branching and loop behavior
-- easier evolution toward resumable stateful workflows
-- cleaner separation between runtime graph definition and node implementations
-
-## Migration Constraints
-
-If we migrate later, preserve these current behaviors:
-
-- graph data can be emitted before the final text finishes
-- `Stop` must actually stop server-side work
-- persistence happens only after successful completion
-- graph warnings and retrieval notices remain first-class events
-- stale node-enrichment results must not land on a newer graph
-
-These are product behaviors, not implementation details.
-
-## Proposed Migration Order
-
-1. Freeze current runtime behavior with stronger integration tests.
-2. Extract node contracts more cleanly:
-   - route
-   - rag
-   - research
-   - graph
-   - synthesize
-   - enrich
-3. Recreate the same flow in LangGraph without changing UX contracts.
-4. Run both implementations behind the same tests.
-5. Only then switch the app entrypoint to the LangGraph-backed runtime.
-
-## Non-Goal
-
-Do not introduce LangGraph just because the architecture is “agent-like.”
-
-The trigger should be real workflow complexity, not fashion.
+- Stop cancels server-side model work.
+- Steering resets partial output and cannot create concurrent writers.
+- Completed turns persist atomically before `done` on WebSockets.
+- Retrieval and graph warnings remain typed events.
+- Applied recommendations never receive fabricated book citations.
+- A diagram that fails the second quality review is omitted.

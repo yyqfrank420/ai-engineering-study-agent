@@ -47,21 +47,10 @@ def skip_prompt_injection_model(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def clear_rate_limits():
-    from api.auth_route import (
-        _internal_login_failures,
-        _otp_request_by_email,
-        _otp_request_by_ip,
-        _otp_verify_failures,
-    )
-    from api.analytics_route import _capture_attempts
     from adapters.database_adapter import execute
 
-    _capture_attempts.clear()
-    _otp_request_by_email.clear()
-    _otp_request_by_ip.clear()
-    _otp_verify_failures.clear()
-    _internal_login_failures.clear()
     try:
+        execute("DELETE FROM rate_limit_events")
         execute("DELETE FROM request_events")
         execute("DELETE FROM product_analytics_events")
         execute("DELETE FROM search_tool_requests")
@@ -72,12 +61,8 @@ def clear_rate_limits():
     except Exception:
         pass
     yield
-    _capture_attempts.clear()
-    _otp_request_by_email.clear()
-    _otp_request_by_ip.clear()
-    _otp_verify_failures.clear()
-    _internal_login_failures.clear()
     try:
+        execute("DELETE FROM rate_limit_events")
         execute("DELETE FROM request_events")
         execute("DELETE FROM product_analytics_events")
         execute("DELETE FROM search_tool_requests")

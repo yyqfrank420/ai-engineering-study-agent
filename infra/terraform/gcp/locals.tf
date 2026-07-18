@@ -26,13 +26,33 @@ locals {
     INTERNAL_TEST_EMAIL_ALLOWLIST_RAW = "internal-test-email-allowlist-raw"
   }
 
+  staging_secret_bindings = merge(local.secret_bindings, {
+    SUPABASE_DB_URL = "staging-supabase-db-url"
+  })
+
+  secret_ids = toset(concat(
+    values(local.secret_bindings),
+    values(local.staging_secret_bindings),
+    ["production-migration-db-url"],
+  ))
+
   backend_image = "${var.region}-docker.pkg.dev/${var.project_id}/${var.artifact_registry_repository}/${var.image_name}:${var.image_tag}"
 
   base_env_vars = merge(
     {
-      FRONTEND_ORIGIN          = var.frontend_origin
-      FAISS_ARTIFACT_TIMEOUT_S = tostring(var.faiss_artifact_timeout_s)
+      FRONTEND_ORIGIN                  = var.frontend_origin
+      DB_SCHEMA                        = "public"
+      FAISS_ARTIFACT_TIMEOUT_S         = tostring(var.faiss_artifact_timeout_s)
+      INTERNAL_DASHBOARD_ALLOWLIST_RAW = var.internal_dashboard_allowlist_raw
     },
     var.env_vars,
+  )
+
+  staging_env_vars = merge(
+    local.base_env_vars,
+    {
+      DB_SCHEMA        = "staging"
+      OTEL_ENVIRONMENT = "staging"
+    },
   )
 }

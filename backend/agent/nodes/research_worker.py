@@ -18,11 +18,15 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from agent.state import AgentState
 from config import settings
+
+
+logger = logging.getLogger(__name__)
 
 # Max characters for title and body in each bullet to keep prompts lean
 _TITLE_MAX  = 80
@@ -50,8 +54,8 @@ async def research_worker_node(state: AgentState) -> AgentState:
             settings.research_results_per_query,
         )
     except Exception as exc:
-        # Fail silently — research is additive, never a blocker
-        print(f"[research_worker] DDG search failed: {exc}")
+        # Research is additive, so provider failure degrades to book context.
+        logger.warning("Web research failed: %s", type(exc).__name__)
         return {**state, "research_context": ""}
 
     context = _format_results(raw, settings.research_noise_domains)
@@ -73,7 +77,7 @@ def _run_ddg_searches(queries: list[str], results_per_query: int) -> list[dict]:
     Called inside asyncio.to_thread — must be thread-safe.
     Returns a flat list of raw result dicts (title, href, body).
     """
-    from duckduckgo_search import DDGS  # imported lazily — only if research is enabled
+    from ddgs import DDGS  # imported lazily — only if research is enabled
 
     results: list[dict] = []
     with DDGS(timeout=4) as ddg:
@@ -83,6 +87,7 @@ def _run_ddg_searches(queries: list[str], results_per_query: int) -> list[dict]:
                 results.extend(hits)
             except Exception:
                 # One failed query shouldn't abort the rest
+                logger.debug("DuckDuckGo query failed", exc_info=True)
                 continue
     return results
 

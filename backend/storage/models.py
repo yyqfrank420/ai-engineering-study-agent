@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class StorageModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def normalize_database_uuids(cls, value: Any) -> Any:
+        """Keep Postgres UUID results consistent with SQLite string IDs."""
+        return str(value) if isinstance(value, UUID) else value
 
 
 class ProductAnalyticsEventWrite(StorageModel):

@@ -44,6 +44,7 @@ export interface GraphNode {
   canonical_id?: string;
   confidence?: number;
   evidence_chunk_ids?: string[];
+  design_origin?: 'applied';
 }
 
 export interface GraphEdge {
@@ -89,6 +90,9 @@ export interface GraphData {
   sequence: GraphStep[];
   groups?: GraphGroup[];
   version?: string;
+  design_origin?: 'applied';
+  resolved_complexity?: ComplexityLevel;
+  assumptions?: string[];
   view_state?: GraphViewState;
 }
 
@@ -101,6 +105,9 @@ export interface Message {
   role: MessageRole;
   content: string;
   isStreaming?: boolean;   // true while response_delta events are arriving
+  kind?: 'text' | 'explanation';
+  title?: string;
+  relatedNodeIds?: string[];
 }
 
 export interface ThreadSummary {
@@ -145,7 +152,7 @@ export interface AuthSession {
 
 export interface WorkerStatusEvent {
   type: 'worker_status';
-  worker: 'orchestrator' | 'rag' | 'graph' | 'research';
+  worker: 'orchestrator' | 'rag' | 'graph' | 'critic' | 'research';
   status: string;
 }
 
@@ -162,6 +169,40 @@ export interface ResponseDeltaEvent {
 export interface GraphDataEvent {
   type: 'graph_data';
   data: GraphData;
+}
+
+export interface GraphCandidateEvent {
+  type: 'graph_candidate';
+  evaluation_id: string;
+  graph_version?: string | null;
+  data: GraphData;
+}
+
+export type WorkflowPhase =
+  | 'evidence'
+  | 'architect'
+  | 'challenger'
+  | 'integrate'
+  | 'render'
+  | 'review'
+  | 'explain';
+
+export interface WorkflowProgressEvent {
+  type: 'workflow_progress';
+  phase: WorkflowPhase;
+  status: 'active' | 'complete' | 'retry';
+  title: string;
+  detail: string;
+}
+
+export interface ExplanationBlockEvent {
+  type: 'explanation_block';
+  block_id: string;
+  title: string;
+  content: string;
+  related_node_ids: string[];
+  evidence_refs: string[];
+  graph_version?: string | null;
 }
 
 export interface NodeDetailEvent {
@@ -202,18 +243,44 @@ export interface ProviderSwitchEvent {
   provider: string;   // e.g. "openai" — signals Claude is unavailable, GPT is responding
 }
 
+export interface ResponseResetEvent {
+  type: 'response_reset';
+}
+
+export interface SteerAppliedEvent {
+  type: 'steer_applied';
+  content: string;
+  steer_count: number;
+}
+
+export interface CommandRejectedEvent {
+  type: 'command_rejected';
+  reason: string;
+}
+
+export interface StoppedEvent {
+  type: 'stopped';
+}
+
 export type ServerEvent =
   | WorkerStatusEvent
   | ThinkingDeltaEvent
   | ResponseDeltaEvent
   | GraphDataEvent
+  | GraphCandidateEvent
+  | WorkflowProgressEvent
+  | ExplanationBlockEvent
   | NodeDetailEvent
   | SuggestedQuestionsEvent
   | RetrievalNoticeEvent
   | GraphNoticeEvent
   | DoneEvent
   | ErrorEvent
-  | ProviderSwitchEvent;
+  | ProviderSwitchEvent
+  | ResponseResetEvent
+  | SteerAppliedEvent
+  | CommandRejectedEvent
+  | StoppedEvent;
 
 // ── Request payload event types — Browser → Server ────────────────────────────
 
@@ -244,6 +311,7 @@ export type GraphMode = 'auto' | 'on' | 'off';
 export interface WorkerStatus {
   rag: string | null;
   graph: string | null;
+  critic: string | null;
   orchestrator: string | null;
   research: string | null;
 }
@@ -261,6 +329,30 @@ export interface RetrievalNotice {
 
 export interface GraphNotice {
   message: string;
+}
+
+export interface GraphCandidate {
+  evaluationId: string;
+  graphVersion?: string | null;
+  data: GraphData;
+}
+
+export interface WorkflowProgress {
+  phase: WorkflowPhase;
+  status: 'active' | 'complete' | 'retry';
+  title: string;
+  detail: string;
+}
+
+export interface DiagramLayoutReport {
+  viewport_width: number;
+  viewport_height: number;
+  rendered_nodes: number;
+  rendered_edges: number;
+  overlap_count: number;
+  clipped_nodes: number;
+  minimum_text_px: number;
+  capture_error?: string;
 }
 
 // ── Analytics / dashboard ───────────────────────────────────────────────────

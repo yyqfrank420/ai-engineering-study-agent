@@ -9,8 +9,9 @@
 # Outputs: list of 384-dim float vectors (all-MiniLM-L6-v2)
 # ─────────────────────────────────────────────────────────────────────────────
 
+from typing import Any
+
 from langchain_core.embeddings import Embeddings
-from sentence_transformers import SentenceTransformer
 
 from config import EMBEDDING_MODEL
 
@@ -22,9 +23,14 @@ class SentenceEmbedder(Embeddings):
     Model is loaded once at construction and reused for all calls.
     """
 
-    def __init__(self, model_name: str = EMBEDDING_MODEL):
-        # SentenceTransformer downloads the model on first use and caches it
-        self._model = SentenceTransformer(model_name)
+    def __init__(self, model_name: str = EMBEDDING_MODEL, *, model: Any | None = None):
+        if model is None:
+            # Keep the heavyweight optional import out of module collection.
+            # Production ingestion still loads and reuses one real model.
+            from sentence_transformers import SentenceTransformer
+
+            model = SentenceTransformer(model_name)
+        self._model = model
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Embed a batch of documents. Returns list of 384-dim vectors."""

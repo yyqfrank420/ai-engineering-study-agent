@@ -1,5 +1,8 @@
+from types import SimpleNamespace
+
 import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import HTTPException
 
 from adapters.supabase_auth_adapter import (
@@ -59,6 +62,33 @@ def test_verify_access_token_rejects_wrong_audience(monkeypatch):
         verify_access_token(token)
 
     assert exc_info.value.status_code == 401
+
+
+def test_verify_access_token_accepts_es256_token(monkeypatch):
+    issuer = "https://project.supabase.co/auth/v1"
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    token = jwt.encode(
+        {
+            "sub": "user-es256-123",
+            "email": "admin@example.com",
+            "aud": "authenticated",
+            "iss": issuer,
+        },
+        private_key,
+        algorithm="ES256",
+    )
+    jwk_client = SimpleNamespace(
+        get_signing_key_from_jwt=lambda _token: SimpleNamespace(key=private_key.public_key()),
+    )
+
+    monkeypatch.setattr(settings, "supabase_jwt_issuer", issuer)
+    monkeypatch.setattr(settings, "supabase_jwt_audience", "authenticated")
+    monkeypatch.setattr("adapters.supabase_auth_adapter._get_jwk_client", lambda: jwk_client)
+
+    payload = verify_access_token(token)
+
+    assert payload["sub"] == "user-es256-123"
+    assert payload["email"] == "admin@example.com"
 
 
 def test_verify_access_token_accepts_google_oauth_token(monkeypatch):

@@ -318,6 +318,40 @@ async def dashboard_llm_performance(_user=Depends(get_internal_dashboard_user)):
     }
 
 
+@router.get("/eval-telemetry")
+async def dashboard_eval_telemetry(
+    since_epoch: float = Query(..., ge=0),
+    thread_id: list[str] | None = Query(default=None),
+    _user=Depends(get_internal_dashboard_user),
+):
+    """Return bounded, sanitized call accounting for an authenticated eval run."""
+    if not thread_id or len(thread_id) > 20:
+        return {"calls": []}
+    wanted = set(thread_id)
+    rows = list_recent_llm_telemetry(since_epoch=since_epoch)
+    calls = []
+    for row in rows:
+        if row.get("thread_id") not in wanted:
+            continue
+        metadata = row.get("metadata") or {}
+        calls.append(
+            {
+                "thread_id": row.get("thread_id"),
+                "operation": row["operation"],
+                "provider": row["provider"],
+                "model": row["model"],
+                "status": row["status"],
+                "latency_ms": row["duration_ms"],
+                "fallback": row["used_fallback"],
+                "input_tokens": int(metadata.get("input_tokens") or 0),
+                "output_tokens": int(metadata.get("output_tokens") or 0),
+                "provider_attempts": max(1, int(metadata.get("provider_attempts") or 1)),
+                "created_at_epoch": row["created_at_epoch"],
+            }
+        )
+    return {"calls": calls}
+
+
 @router.get("/self-improvement")
 async def dashboard_self_improvement(_user=Depends(get_internal_dashboard_user)):
     now = time.time()

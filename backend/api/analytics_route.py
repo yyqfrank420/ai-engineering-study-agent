@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from collections import defaultdict
 import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from analytics.events import enqueue_analytics_event, enqueue_product_analytics_event
 from api.internal_access import get_optional_user
+from storage.rate_limit_store import RateLimitDimension, reserve_rate_limit
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
@@ -60,19 +60,22 @@ _ALLOWED_PROPERTIES = {
 
 _CAPTURE_WINDOW_S = 600
 _CAPTURE_LIMIT_PER_KEY = 120
-_capture_attempts: dict[str, list[float]] = defaultdict(list)
 
 
-def _prune_attempts(key: str, *, now: float) -> list[float]:
-    _capture_attempts[key] = [ts for ts in _capture_attempts[key] if now - ts < _CAPTURE_WINDOW_S]
-    return _capture_attempts[key]
-
-
-def _capture_key(body: "AnalyticsCaptureRequest", request: Request, user: dict | None) -> str:
+def _capture_dimension(request: Request, user: dict | None) -> RateLimitDimension:
     if user and user.get("id"):
-        return f"user:{user['id']}"
-    client_ip = request.client.host if request.client else "unknown"
-    return f"anon:{client_ip}"
+        scope = "analytics-capture-user"
+        identifier = str(user["id"])
+    else:
+        scope = "analytics-capture-ip"
+        identifier = request.client.host if request.client else "unknown"
+    return RateLimitDimension(
+        scope=scope,
+        identifier=identifier,
+        event_type="analytics_capture",
+        limit=_CAPTURE_LIMIT_PER_KEY,
+        window_s=_CAPTURE_WINDOW_S,
+    )
 
 
 def _sanitize_properties(properties: dict[str, Any]) -> dict[str, Any]:
@@ -92,7 +95,7 @@ def _sanitize_properties(properties: dict[str, Any]) -> dict[str, Any]:
 class AnalyticsCaptureRequest(BaseModel):
     anonymous_id: str
     event_type: str
-    properties: dict[str, Any] = {}
+    properties: dict[str, Any] = Field(default_factory=dict)
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -124,11 +127,8 @@ async def capture_analytics_event(
         raise HTTPException(status_code=401, detail="Authentication required for this analytics event")
 
     now = time.time()
-    key = _capture_key(body, request, user)
-    attempts = _prune_attempts(key, now=now)
-    if len(attempts) >= _CAPTURE_LIMIT_PER_KEY:
+    if reserve_rate_limit((_capture_dimension(request, user),), created_at_epoch=now) is None:
         raise HTTPException(status_code=429, detail="Too many analytics events")
-    attempts.append(now)
 
     properties = _sanitize_properties(body.properties)
     enqueue_product_analytics_event(

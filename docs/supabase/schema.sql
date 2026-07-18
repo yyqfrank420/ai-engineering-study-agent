@@ -4,6 +4,11 @@
 
 begin;
 
+create table if not exists public.alembic_version (
+  version_num varchar(32) not null,
+  constraint alembic_version_pkc primary key (version_num)
+);
+
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   email text not null unique,
@@ -27,6 +32,7 @@ create table if not exists public.chat_messages (
   user_id uuid not null references public.profiles(id) on delete cascade,
   role text not null check (role in ('user', 'assistant')),
   content text not null,
+  client_request_id text,
   created_at timestamptz not null default now()
 );
 
@@ -65,7 +71,7 @@ create table if not exists public.active_streams (
 
 create table if not exists public.http_request_logs (
   id uuid primary key,
-  user_id text,
+  user_id uuid,
   method text not null,
   path text not null,
   status_code integer not null,
@@ -79,7 +85,7 @@ create table if not exists public.http_request_logs (
 create table if not exists public.llm_telemetry (
   id uuid primary key,
   user_id uuid,
-  thread_id text,
+  thread_id uuid,
   operation text not null,
   provider text not null,
   model text not null,
@@ -96,10 +102,10 @@ create table if not exists public.analytics_events (
   id uuid primary key,
   event_name text not null,
   event_category text not null,
-  user_id uuid,
+  user_id text,
   anonymous_id text,
   session_id text,
-  thread_id uuid,
+  thread_id text,
   request_id text,
   trace_id text,
   client_request_id text,
@@ -112,11 +118,23 @@ create table if not exists public.analytics_events (
   created_at_epoch double precision not null
 );
 
+create table if not exists public.rate_limit_events (
+  id uuid primary key,
+  key_hash text not null,
+  event_type text not null,
+  created_at_epoch double precision not null,
+  expires_at_epoch double precision not null
+);
+
 create index if not exists idx_chat_threads_user_last_seen
   on public.chat_threads(user_id, last_seen_at desc);
 
 create index if not exists idx_chat_messages_thread_created
   on public.chat_messages(thread_id, created_at desc);
+
+create unique index if not exists uq_chat_messages_client_turn_role
+  on public.chat_messages(user_id, thread_id, client_request_id, role)
+  where client_request_id is not null;
 
 create index if not exists idx_request_events_user_type_created
   on public.request_events(user_id, event_type, created_at_epoch desc);
@@ -160,7 +178,14 @@ create index if not exists idx_analytics_events_request
 create index if not exists idx_analytics_events_trace
   on public.analytics_events(trace_id);
 
+create index if not exists idx_rate_limit_key_type_expiry
+  on public.rate_limit_events(key_hash, event_type, expires_at_epoch desc);
+
+create index if not exists idx_rate_limit_expiry
+  on public.rate_limit_events(expires_at_epoch);
+
 alter table public.profiles enable row level security;
+alter table public.alembic_version enable row level security;
 alter table public.chat_threads enable row level security;
 alter table public.chat_messages enable row level security;
 alter table public.request_events enable row level security;
@@ -170,6 +195,7 @@ alter table public.active_streams enable row level security;
 alter table public.http_request_logs enable row level security;
 alter table public.llm_telemetry enable row level security;
 alter table public.analytics_events enable row level security;
+alter table public.rate_limit_events enable row level security;
 
 drop policy if exists "profiles_select_own" on public.profiles;
 create policy "profiles_select_own" on public.profiles

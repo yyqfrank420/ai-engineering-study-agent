@@ -24,6 +24,8 @@ interface SegmentedControlProps<T extends string> {
   optionStyle?: (isActive: boolean, isHovered: boolean) => CSSProperties;
   /** Wrapper around each option span (e.g. ChatInput wraps in a flex container). */
   optionWrapper?: (children: React.ReactNode, index: number) => React.ReactNode;
+  /** Accessible name for keyboard users and browser journeys. */
+  ariaLabel?: string;
 }
 
 // ── Default styles (match ModeBar's SegmentedGroup exactly) ──────────────────
@@ -72,11 +74,12 @@ export function SegmentedControl<T extends string>({
   dividerStyle   = defaultDividerStyle,
   optionStyle    = defaultOptionStyle,
   optionWrapper,
+  ariaLabel,
 }: SegmentedControlProps<T>) {
   const [hovered, setHovered] = useState<T | null>(null);
 
   return (
-    <div style={containerStyle}>
+    <div style={containerStyle} role="radiogroup" aria-label={ariaLabel}>
       {options.map((opt, i) => {
         const isActive  = opt.value === value;
         const isHovered = opt.value === hovered && !isActive;
@@ -84,8 +87,18 @@ export function SegmentedControl<T extends string>({
           <>
             {i > 0 && <span style={dividerStyle} />}
             <span
+              role="radio"
+              aria-label={opt.value}
+              aria-checked={isActive}
+              tabIndex={isActive ? 0 : -1}
               style={optionStyle(isActive, isHovered)}
               onClick={() => onChange(opt.value)}
+              onKeyDown={event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  onChange(opt.value);
+                }
+              }}
               onMouseEnter={() => setHovered(opt.value)}
               onMouseLeave={() => setHovered(null)}
             >

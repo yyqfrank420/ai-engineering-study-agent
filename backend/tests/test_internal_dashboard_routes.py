@@ -216,6 +216,50 @@ async def test_dashboard_llm_performance_groups_by_operation_provider_model(dash
 
 
 @pytest.mark.asyncio
+async def test_eval_telemetry_is_thread_scoped_bounded_and_sanitized(monkeypatch):
+    rows = [
+        _llm(
+            "synthesis",
+            "anthropic",
+            "claude",
+            metadata={"input_tokens": 12, "output_tokens": 5, "secret": "never-return"},
+        )
+        | {"thread_id": "thread-1"},
+        _llm("routing", "openai", "gpt") | {"thread_id": "another-thread"},
+    ]
+    monkeypatch.setattr(dashboard, "list_recent_llm_telemetry", lambda since_epoch: rows)
+
+    payload = await dashboard.dashboard_eval_telemetry(
+        since_epoch=900,
+        thread_id=["thread-1"],
+        _user={"email": "admin@example.com"},
+    )
+
+    assert payload == {
+        "calls": [
+            {
+                "thread_id": "thread-1",
+                "operation": "synthesis",
+                "provider": "anthropic",
+                "model": "claude",
+                "status": "success",
+                "latency_ms": 100,
+                "fallback": False,
+                "input_tokens": 12,
+                "output_tokens": 5,
+                "provider_attempts": 1,
+                "created_at_epoch": 1000.0,
+            }
+        ]
+    }
+    assert await dashboard.dashboard_eval_telemetry(
+        since_epoch=900,
+        thread_id=[str(index) for index in range(21)],
+        _user={"email": "admin@example.com"},
+    ) == {"calls": []}
+
+
+@pytest.mark.asyncio
 async def test_dashboard_self_improvement_surfaces_latency_scores_and_errors(dashboard_data):
     payload = await dashboard.dashboard_self_improvement(_user={"email": "admin@example.com"})
 

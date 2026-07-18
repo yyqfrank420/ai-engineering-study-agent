@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../services/api', () => ({
+  prepareBackend: vi.fn().mockResolvedValue({ status: 'ready', faiss_loaded: true }),
   fetchDashboardOverview: vi.fn().mockResolvedValue({
     window_hours: 24,
     kpis: {
@@ -55,6 +56,7 @@ import {
   fetchDashboardLLMPerformance,
   fetchDashboardOverview,
   fetchDashboardTrends,
+  prepareBackend,
 } from '../services/api';
 
 const SESSION = {
@@ -77,6 +79,7 @@ describe('InternalDashboard', () => {
       expect(screen.getByText('Observability dashboard')).toBeTruthy();
     });
 
+    expect(prepareBackend).toHaveBeenCalledTimes(1);
     expect(screen.getByText('DAU')).toBeTruthy();
     expect(screen.getByText('3')).toBeTruthy();
     expect(screen.getByText('Provider mix')).toBeTruthy();

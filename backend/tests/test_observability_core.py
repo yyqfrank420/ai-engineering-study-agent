@@ -1,5 +1,3 @@
-import importlib
-
 from config import settings
 
 

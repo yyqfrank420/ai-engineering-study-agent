@@ -10,8 +10,6 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 import json
-from typing import Any
-
 from langchain_core.tools import tool
 from graph.ids import parent_chunk_id_from_metadata
 

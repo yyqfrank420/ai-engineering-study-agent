@@ -24,6 +24,7 @@ frontend/.vercel/
 data/*.db
 *.db
 backend/eval/results/staging-*.json
+artifacts/
 
 # ── Terraform ─────────────────────────────────────────────────────────────────
 # Provider binaries and plugins — large, machine-specific, always regenerated

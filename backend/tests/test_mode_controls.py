@@ -73,6 +73,53 @@ class TestChatRequestValidation:
         assert req.research_enabled is False
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "growth marketing AI agent system that evaluates campaigns and adjusts targeting",
+        "multi-agent customer support chatbot architecture",
+        "Describe a production model serving stack",
+    ],
+)
+def test_applied_system_design_detection(query):
+    from agent.complexity import is_applied_system_design_request
+
+    assert is_applied_system_design_request(query)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Explain retrieval augmented generation",
+        "What is agent planning?",
+        "Create a concise summary of the last answer",
+        "What is a machine learning pipeline?",
+    ],
+)
+def test_concept_questions_do_not_trigger_applied_design(query):
+    from agent.complexity import is_applied_system_design_request
+
+    assert not is_applied_system_design_request(query)
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected_range"),
+    [
+        ("low", (4, 7)),
+        ("prototype", (5, 10)),
+        ("production", (6, 10)),
+    ],
+)
+def test_complexity_profiles_keep_diagrams_within_the_ui_node_cap(requested, expected_range):
+    from agent.complexity import resolve_complexity
+    from config import settings
+
+    profile = resolve_complexity(requested, "Design a production AI system")
+
+    assert (profile.min_graph_nodes, profile.max_graph_nodes) == expected_range
+    assert profile.max_graph_nodes <= settings.max_graph_nodes
+
+
 # ── research_worker._format_results ──────────────────────────────────────────
 
 class TestFormatResults:
@@ -266,7 +313,7 @@ class TestResearchWorkerResilience:
                     raise RuntimeError("search failed")
                 return [{"href": f"https://example.com/{query}", "title": query, "body": "body"}]
 
-        monkeypatch.setitem(sys.modules, "duckduckgo_search", types.SimpleNamespace(DDGS=_DDGS))
+        monkeypatch.setitem(sys.modules, "ddgs", types.SimpleNamespace(DDGS=_DDGS))
 
         assert _run_ddg_searches(["good", "bad", "later"], 2) == [
             {"href": "https://example.com/good", "title": "good", "body": "body"},

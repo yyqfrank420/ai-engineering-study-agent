@@ -1,6 +1,9 @@
 # Build Plan — AI Engineering Study Agent
 
-Last updated: 2026-04-02
+Last updated: 2026-07-18
+
+> Historical implementation log. For the current runtime contract, use
+> `docs/current-architecture.md`; later entries below supersede the original phase text.
 
 ## Status Key
 - `[x]` Complete
@@ -22,7 +25,7 @@ Build locally. Run once per book. Output is the FAISS index files that the backe
 ---
 
 ## Phase 2: Backend
-FastAPI + explicit asyncio agent pipeline. Build bottom-up: config → adapters → RAG → storage → agent → API.
+FastAPI + LangGraph orchestration. Build bottom-up: config → adapters → RAG → storage → agents → transports.
 
 - [x] **2.1** Scaffold `backend/` + `requirements.txt` + `Dockerfile`
 - [~] **2.2** `backend/config.py` — pydantic-settings for all env vars
@@ -43,23 +46,26 @@ FastAPI + explicit asyncio agent pipeline. Build bottom-up: config → adapters 
 - [~] **2.8** `backend/agent/tools/` — rag_search (k=5), get_section, generate_graph
   - _Edge schema extended: `protocol`, `port`, `description` fields on each edge_
 - [~] **2.9** `backend/agent/nodes/` — all workers implemented
-  - _orchestrator: synthesis uses 3–5 bullet format, thinking disabled (cost reduction ~4×); injects `research_context` block_
+  - _orchestrator: complexity-aware synthesis with private extended reasoning for applied designs_
   - _rag_worker: `k` param wired from config_
   - _node_detail_worker: 2 RAG searches per node; `book_refs` extracted via regex; connection context injected_
-  - _graph_worker: `_COMPLEXITY_HINTS` for low/prototype/production prefix; injects `research_context` before user question_
+  - _graph_worker: produces domain-specific applied designs; canonical taxonomy is restricted to concept explanations_
+  - _graph_critic: independently rejects generic designs and provides one bounded revision instruction_
   - _**research_worker** (NEW): DuckDuckGo web search via `asyncio.to_thread`; 3 queries per message; noise domain filtering; 6-bullet cap; silent fail on timeout_
 - [~] **2.10** `backend/agent/graph.py` — Phase 1 restructured
-  - _Phase 1a: RAG worker + research worker run in parallel_
-  - _Phase 1b: graph worker runs after (receives both rag_chunks + research_context)_
-  - _`graph_mode == "off"`: skips graph worker; `"on"`: forces graph worker regardless of routing_
+  - _LangGraph owns routing, context, graph design, review/revision, synthesis, and enrichment edges_
+  - _asyncio remains inside nodes for parallel retrieval and transport cancellation_
 - [~] **2.11** `backend/api/sse_handler.py` — SSE endpoints
   - _`ChatRequest` extended: `complexity`, `graph_mode`, `research_enabled` with validators_
   - _Pre-flight gates: payload size, rate limiting, prompt injection_
   - _Auth: `Depends(get_current_user)` — requires Supabase bearer token_
+- [x] **2.11a** `backend/api/chat_websocket.py` — primary bidirectional chat
+  - _First-frame bearer authentication, origin/payload gates, bounded `steer`, and server-side `stop`_
+  - _Completed turns persist before the terminal `done` event_
 - [~] **2.12** `backend/main.py` — FastAPI app + lifespan
 - [x] **2.13** `backend/api/auth_route.py` — `/api/auth/verify-otp`, `/api/auth/resend-otp` (Supabase OTP)
 - [x] **2.14** `backend/api/thread_route.py` — `/api/threads` CRUD (list, create, get, delete)
-- [x] **Verify:** SSE connects, chat pipeline fires, graph + node enrichment stream correctly; 30 backend tests pass
+- [x] **Verify:** WebSocket steering/cancellation, compatibility SSE, review loop, graph streaming, and persistence; 326 backend tests pass
 
 ---
 
@@ -71,8 +77,8 @@ React + TS + D3. Build inside-out: types → services → hooks → components �
   - _`GraphEdge` extended: `protocol?`, `port?`, `description?`_
   - _`GraphNode` extended: `book_refs?: string[]`_
   - _Added: `ComplexityLevel`, `GraphMode`, `WorkerStatus` (incl. `research`), `ThreadSummary`, `AuthSession`_
-- [~] **3.3** `frontend/src/services/sse.ts` — SSE client
-  - _Sends `Authorization: Bearer` header; passes `complexity`, `graph_mode`, `research_enabled` in POST body_
+- [~] **3.3** `frontend/src/services/agentTransport.ts` — WebSocket + one-shot SSE transport
+  - _Authenticates in the first WS frame and supports `start`, `steer`, and `stop` commands_
 - [~] **3.4** `frontend/src/hooks/useAgentStream.ts` + `useGraph.ts`
   - _`sendMessage(content, opts?)` — accepts complexity/graphMode/researchEnabled opts_
   - _`streamStatus` changed from `'connecting'` → `'generating'`_

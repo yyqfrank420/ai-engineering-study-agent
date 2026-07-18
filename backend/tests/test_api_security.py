@@ -9,7 +9,7 @@ from main import create_app
 from storage import message_store, runtime_state_store
 from storage.analytics_event_store import list_recent_analytics_events
 from storage.profile_store import upsert_profile
-from storage.thread_store import create_thread, get_graph, get_thread
+from storage.thread_store import create_thread, get_graph, get_thread, persist_turn
 
 
 def _authed_app(*, with_resources: bool = True):
@@ -92,6 +92,32 @@ def test_security_headers_are_applied():
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["x-frame-options"] == "DENY"
     assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["strict-transport-security"].startswith("max-age=")
+
+
+def test_cloud_run_config_rejects_disabled_security_limits(monkeypatch):
+    monkeypatch.setattr(settings, "supabase_db_url", "postgresql://example")
+    monkeypatch.setattr(settings, "dev_bypass_auth", False)
+    monkeypatch.setattr(settings, "anthropic_api_key", "anthropic-key")
+    monkeypatch.setattr(settings, "supabase_url", "https://project.supabase.co")
+    monkeypatch.setattr(settings, "supabase_anon_key", "anon-key")
+    monkeypatch.setattr(settings, "supabase_jwt_issuer", "https://project.supabase.co/auth/v1")
+    monkeypatch.setattr(settings, "turnstile_secret_key", "turnstile-key")
+    monkeypatch.setattr(settings, "frontend_origin", "https://example.com")
+    monkeypatch.setattr(settings, "internal_test_password", "")
+    monkeypatch.setattr(settings, "rate_limit_per_minute", 0)
+
+    with pytest.raises(RuntimeError, match="RATE_LIMIT_PER_MINUTE"):
+        settings.validate_for_cloud_run()
+
+
+def test_api_responses_are_not_cacheable():
+    app = create_app(load_resources=False)
+
+    with TestClient(app) as client:
+        response = client.get("/api/prepare")
+
+    assert response.headers["cache-control"] == "no-store"
 
 
 def test_large_request_body_rejected_before_route(monkeypatch):
@@ -110,6 +136,31 @@ def test_large_request_body_rejected_before_route(monkeypatch):
     assert response.headers["x-request-id"]
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["x-frame-options"] == "DENY"
+
+
+@pytest.mark.asyncio
+async def test_body_limit_counts_streamed_bytes_without_content_length():
+    from starlette.requests import Request
+    from main import _buffer_request_body
+
+    messages = iter(
+        (
+            {"type": "http.request", "body": b"1234", "more_body": True},
+            {"type": "http.request", "body": b"5678", "more_body": False},
+        )
+    )
+
+    async def receive():
+        return next(messages)
+
+    request = Request(
+        {"type": "http", "method": "POST", "path": "/", "headers": []},
+        receive,
+    )
+    body_size, too_large = await _buffer_request_body(request, 6)
+
+    assert body_size == 8
+    assert too_large is True
 
 
 def test_invalid_content_length_is_treated_as_zero(monkeypatch):
@@ -256,7 +307,7 @@ def test_prepare_returns_503_when_parent_docs_missing():
 
 
 def test_cloud_run_refuses_sqlite_fallback(monkeypatch):
-    monkeypatch.setenv("K_SERVICE", "agent-backend")
+    monkeypatch.setattr(settings, "k_service", "agent-backend")
     monkeypatch.setattr(settings, "supabase_db_url", "")
     app = create_app(load_resources=False)
 
@@ -266,12 +317,24 @@ def test_cloud_run_refuses_sqlite_fallback(monkeypatch):
 
 
 def test_cloud_run_refuses_dev_bypass_auth(monkeypatch):
-    monkeypatch.setenv("K_SERVICE", "agent-backend")
+    monkeypatch.setattr(settings, "k_service", "agent-backend")
     monkeypatch.setattr(settings, "supabase_db_url", "postgresql://example")
     monkeypatch.setattr(settings, "dev_bypass_auth", True)
     app = create_app(load_resources=False)
 
     with pytest.raises(RuntimeError, match="DEV_BYPASS_AUTH"):
+        with TestClient(app):
+            pass
+
+
+def test_cloud_run_refuses_incomplete_auth_configuration(monkeypatch):
+    monkeypatch.setattr(settings, "k_service", "agent-backend")
+    monkeypatch.setattr(settings, "supabase_db_url", "postgresql://example")
+    monkeypatch.setattr(settings, "dev_bypass_auth", False)
+    monkeypatch.setattr(settings, "supabase_url", "")
+    app = create_app(load_resources=False)
+
+    with pytest.raises(RuntimeError, match="SUPABASE_URL"):
         with TestClient(app):
             pass
 
@@ -334,6 +397,38 @@ def test_chat_rejects_missing_thread(temp_data_dir):
 
     assert response.status_code == 200
     assert "Thread not found" in response.text
+
+
+def test_chat_replays_completed_idempotent_turn_before_admission_checks(temp_data_dir, monkeypatch):
+    init_db()
+    upsert_profile("user-1", "friend@example.com")
+    thread = create_thread("user-1")
+    persist_turn(
+        "user-1",
+        thread["id"],
+        title="Stored",
+        user_content="Explain RAG",
+        assistant_content="Canonical stored answer",
+        graph_data=None,
+        client_request_id="client-replay-1",
+    )
+    monkeypatch.setattr(settings, "rate_limit_per_minute", 0)
+    app = _authed_app(with_resources=False)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/chat",
+            json={
+                "thread_id": thread["id"],
+                "content": "Explain RAG",
+                "client_request_id": "client-replay-1",
+            },
+        )
+
+    assert _parse_sse_events(response.text) == [
+        {"type": "response_delta", "content": "Canonical stored answer"},
+        {"type": "done"},
+    ]
 
 
 def test_chat_rejects_rate_limited_user(temp_data_dir, monkeypatch):
@@ -571,7 +666,7 @@ def test_chat_stream_releases_active_stream_lock(temp_data_dir, monkeypatch):
     runtime_state_store.release_active_stream(acquired)
 
 
-def test_request_otp_requires_captcha_after_burst(monkeypatch):
+def test_request_otp_requires_captcha_after_burst(temp_data_dir, monkeypatch):
     monkeypatch.setattr(settings, "otp_request_per_email_limit", 1)
     monkeypatch.setattr(settings, "otp_request_per_ip_limit", 100)
     app = create_app(load_resources=False)
@@ -679,7 +774,9 @@ def test_chat_agent_error_emits_error_and_skips_persistence(temp_data_dir, monke
 
     assert response.status_code == 200
     events = _parse_sse_events(response.text)
-    assert any(event["type"] == "error" and "agent exploded" in event["content"] for event in events)
+    error = next(event for event in events if event["type"] == "error")
+    assert error["content"] == "Response failed — please try again"
+    assert "agent exploded" not in response.text
     assert message_store.get_messages("user-1", thread["id"]) == []
     assert get_graph("user-1", thread["id"]) is None
 
@@ -758,7 +855,7 @@ def test_chat_stream_reports_unsaved_large_graph(temp_data_dir, monkeypatch):
 
     import api.sse_handler as sse_handler
     monkeypatch.setattr(sse_handler, "run_agent", fake_run_agent)
-    monkeypatch.setattr(sse_handler.thread_store, "save_graph", lambda *args, **kwargs: False)
+    monkeypatch.setattr(settings, "max_graph_data_bytes", 1)
 
     with TestClient(app) as client:
         response = client.post(
@@ -783,7 +880,11 @@ def test_chat_stream_reports_persistence_error(temp_data_dir, monkeypatch):
 
     import api.sse_handler as sse_handler
     monkeypatch.setattr(sse_handler, "run_agent", fake_run_agent)
-    monkeypatch.setattr(sse_handler.message_store, "append", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("db down")))
+    monkeypatch.setattr(
+        sse_handler.thread_store,
+        "persist_turn",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("db down")),
+    )
 
     with TestClient(app) as client:
         response = client.post(
@@ -791,7 +892,8 @@ def test_chat_stream_reports_persistence_error(temp_data_dir, monkeypatch):
             json={"thread_id": thread["id"], "content": "Teach me RAG"},
         )
 
-    assert "Persistence error: db down" in response.text
+    assert "Response could not be saved" in response.text
+    assert "db down" not in response.text
 
 
 def test_chat_stream_waits_for_search_tool_request_and_cleans_it_up(temp_data_dir, monkeypatch):

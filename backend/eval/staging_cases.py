@@ -12,6 +12,8 @@ class StepExpectation:
     graph_title_contains: str | None = None
     graph_node_labels_include: list[str] = field(default_factory=list)
     graph_node_labels_exclude: list[str] = field(default_factory=list)
+    graph_node_label_keywords_include: list[str] = field(default_factory=list)
+    graph_max_generic_label_count: int | None = None
     workers_include: list[str] = field(default_factory=list)
     workers_exclude: list[str] = field(default_factory=list)
     response_min_length: int | None = None
@@ -353,16 +355,14 @@ STAGING_CASES: list[StagingCase] = [
                     graph_emitted=True,
                     graph_type="architecture",
                     graph_title_contains="Customer Support",
-                    graph_node_labels_include=[
-                        "Orchestrator",
-                        "Intent Router",
-                        "FAQ Agent",
-                        "Billing Agent",
-                        "Returns Agent",
-                        "Escalation Agent",
-                        "Tool Service",
-                        "Policy KB",
-                        "Human Support",
+                    graph_node_label_keywords_include=[
+                        "customer",
+                        "intent|triage",
+                        "faq|knowledge",
+                        "billing|account",
+                        "return|order",
+                        "escalation|human",
+                        "policy|approval",
                     ],
                     graph_node_labels_exclude=[
                         "Agent",
@@ -387,12 +387,11 @@ STAGING_CASES: list[StagingCase] = [
                     graph_emitted=True,
                     graph_type="architecture",
                     graph_title_contains="Customer Support",
-                    graph_node_labels_include=[
-                        "FAQ Agent",
-                        "Billing Agent",
-                        "Returns Agent",
-                        "Escalation Agent",
-                        "Human Support",
+                    graph_node_label_keywords_include=[
+                        "faq|knowledge",
+                        "billing|account",
+                        "return|order",
+                        "escalation|human",
                     ],
                     graph_node_labels_exclude=[
                         "Tool Use",
@@ -404,9 +403,56 @@ STAGING_CASES: list[StagingCase] = [
             ),
         ],
     ),
+    StagingCase(
+        id="S11",
+        category="applied_design_quality",
+        description="Arbitrary domains must produce a customised design rather than the book taxonomy.",
+        steps=[
+            StagingStep(
+                kind="chat",
+                description="Design the growth-marketing optimisation system from the reported regression.",
+                payload={
+                    "content": (
+                        "growth and performance marketing AI agent system that auto evaluates, "
+                        "writes and adjusts copy, strategies, targeting, and event definitions, "
+                        "and maximises a constrained objective function"
+                    ),
+                    "complexity": "prototype",
+                    "graph_mode": "auto",
+                    "research_enabled": False,
+                },
+                expect=StepExpectation(
+                    route="search",
+                    graph_emitted=True,
+                    graph_type="architecture",
+                    graph_node_label_keywords_include=[
+                        "objective",
+                        "event",
+                        "creative|copy",
+                        "audience|target",
+                        "performance|outcome",
+                        "policy|approval|guardrail",
+                    ],
+                    graph_node_labels_exclude=[
+                        "Agent",
+                        "Tool Use",
+                        "Planning",
+                        "Evaluation",
+                        "Foundation Model",
+                        "Generation",
+                        "Tokenization",
+                    ],
+                    graph_max_generic_label_count=2,
+                    workers_include=["orchestrator", "rag", "graph"],
+                    response_min_length=350,
+                    response_contains=["objective", "event", "target"],
+                ),
+            ),
+        ],
+    ),
 ]
 
 
 # Blocking CI/CD live evals spend real model tokens. Keep the default gate small
 # and representative; run all STAGING_CASES manually for prompt/pipeline releases.
-BLOCKING_STAGING_CASE_IDS = ["S1", "S4", "S7", "S8", "S10"]
+BLOCKING_STAGING_CASE_IDS = ["S1", "S4", "S7", "S8", "S11"]

@@ -4,6 +4,7 @@ import uuid
 from typing import Any
 
 from adapters.database_adapter import execute, fetchall
+from config import settings
 from storage.models import ProductAnalyticsEventRow, ProductAnalyticsEventWrite
 
 
@@ -65,8 +66,9 @@ def list_recent_product_analytics_events(*, since_epoch: float) -> list[dict[str
         FROM product_analytics_events
         WHERE created_at_epoch >= ?
         ORDER BY created_at_epoch DESC
+        LIMIT ?
         """,
-        (since_epoch,),
+        (since_epoch, settings.dashboard_query_max_rows),
     )
     normalized: list[dict[str, Any]] = []
     for row in rows:

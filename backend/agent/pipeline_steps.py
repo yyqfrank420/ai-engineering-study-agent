@@ -129,6 +129,12 @@ async def maybe_start_node_enrichment(state: AgentState, node_detail_tools: list
     if not graph_data or not graph_data.get("nodes"):
         return
 
+    # Applied nodes already contain domain-specific responsibilities. Running
+    # the book-only node enricher would overwrite them with generic concepts
+    # and could imply citations for recommendations the book never made.
+    if graph_data.get("design_origin") == "applied":
+        return
+
     rag_search_tool = node_detail_tools[0] if node_detail_tools else None
     if not rag_search_tool:
         return

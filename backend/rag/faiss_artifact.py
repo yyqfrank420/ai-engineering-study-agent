@@ -1,4 +1,5 @@
 import hashlib
+import stat
 import shutil
 import tarfile
 import tempfile
@@ -59,11 +60,18 @@ def _artifact_filename(url: str) -> str:
 
 def _download_artifact(url: str, destination: Path) -> None:
     timeout = httpx.Timeout(settings.faiss_artifact_timeout_s)
+    downloaded_bytes = 0
     with httpx.stream("GET", url, timeout=timeout, follow_redirects=True) as response:
         response.raise_for_status()
         with destination.open("wb") as output:
             for chunk in response.iter_bytes():
                 if chunk:
+                    downloaded_bytes += len(chunk)
+                    if downloaded_bytes > settings.faiss_artifact_max_download_bytes:
+                        raise ValueError(
+                            "FAISS artifact download exceeds configured size limit "
+                            f"({settings.faiss_artifact_max_download_bytes} bytes)"
+                        )
                     output.write(chunk)
 
 
@@ -87,15 +95,39 @@ def _extract_archive(archive_path: Path, destination: Path) -> None:
     name = archive_path.name.lower()
     if name.endswith((".tar.gz", ".tgz", ".tar")):
         with tarfile.open(archive_path, "r:*") as archive:
-            for member in archive.getmembers():
+            members = archive.getmembers()
+            _validate_archive_limits(
+                file_count=len(members),
+                extracted_bytes=sum(member.size for member in members if member.isfile()),
+            )
+            for member in members:
                 _validate_extraction_path(destination, member.name)
+                if not (member.isfile() or member.isdir()):
+                    raise ValueError(f"Unsupported entry in FAISS artifact archive: {member.name}")
             archive.extractall(destination, filter="data")
         return
     if name.endswith(".zip"):
         with zipfile.ZipFile(archive_path) as archive:
-            for member in archive.namelist():
-                _validate_extraction_path(destination, member)
-            archive.extractall(destination)
+            members = archive.infolist()
+            _validate_archive_limits(
+                file_count=len(members),
+                extracted_bytes=sum(member.file_size for member in members if not member.is_dir()),
+            )
+            for member in members:
+                _validate_extraction_path(destination, member.filename)
+                unix_mode = member.external_attr >> 16
+                if stat.S_ISLNK(unix_mode):
+                    raise ValueError(
+                        f"Unsupported entry in FAISS artifact archive: {member.filename}"
+                    )
+            for member in members:
+                target = destination / member.filename
+                if member.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as source, target.open("wb") as output:
+                    shutil.copyfileobj(source, output)
         return
     raise ValueError(
         "Unsupported FAISS artifact archive format. Use .tar.gz, .tgz, .tar, or .zip."
@@ -105,9 +137,14 @@ def _extract_archive(archive_path: Path, destination: Path) -> None:
 def _copy_required_files(extracted_dir: Path, faiss_dir: Path) -> None:
     located_files = {}
     for required_name in REQUIRED_FAISS_FILES:
-        match = next(extracted_dir.rglob(required_name), None)
-        if match is None:
+        matches = [path for path in extracted_dir.rglob(required_name) if path.is_file()]
+        if not matches:
             raise FileNotFoundError(f"Missing {required_name} in extracted FAISS artifact bundle")
+        if len(matches) > 1:
+            raise ValueError(f"Duplicate {required_name} files in FAISS artifact bundle")
+        match = matches[0]
+        if match.is_symlink():
+            raise ValueError(f"Unsupported symlink in FAISS artifact bundle: {required_name}")
         located_files[required_name] = match
 
     for required_name, source in located_files.items():
@@ -120,3 +157,16 @@ def _validate_extraction_path(destination: Path, member_name: str) -> None:
     destination_root = destination.resolve()
     if destination_root != target_path and destination_root not in target_path.parents:
         raise ValueError(f"Unsafe path in FAISS artifact archive: {member_name}")
+
+
+def _validate_archive_limits(*, file_count: int, extracted_bytes: int) -> None:
+    if file_count > settings.faiss_artifact_max_files:
+        raise ValueError(
+            "FAISS artifact contains too many entries "
+            f"({file_count} > {settings.faiss_artifact_max_files})"
+        )
+    if extracted_bytes > settings.faiss_artifact_max_extracted_bytes:
+        raise ValueError(
+            "FAISS artifact expands beyond configured size limit "
+            f"({extracted_bytes} > {settings.faiss_artifact_max_extracted_bytes} bytes)"
+        )

@@ -28,10 +28,37 @@ def test_synthesis_prompts_preserve_user_language():
 def test_synthesis_prompts_answer_adjacent_applications_directly():
     from agent.nodes.orchestrator_node import _QUICK_SYNTHESIS_SYSTEM, _SYNTHESIS_SYSTEM
 
-    assert "use the book as the foundation and give the best applied answer" in _SYNTHESIS_SYSTEM
+    assert "answering the user's actual problem" in _SYNTHESIS_SYSTEM
     assert "Do not lead with \"the book does not cover this\"" in _SYNTHESIS_SYSTEM
     assert "marketing" in _SYNTHESIS_SYSTEM
+    assert "generic agent recipe" in _SYNTHESIS_SYSTEM
+    assert "live campaign data" in _SYNTHESIS_SYSTEM
     assert "answer the application directly" in _QUICK_SYNTHESIS_SYSTEM
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_routes_applied_agent_design_without_short_path(monkeypatch):
+    import agent.nodes.orchestrator_node as orchestrator
+
+    async def fail_stream_llm(**_kwargs):
+        raise AssertionError("applied system design should deterministically route to search")
+
+    monkeypatch.setattr(orchestrator, "stream_llm", fail_stream_llm)
+
+    async def send(_event):
+        return None
+
+    result = await orchestrator.orchestrator_route({
+        "send": send,
+        "history": [],
+        "user_message": (
+            "growth and performance marketing AI agent system that evaluates results, "
+            "writes copy, adjusts targeting, and maximises an objective function"
+        ),
+        "graph_data": None,
+    })
+
+    assert result["route"] == "search"
 
 
 @pytest.mark.asyncio
@@ -168,7 +195,8 @@ async def test_quick_synthesise_streams_answer_and_existing_graph(monkeypatch):
 
     assert events[0]["status"] == "Looking it up…"
     assert events[1] == {"type": "graph_data", "data": graph_data}
-    assert events[-1] == {"type": "done"}
+    assert events[-1] == {"type": "response_delta", "content": "fast"}
+    assert not any(event["type"] == "done" for event in events)
     assert captured["stream_deltas"] is True
     assert captured["messages"][-1] == {"role": "user", "content": "Define RAG"}
     assert result["response_text"] == "fast answer"
@@ -236,22 +264,21 @@ def test_graph_context_formatting_handles_empty_nodes_groups_and_lanes():
 @pytest.mark.asyncio
 async def test_orchestrator_synthesise_emits_status_and_includes_graph_context(monkeypatch):
     import agent.nodes.orchestrator_node as orchestrator
-    import agent.stream_utils as stream_utils_mod
-
     captured = {}
 
-    async def fake_stream_response(*, model, system, messages, thinking_budget, temperature=None, top_p=None, top_k=None):
-        captured["model"] = model
-        captured["system"] = system
-        captured["messages"] = messages
-        captured["thinking_budget"] = thinking_budget
-        captured["temperature"] = temperature
-        captured["top_p"] = top_p
-        captured["top_k"] = top_k
-        yield ("text", "Story")
-        yield ("text", " answer")
+    async def fake_stream_blocks(**kwargs):
+        captured.update(kwargs)
+        await kwargs["send"]({
+            "type": "explanation_block",
+            "block_id": "overview",
+            "title": "Overview",
+            "content": "Story answer",
+            "related_node_ids": ["retriever"],
+            "evidence_refs": [],
+        })
+        return "Story answer"
 
-    monkeypatch.setattr(stream_utils_mod, "stream_response", fake_stream_response)
+    monkeypatch.setattr(orchestrator, "stream_explanation_blocks", fake_stream_blocks)
 
     events = []
 
@@ -283,25 +310,59 @@ async def test_orchestrator_synthesise_emits_status_and_includes_graph_context(m
 
     result = await orchestrator.orchestrator_synthesise(state)
 
-    assert events[0] == {
-        "type": "worker_status",
-        "worker": "orchestrator",
-        "status": "Writing the explanation…",
-    }
+    assert events[0]["type"] == "worker_status"
+    assert events[0]["worker"] == "orchestrator"
+    assert "Reasoning through the low design" in events[0]["status"]
     assert events[1]["type"] == "graph_data"
-    assert any(event == {"type": "response_delta", "content": "Story"} for event in events)
-    assert events[-1] == {"type": "done"}
+    assert any(event.get("type") == "explanation_block" for event in events)
+    assert events[-1]["type"] == "workflow_progress"
+    assert events[-1]["status"] == "complete"
+    assert not any(event["type"] == "done" for event in events)
 
     assert "<style>" in captured["system"]
-    assert "use 3-5 short chunks" in captured["system"]
-    assert "Each chunk should follow this pattern: `Topic: locator`" in captured["system"]
-    assert "Add follow-up bullets only when they would help" in captured["system"]
-    assert "If graph context is provided, anchor the explanation" in captured["system"]
+    assert "Do not force every answer into the same template" in captured["system"]
+    assert "primary runtime loop" in captured["system"]
+    assert "specific to this system" in captured["system"]
+    assert "exact domain node labels" in captured["system"]
     assert "Do not invent graph positions or edge directions" in captured["system"]
-    assert captured["temperature"] == orchestrator.settings.synthesis_temperature
+    assert "<streaming_output_contract>" in captured["system"]
+    assert captured["allowed_node_ids"] == {"retriever"}
     assert "Current graph:" in captured["messages"][-1]["content"]
+    assert "Response depth contract:" in captured["messages"][-1]["content"]
     assert "Title: RAG pipeline" in captured["messages"][-1]["content"]
     assert result["response_text"] == "Story answer"
+
+
+@pytest.mark.asyncio
+async def test_production_complexity_keeps_depth_contract_in_low_cost_explanation_call(monkeypatch):
+    import agent.nodes.orchestrator_node as orchestrator
+
+    captured = {}
+
+    async def fake_stream_blocks(**kwargs):
+        captured.update(kwargs)
+        return "specific production answer"
+
+    monkeypatch.setattr(orchestrator, "stream_explanation_blocks", fake_stream_blocks)
+
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    await orchestrator.orchestrator_synthesise({
+        "send": send,
+        "history": [],
+        "user_message": "Design a reliable growth marketing agent system",
+        "complexity": "production",
+        "rag_chunks": [],
+        "research_context": "",
+        "graph_data": {"title": "Growth Optimisation Loop", "design_origin": "applied"},
+    })
+
+    assert "Production depth" in captured["messages"][-1]["content"]
+    assert "<streaming_output_contract>" in captured["system"]
+    assert "production design and trade-offs" in events[0]["status"]
 
 
 @pytest.mark.asyncio
@@ -321,7 +382,7 @@ async def test_context_condense_prompt_preserves_open_questions_and_avoids_inven
 
     monkeypatch.setattr(context_manager, "stream_response", fake_stream_response)
 
-    result = await context_manager._call_haiku_summary("user: tell me more about the graph")
+    result = await context_manager._call_summary("user: tell me more about the graph")
 
     assert result == "summary"
     assert "open questions" in captured["system"]

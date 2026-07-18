@@ -1,0 +1,187 @@
+name: Deploy production
+
+on:
+  workflow_run:
+    workflows: ["Live eval required"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  PROJECT_ID: project-c170fa55-f0d5-4d83-bfe
+  REGION: europe-west2
+  SERVICE: agent-backend
+  IMAGE: europe-west2-docker.pkg.dev/project-c170fa55-f0d5-4d83-bfe/agent-backend/agent-backend
+  VERCEL_CLI_VERSION: 50.42.0
+
+concurrency:
+  group: production-deployment
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Verify approved main tree
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+    outputs:
+      ai-impact: ${{ steps.impact.outputs.ai-impact }}
+      tree-sha: ${{ steps.identity.outputs.tree-sha }}
+      commit-sha: ${{ steps.identity.outputs.commit-sha }}
+      corpus-status: ${{ steps.corpus.outputs.status }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 2
+      - id: impact
+        run: ./scripts/ci impact --base HEAD^ --head HEAD --github-output
+      - id: identity
+        run: |
+          echo "tree-sha=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+          echo "commit-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - id: corpus
+        name: Resolve corpus approval state
+        run: |
+          status="$(python3 -c 'import json; print(json.load(open("backend/eval/corpus/v1/cases.json"))["approval"]["status"])')"
+          case "$status" in pending_human_review|approved) ;; *) echo "Invalid corpus approval status." >&2; exit 1 ;; esac
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+  backend:
+    name: Migrate, smoke, and promote approved digest
+    runs-on: ubuntu-latest
+    needs: prepare
+    if: needs.prepare.outputs.ai-impact == 'true' && needs.prepare.outputs.corpus-status == 'approved'
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit-sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install smoke dependencies
+        run: |
+          pip install -r backend/requirements.txt -r backend/requirements-eval.txt
+          python -m playwright install --with-deps chromium
+          npm ci --prefix frontend --prefer-offline --no-audit --no-fund
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resolve the exact approved digest
+        env:
+          TREE_SHA: ${{ needs.prepare.outputs.tree-sha }}
+        run: |
+          digest="$(gcloud artifacts docker images describe "$IMAGE:approved-tree-$TREE_SHA" --format='value(image_summary.digest)')"
+          if [ -z "$digest" ]; then
+            echo "No protected staging approval exists for main tree $TREE_SHA; production will not rebuild or substitute another image." >&2
+            exit 1
+          fi
+          echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
+
+      - name: Load main-only migration identity and test credentials
+        run: |
+          db_url="$(gcloud secrets versions access latest --secret=production-migration-db-url)"
+          password="$(gcloud secrets versions access latest --secret=internal-test-password)"
+          allowlist="$(gcloud secrets versions access latest --secret=internal-test-email-allowlist-raw)"
+          email="$(printf '%s\n' "$allowlist" | tr ',;' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d' | head -n1)"
+          echo "::add-mask::$db_url"
+          echo "::add-mask::$password"
+          echo "::add-mask::$email"
+          {
+            echo "SUPABASE_DB_URL=$db_url"
+            echo "DB_SCHEMA=public"
+            echo "EVAL_INTERNAL_PASSWORD=$password"
+            echo "EVAL_EMAIL=$email"
+          } >> "$GITHUB_ENV"
+
+      - name: Apply the approved migration set to public
+        run: bash scripts/apply_supabase_schema.sh
+
+      - id: candidate
+        name: Deploy an immutable no-traffic production candidate
+        env:
+          CANDIDATE_TAG: prod-${{ github.run_id }}
+        run: |
+          gcloud run deploy "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE@$IMAGE_DIGEST" --no-traffic --tag "$CANDIDATE_TAG" --quiet
+          candidate_url="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json | python -c 'import json,os,sys; data=json.load(sys.stdin); tag=os.environ["CANDIDATE_TAG"]; print(next((x.get("url", "") for x in data.get("status", {}).get("traffic", []) if x.get("tag") == tag), ""))')"
+          [ -n "$candidate_url" ] || exit 1
+          echo "CANDIDATE_URL=$candidate_url" >> "$GITHUB_ENV"
+          echo "candidate-tag=$CANDIDATE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Start production-candidate frontend
+        run: |
+          mkdir -p artifacts/production-smoke
+          VITE_API_PROXY_TARGET="$CANDIDATE_URL" npm --prefix frontend run dev -- --host 127.0.0.1 --port 4173 > artifacts/production-smoke/vite.log 2>&1 &
+          echo "VITE_PID=$!" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 30); do
+            curl --fail --silent "$CANDIDATE_URL/api/prepare" > /dev/null && curl --fail --silent http://127.0.0.1:4173 > /dev/null && exit 0
+            sleep 5
+          done
+          exit 1
+
+      - name: Run authentication, dashboard, persistence, graph, and real-model smoke
+        env:
+          EVAL_BACKEND_URL: ${{ env.CANDIDATE_URL }}
+        run: ./scripts/ci browser --suite smoke --target http://127.0.0.1:4173 --output artifacts/production-smoke/browser-results.json
+
+      - name: Promote only the tested revision
+        env:
+          CANDIDATE_TAG: ${{ steps.candidate.outputs.candidate-tag }}
+        run: gcloud run services update-traffic "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --to-tags "$CANDIDATE_TAG=100" --quiet
+
+      - name: Upload production smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-smoke
+          path: artifacts/production-smoke
+          retention-days: 30
+
+      - name: Stop local frontend
+        if: always()
+        run: '[ -z "${VITE_PID:-}" ] || kill "$VITE_PID" || true'
+
+  frontend:
+    name: Deploy frontend to Vercel
+    runs-on: ubuntu-latest
+    needs: [prepare, backend]
+    if: always() && needs.prepare.result == 'success' && needs.prepare.outputs.corpus-status == 'approved' && (needs.backend.result == 'success' || needs.backend.result == 'skipped')
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit-sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build and deploy the reviewed frontend
+        working-directory: frontend
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          npm ci --prefer-offline --no-audit --no-fund
+          npx vercel@${VERCEL_CLI_VERSION} pull --yes --environment=production --token="${{ secrets.VERCEL_TOKEN }}"
+          npx vercel@${VERCEL_CLI_VERSION} build --prod --token="${{ secrets.VERCEL_TOKEN }}"
+          npx vercel@${VERCEL_CLI_VERSION} deploy --prebuilt --prod --token="${{ secrets.VERCEL_TOKEN }}"

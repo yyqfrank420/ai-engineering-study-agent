@@ -10,12 +10,12 @@ This document captures hard-won learnings across every layer of the project. Wri
 
 ## 1. System Design
 
-### 1.1 Transport: SSE over WebSockets for LLM streaming
+### 1.1 Transport evolves with the interaction contract
 
-- **What we used:** Server-Sent Events (SSE) — `text/event-stream` via a `POST` endpoint.
-- **Why not WebSocket:** WebSocket is bidirectional and stateful. For a request-response LLM pattern that just needs to stream tokens back, SSE is simpler — no connection management, native browser support, works through proxies.
-- **The catch:** The browser's native `EventSource` API only supports `GET` requests. We needed to send a JSON body, so we built a custom `fetch`-based SSE client (`sse.ts`). The hook is named `useWebSocket.ts` for historical reasons — don't be fooled by the name.
-- **Lesson:** Don't reach for WebSocket when SSE does the job. Pick the simplest transport that fits the data flow direction.
+- **Initial choice:** POST + SSE was correct while chat was strictly request/response and server-to-client streaming.
+- **Trigger for change:** Mid-run steering and real server-side cancellation made the data flow bidirectional.
+- **Current choice:** Chat uses an authenticated WebSocket command channel; one-shot node suggestions still use SSE.
+- **Lesson:** Pick the simplest transport that fits the actual direction of control. Keep SSE for one-way flows, but do not simulate bidirectional commands with polling endpoints once steering becomes a product requirement.
 
 ### 1.2 Cold-start UX contract
 
@@ -49,31 +49,30 @@ This document captures hard-won learnings across every layer of the project. Wri
 
 ### 2.1 Agent pipeline: explicit asyncio vs. framework
 
-- We started with LangGraph in the design spec. We shipped with a plain `asyncio` pipeline in `backend/agent/graph.py`.
-- **Why we dropped LangGraph:** The pipeline is 4 phases, ~200 lines of control flow. LangGraph adds value when you need durable checkpointing, stateful retries, or human-in-the-loop interrupts. We didn't need any of those yet. Adding a framework to manage complexity we didn't have would've added complexity.
-- **Lesson:** Use orchestration frameworks when you need their specific capabilities. A `for` loop and `asyncio.gather` are correct solutions for simple parallel fan-out.
-- **When to revisit LangGraph:** Durable checkpointing / resume mid-run, multi-step retries with stateful recovery, human approval steps.
+- We initially shipped a plain `asyncio` pipeline because the flow was linear.
+- **Trigger for LangGraph:** Independent quality review, conditional rejection, bounded revision, client steering, and a future checkpoint boundary made workflow state explicit product behavior.
+- **Current split:** LangGraph owns branches and loops; `asyncio.gather` remains correct inside nodes for parallel I/O.
+- **Lesson:** Adopt an orchestration framework when control-flow state becomes a feature, not merely because several functions are called “agents.”
 
-### 2.2 Model split: Sonnet for orchestration, Haiku for workers
+### 2.2 Model split follows consequence, not the word “worker”
 
-- Orchestrator (routing + synthesis): `claude-sonnet-4-6` — needs reasoning quality.
-- RAG worker, graph worker, node detail workers: `claude-haiku-4-5` — high volume, cost-sensitive, structured output.
+- Applied graph design, independent critique, and synthesis use the orchestrator model because errors become user-visible architecture recommendations.
+- Cheap workers remain appropriate for bounded enrichment and other low-consequence structured tasks.
 - OpenAI SDK wired as a fallback after `llm_max_retries` Anthropic failures.
 - **Lesson:** Not all calls need the same model. Route cheap, high-volume calls to cheaper models. Use the expensive model only where quality is critical.
 
-### 2.3 Thinking tokens: where they add value vs. waste money
+### 2.3 Thinking depth must be a behavioral control
 
-- Extended thinking (`budget_tokens=5000`) was enabled for synthesis in early design. Cost: ~$0.075/query extra at Sonnet 4.6 rates.
-- **What we found:** Synthesis quality didn't justify the cost. Synthesis is constrained (130–200 words, flowing prose) — the LLM doesn't need deep reasoning, it needs good formatting.
-- **Where thinking does add value:** Routing decisions (intent classification) — the orchestrator needs to correctly decide `simple / memory / search`. Getting this wrong wastes entire downstream pipeline runs.
-- **Lesson:** Thinking tokens pay off when the task requires genuine multi-step reasoning before producing output. Formatting tasks don't qualify.
+- The original complexity selector only changed telemetry; that was misleading.
+- `low` now stays direct, `prototype` receives a 6k reasoning budget, and `production` receives 9k plus explicit failure, safety, operations, and rollout obligations.
+- Private reasoning is not streamed as chain-of-thought. The UI receives honest phase/status events instead.
+- **Lesson:** A depth control must change budgets and acceptance criteria, not just labels or response length.
 
-### 2.4 Synthesis quality: prose not bullets
+### 2.4 Synthesis shape must follow the task
 
-- Early synthesis produced bullet-pointed summaries. Users read answers in a chat UI, not a dashboard.
-- **What worked:** Flowing prose, 130–200 words, no "Story:"/"Walkthrough:" headers, no unexplained jargon. Write like an intelligent tutor, not a report generator.
-- **Prompt pattern:** "Synthesise from the context below. Write 130–200 words of flowing prose aimed at an intelligent non-expert. No headers. No bullet points. No jargon without inline explanation. Use analogies where helpful."
-- **Lesson:** LLMs default to bullet points because they're common in training data. Explicitly prohibit the formats you don't want. Specifying the word count constrains verbosity and forces concision.
+- Concise prose is useful for concept tutoring, but forcing every system-design answer into 130–200 words erased interfaces, controls, failure modes, and trade-offs.
+- Applied requests now walk the actual observation → decision → controlled action → measured outcome loop and use structure only where it improves scanability.
+- **Lesson:** A universal response template is a quality regression disguised as consistency.
 
 ### 2.5 LLM routing: when routing fails, the whole pipeline fails expensively
 
@@ -310,7 +309,7 @@ This document captures hard-won learnings across every layer of the project. Wri
 
 | Decision | Deferred until | Rationale |
 |---|---|---|
-| LangGraph migration | Multi-step stateful pipelines needed | Current asyncio pipeline is ~200 lines and fully working. Framework adds complexity without solving a current problem. |
+| Durable LangGraph checkpointing | I/O handles are moved into runtime context | Persist only reduced workflow state; never serialize callbacks, tool objects, or asyncio tasks. |
 | Full GraphRAG | Global/community queries needed | Single-book Q&A doesn't require community detection or map-reduce search. Dense FAISS retrieval is sufficient. |
 | Custom domain | Traffic justifies it | `run.app` + `vercel.app` URLs work fine. Custom domain adds DNS, cert management, and load balancer costs. |
 | `min_instances = 1` | Cold-start UX becomes unacceptable | Measure first. The Prepare flow mitigates cold starts. Pay for always-on only when the data says it's worth it. |

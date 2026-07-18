@@ -16,7 +16,7 @@ depends_on = None
 def upgrade() -> None:
     op.execute(
         """
-        create table if not exists public.analytics_events (
+        create table if not exists analytics_events (
           id uuid primary key,
           event_name text not null,
           event_category text not null,
@@ -37,21 +37,21 @@ def upgrade() -> None:
         );
 
         create index if not exists idx_analytics_events_created
-          on public.analytics_events(created_at_epoch desc);
+          on analytics_events(created_at_epoch desc);
 
         create index if not exists idx_analytics_events_category_created
-          on public.analytics_events(event_category, created_at_epoch desc);
+          on analytics_events(event_category, created_at_epoch desc);
 
         create index if not exists idx_analytics_events_request
-          on public.analytics_events(request_id);
+          on analytics_events(request_id);
 
         create index if not exists idx_analytics_events_trace
-          on public.analytics_events(trace_id);
+          on analytics_events(trace_id);
 
-        alter table public.analytics_events enable row level security;
+        alter table analytics_events enable row level security;
         """
     )
 
 
 def downgrade() -> None:
-    op.execute("drop table if exists public.analytics_events;")
+    op.execute("drop table if exists analytics_events;")

@@ -1,9 +1,17 @@
+from concurrent.futures import ThreadPoolExecutor
+
 from adapters.database_adapter import execute, init_db
 from storage import analytics_event_store, product_analytics_store, runtime_state_store, telemetry_store
+from storage.profile_store import upsert_profile
+from storage.rate_limit_store import RateLimitDimension, reserve_rate_limit
+from storage.retention import prune_expired_observability_data
+from storage.thread_store import create_thread, get_completed_turn, get_graph, get_thread, persist_turn
+from storage.message_store import get_messages
 
 
 def test_runtime_state_request_events_and_pruning(temp_data_dir):
     init_db()
+    upsert_profile("user-1", "friend@example.com")
 
     runtime_state_store.record_request_event("user-1", "chat", created_at_epoch=10)
     runtime_state_store.record_request_event("user-1", "chat", created_at_epoch=20)
@@ -17,35 +25,141 @@ def test_runtime_state_request_events_and_pruning(temp_data_dir):
     assert len(runtime_state_store.get_recent_request_events("user-1", "node", since_epoch=0)) == 1
 
 
+def test_rate_limit_reservations_are_atomic_and_expire(temp_data_dir):
+    init_db()
+    dimensions = (
+        RateLimitDimension(
+            scope="otp-verify-email",
+            identifier="friend@example.com",
+            event_type="otp_verify_email",
+            limit=1,
+            window_s=10,
+        ),
+    )
+
+    assert reserve_rate_limit(dimensions, created_at_epoch=100)
+    assert reserve_rate_limit(dimensions, created_at_epoch=101) is None
+    assert reserve_rate_limit(dimensions, created_at_epoch=101, bypass_limits=True)
+    assert reserve_rate_limit(dimensions, created_at_epoch=111) is not None
+
+
+def test_concurrent_rate_limit_reservations_admit_only_one(temp_data_dir):
+    init_db()
+    dimensions = (
+        RateLimitDimension(
+            scope="internal-login-ip",
+            identifier="127.0.0.1",
+            event_type="internal_login_failure",
+            limit=1,
+            window_s=60,
+        ),
+    )
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        reservations = list(
+            executor.map(
+                lambda _: reserve_rate_limit(dimensions, created_at_epoch=100),
+                range(4),
+            )
+        )
+
+    assert sum(reservation is not None for reservation in reservations) == 1
+
+
+def test_persist_turn_commits_messages_metadata_and_graph_together(temp_data_dir):
+    init_db()
+    upsert_profile("user-1", "friend@example.com")
+    thread = create_thread("user-1")
+    graph = {"nodes": [{"id": "n1"}], "edges": []}
+
+    assert persist_turn(
+        "user-1",
+        thread["id"],
+        title="RAG",
+        user_content="Explain RAG",
+        assistant_content="Retrieval-augmented generation…",
+        graph_data=graph,
+    ) is True
+
+    assert [message["role"] for message in get_messages("user-1", thread["id"])] == [
+        "user",
+        "assistant",
+    ]
+    assert get_thread("user-1", thread["id"])["title"] == "RAG"
+    assert get_graph("user-1", thread["id"]) == graph
+
+
+def test_persist_turn_deduplicates_completed_client_request(temp_data_dir):
+    init_db()
+    upsert_profile("user-1", "friend@example.com")
+    thread = create_thread("user-1")
+
+    first = persist_turn(
+        "user-1",
+        thread["id"],
+        title="Original",
+        user_content="Explain RAG",
+        assistant_content="Original answer",
+        graph_data=None,
+        client_request_id="client-turn-1",
+    )
+    retry = persist_turn(
+        "user-1",
+        thread["id"],
+        title="Retry must not overwrite",
+        user_content="Explain RAG",
+        assistant_content="Different retry output",
+        graph_data=None,
+        client_request_id="client-turn-1",
+    )
+
+    assert first is True
+    assert retry is True
+    assert [message["content"] for message in get_messages("user-1", thread["id"])] == [
+        "Explain RAG",
+        "Original answer",
+    ]
+    assert get_thread("user-1", thread["id"])["title"] == "Original"
+    assert get_completed_turn("user-1", thread["id"], "client-turn-1") == {
+        "user_content": "Explain RAG",
+        "assistant_content": "Original answer",
+    }
+    assert get_completed_turn("user-1", thread["id"], "unknown") is None
+
+
 def test_runtime_state_search_tool_expiry_and_delete(temp_data_dir, monkeypatch):
     init_db()
+    upsert_profile("user-1", "friend@example.com")
+    thread = create_thread("user-1")
+    thread_id = thread["id"]
     monkeypatch.setattr(runtime_state_store.time, "time", lambda: 100.0)
 
     runtime_state_store.create_search_tool_request(
         "req-1",
         "user-1",
-        "thread-1",
+        thread_id,
         expires_at_epoch=110,
     )
-    assert runtime_state_store.mark_search_tool_requested("req-1", "user-1", "thread-1") is True
-    assert runtime_state_store.is_search_tool_requested("req-1", "user-1", "thread-1") is True
+    assert runtime_state_store.mark_search_tool_requested("req-1", "user-1", thread_id) is True
+    assert runtime_state_store.is_search_tool_requested("req-1", "user-1", thread_id) is True
 
     runtime_state_store.delete_search_tool_request("req-1")
-    assert runtime_state_store.is_search_tool_requested("req-1", "user-1", "thread-1") is False
+    assert runtime_state_store.is_search_tool_requested("req-1", "user-1", thread_id) is False
 
     runtime_state_store.create_search_tool_request(
         "req-expired",
         "user-1",
-        "thread-1",
+        thread_id,
         expires_at_epoch=99,
     )
-    assert runtime_state_store.mark_search_tool_requested("req-expired", "user-1", "thread-1") is False
+    assert runtime_state_store.mark_search_tool_requested("req-expired", "user-1", thread_id) is False
     runtime_state_store.prune_search_tool_requests(older_than_epoch=100)
-    assert runtime_state_store.is_search_tool_requested("req-expired", "user-1", "thread-1") is False
+    assert runtime_state_store.is_search_tool_requested("req-expired", "user-1", thread_id) is False
 
 
 def test_runtime_state_active_stream_limits_release_and_prune(temp_data_dir, monkeypatch):
     init_db()
+    upsert_profile("user-1", "friend@example.com")
     monkeypatch.setattr(runtime_state_store.time, "time", lambda: 100.0)
 
     unlimited = runtime_state_store.try_acquire_active_stream("user-1", "chat", limit=0, ttl_s=10)
@@ -68,6 +182,7 @@ def test_runtime_state_active_stream_limits_release_and_prune(temp_data_dir, mon
 
 def test_product_analytics_round_trips_properties_and_ignores_bad_json(temp_data_dir):
     init_db()
+    upsert_profile("user-1", "friend@example.com")
 
     product_analytics_store.record_product_analytics_event(
         anonymous_id="anon-1",
@@ -233,3 +348,36 @@ def test_generic_analytics_events_round_trip_shape_metrics(temp_data_dir):
     assert rows[0]["event_category"] == "stream"
     assert rows[0]["numeric_value"] == 321
     assert rows[0]["properties"] == {"output_type": "chat_response", "nested": {"ok": True}}
+
+
+def test_observability_retention_prunes_old_rows_atomically(temp_data_dir):
+    init_db()
+    telemetry_store.record_http_request_log(
+        method="GET", path="/old", status_code=200, latency_ms=1, created_at_epoch=10
+    )
+    telemetry_store.record_llm_telemetry(
+        operation="route",
+        provider="anthropic",
+        model="claude",
+        status="success",
+        duration_ms=1,
+        output_chars=1,
+        used_fallback=False,
+        created_at_epoch=10,
+    )
+    analytics_event_store.record_analytics_event(
+        event_name="old", event_category="test", created_at_epoch=10
+    )
+    product_analytics_store.record_product_analytics_event(
+        anonymous_id="anon", event_type="old", created_at_epoch=10
+    )
+    analytics_event_store.record_analytics_event(
+        event_name="new", event_category="test", created_at_epoch=30
+    )
+
+    prune_expired_observability_data(older_than_epoch=20)
+
+    assert telemetry_store.list_recent_http_request_logs(since_epoch=0) == []
+    assert telemetry_store.list_recent_llm_telemetry(since_epoch=0) == []
+    assert product_analytics_store.list_recent_product_analytics_events(since_epoch=0) == []
+    assert [row["event_name"] for row in analytics_event_store.list_recent_analytics_events(since_epoch=0)] == ["new"]

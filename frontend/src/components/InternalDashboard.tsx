@@ -7,6 +7,7 @@ import {
   fetchDashboardLLMPerformance,
   fetchDashboardOverview,
   fetchDashboardTrends,
+  prepareBackend,
 } from '../services/api';
 import type {
   AuthSession,
@@ -35,6 +36,10 @@ export function InternalDashboard({ authSession }: InternalDashboardProps) {
     setLoading(true);
     setError(null);
     try {
+      // Wake a scale-to-zero Cloud Run instance before issuing the dashboard's
+      // parallel API requests. Otherwise the initial burst can exhaust the
+      // service while its first instances are still starting.
+      await prepareBackend();
       const [nextOverview, nextDayTrends, nextHourTrends, nextFunnel, nextFailures, nextLlm] = await Promise.all([
         fetchDashboardOverview(authSession),
         fetchDashboardTrends(authSession, 'day'),

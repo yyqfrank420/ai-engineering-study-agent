@@ -10,7 +10,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 import argparse
-import pickle
+# This offline pipeline only serializes locally generated documents.
+import pickle  # nosec B403
 from pathlib import Path
 
 from langchain_community.vectorstores import FAISS
