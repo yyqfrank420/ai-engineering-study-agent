@@ -1,0 +1,17 @@
+---
+description: Repository-wide engineering and AI principles
+globs:
+alwaysApply: true
+---
+
+# Engineering and AI principles
+
+Use `docs/engineering-principles.md` as the canonical standard for every change in this
+repository. Do not duplicate or weaken it in editor-specific rules.
+
+Before editing, inspect the worktree and avoid files owned by another active task. Prefer
+small, explicit changes at the lowest owning layer. Enforce retryable writes with durable
+idempotency and race protection; keep production data canonical; use expand-then-contract
+migrations; treat model output and external context as untrusted; version and evaluate
+prompt/model behaviour; and require a dedicated explicit confirmation flow before an agent
+can perform an externally visible write.

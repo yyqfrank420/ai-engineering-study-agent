@@ -16,16 +16,16 @@ depends_on = None
 def upgrade() -> None:
     op.execute(
         """
-        create table if not exists public.profiles (
+        create table if not exists profiles (
           id uuid primary key references auth.users(id) on delete cascade,
           email text not null unique,
           created_at timestamptz not null default now(),
           updated_at timestamptz not null default now()
         );
 
-        create table if not exists public.chat_threads (
+        create table if not exists chat_threads (
           id uuid primary key,
-          user_id uuid not null references public.profiles(id) on delete cascade,
+          user_id uuid not null references profiles(id) on delete cascade,
           title text not null default 'New chat',
           graph_data jsonb,
           created_at timestamptz not null default now(),
@@ -33,49 +33,49 @@ def upgrade() -> None:
           last_seen_at timestamptz not null default now()
         );
 
-        create table if not exists public.chat_messages (
+        create table if not exists chat_messages (
           id uuid primary key,
-          thread_id uuid not null references public.chat_threads(id) on delete cascade,
-          user_id uuid not null references public.profiles(id) on delete cascade,
+          thread_id uuid not null references chat_threads(id) on delete cascade,
+          user_id uuid not null references profiles(id) on delete cascade,
           role text not null check (role in ('user', 'assistant')),
           content text not null,
           created_at timestamptz not null default now()
         );
 
-        create table if not exists public.request_events (
+        create table if not exists request_events (
           id uuid primary key,
-          user_id uuid not null references public.profiles(id) on delete cascade,
+          user_id uuid not null references profiles(id) on delete cascade,
           event_type text not null,
           created_at_epoch double precision not null
         );
 
-        create table if not exists public.product_analytics_events (
+        create table if not exists product_analytics_events (
           id uuid primary key,
-          user_id uuid references public.profiles(id) on delete cascade,
+          user_id uuid references profiles(id) on delete cascade,
           anonymous_id text not null,
           event_type text not null,
           properties_json text,
           created_at_epoch double precision not null
         );
 
-        create table if not exists public.search_tool_requests (
+        create table if not exists search_tool_requests (
           request_id uuid primary key,
-          user_id uuid not null references public.profiles(id) on delete cascade,
-          thread_id uuid not null references public.chat_threads(id) on delete cascade,
+          user_id uuid not null references profiles(id) on delete cascade,
+          thread_id uuid not null references chat_threads(id) on delete cascade,
           requested boolean not null default false,
           created_at_epoch double precision not null,
           expires_at_epoch double precision not null
         );
 
-        create table if not exists public.active_streams (
+        create table if not exists active_streams (
           id uuid primary key,
-          user_id uuid not null references public.profiles(id) on delete cascade,
+          user_id uuid not null references profiles(id) on delete cascade,
           stream_type text not null,
           created_at_epoch double precision not null,
           expires_at_epoch double precision not null
         );
 
-        create table if not exists public.http_request_logs (
+        create table if not exists http_request_logs (
           id uuid primary key,
           user_id uuid,
           method text not null,
@@ -88,7 +88,7 @@ def upgrade() -> None:
           created_at_epoch double precision not null
         );
 
-        create table if not exists public.llm_telemetry (
+        create table if not exists llm_telemetry (
           id uuid primary key,
           user_id uuid,
           thread_id uuid,
@@ -105,69 +105,69 @@ def upgrade() -> None:
         );
 
         create index if not exists idx_chat_threads_user_last_seen
-          on public.chat_threads(user_id, last_seen_at desc);
+          on chat_threads(user_id, last_seen_at desc);
 
         create index if not exists idx_chat_messages_thread_created
-          on public.chat_messages(thread_id, created_at desc);
+          on chat_messages(thread_id, created_at desc);
 
         create index if not exists idx_request_events_user_type_created
-          on public.request_events(user_id, event_type, created_at_epoch desc);
+          on request_events(user_id, event_type, created_at_epoch desc);
 
         create index if not exists idx_product_analytics_events_created
-          on public.product_analytics_events(created_at_epoch desc);
+          on product_analytics_events(created_at_epoch desc);
 
         create index if not exists idx_product_analytics_events_type_created
-          on public.product_analytics_events(event_type, created_at_epoch desc);
+          on product_analytics_events(event_type, created_at_epoch desc);
 
         create index if not exists idx_product_analytics_events_actor_created
-          on public.product_analytics_events(anonymous_id, created_at_epoch desc);
+          on product_analytics_events(anonymous_id, created_at_epoch desc);
 
         create index if not exists idx_search_tool_requests_user_thread
-          on public.search_tool_requests(user_id, thread_id);
+          on search_tool_requests(user_id, thread_id);
 
         create index if not exists idx_active_streams_user_type
-          on public.active_streams(user_id, stream_type, expires_at_epoch desc);
+          on active_streams(user_id, stream_type, expires_at_epoch desc);
 
         create index if not exists idx_http_request_logs_created
-          on public.http_request_logs(created_at_epoch desc);
+          on http_request_logs(created_at_epoch desc);
 
         create index if not exists idx_http_request_logs_user_created
-          on public.http_request_logs(user_id, created_at_epoch desc);
+          on http_request_logs(user_id, created_at_epoch desc);
 
         create index if not exists idx_llm_telemetry_created
-          on public.llm_telemetry(created_at_epoch desc);
+          on llm_telemetry(created_at_epoch desc);
 
         create index if not exists idx_llm_telemetry_user_created
-          on public.llm_telemetry(user_id, created_at_epoch desc);
+          on llm_telemetry(user_id, created_at_epoch desc);
 
-        alter table public.profiles enable row level security;
-        alter table public.chat_threads enable row level security;
-        alter table public.chat_messages enable row level security;
-        alter table public.request_events enable row level security;
-        alter table public.product_analytics_events enable row level security;
-        alter table public.search_tool_requests enable row level security;
-        alter table public.active_streams enable row level security;
-        alter table public.http_request_logs enable row level security;
-        alter table public.llm_telemetry enable row level security;
+        alter table profiles enable row level security;
+        alter table chat_threads enable row level security;
+        alter table chat_messages enable row level security;
+        alter table request_events enable row level security;
+        alter table product_analytics_events enable row level security;
+        alter table search_tool_requests enable row level security;
+        alter table active_streams enable row level security;
+        alter table http_request_logs enable row level security;
+        alter table llm_telemetry enable row level security;
 
-        drop policy if exists "profiles_select_own" on public.profiles;
-        create policy "profiles_select_own" on public.profiles
+        drop policy if exists "profiles_select_own" on profiles;
+        create policy "profiles_select_own" on profiles
         for select using (auth.uid() = id);
 
-        drop policy if exists "profiles_update_own" on public.profiles;
-        create policy "profiles_update_own" on public.profiles
+        drop policy if exists "profiles_update_own" on profiles;
+        create policy "profiles_update_own" on profiles
         for update using (auth.uid() = id);
 
-        drop policy if exists "threads_all_own" on public.chat_threads;
-        create policy "threads_all_own" on public.chat_threads
+        drop policy if exists "threads_all_own" on chat_threads;
+        create policy "threads_all_own" on chat_threads
         for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
-        drop policy if exists "messages_all_own" on public.chat_messages;
-        create policy "messages_all_own" on public.chat_messages
+        drop policy if exists "messages_all_own" on chat_messages;
+        create policy "messages_all_own" on chat_messages
         for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
-        drop policy if exists "active_streams_all_own" on public.active_streams;
-        create policy "active_streams_all_own" on public.active_streams
+        drop policy if exists "active_streams_all_own" on active_streams;
+        create policy "active_streams_all_own" on active_streams
         for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
         """
     )
@@ -176,20 +176,20 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute(
         """
-        drop policy if exists "active_streams_all_own" on public.active_streams;
-        drop policy if exists "messages_all_own" on public.chat_messages;
-        drop policy if exists "threads_all_own" on public.chat_threads;
-        drop policy if exists "profiles_update_own" on public.profiles;
-        drop policy if exists "profiles_select_own" on public.profiles;
+        drop policy if exists "active_streams_all_own" on active_streams;
+        drop policy if exists "messages_all_own" on chat_messages;
+        drop policy if exists "threads_all_own" on chat_threads;
+        drop policy if exists "profiles_update_own" on profiles;
+        drop policy if exists "profiles_select_own" on profiles;
 
-        drop table if exists public.llm_telemetry;
-        drop table if exists public.http_request_logs;
-        drop table if exists public.active_streams;
-        drop table if exists public.search_tool_requests;
-        drop table if exists public.product_analytics_events;
-        drop table if exists public.request_events;
-        drop table if exists public.chat_messages;
-        drop table if exists public.chat_threads;
-        drop table if exists public.profiles;
+        drop table if exists llm_telemetry;
+        drop table if exists http_request_logs;
+        drop table if exists active_streams;
+        drop table if exists search_tool_requests;
+        drop table if exists product_analytics_events;
+        drop table if exists request_events;
+        drop table if exists chat_messages;
+        drop table if exists chat_threads;
+        drop table if exists profiles;
         """
     )

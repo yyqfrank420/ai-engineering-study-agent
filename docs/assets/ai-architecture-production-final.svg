@@ -1,0 +1,465 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="2160" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+  <title id="title">AI Architecture Chatbot — Production Architecture</title>
+  <desc id="desc">Production architecture and deployment flow for the AI Architecture Chatbot.</desc>
+
+  <defs>
+    <marker id="arrow-blue" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,4.5 L0,9 Z" fill="#1a73e8"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,4.5 L0,9 Z" fill="#5b21b6"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,4.5 L0,9 Z" fill="#f97316"/>
+    </marker>
+    <marker id="arrow-dark" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,4.5 L0,9 Z" fill="#17233b"/>
+    </marker>
+    <marker id="arrow-gray" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,4.5 L0,9 Z" fill="#718096"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,4.5 L0,9 Z" fill="#15803d"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,4.5 L0,9 Z" fill="#dc2626"/>
+    </marker>
+    <style>
+      text { font-family: Arial, Helvetica, sans-serif; font-stretch: normal; }
+      .title { font-size: 32px; font-weight: 700; fill: #0f172a; }
+      .region-title { font-size: 20px; font-weight: 700; fill: #111827; }
+      .service-title { font-size: 18px; font-weight: 700; fill: #111827; }
+      .node-title { font-size: 14px; font-weight: 700; fill: #162238; }
+      .body { font-size: 13px; font-weight: 400; fill: #334155; }
+      .small { font-size: 11.5px; font-weight: 400; fill: #475569; }
+      .micro { font-size: 10.5px; font-weight: 400; fill: #64748b; }
+      .ci-title { font-size: 12px; font-weight: 700; fill: #162238; }
+      .ci-small { font-size: 10.5px; font-weight: 400; fill: #475569; }
+      .blue-label { fill: #1559c7; }
+      .purple-label { fill: #4c1d95; }
+      .orange-label { fill: #c94f0b; }
+      .green-label { fill: #137333; }
+      .red-label { fill: #c5221f; }
+      .card { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.25; rx: 8; }
+      .node { fill: #ffffff; stroke: #4e8ee8; stroke-width: 1.3; rx: 6; }
+      .node-orange { fill: #fffaf5; stroke: #f28b45; stroke-width: 1.3; rx: 6; }
+      .node-green { fill: #f7fcf7; stroke: #55a963; stroke-width: 1.3; rx: 6; }
+      .node-red { fill: #fff8f7; stroke: #e56a62; stroke-width: 1.3; rx: 6; }
+      .line-blue { fill: none; stroke: #1a73e8; stroke-width: 2.2; marker-end: url(#arrow-blue); }
+      .line-purple { fill: none; stroke: #5b21b6; stroke-width: 3; marker-end: url(#arrow-purple); }
+      .line-orange { fill: none; stroke: #f97316; stroke-width: 2.4; marker-end: url(#arrow-orange); }
+      .line-dark { fill: none; stroke: #17233b; stroke-width: 1.9; marker-end: url(#arrow-dark); }
+      .line-gray { fill: none; stroke: #718096; stroke-width: 1.7; stroke-dasharray: 5 5; marker-end: url(#arrow-gray); }
+      .line-green { fill: none; stroke: #15803d; stroke-width: 2; marker-end: url(#arrow-green); }
+      .line-red { fill: none; stroke: #dc2626; stroke-width: 2; marker-end: url(#arrow-red); }
+      .boundary-blue { fill: #f8fbff; stroke: #60a5fa; stroke-width: 1.25; stroke-dasharray: 7 5; rx: 12; }
+      .boundary-navy { fill: #fbfcfe; stroke: #64748b; stroke-width: 1.25; stroke-dasharray: 7 5; rx: 12; }
+      .boundary-teal { fill: #f8fcfb; stroke: #5aa7a4; stroke-width: 1.25; stroke-dasharray: 7 5; rx: 12; }
+      .boundary-purple { fill: #fbfaff; stroke: #8b75c9; stroke-width: 1.25; stroke-dasharray: 7 5; rx: 12; }
+      .step { fill: #ffffff; stroke: #17233b; stroke-width: 1.6; }
+      .step-text { font-size: 11px; font-weight: 700; fill: #17233b; text-anchor: middle; }
+    </style>
+  </defs>
+
+  <rect width="1920" height="1080" fill="#ffffff"/>
+
+  <!-- Header -->
+  <text class="title" x="42" y="58">AI Architecture Chatbot — Production Architecture</text>
+  <g transform="translate(1248,18)">
+    <rect class="card" x="0" y="0" width="626" height="66" rx="13"/>
+    <line x1="24" y1="22" x2="72" y2="22" stroke="#1a73e8" stroke-width="3" marker-end="url(#arrow-blue)"/>
+    <text class="small" x="84" y="27">Runtime data</text>
+    <line x1="213" y1="22" x2="261" y2="22" stroke="#5b21b6" stroke-width="3" marker-start="url(#arrow-purple)" marker-end="url(#arrow-purple)"/>
+    <text class="small" x="274" y="27">WebSocket</text>
+    <line x1="401" y1="22" x2="449" y2="22" stroke="#f97316" stroke-width="3"/>
+    <text class="small" x="462" y="27">Quality feedback</text>
+    <line x1="24" y1="48" x2="72" y2="48" stroke="#718096" stroke-width="2" stroke-dasharray="5 4"/>
+    <text class="small" x="84" y="53">Deploy / control</text>
+    <rect x="213" y="39" width="16" height="16" rx="8" class="step"/>
+    <text x="221" y="47" class="step-text" font-size="10">#</text>
+    <text class="small" x="240" y="53">Runtime sequence</text>
+  </g>
+
+  <!-- Region boundaries -->
+  <rect class="boundary-navy" x="98" y="104" width="352" height="592" rx="18"/>
+  <rect class="boundary-blue" x="488" y="104" width="974" height="592" rx="18"/>
+  <rect class="boundary-teal" x="1490" y="104" width="388" height="592" rx="18"/>
+
+  <text class="region-title" x="274" y="137" text-anchor="middle">CLIENT &amp; EDGE</text>
+  <g transform="translate(975,0)">
+    <text class="region-title" x="-16" y="137" text-anchor="end">GOOGLE CLOUD</text>
+    <text class="body" x="-8" y="137">· europe-west2</text>
+  </g>
+  <text class="region-title" x="1684" y="137" text-anchor="middle">DATA &amp; MODEL SERVICES</text>
+
+  <!-- User browser -->
+  <g transform="translate(18,276)">
+    <rect x="0" y="0" width="67" height="61" rx="8" fill="#fff" stroke="#15223a" stroke-width="2"/>
+    <line x1="0" y1="14" x2="67" y2="14" stroke="#15223a" stroke-width="2"/>
+    <circle cx="10" cy="7" r="2.3" fill="#15223a"/>
+    <circle cx="18" cy="7" r="2.3" fill="#15223a"/>
+    <circle cx="26" cy="7" r="2.3" fill="#15223a"/>
+    <circle cx="34" cy="37" r="15" fill="none" stroke="#15223a" stroke-width="1.6"/>
+    <path d="M19,37 H49 M34,22 C27,30 27,44 34,52 M34,22 C41,30 41,44 34,52" fill="none" stroke="#15223a" stroke-width="1.4"/>
+    <text class="service-title" x="34" y="88" text-anchor="middle">User</text>
+    <text class="service-title" x="34" y="111" text-anchor="middle">Browser</text>
+  </g>
+
+  <!-- Vercel frontend -->
+  <g transform="translate(126,164)">
+    <rect class="card" width="296" height="112" rx="13"/>
+    <path d="M25,54 L48,18 L71,54 Z" fill="#050505"/>
+    <text class="service-title" x="88" y="48">Vercel Frontend</text>
+    <text class="body" x="88" y="76">React · TypeScript · D3.js</text>
+    <text class="micro" x="88" y="96">steerable WebSocket client</text>
+  </g>
+
+  <!-- Cloudflare Turnstile -->
+  <g transform="translate(126,294)">
+    <rect class="card" width="296" height="112" rx="13"/>
+    <g transform="translate(24,27)" fill="#f56600">
+      <circle cx="28" cy="27" r="20"/>
+      <circle cx="52" cy="31" r="15"/>
+      <circle cx="11" cy="36" r="11"/>
+      <rect x="4" y="34" width="63" height="15" rx="7"/>
+    </g>
+    <text class="service-title" x="105" y="49">Cloudflare Turnstile</text>
+    <text class="body" x="105" y="77">bot protection</text>
+  </g>
+
+  <!-- Private render -->
+  <g transform="translate(126,424)">
+    <rect class="card" width="296" height="112" rx="8"/>
+    <g transform="translate(33,25)" fill="#1a73e8">
+      <circle cx="28" cy="2" r="4"/><circle cx="44" cy="8" r="4"/><circle cx="54" cy="22" r="4"/>
+      <circle cx="54" cy="40" r="4"/><circle cx="44" cy="54" r="4"/><circle cx="28" cy="60" r="4"/>
+      <circle cx="12" cy="54" r="4"/><circle cx="2" cy="40" r="4"/><circle cx="2" cy="22" r="4"/><circle cx="12" cy="8" r="4"/>
+    </g>
+    <text class="service-title" x="104" y="48">Private D3</text>
+    <text class="service-title" x="104" y="72">Candidate Render</text>
+    <text class="body" x="104" y="97">screenshot + layout report</text>
+  </g>
+
+  <!-- Offline ingestion -->
+  <g transform="translate(126,554)">
+    <rect x="0" y="0" width="296" height="112" rx="8" fill="#fff" stroke="#60a5fa" stroke-width="1.25" stroke-dasharray="7 5"/>
+    <path d="M22,22 H43 L55,34 V91 H22 Z M43,22 V36 H55" fill="none" stroke="#475569" stroke-width="1.6"/>
+    <text class="node-title" x="78" y="29">AI Engineering PDF</text>
+    <text class="body" x="78" y="53">chunk → embed</text>
+    <text class="body" x="78" y="76">checksum-pinned FAISS</text>
+    <text class="body" x="78" y="98">artifact</text>
+  </g>
+
+  <!-- Cloud Run outer card -->
+  <g>
+    <rect class="card" x="516" y="151" width="920" height="517" rx="16"/>
+    <g transform="translate(720,166)" fill="#4285f4">
+      <path d="M0,0 L25,17 L11,52 Z"/><path d="M27,4 L51,21 L17,52 Z" opacity="0.82"/>
+    </g>
+    <text class="region-title" x="976" y="184" text-anchor="middle">Cloud Run · FastAPI Backend</text>
+    <text class="body" x="976" y="208" text-anchor="middle">containerised · autoscaling · WebSocket API · min instances 0</text>
+  </g>
+
+  <!-- LangGraph boundary -->
+  <rect x="536" y="225" width="880" height="282" rx="14" fill="#ffffff" stroke="#6b7f99" stroke-width="1.4"/>
+  <text class="service-title" x="976" y="255" text-anchor="middle">LangGraph Orchestration</text>
+  <text class="body" x="976" y="279" text-anchor="middle" font-style="italic">asyncio concurrency inside nodes</text>
+
+  <!-- Workflow nodes -->
+  <g>
+    <rect class="node" x="552" y="337" width="60" height="60" rx="9"/>
+    <text class="node-title" x="582" y="372" text-anchor="middle">Route</text>
+
+    <rect class="node" x="638" y="327" width="68" height="80" rx="9"/>
+    <text class="node-title" x="672" y="360" text-anchor="middle">FAISS</text>
+    <text class="node-title" x="672" y="380" text-anchor="middle">RAG</text>
+
+    <rect class="node" x="739" y="300" width="88" height="55" rx="9"/>
+    <text class="node-title" x="783" y="333" text-anchor="middle">Architect</text>
+
+    <rect class="node" x="739" y="406" width="88" height="55" rx="9"/>
+    <text class="node-title" x="783" y="439" text-anchor="middle">Challenger</text>
+
+    <rect class="node" x="864" y="340" width="98" height="68" rx="9"/>
+    <text class="node-title" x="913" y="370" text-anchor="middle">Graph</text>
+    <text class="node-title" x="913" y="390" text-anchor="middle">Integration</text>
+
+    <rect class="node-orange" x="996" y="333" width="120" height="82" rx="9"/>
+    <text class="node-title" x="1056" y="364" text-anchor="middle">Architecture +</text>
+    <text class="node-title" x="1056" y="385" text-anchor="middle">Render Critic</text>
+
+    <path d="M1160,374 L1202,332 L1244,374 L1202,416 Z" fill="#f3fbf4" stroke="#55a963" stroke-width="1.5"/>
+    <text class="node-title" x="1202" y="380" text-anchor="middle">Accept?</text>
+
+    <rect class="node-green" x="1280" y="331" width="112" height="86" rx="9"/>
+    <text class="node-title" x="1336" y="360" text-anchor="middle">Graph +</text>
+    <text class="node-title" x="1336" y="381" text-anchor="middle">Explanation</text>
+    <text class="node-title" x="1336" y="402" text-anchor="middle">Stream</text>
+
+    <rect class="node-red" x="1142" y="440" width="120" height="54" rx="9"/>
+    <text class="node-title" x="1202" y="463" text-anchor="middle">One Bounded</text>
+    <text class="node-title" x="1202" y="483" text-anchor="middle">Repair</text>
+  </g>
+
+  <!-- Workflow arrows -->
+  <path class="line-dark" d="M612,367 H638"/>
+  <path class="line-dark" d="M706,352 H720 V327 H739"/>
+  <path class="line-dark" d="M706,382 H720 V434 H739"/>
+  <path class="line-dark" d="M827,327 H842 V361 H864"/>
+  <path class="line-dark" d="M827,434 H842 V388 H864"/>
+  <path class="line-dark" d="M962,374 H996"/>
+  <path class="line-dark" d="M1116,374 H1160"/>
+  <path class="line-green" d="M1244,374 H1280"/>
+  <text class="small green-label" x="1250" y="356">Yes</text>
+  <path class="line-red" d="M1202,416 V440"/>
+  <text class="small red-label" x="1212" y="432">No</text>
+  <path class="line-orange" d="M1142,467 H1127 V420 H1056 V415"/>
+
+  <!-- Cloud Run resources -->
+  <g transform="translate(558,529)">
+    <rect class="card" width="200" height="108" rx="12"/>
+    <g transform="translate(24,33) scale(0.72)" fill="#1a73e8">
+      <circle cx="28" cy="4" r="5"/><circle cx="47" cy="12" r="5"/><circle cx="54" cy="30" r="5"/>
+      <circle cx="47" cy="48" r="5"/><circle cx="28" cy="56" r="5"/><circle cx="10" cy="48" r="5"/>
+      <circle cx="3" cy="30" r="5"/><circle cx="10" cy="12" r="5"/>
+      <circle cx="28" cy="30" r="5"/>
+    </g>
+    <text class="service-title" x="78" y="39">FAISS Index</text>
+    <text class="micro" x="78" y="60">AI Engineering textbook</text>
+    <text class="micro" x="78" y="78">loaded at startup</text>
+  </g>
+
+  <g transform="translate(770,529)">
+    <rect class="card" width="200" height="108" rx="12"/>
+    <path d="M29,35 L50,23 L71,35 V63 C71,75 61,83 50,89 C39,83 29,75 29,63 Z" fill="#1a73e8"/>
+    <rect x="43" y="46" width="14" height="20" rx="2" fill="#fff"/>
+    <path d="M45,46 V41 A5,5 0 0 1 55,41 V46" fill="none" stroke="#fff" stroke-width="2.5"/>
+    <text class="service-title" x="88" y="48">Secret</text>
+    <text class="service-title" x="88" y="71">Manager</text>
+  </g>
+
+  <g transform="translate(982,529)">
+    <rect class="card" width="200" height="108" rx="12"/>
+    <path d="M30,35 L52,22 L74,35 L74,65 L52,79 L30,65 Z" fill="none" stroke="#1a73e8" stroke-width="5"/>
+    <path d="M52,22 V79 M30,35 L52,49 L74,35" fill="none" stroke="#1a73e8" stroke-width="3"/>
+    <text class="service-title" x="90" y="48">Artifact</text>
+    <text class="service-title" x="90" y="71">Registry</text>
+  </g>
+
+  <g transform="translate(1194,529)">
+    <rect class="card" width="200" height="108" rx="12"/>
+    <g transform="translate(25,33) scale(0.72)" fill="#1a73e8">
+      <rect x="0" y="0" width="13" height="53" rx="2"/>
+      <rect x="20" y="4" width="45" height="10" rx="2"/>
+      <rect x="20" y="22" width="58" height="10" rx="2"/>
+      <rect x="20" y="40" width="50" height="10" rx="2"/>
+    </g>
+    <text class="service-title" x="92" y="48">Cloud</text>
+    <text class="service-title" x="92" y="71">Logging</text>
+  </g>
+
+  <!-- Data services -->
+  <g transform="translate(1515,155)">
+    <rect class="card" width="338" height="226" rx="8"/>
+    <path d="M32,36 L56,20 L48,48 H65 L35,80 L42,53 H26 Z" fill="#16a89a"/>
+    <text class="region-title" x="86" y="52">Supabase</text>
+    <rect x="27" y="91" width="112" height="48" rx="10" fill="#f2fbfa" stroke="#16968d" stroke-width="1.4"/>
+    <text class="service-title" x="83" y="122" text-anchor="middle" fill="#0f766e">Auth</text>
+    <rect x="157" y="91" width="154" height="48" rx="10" fill="#f2fbfa" stroke="#16968d" stroke-width="1.4"/>
+    <text class="service-title" x="234" y="122" text-anchor="middle" fill="#0f766e">PostgreSQL</text>
+    <line x1="24" y1="159" x2="314" y2="159" stroke="#78909c" stroke-width="1.3" stroke-dasharray="4 4"/>
+    <ellipse cx="64" cy="183" rx="24" ry="10" fill="#fff" stroke="#1f2937" stroke-width="1.8"/>
+    <path d="M40,183 V215 C40,222 88,222 88,215 V183 M40,199 C40,206 88,206 88,199" fill="none" stroke="#1f2937" stroke-width="1.8"/>
+    <text class="body" x="112" y="190">threads · messages · layouts</text>
+    <text class="body" x="112" y="215">durable rate limits</text>
+  </g>
+
+  <g transform="translate(1515,410)">
+    <rect class="card" width="338" height="226" rx="8" stroke="#8b75c9"/>
+    <text x="29" y="64" font-size="38" font-weight="700" fill="#111827">AI</text>
+    <text class="region-title" x="102" y="59">Anthropic Claude</text>
+    <rect x="26" y="89" width="286" height="43" rx="9" fill="#faf8ff" stroke="#7357d8" stroke-width="1.3"/>
+    <text x="169" y="116" text-anchor="middle" font-size="15" font-weight="700" fill="#4c1d95">Sonnet 5 · normal workflow</text>
+    <rect x="26" y="142" width="286" height="43" rx="9" fill="#faf8ff" stroke="#7357d8" stroke-width="1.3"/>
+    <text x="169" y="169" text-anchor="middle" font-size="15" font-weight="700" fill="#4c1d95">Opus 4.8 · repair only</text>
+  </g>
+
+  <!-- Runtime connectors -->
+  <path class="line-blue" d="M85,306 H106 V220 H126"/>
+  <circle class="step" cx="103" cy="266" r="11"/><text class="step-text" x="103" y="270">1</text>
+
+  <path class="line-blue" d="M274,276 V294"/>
+  <circle class="step" cx="274" cy="285" r="11"/><text class="step-text" x="274" y="289">2</text>
+  <text class="small blue-label" x="291" y="290">verification token</text>
+
+  <path d="M422,220 H516" fill="none" stroke="#5b21b6" stroke-width="3" marker-start="url(#arrow-purple)" marker-end="url(#arrow-purple)"/>
+  <circle class="step" cx="506" cy="199" r="11"/><text class="step-text" x="506" y="203">3</text>
+  <circle class="step" cx="432" cy="199" r="11"/><text class="step-text" x="432" y="203" font-size="10">11</text>
+
+  <path class="line-blue" d="M450,300 H516"/>
+  <text class="micro blue-label" x="454" y="289">SSE compatibility</text>
+
+  <circle class="step" cx="625" cy="347" r="11"/><text class="step-text" x="625" y="351">4</text>
+  <circle class="step" cx="979" cy="354" r="11"/><text class="step-text" x="979" y="358">5</text>
+
+  <path class="line-orange" d="M996,420 V483 H422"/>
+  <text class="small orange-label" x="431" y="468">graph candidate</text>
+  <circle class="step" cx="462" cy="483" r="11"/><text class="step-text" x="462" y="487">7</text>
+
+  <path class="line-orange" d="M422,522 H468 V687 H976 V425 H1056 V415"/>
+  <text class="small orange-label" x="565" y="709">versioned screenshot + metrics</text>
+  <circle class="step" cx="1056" cy="444" r="11"/><text class="step-text" x="1056" y="448">8</text>
+  <circle class="step" cx="1278" cy="467" r="11"/><text class="step-text" x="1278" y="471">9</text>
+
+  <path class="line-blue" d="M1436,246 H1515"/>
+  <path d="M1436,246 H1515" fill="none" stroke="#1a73e8" stroke-width="2.2" marker-start="url(#arrow-blue)"/>
+  <text class="small" x="1461" y="229">TLS</text>
+  <circle class="step" cx="1477" cy="266" r="11"/><text class="step-text" x="1477" y="270" font-size="10">10</text>
+
+  <path class="line-blue" d="M1436,516 H1515"/>
+  <path d="M1436,516 H1515" fill="none" stroke="#1a73e8" stroke-width="2.2" marker-start="url(#arrow-blue)"/>
+  <text class="small" x="1461" y="499">TLS</text>
+  <circle class="step" cx="1477" cy="538" r="11"/><text class="step-text" x="1477" y="542">6</text>
+
+  <path class="line-blue" d="M422,620 H530 V583 H558"/>
+  <path class="line-gray" d="M870,637 V684 H1450 V360 H1515"/>
+  <path class="line-gray" d="M870,684 H1450 V615 H1515"/>
+
+  <!-- CI/CD boundary -->
+  <rect class="boundary-purple" x="18" y="724" width="1884" height="336" rx="18"/>
+  <text class="region-title" x="42" y="758">CI/CD &amp; INFRASTRUCTURE</text>
+
+  <!-- CI cards -->
+  <g transform="translate(45,790)">
+    <rect class="card" width="160" height="84" rx="8"/>
+    <circle cx="30" cy="33" r="20" fill="#111827"/>
+    <path d="M21,31 C19,20 25,15 30,15 C35,15 41,20 39,31 C44,33 44,40 40,43 C34,47 26,47 20,43 C16,40 16,33 21,31 Z" fill="#fff"/>
+    <text class="ci-title" x="60" y="29">Developer</text>
+    <text class="ci-small" x="60" y="51">Push / Pull Request</text>
+  </g>
+
+  <g transform="translate(221,790)">
+    <rect class="card" width="160" height="84" rx="8"/>
+    <g transform="translate(15,18)" fill="none" stroke="#1a73e8" stroke-width="2">
+      <circle cx="10" cy="8" r="6"/><circle cx="10" cy="38" r="6"/><circle cx="38" cy="23" r="6"/>
+      <path d="M16,8 H25 V23 H32 M16,38 H25 V23"/>
+    </g>
+    <text class="ci-title" x="62" y="21">GitHub Actions</text>
+    <text class="ci-title" x="62" y="37">PR CI</text>
+    <text class="ci-small" x="62" y="54">unit · integration</text>
+    <text class="micro" x="62" y="70">lint · security · build</text>
+  </g>
+
+  <g transform="translate(397,790)">
+    <rect class="card" width="160" height="84" rx="8"/>
+    <g transform="translate(14,20)" fill="none" stroke="#5b21b6" stroke-width="3">
+      <circle cx="7" cy="7" r="5"/><circle cx="7" cy="39" r="5"/><circle cx="32" cy="23" r="5"/>
+      <path d="M12,7 H20 V23 H27 M12,39 H20 V23"/>
+    </g>
+    <text class="ci-title" x="64" y="34">Merge to</text>
+    <text class="ci-small" x="64" y="54">main</text>
+  </g>
+
+  <g transform="translate(573,790)">
+    <rect class="card" width="160" height="84" rx="8"/>
+    <g transform="translate(15,18)" fill="#1687d9">
+      <rect x="0" y="17" width="10" height="10"/><rect x="12" y="17" width="10" height="10"/><rect x="24" y="17" width="10" height="10"/>
+      <rect x="12" y="5" width="10" height="10"/><rect x="24" y="5" width="10" height="10"/><path d="M0,30 H48 C44,47 15,49 7,38 Z"/>
+    </g>
+    <text class="ci-title" x="69" y="34">Docker</text>
+    <text class="ci-small" x="69" y="54">Buildx</text>
+  </g>
+
+  <g transform="translate(749,790)">
+    <rect class="card" width="160" height="84" rx="8"/>
+    <path d="M18,27 L37,16 L56,27 L56,51 L37,63 L18,51 Z" fill="none" stroke="#1a73e8" stroke-width="5"/>
+    <text class="ci-title" x="67" y="34">Artifact</text>
+    <text class="ci-small" x="67" y="54">Registry</text>
+  </g>
+
+  <g transform="translate(925,790)">
+    <rect class="card" width="160" height="84" rx="8"/>
+    <path d="M18,23 L42,9 L34,36 H51 L22,68 L29,41 H10 Z" fill="#16a89a"/>
+    <text class="ci-title" x="62" y="31">Supabase</text>
+    <text class="ci-small" x="62" y="52">Schema migration</text>
+  </g>
+
+  <g transform="translate(1101,790)">
+    <rect class="card" width="160" height="84" rx="8"/>
+    <path d="M16,17 L36,31 L25,62 Z M38,20 L57,34 L29,62 Z" fill="#4285f4"/>
+    <text class="ci-title" x="64" y="23">Cloud Run</text>
+    <text class="ci-small" x="64" y="43">candidate · 0% traffic</text>
+    <text class="micro" x="64" y="62">no production traffic</text>
+  </g>
+
+  <g transform="translate(1277,790)">
+    <rect class="card" width="160" height="84" rx="8"/>
+    <path d="M18,17 L38,8 L58,17 V47 C58,58 48,66 38,71 C28,66 18,58 18,47 Z" fill="none" stroke="#17233b" stroke-width="2"/>
+    <path d="M29,27 L35,33 L47,21 M29,43 L35,49 L47,37" fill="none" stroke="#17233b" stroke-width="2"/>
+    <text class="ci-title" x="64" y="25">Live staging gate</text>
+    <text class="ci-small" x="64" y="45">WebSocket · LLM eval</text>
+    <text class="micro" x="64" y="63">diagram evaluation</text>
+  </g>
+
+  <path d="M1453,832 L1488,797 L1523,832 L1488,867 Z" fill="#f7fcf7" stroke="#55a963" stroke-width="1.3"/>
+  <text class="node-title" x="1488" y="837" text-anchor="middle">Pass?</text>
+
+  <g transform="translate(1539,790)">
+    <rect class="card" width="160" height="84" rx="8"/>
+    <path d="M16,17 L36,31 L25,62 Z M38,20 L57,34 L29,62 Z" fill="#4285f4"/>
+    <text class="ci-title" x="64" y="29">Promote</text>
+    <text class="ci-small" x="64" y="51">shift 100% traffic</text>
+  </g>
+
+  <g transform="translate(1715,790)">
+    <rect class="card" width="160" height="84" rx="8"/>
+    <path d="M16,55 L38,19 L60,55 Z" fill="#050505"/>
+    <text class="ci-title" x="64" y="30">Deploy Vercel</text>
+    <text class="ci-small" x="64" y="51">frontend</text>
+  </g>
+
+  <!-- CI arrows -->
+  <path class="line-dark" d="M205,832 H221"/>
+  <path class="line-dark" d="M381,832 H397"/>
+  <path class="line-dark" d="M557,832 H573"/>
+  <path class="line-dark" d="M733,832 H749"/>
+  <path class="line-dark" d="M909,832 H925"/>
+  <path class="line-dark" d="M1085,832 H1101"/>
+  <path class="line-dark" d="M1261,832 H1277"/>
+  <path class="line-dark" d="M1437,832 H1453"/>
+  <path class="line-green" d="M1523,832 H1539"/>
+  <text class="small green-label" x="1524" y="811">Yes</text>
+  <path class="line-dark" d="M1699,832 H1715"/>
+
+  <!-- Block release -->
+  <path class="line-red" d="M1488,867 V925"/>
+  <text class="small red-label" x="1498" y="899">No</text>
+  <g transform="translate(1408,925)">
+    <rect x="0" y="0" width="160" height="54" rx="11" fill="#fff5f4" stroke="#dc2626" stroke-width="1.5"/>
+    <circle cx="28" cy="27" r="17" fill="#dc2626"/>
+    <path d="M21,32 V20 M26,32 V17 M31,32 V19 M36,32 V23 M21,32 C25,41 35,41 39,31" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/>
+    <text x="54" y="33" font-size="15" font-weight="700" fill="#c5221f">Block Release</text>
+  </g>
+
+  <!-- Terraform / identity -->
+  <g transform="translate(520,925)">
+    <rect class="card" width="460" height="72" rx="8"/>
+    <g transform="translate(25,13) scale(0.75)" fill="#5b21b6">
+      <path d="M0,0 L25,14 V43 L0,29 Z"/><path d="M29,16 L54,30 V59 L29,45 Z"/><path d="M29,0 L54,14 V28 L29,14 Z"/><path d="M58,30 L83,16 V45 L58,59 Z"/>
+    </g>
+    <text x="108" y="32" font-size="23" font-weight="700" fill="#111827">Terraform</text>
+    <text class="body" x="108" y="54">provisions stable infrastructure</text>
+  </g>
+
+  <g transform="translate(1040,925)">
+    <rect class="card" width="260" height="55" rx="8"/>
+    <text class="node-title" x="17" y="24">GitHub OIDC →</text>
+    <text class="small" x="17" y="43">GCP Workload Identity</text>
+    <rect x="227" y="16" width="17" height="23" rx="3" fill="none" stroke="#17233b" stroke-width="2"/>
+    <path d="M231,16 V11 A5,5 0 0 1 241,11 V16" fill="none" stroke="#17233b" stroke-width="2"/>
+  </g>
+
+  <path class="line-gray" d="M301,874 V908 H1024 V952 H1040"/>
+  <path class="line-gray" d="M750,925 V900 H829 V874"/>
+  <path class="line-gray" d="M1170,925 V900 H1181 V874"/>
+</svg>

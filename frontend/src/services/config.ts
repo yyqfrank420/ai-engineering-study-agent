@@ -18,7 +18,7 @@
  *            in the Vercel project's Environment Variables dashboard.
  * Locally:   leave VITE_API_URL unset (or blank) — Vite proxy handles routing.
  *
- * Connects to: services/api.ts, services/sse.ts
+ * Connects to: services/api.ts, services/agentTransport.ts
  */
 
 const _isLocalhost =

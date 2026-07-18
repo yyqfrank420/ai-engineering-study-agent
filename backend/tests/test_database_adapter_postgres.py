@@ -12,10 +12,12 @@ class _Cursor:
 
 
 class _FakePostgresConnection:
-    def __init__(self, *, tables=None, rls=None, policies=None):
+    def __init__(self, *, tables=None, rls=None, policies=None, columns=None, indexes=None):
         self.tables = tables or []
         self.rls = rls or []
         self.policies = policies or []
+        self.columns = columns or {}
+        self.indexes = indexes or []
         self.queries = []
         self.committed = False
         self.rolled_back = False
@@ -25,6 +27,14 @@ class _FakePostgresConnection:
         self.queries.append((query, params))
         if "FROM pg_tables" in query:
             return _Cursor([{"tablename": table} for table in self.tables])
+        if "FROM information_schema.columns" in query:
+            return _Cursor([
+                {"table_name": table, "column_name": column}
+                for table, columns in self.columns.items()
+                for column in columns
+            ])
+        if "FROM pg_indexes" in query:
+            return _Cursor([{"indexname": index} for index in self.indexes])
         if "FROM pg_class" in query:
             return _Cursor([{"table_name": table} for table in self.rls])
         if "FROM pg_policies" in query:
@@ -50,7 +60,12 @@ def test_postgres_connect_commits_and_adapts_placeholders(monkeypatch):
 
     conn = _FakePostgresConnection()
     monkeypatch.setattr(settings, "supabase_db_url", "postgresql://db")
-    monkeypatch.setattr(db.psycopg, "connect", lambda url: conn)
+    connection_args = []
+    monkeypatch.setattr(
+        db.psycopg,
+        "connect",
+        lambda url, **kwargs: connection_args.append((url, kwargs)) or conn,
+    )
 
     with db._connect() as opened:
         assert opened is conn
@@ -58,6 +73,9 @@ def test_postgres_connect_commits_and_adapts_placeholders(monkeypatch):
 
     assert conn.committed is True
     assert conn.closed is True
+    assert connection_args == [
+        ("postgresql://db", {"options": f"-c search_path={settings.db_schema},auth"})
+    ]
 
 
 def test_postgres_connect_rolls_back_on_error(monkeypatch):
@@ -65,7 +83,7 @@ def test_postgres_connect_rolls_back_on_error(monkeypatch):
 
     conn = _FakePostgresConnection()
     monkeypatch.setattr(settings, "supabase_db_url", "postgresql://db")
-    monkeypatch.setattr(db.psycopg, "connect", lambda url: conn)
+    monkeypatch.setattr(db.psycopg, "connect", lambda url, **kwargs: conn)
 
     with pytest.raises(RuntimeError, match="boom"):
         with db._connect():
@@ -80,7 +98,15 @@ def test_validate_postgres_schema_success_and_failure(monkeypatch):
 
     tables = list(db.POSTGRES_REQUIRED_TABLES)
     policies = {table: set(required) for table, required in db.POSTGRES_REQUIRED_POLICIES.items()}
-    db._validate_postgres_schema(_FakePostgresConnection(tables=tables, rls=tables, policies=policies))
+    db._validate_postgres_schema(
+        _FakePostgresConnection(
+            tables=tables,
+            rls=tables,
+            policies=policies,
+            columns=db.POSTGRES_REQUIRED_COLUMNS,
+            indexes=db.POSTGRES_REQUIRED_INDEXES,
+        )
+    )
 
     with pytest.raises(RuntimeError) as exc_info:
         db._validate_postgres_schema(

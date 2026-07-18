@@ -4,6 +4,7 @@ import asyncio
 import time
 from contextlib import suppress
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 from config import settings
@@ -11,6 +12,8 @@ from storage.analytics_event_store import record_analytics_event
 from storage.models import AnalyticsEventWrite, ProductAnalyticsEventWrite
 from storage.product_analytics_store import record_product_analytics_event
 from storage.profile_store import upsert_profile
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -104,7 +107,7 @@ def enqueue_analytics_event(
         )
     except Exception as exc:
         _dropped_events += 1
-        print(f"[analytics] Invalid event dropped: {type(exc).__name__}: {exc}")
+        logger.warning("Invalid analytics event dropped: %s", type(exc).__name__)
         return False
 
     return _enqueue_or_write(event, f"{event.event_category}.{event.event_name}")
@@ -133,7 +136,7 @@ def enqueue_product_analytics_event(
         )
     except Exception as exc:
         _dropped_events += 1
-        print(f"[analytics] Invalid product event dropped: {type(exc).__name__}: {exc}")
+        logger.warning("Invalid product analytics event dropped: %s", type(exc).__name__)
         return False
 
     return _enqueue_or_write(
@@ -152,12 +155,13 @@ def _enqueue_or_write(item: AnalyticsQueueItem, label: str) -> bool:
         return True
     except asyncio.QueueFull:
         _dropped_events += 1
-        print(f"[analytics] Event queue full; dropping event {label}")
+        logger.warning("Analytics event queue full; dropping %s", label)
         return False
 
 
 async def _analytics_worker() -> None:
-    assert _queue is not None
+    if _queue is None:
+        raise RuntimeError("Analytics worker started before its queue was initialised")
     while True:
         item = await _queue.get()
         try:
@@ -179,9 +183,11 @@ def _write_event_safely(event: AnalyticsEventWrite) -> bool:
         record_analytics_event(**event.model_dump())
         return True
     except Exception as exc:
-        print(
-            "[analytics] Event write failed: "
-            f"{event.event_category}.{event.event_name} {type(exc).__name__}: {exc}"
+        logger.warning(
+            "Analytics event write failed for %s.%s: %s",
+            event.event_category,
+            event.event_name,
+            type(exc).__name__,
         )
         return False
 
@@ -193,9 +199,10 @@ def _write_product_event_safely(job: ProductAnalyticsEventJob) -> bool:
         record_product_analytics_event(**job.event.model_dump())
         return True
     except Exception as exc:
-        print(
-            "[analytics] Product event write failed: "
-            f"product.{job.event.event_type} {type(exc).__name__}: {exc}"
+        logger.warning(
+            "Product analytics event write failed for %s: %s",
+            job.event.event_type,
+            type(exc).__name__,
         )
         return False
 

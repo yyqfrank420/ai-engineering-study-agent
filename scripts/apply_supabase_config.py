@@ -14,6 +14,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -38,13 +39,19 @@ if not MANAGEMENT_TOKEN:
 if not SITE_URL:
     print("ERROR: APP_SITE_URL is not set.")
     sys.exit(1)
+if not re.fullmatch(r"[a-z0-9]{20}", PROJECT_REF):
+    print("ERROR: SUPABASE_PROJECT_REF has an invalid format.")
+    sys.exit(1)
+if not SITE_URL.startswith("https://"):
+    print("ERROR: APP_SITE_URL must use HTTPS.")
+    sys.exit(1)
 
 TEMPLATES_DIR = Path(__file__).parent.parent / "docs" / "supabase" / "email_templates"
 API_BASE = "https://api.supabase.com/v1"
 
 # ── Email templates ───────────────────────────────────────────────────────────
 
-magic_link_html = (TEMPLATES_DIR / "magic_link.html").read_text()
+magic_link_html = (TEMPLATES_DIR / "magic_link.html").read_text(encoding="utf-8")
 
 # ── Redirect URLs ─────────────────────────────────────────────────────────────
 # APP_REDIRECT_URLS is comma-separated. If omitted, default to site URL + local dev.
@@ -69,8 +76,8 @@ payload = {
     "mailer_templates_magic_link_content": magic_link_html,
 }
 
-# Google OAuth — only included if credentials are present in env.
-# Credentials stored in GCP Secret Manager: google-oauth-client-id, google-oauth-client-secret.
+# Google OAuth — only included if credentials are present in the local script
+# environment. They are sent to Supabase and are never logged.
 if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
     payload["external_google_enabled"] = True
     payload["external_google_client_id"] = GOOGLE_CLIENT_ID
@@ -94,5 +101,7 @@ response = httpx.patch(
 if response.status_code == 200:
     print("Done.")
 else:
-    print(f"ERROR {response.status_code}: {response.text}")
+    # The management API may echo submitted provider configuration. Never print
+    # its body because the payload can contain an OAuth client secret.
+    print(f"ERROR: Supabase auth config update returned HTTP {response.status_code}.")
     sys.exit(1)

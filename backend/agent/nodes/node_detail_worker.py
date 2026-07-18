@@ -15,7 +15,7 @@
 import asyncio
 import json
 import re
-from typing import Any, Callable, Awaitable
+from typing import Callable, Awaitable
 
 from adapters.llm_adapter import build_telemetry
 from agent.state import GraphNode
@@ -144,6 +144,7 @@ async def enrich_node(
         temperature=settings.node_detail_temperature,
         top_p=settings.node_detail_top_p,
         top_k=settings.node_detail_top_k,
+        effort="low",
         telemetry=build_telemetry(
             "node_detail_worker",
             metadata={
@@ -192,8 +193,9 @@ async def enrich_all_nodes(
     graph_version: str | None = None,
 ) -> None:
     """
-    Enrich all nodes in parallel, capped at settings.max_graph_nodes workers.
-    Called as a fire-and-forget task after Phase 2 (done event already sent).
+    Enrich canonical graph nodes in parallel, capped at
+    ``settings.max_graph_nodes`` workers. The workflow awaits enrichment before
+    the transport publishes its terminal event.
 
     Args:
         nodes:           list of GraphNode dicts from the current graph

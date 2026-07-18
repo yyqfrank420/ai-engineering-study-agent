@@ -97,23 +97,34 @@ def record_analytics_event(
 
 
 def list_recent_analytics_events(*, since_epoch: float, event_category: str | None = None) -> list[dict[str, Any]]:
-    where = "created_at_epoch >= ?"
-    params: tuple[Any, ...] = (since_epoch,)
     if event_category:
-        where += " AND event_category = ?"
-        params = (since_epoch, event_category)
-
-    rows = fetchall(
-        f"""
-        SELECT id, event_name, event_category, user_id, anonymous_id, session_id,
-               thread_id, request_id, trace_id, client_request_id, schema_version,
-               app_version, environment, numeric_value, unit, properties_json, created_at_epoch
-        FROM analytics_events
-        WHERE {where}
-        ORDER BY created_at_epoch DESC
-        """,
-        params,
-    )
+        rows = fetchall(
+            """
+            SELECT id, event_name, event_category, user_id, anonymous_id, session_id,
+                   thread_id, request_id, trace_id, client_request_id, schema_version,
+                   app_version, environment, numeric_value, unit, properties_json,
+                   created_at_epoch
+            FROM analytics_events
+            WHERE created_at_epoch >= ? AND event_category = ?
+            ORDER BY created_at_epoch DESC
+            LIMIT ?
+            """,
+            (since_epoch, event_category, settings.dashboard_query_max_rows),
+        )
+    else:
+        rows = fetchall(
+            """
+            SELECT id, event_name, event_category, user_id, anonymous_id, session_id,
+                   thread_id, request_id, trace_id, client_request_id, schema_version,
+                   app_version, environment, numeric_value, unit, properties_json,
+                   created_at_epoch
+            FROM analytics_events
+            WHERE created_at_epoch >= ?
+            ORDER BY created_at_epoch DESC
+            LIMIT ?
+            """,
+            (since_epoch, settings.dashboard_query_max_rows),
+        )
     normalized: list[dict[str, Any]] = []
     for row in rows:
         row["properties"] = _load_properties(row.pop("properties_json", None))

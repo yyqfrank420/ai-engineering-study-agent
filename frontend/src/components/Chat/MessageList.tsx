@@ -26,6 +26,7 @@ type Segment = { type: 'text'; value: string } | { type: 'inline-math' | 'block-
 type MarkdownChildrenProps = { children?: ReactNode };
 type MarkdownCodeProps = MarkdownChildrenProps & { className?: string; inline?: boolean };
 type MarkdownAnchorProps = MarkdownChildrenProps & { href?: string };
+type MarkdownImageProps = { alt?: string };
 
 function splitLatex(text: string): Segment[] {
   const segments: Segment[] = [];
@@ -141,6 +142,11 @@ const mdComponents = {
   a: ({ href, children }: MarkdownAnchorProps) => (
     <a href={href} style={{ color: '#60a5fa', textDecoration: 'none' }} target="_blank" rel="noopener noreferrer">{children}</a>
   ),
+  // Model-authored remote images can act as tracking pixels. This text-only
+  // study UI intentionally does not fetch them.
+  img: ({ alt }: MarkdownImageProps) => (
+    <span style={{ color: '#6e7681', fontStyle: 'italic' }}>[Image omitted{alt ? `: ${alt}` : ''}]</span>
+  ),
 };
 
 // ── Message content renderer ──────────────────────────────────────────────────
@@ -192,6 +198,7 @@ export function MessageList({ messages }: MessageListProps) {
       {messages.map(msg => (
         <div
           key={msg.id}
+          data-testid={`message-${msg.role}`}
           style={{
             display: 'flex',
             justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
@@ -201,7 +208,11 @@ export function MessageList({ messages }: MessageListProps) {
             maxWidth: '85%',
             padding: '0.6rem 0.875rem',
             borderRadius: msg.role === 'user' ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
-            background: msg.role === 'user' ? '#1c2d4f' : '#161b22',
+            background: msg.role === 'user'
+              ? '#1c2d4f'
+              : msg.kind === 'explanation'
+                ? 'linear-gradient(145deg, rgba(22,27,34,0.98), rgba(20,27,43,0.92))'
+                : '#161b22',
             border: msg.role === 'user'
               ? '1px solid rgba(96, 165, 250, 0.15)'
               : '1px solid #21262d',
@@ -209,7 +220,34 @@ export function MessageList({ messages }: MessageListProps) {
             fontSize: '0.875rem',
             lineHeight: 1.65,
           }}>
+            {msg.kind === 'explanation' && msg.title && (
+              <div style={{
+                color: '#d8dee9',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                letterSpacing: '0.01em',
+                marginBottom: '0.35rem',
+              }}>
+                {msg.title}
+              </div>
+            )}
             <MessageContent content={msg.content} />
+            {msg.kind === 'explanation' && msg.relatedNodeIds && msg.relatedNodeIds.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: '0.45rem' }}>
+                {msg.relatedNodeIds.slice(0, 4).map(nodeId => (
+                  <span key={nodeId} style={{
+                    color: '#8bb5ff',
+                    background: 'rgba(96,165,250,0.08)',
+                    border: '1px solid rgba(96,165,250,0.15)',
+                    borderRadius: 999,
+                    padding: '1px 6px',
+                    fontSize: '0.58rem',
+                  }}>
+                    {nodeId.replaceAll('_', ' ')}
+                  </span>
+                ))}
+              </div>
+            )}
             {msg.isStreaming && (
               <span style={{
                 display: 'inline-block',

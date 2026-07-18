@@ -85,12 +85,14 @@ describe('analytics service', () => {
     await analytics.trackEvent('auth_viewed', { mode: 'test' }, session);
     analytics.resetAnalytics();
 
-    expect(posthog.init).toHaveBeenCalledWith('ph-key', expect.objectContaining({
-      api_host: 'https://posthog.example',
-      autocapture: false,
-    }));
-    expect(posthog.identify).toHaveBeenCalledWith('user-1');
-    expect(posthog.capture).toHaveBeenCalledWith('auth_viewed', { mode: 'test' });
-    expect(posthog.reset).toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(posthog.init).toHaveBeenCalledWith('ph-key', expect.objectContaining({
+        api_host: 'https://posthog.example',
+        autocapture: false,
+      }));
+      expect(posthog.identify).toHaveBeenCalledWith('user-1');
+      expect(posthog.capture).toHaveBeenCalledWith('auth_viewed', { mode: 'test' });
+      expect(posthog.reset).toHaveBeenCalled();
+    });
   });
 });

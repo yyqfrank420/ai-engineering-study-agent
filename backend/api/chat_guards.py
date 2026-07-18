@@ -1,28 +1,40 @@
 import re
+import time
 
-from fastapi import Request
+from starlette.requests import HTTPConnection
 
 from config import settings
-from storage.runtime_state_store import get_recent_request_events, prune_request_events, record_request_event
+from storage.rate_limit_store import RateLimitDimension, reserve_rate_limit
 
 
 def check_rate_limit(key: str) -> str | None:
     """Return an error string when the user is over limit, otherwise None."""
-    import time
-
     now = time.time()
-    prune_request_events(older_than_epoch=now - 3600)
-    events = get_recent_request_events(key, "chat_request", since_epoch=now - 3600)
-
-    per_minute = sum(1 for event in events if now - float(event["created_at_epoch"]) < 60)
-    per_hour = len(events)
-
-    if per_minute >= settings.rate_limit_per_minute:
-        return f"Rate limit exceeded: {settings.rate_limit_per_minute} messages/minute"
-    if per_hour >= settings.rate_limit_per_hour:
-        return f"Rate limit exceeded: {settings.rate_limit_per_hour} messages/hour"
-
-    record_request_event(key, "chat_request", created_at_epoch=now)
+    reservation = reserve_rate_limit(
+        (
+            RateLimitDimension(
+                scope="chat-user-minute",
+                identifier=key,
+                event_type="chat_request_minute",
+                limit=settings.rate_limit_per_minute,
+                window_s=60,
+            ),
+            RateLimitDimension(
+                scope="chat-user-hour",
+                identifier=key,
+                event_type="chat_request_hour",
+                limit=settings.rate_limit_per_hour,
+                window_s=3600,
+            ),
+        ),
+        created_at_epoch=now,
+    )
+    if reservation is None:
+        return (
+            "Rate limit exceeded: "
+            f"max {settings.rate_limit_per_minute}/minute or "
+            f"{settings.rate_limit_per_hour}/hour"
+        )
     return None
 
 
@@ -46,7 +58,14 @@ def byte_len(text: str) -> int:
     return len(text.encode("utf-8"))
 
 
-def knowledge_base_ready(request: Request) -> bool:
+def truncate_utf8(text: str, max_bytes: int) -> str:
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def knowledge_base_ready(request: HTTPConnection) -> bool:
     return getattr(request.app.state, "vectorstore", None) is not None and bool(
         getattr(request.app.state, "parent_docs", None)
     )

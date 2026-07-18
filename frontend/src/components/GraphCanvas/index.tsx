@@ -4,11 +4,12 @@
 //          SequenceBar. Manages which node popup is open.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState, useEffect, useMemo } from 'react';
-import type { AuthSession, GraphData, GraphNode, GraphViewState, SelectedNode } from '../../types';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import type { AuthSession, GraphCandidate, GraphData, GraphNode, GraphViewState, SelectedNode, WorkflowProgress } from '../../types';
 import { useGraph } from '../../hooks/useGraph';
 import { graphStructureKey } from '../../utils/graphStructureKey';
 import { D3Graph } from './D3Graph';
+import { HiddenGraphEvaluator } from './HiddenGraphEvaluator';
 import { GlossaryDrawer } from './GlossaryDrawer';
 import { NodeDetailPopup } from './NodeDetailPopup';
 import { SequenceBar } from './SequenceBar';
@@ -25,6 +26,9 @@ interface GraphCanvasProps {
   selectedNode: SelectedNode | null;
   onClosePopup: () => void;
   sourceTexts: string[];
+  isBuilding?: boolean;
+  workflowProgress?: WorkflowProgress[];
+  graphCandidate?: GraphCandidate | null;
 }
 
 function sameGraphViewState(a: GraphViewState | null | undefined, b: GraphViewState | null | undefined): boolean {
@@ -52,11 +56,16 @@ export function GraphCanvas({
   selectedNode,
   onClosePopup,
   sourceTexts,
+  isBuilding = false,
+  workflowProgress = [],
+  graphCandidate = null,
 }: GraphCanvasProps) {
   const { currentStep, totalSteps, hasSequence, activeNodeIds, stepDescription, goToStep } = useGraph(graphData, animateSequence);
   const [sequenceDismissal, setSequenceDismissal] = useState<{ key: string; dismissed: boolean } | null>(null);
   const [viewStateCache, setViewStateCache] = useState<Record<string, GraphViewState>>({});
   const [pendingPersistViewState, setPendingPersistViewState] = useState<GraphViewState | null>(null);
+  const canvasHostRef = useRef<HTMLDivElement>(null);
+  const [evaluationViewport, setEvaluationViewport] = useState({ width: 760, height: 500 });
   const graphContentKey = useMemo(() => graphStructureKey(graphData), [graphData]);
   const sequenceDismissed = sequenceDismissal?.key === graphContentKey && sequenceDismissal.dismissed;
   const graphViewKey = useMemo(() => {
@@ -73,6 +82,16 @@ export function GraphCanvas({
     ].join('::');
   }, [activeThreadId, graphData]);
   const persistedViewState = graphViewKey ? viewStateCache[graphViewKey] ?? graphData?.view_state ?? null : null;
+
+  useEffect(() => {
+    if (!graphCandidate || !canvasHostRef.current) return;
+    const rect = canvasHostRef.current.getBoundingClientRect();
+    if (rect.width < 240 || rect.height < 240) return;
+    setEvaluationViewport({
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    });
+  }, [graphCandidate]);
 
   useEffect(() => {
     if (!authSession || !activeThreadId || !graphData || !pendingPersistViewState) {
@@ -94,22 +113,59 @@ export function GraphCanvas({
   }, [activeThreadId, authSession, graphData, pendingPersistViewState]);
 
   if (!graphData) {
+    const latest = workflowProgress.at(-1);
     return (
-      <div style={{
+      <>
+      <div ref={canvasHostRef} style={{
         flex: 1,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         background: '#0a0f1a',
-        color: '#21262d',
-        fontSize: '0.875rem',
+        color: '#8b949e',
+        fontSize: '0.8rem',
+        flexDirection: 'column',
+        gap: '1.1rem',
+        padding: '2rem',
       }}>
-        Graph will appear here
+        {isBuilding ? (
+          <>
+            <div style={{ position: 'relative', width: 'min(440px, 88%)', height: 180 }}>
+              {[0, 1, 2].map(column => (
+                <div key={column} style={{
+                  position: 'absolute',
+                  left: `${column * 37}%`,
+                  top: `${26 + (column % 2) * 42}px`,
+                  width: '26%',
+                  height: 58,
+                  border: '1px solid rgba(96,165,250,0.18)',
+                  borderRadius: 8,
+                  background: 'linear-gradient(110deg, rgba(22,27,34,0.8) 20%, rgba(49,60,78,0.55) 45%, rgba(22,27,34,0.8) 70%)',
+                  backgroundSize: '240% 100%',
+                  animation: 'blueprintShimmer 2.2s ease-in-out infinite',
+                }} />
+              ))}
+              <div style={{ position: 'absolute', left: '26%', top: 56, width: '11%', height: 1, background: 'rgba(96,165,250,0.22)' }} />
+              <div style={{ position: 'absolute', left: '63%', top: 78, width: '11%', height: 1, background: 'rgba(96,165,250,0.22)' }} />
+            </div>
+            <div style={{ textAlign: 'center', maxWidth: 460 }}>
+              <div style={{ color: '#c9d1d9', fontWeight: 600, marginBottom: 5 }}>
+                {latest?.title ?? 'Preparing the architecture workspace'}
+              </div>
+              <div style={{ color: '#6e7681', lineHeight: 1.55 }}>
+                {latest?.detail ?? 'The design will appear after its structure and real browser layout pass review.'}
+              </div>
+            </div>
+          </>
+        ) : 'Graph will appear here'}
       </div>
+      <HiddenGraphEvaluator candidate={graphCandidate} viewport={evaluationViewport} />
+      </>
     );
   }
 
   return (
+    <>
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
       {/* Graph title */}
       <div style={{
@@ -151,23 +207,44 @@ export function GraphCanvas({
       </div>
 
       {/* D3 canvas */}
-      <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-        <D3Graph
-          graphData={graphData}
-          currentStep={currentStep}
-          activeNodeIds={activeNodeIds}
-          onNodeClick={onNodeClick}
-          initialViewState={persistedViewState ?? undefined}
-          onViewStateChange={(viewState) => {
-            if (!graphViewKey) return;
-            const existingViewState = viewStateCache[graphViewKey] ?? graphData.view_state ?? null;
-            if (sameGraphViewState(existingViewState, viewState)) {
-              return;
-            }
-            setViewStateCache(prev => ({ ...prev, [graphViewKey]: viewState }));
-            setPendingPersistViewState(viewState);
-          }}
-        />
+      <div ref={canvasHostRef} style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+        <div style={{ width: '100%', height: '100%', opacity: isBuilding ? 0.56 : 1, transition: 'opacity 180ms ease' }}>
+          <D3Graph
+            graphData={graphData}
+            currentStep={currentStep}
+            activeNodeIds={activeNodeIds}
+            onNodeClick={onNodeClick}
+            initialViewState={persistedViewState ?? undefined}
+            onViewStateChange={(viewState) => {
+              if (!graphViewKey) return;
+              const existingViewState = viewStateCache[graphViewKey] ?? graphData.view_state ?? null;
+              if (sameGraphViewState(existingViewState, viewState)) {
+                return;
+              }
+              setViewStateCache(prev => ({ ...prev, [graphViewKey]: viewState }));
+              setPendingPersistViewState(viewState);
+            }}
+          />
+        </div>
+
+        {isBuilding && (
+          <div style={{
+            position: 'absolute',
+            top: 12,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            padding: '0.38rem 0.7rem',
+            borderRadius: 999,
+            border: '1px solid rgba(167,139,250,0.25)',
+            background: 'rgba(10,14,26,0.88)',
+            color: '#c4b5fd',
+            fontSize: '0.66rem',
+            zIndex: 20,
+            whiteSpace: 'nowrap',
+          }}>
+            Revising privately · current approved diagram stays visible
+          </div>
+        )}
 
         {/* Node detail popup — resolve live node from graphData so enrichment
             updates (node_detail events) are reflected without a re-click */}
@@ -202,5 +279,7 @@ export function GraphCanvas({
         />
       )}
     </div>
+    <HiddenGraphEvaluator candidate={graphCandidate} viewport={evaluationViewport} />
+    </>
   );
 }

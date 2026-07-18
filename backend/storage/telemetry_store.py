@@ -3,6 +3,7 @@ import time
 import uuid
 
 from adapters.database_adapter import execute, fetchall
+from config import settings
 from storage.models import HttpRequestLogRow, HttpRequestLogWrite, LLMTelemetryRow, LLMTelemetryWrite
 
 
@@ -20,19 +21,6 @@ def _load_metadata(value: str | None) -> dict:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
-
-
-def _list_recent(table: str, columns: str, *, since_epoch: float, user_id: str | None = None) -> list[dict]:
-    """Query recent rows from a telemetry table, optionally filtered by user."""
-    where = "created_at_epoch >= ?"
-    params: tuple = (since_epoch,)
-    if user_id:
-        where += " AND user_id = ?"
-        params = (since_epoch, user_id)
-    return fetchall(
-        f"SELECT {columns} FROM {table} WHERE {where} ORDER BY created_at_epoch DESC",
-        params,
-    )
 
 
 def record_http_request_log(
@@ -83,14 +71,31 @@ def record_http_request_log(
     )
 
 
-_HTTP_LOG_COLUMNS = (
-    "id, user_id, method, path, status_code, latency_ms, "
-    "ip_address, user_agent, metadata_json, created_at_epoch"
-)
-
-
 def list_recent_http_request_logs(*, since_epoch: float, user_id: str | None = None) -> list[dict]:
-    rows = _list_recent("http_request_logs", _HTTP_LOG_COLUMNS, since_epoch=since_epoch, user_id=user_id)
+    if user_id:
+        rows = fetchall(
+            """
+            SELECT id, user_id, method, path, status_code, latency_ms,
+                   ip_address, user_agent, metadata_json, created_at_epoch
+            FROM http_request_logs
+            WHERE created_at_epoch >= ? AND user_id = ?
+            ORDER BY created_at_epoch DESC
+            LIMIT ?
+            """,
+            (since_epoch, user_id, settings.dashboard_query_max_rows),
+        )
+    else:
+        rows = fetchall(
+            """
+            SELECT id, user_id, method, path, status_code, latency_ms,
+                   ip_address, user_agent, metadata_json, created_at_epoch
+            FROM http_request_logs
+            WHERE created_at_epoch >= ?
+            ORDER BY created_at_epoch DESC
+            LIMIT ?
+            """,
+            (since_epoch, settings.dashboard_query_max_rows),
+        )
     normalized: list[dict] = []
     for row in rows:
         row["metadata"] = _load_metadata(row.pop("metadata_json", None))
@@ -155,14 +160,33 @@ def record_llm_telemetry(
     )
 
 
-_LLM_TELEMETRY_COLUMNS = (
-    "id, user_id, thread_id, operation, provider, model, status, "
-    "duration_ms, output_chars, used_fallback, error_type, metadata_json, created_at_epoch"
-)
-
-
 def list_recent_llm_telemetry(*, since_epoch: float, user_id: str | None = None) -> list[dict]:
-    rows = _list_recent("llm_telemetry", _LLM_TELEMETRY_COLUMNS, since_epoch=since_epoch, user_id=user_id)
+    if user_id:
+        rows = fetchall(
+            """
+            SELECT id, user_id, thread_id, operation, provider, model, status,
+                   duration_ms, output_chars, used_fallback, error_type, metadata_json,
+                   created_at_epoch
+            FROM llm_telemetry
+            WHERE created_at_epoch >= ? AND user_id = ?
+            ORDER BY created_at_epoch DESC
+            LIMIT ?
+            """,
+            (since_epoch, user_id, settings.dashboard_query_max_rows),
+        )
+    else:
+        rows = fetchall(
+            """
+            SELECT id, user_id, thread_id, operation, provider, model, status,
+                   duration_ms, output_chars, used_fallback, error_type, metadata_json,
+                   created_at_epoch
+            FROM llm_telemetry
+            WHERE created_at_epoch >= ?
+            ORDER BY created_at_epoch DESC
+            LIMIT ?
+            """,
+            (since_epoch, settings.dashboard_query_max_rows),
+        )
     normalized: list[dict] = []
     for row in rows:
         row["metadata"] = _load_metadata(row.pop("metadata_json", None))

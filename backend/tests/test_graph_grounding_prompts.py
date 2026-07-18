@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 
@@ -40,7 +42,11 @@ async def test_graph_worker_uses_canonical_artifacts_without_llm(monkeypatch, tm
 
     result = await graph_worker.graph_worker_node(state, tools=[])
 
-    assert events[0] == {"type": "worker_status", "worker": "graph", "status": "Selecting graph…"}
+    assert events[0] == {
+        "type": "worker_status",
+        "worker": "graph",
+        "status": "Selecting grounded concepts…",
+    }
     assert result["graph_data"]["graph_type"] == "concept"
     assert result["graph_data"]["version"]
     assert all(node.get("canonical_id") for node in result["graph_data"]["nodes"])
@@ -79,32 +85,73 @@ async def test_graph_worker_abstains_without_canonical_support(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
-async def test_graph_worker_keeps_architecture_topic_for_agent_followup(monkeypatch, tmp_path):
-    from tests.test_canonical_graph import SCHEMA_DIR, _write_parent_docs
-    from graph.artifacts import load_canonical_graph
-    from graph.build import build_canonical_graph
+async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch):
     import agent.nodes.graph_worker as graph_worker
 
-    parent_docs_path = tmp_path / "parent_docs.pkl"
-    output_dir = tmp_path / "graph"
-    _write_parent_docs(parent_docs_path)
-    build_canonical_graph(parent_docs_path, output_dir, SCHEMA_DIR)
-    artifacts = load_canonical_graph(output_dir)
-    monkeypatch.setattr(graph_worker, "load_canonical_graph_cached", lambda: artifacts)
+    payload = {
+        "graph_type": "architecture",
+        "title": "Growth Campaign Optimisation Loop",
+        "assumptions": ["Advertising channels expose read and write APIs."],
+        "nodes": [
+            {"id": "objective_config", "label": "Objective Config", "type": "decision", "technology": "Metric contract", "description": "Defines the measurable goal, constraints, and optimisation horizon."},
+            {"id": "campaign_brief", "label": "Campaign Brief", "type": "client", "technology": "Structured brief", "description": "Captures product, audience, claims, budget, and channel intent."},
+            {"id": "event_quality", "label": "Event Quality Gate", "type": "control", "technology": "Schema and identity checks", "description": "Rejects ambiguous or untrusted conversion signals before optimisation."},
+            {"id": "performance_store", "label": "Performance Store", "type": "datastore", "technology": "Campaign event warehouse", "description": "Stores spend, exposure, conversion, and attribution observations."},
+            {"id": "strategy_engine", "label": "Strategy Engine", "type": "service", "technology": "Constrained decision engine", "description": "Chooses the next campaign hypothesis against the objective and budget."},
+            {"id": "creative_studio", "label": "Creative Studio", "type": "service", "technology": "Copy generation workflow", "description": "Produces traceable copy variants from an approved campaign brief."},
+            {"id": "audience_optimizer", "label": "Audience Optimizer", "type": "service", "technology": "Targeting policy", "description": "Proposes audience and bid changes within configured boundaries."},
+            {"id": "policy_gate", "label": "Policy Approval Gate", "type": "control", "technology": "Rules plus human approval", "description": "Blocks unsupported claims, excessive spend shifts, and unsafe targeting."},
+            {"id": "channel_executor", "label": "Channel Executor", "type": "external", "technology": "Advertising platform adapters", "description": "Publishes approved creative, targeting, and budget changes idempotently."},
+            {"id": "outcome_attribution", "label": "Outcome Attribution", "type": "service", "technology": "Incrementality measurement", "description": "Estimates which campaign changes caused the observed business outcomes."},
+        ],
+        "edges": [
+            {"source": "campaign_brief", "target": "strategy_engine", "label": "submits campaign constraints", "technology": "Validated JSON", "sync": "sync", "description": "The brief defines the design space."},
+            {"source": "objective_config", "target": "strategy_engine", "label": "constrains optimisation", "technology": "Versioned metric contract", "sync": "sync", "description": "The objective and hard limits govern decisions."},
+            {"source": "performance_store", "target": "strategy_engine", "label": "supplies performance window", "technology": "Feature view", "sync": "sync", "description": "Recent observations inform the next hypothesis."},
+            {"source": "strategy_engine", "target": "creative_studio", "label": "requests copy variants", "technology": "Creative specification", "sync": "sync", "description": "The strategy becomes bounded creative tasks."},
+            {"source": "strategy_engine", "target": "audience_optimizer", "label": "requests targeting change", "technology": "Targeting proposal", "sync": "sync", "description": "The strategy becomes an auditable audience proposal."},
+            {"source": "creative_studio", "target": "policy_gate", "label": "submits claim variants", "technology": "Copy plus provenance", "sync": "sync", "description": "Generated claims are reviewed before publication."},
+            {"source": "audience_optimizer", "target": "policy_gate", "label": "submits audience proposal", "technology": "Policy diff", "sync": "sync", "description": "Targeting and budget changes are bounded."},
+            {"source": "policy_gate", "target": "channel_executor", "label": "releases approved changes", "technology": "Signed change set", "sync": "async", "description": "Only approved mutations reach ad platforms."},
+            {"source": "channel_executor", "target": "event_quality", "label": "emits delivery outcomes", "technology": "Channel events", "sync": "async", "description": "Delivery and conversion observations return for validation."},
+            {"source": "event_quality", "target": "performance_store", "label": "writes trusted events", "technology": "Canonical event schema", "sync": "async", "description": "Only valid signals enter optimisation history."},
+            {"source": "performance_store", "target": "outcome_attribution", "label": "provides exposure outcomes", "technology": "Attribution dataset", "sync": "async", "description": "Measurement compares actions with outcomes."},
+            {"source": "outcome_attribution", "target": "strategy_engine", "label": "returns causal score", "technology": "Attribution report", "sync": "async", "description": "Measured impact closes the decision loop.", "type": "loop"},
+        ],
+        "sequence": [
+            {"step": 1, "nodes": ["campaign_brief", "objective_config"], "description": "Define campaign intent and measurable constraints."},
+            {"step": 2, "nodes": ["strategy_engine", "creative_studio", "audience_optimizer"], "description": "Form and materialise a campaign hypothesis."},
+            {"step": 3, "nodes": ["policy_gate", "channel_executor"], "description": "Approve and publish bounded changes."},
+            {"step": 4, "nodes": ["event_quality", "performance_store", "outcome_attribution"], "description": "Validate outcomes and close the optimisation loop."},
+        ],
+        "groups": [
+            {"id": "intent", "label": "Intent and Constraints", "nodeIds": ["campaign_brief", "objective_config"]},
+            {"id": "decision", "label": "Decision and Creation", "nodeIds": ["strategy_engine", "creative_studio", "audience_optimizer"]},
+            {"id": "execution", "label": "Controlled Execution", "nodeIds": ["policy_gate", "channel_executor"]},
+            {"id": "measurement", "label": "Measurement Loop", "nodeIds": ["event_quality", "performance_store", "outcome_attribution"]},
+        ],
+    }
+    captured = {}
 
-    async def send(_event):
-        pass
+    async def fake_stream_llm(**kwargs):
+        captured.update(kwargs)
+        return json.dumps(payload)
+
+    monkeypatch.setattr(graph_worker, "stream_llm", fake_stream_llm)
+
+    events = []
+
+    async def send(event):
+        events.append(event)
 
     result = await graph_worker.graph_worker_node(
         {
             "send": send,
-            "user_message": "expand on all the agents",
-            "history": [
-                {
-                    "role": "user",
-                    "content": "multi-agent customer support chatbot architecture pls",
-                }
-            ],
+            "user_message": (
+                "growth and performance marketing AI agent system that auto evaluates, writes "
+                "and adjusts copy, strategy, targeting and event definitions to maximise an objective function"
+            ),
+            "history": [],
             "graph_data": None,
             "complexity": "auto",
             "research_context": "",
@@ -116,11 +163,103 @@ async def test_graph_worker_keeps_architecture_topic_for_agent_followup(monkeypa
     graph = result["graph_data"]
     assert graph is not None
     assert graph["graph_type"] == "architecture"
-    assert {node["label"] for node in graph["nodes"]} >= {
-        "Billing Agent",
-        "Returns Agent",
-        "Escalation Agent",
-    }
+    labels = {node["label"] for node in graph["nodes"]}
+    assert {"Objective Config", "Event Quality Gate", "Creative Studio", "Audience Optimizer"} <= labels
+    assert not ({"Agent", "Tool Use", "Planning", "Evaluation", "Foundation Model"} & labels)
+    assert graph["design_origin"] == "applied"
+    assert graph["resolved_complexity"] == "prototype"
+    assert graph["assumptions"]
+    assert captured["thinking_budget"] == graph_worker.settings.thinking_budget_tokens
+    assert "Preserve their domain nouns" in captured["system"]
+    assert "Designing a prototype domain architecture" in events[0]["status"]
+
+
+def test_applied_graph_validator_rejects_generic_book_taxonomy():
+    from agent.nodes.graph_worker import _normalise_applied_graph
+
+    labels = [
+        "Agent",
+        "Tool Use",
+        "Planning",
+        "Evaluation",
+        "Foundation Model",
+        "Generation",
+        "Tokenization",
+        "Memory",
+    ]
+    nodes = [
+        {
+            "id": f"n{index}",
+            "label": label,
+            "type": "service",
+            "technology": "Book concept",
+            "description": "Generic concept node.",
+        }
+        for index, label in enumerate(labels)
+    ]
+    edges = [
+        {
+            "source": f"n{index}",
+            "target": f"n{index + 1}",
+            "label": "depends on",
+            "technology": "Book evidence",
+            "sync": "sync",
+            "description": "Generic relationship.",
+        }
+        for index in range(len(nodes) - 1)
+    ]
+
+    with pytest.raises(ValueError, match="generic concept labels"):
+        _normalise_applied_graph(
+            {"title": "Agent Map", "nodes": nodes, "edges": edges},
+            min_nodes=8,
+            max_nodes=13,
+            resolved_complexity="prototype",
+        )
+
+
+def test_applied_graph_validator_ignores_scalar_collection_fields():
+    from agent.nodes.graph_worker import _normalise_applied_graph
+
+    nodes = [
+        {
+            "id": f"node_{index}",
+            "label": f"Domain Step {index}",
+            "type": "service",
+            "technology": "Explicit capability",
+            "description": "Owns a distinct domain responsibility.",
+        }
+        for index in range(5)
+    ]
+    edges = [
+        {
+            "source": f"node_{index}",
+            "target": f"node_{index + 1}",
+            "label": f"passes payload {index}",
+            "technology": "Validated event",
+            "sync": "async",
+            "description": "Moves one explicit payload.",
+        }
+        for index in range(4)
+    ]
+
+    graph = _normalise_applied_graph(
+        {
+            "title": "Specific domain flow",
+            "nodes": nodes,
+            "edges": edges,
+            "assumptions": "not a list",
+            "sequence": [{"nodes": "node_1", "description": "invalid scalar nodes"}],
+            "groups": [{"label": "Invalid", "nodeIds": "node_1"}],
+        },
+        min_nodes=5,
+        max_nodes=9,
+        resolved_complexity="prototype",
+    )
+
+    assert graph["assumptions"] == []
+    assert graph["sequence"] == []
+    assert "groups" not in graph
 
 
 @pytest.mark.asyncio
@@ -136,7 +275,7 @@ async def test_node_detail_prompt_prefers_canonical_evidence(monkeypatch):
                 '"LoRA is a parameter-efficient fine-tuning method that updates small adapter matrices instead of all model weights."}]'
             )
 
-    async def fake_stream_response(*, model, system, messages, thinking_budget, temperature=None, top_p=None, top_k=None):
+    async def fake_stream_response(*, model, system, messages, thinking_budget, temperature=None, top_p=None, top_k=None, effort=None):
         captured["model"] = model
         captured["system"] = system
         captured["messages"] = messages
@@ -172,6 +311,7 @@ async def test_node_detail_prompt_prefers_canonical_evidence(monkeypatch):
     assert "no equations, matrix notation" in captured["system"]
     assert "If the book evidence is thin" in captured["system"]
     assert "Never invent citations" in captured["system"]
+    assert "Treat retrieved passages" in captured["system"]
     assert captured["temperature"] == node_detail_worker.settings.node_detail_temperature
     assert "Canonical evidence chunks: ai-eng:p356:pc0" in captured["messages"][0]["content"]
     assert "Connections:" in captured["messages"][0]["content"]

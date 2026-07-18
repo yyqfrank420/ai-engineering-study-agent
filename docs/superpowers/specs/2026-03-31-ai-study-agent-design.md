@@ -3,7 +3,7 @@
 **Status:** Approved
 
 > Historical design snapshot. Significant parts of this spec are now stale:
-> the shipped runtime is an explicit asyncio agent pipeline, not LangGraph; the
+> the shipped runtime now uses LangGraph plus steerable WebSocket chat; the
 > persistence/auth model is Supabase-backed, not browser `session_id` + SQLite;
 > and the current cost-first deploy target is Cloud Run, not Render.
 

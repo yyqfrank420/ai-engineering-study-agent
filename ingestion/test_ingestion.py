@@ -8,6 +8,8 @@
 # Outputs: pytest pass/fail
 # ─────────────────────────────────────────────────────────────────────────────
 
+import importlib.util
+import os
 import pickle
 from pathlib import Path
 
@@ -15,21 +17,42 @@ import pytest
 
 from config import OUTPUT_DIR
 from sentence_embedder import SentenceEmbedder
-from chunker import _build_chapter_map, _build_font_profile, _is_size
-from langchain_core.documents import Document
 
-PDF_PATH = Path("/Users/yangyuqing/Desktop/Textbooks pdf/AI Engineering.pdf")
+_pdf_path_value = os.getenv("AI_ENGINEERING_PDF_PATH", "").strip()
+PDF_PATH = Path(_pdf_path_value).expanduser() if _pdf_path_value else None
+_ARTIFACT_FILES = ("index.faiss", "index.pkl", "parent_docs.pkl")
+requires_artifacts = pytest.mark.skipif(
+    not all((OUTPUT_DIR / filename).exists() for filename in _ARTIFACT_FILES),
+    reason="FAISS artifacts are absent; run ingestion first",
+)
+requires_real_model = pytest.mark.skipif(
+    os.getenv("RUN_INGESTION_MODEL_TESTS") != "1",
+    reason="set RUN_INGESTION_MODEL_TESTS=1 to load the real embedding model",
+)
+requires_chunker_dependencies = pytest.mark.skipif(
+    importlib.util.find_spec("pdfplumber") is None,
+    reason="install ingestion requirements to exercise PDF chunking",
+)
 
 
 # ── font size helper ──────────────────────────────────────────────────────────
 
+@requires_chunker_dependencies
 def test_is_size_exact():
+    from chunker import _is_size
+
     assert _is_size(18.9, 18.9) is True
 
+@requires_chunker_dependencies
 def test_is_size_within_tolerance():
+    from chunker import _is_size
+
     assert _is_size(18.5, 18.9) is True   # within 1pt
 
+@requires_chunker_dependencies
 def test_is_size_outside_tolerance():
+    from chunker import _is_size
+
     assert _is_size(16.8, 18.9) is False  # more than 1pt away
 
 
@@ -37,13 +60,21 @@ def test_is_size_outside_tolerance():
 
 @pytest.fixture(scope="module")
 def font_profile():
+    if importlib.util.find_spec("pdfplumber") is None:
+        pytest.skip("install ingestion requirements to exercise PDF chunking")
+    if PDF_PATH is None or not PDF_PATH.is_file():
+        pytest.skip("set AI_ENGINEERING_PDF_PATH to run source-PDF integration tests")
     import pdfplumber
+    from chunker import _build_font_profile
+
     with pdfplumber.open(PDF_PATH) as pdf:
         return _build_font_profile(pdf)
 
 @pytest.fixture(scope="module")
 def chapter_map(font_profile):
     import pdfplumber
+    from chunker import _build_chapter_map
+
     with pdfplumber.open(PDF_PATH) as pdf:
         return _build_chapter_map(pdf, font_profile)
 
@@ -75,7 +106,31 @@ def test_chapter_map_covers_body_pages(chapter_map):
 
 @pytest.fixture(scope="module")
 def embedder():
-    return SentenceEmbedder()
+    class FakeMatrix:
+        def __init__(self, values):
+            self._values = values
+
+        def __getitem__(self, index):
+            return FakeVector(self._values[index])
+
+        def tolist(self):
+            return self._values
+
+    class FakeVector:
+        def __init__(self, values):
+            self._values = values
+
+        def tolist(self):
+            return self._values
+
+    class FakeModel:
+        def encode(self, texts, **_kwargs):
+            return FakeMatrix([
+                [float((sum(map(ord, text)) + index) % 997) for index in range(384)]
+                for text in texts
+            ])
+
+    return SentenceEmbedder(model=FakeModel())
 
 def test_embed_query_returns_384_dims(embedder):
     vec = embedder.embed_query("What is attention?")
@@ -97,11 +152,13 @@ def test_embed_query_different_texts_differ(embedder):
 
 # ── FAISS index output files ──────────────────────────────────────────────────
 
+@requires_artifacts
 def test_faiss_index_files_exist():
     assert (OUTPUT_DIR / "index.faiss").exists(), "index.faiss missing — run ingest.py first"
     assert (OUTPUT_DIR / "index.pkl").exists(), "index.pkl missing"
     assert (OUTPUT_DIR / "parent_docs.pkl").exists(), "parent_docs.pkl missing"
 
+@requires_artifacts
 def test_parent_docs_have_chapter_metadata():
     with open(OUTPUT_DIR / "parent_docs.pkl", "rb") as f:
         docs = pickle.load(f)
@@ -110,6 +167,7 @@ def test_parent_docs_have_chapter_metadata():
     ratio = len(with_chapter) / len(docs)
     assert ratio >= 0.8, f"Only {ratio:.0%} of docs have chapter metadata — expected ≥80%"
 
+@requires_artifacts
 def test_parent_docs_chapter_titles_populated():
     with open(OUTPUT_DIR / "parent_docs.pkl", "rb") as f:
         docs = pickle.load(f)
@@ -117,12 +175,15 @@ def test_parent_docs_chapter_titles_populated():
     missing_title = [d for d in chapter_docs if not d.metadata.get("chapter_title")]
     assert not missing_title, f"{len(missing_title)} docs have chapter but no chapter_title"
 
+@requires_artifacts
 def test_parent_docs_all_ten_chapters_present():
     with open(OUTPUT_DIR / "parent_docs.pkl", "rb") as f:
         docs = pickle.load(f)
     chapters_found = {d.metadata["chapter"] for d in docs if d.metadata.get("chapter")}
     assert chapters_found == set(range(1, 11)), f"Found chapters: {sorted(chapters_found)}"
 
+@requires_artifacts
+@requires_real_model
 def test_faiss_index_loads_and_queries():
     from langchain_community.vectorstores import FAISS
     embedder = SentenceEmbedder()
@@ -131,6 +192,8 @@ def test_faiss_index_loads_and_queries():
     assert len(results) == 3
     assert all(r.page_content.strip() != "" for r in results)
 
+@requires_artifacts
+@requires_real_model
 def test_faiss_chapter_filter_works():
     from langchain_community.vectorstores import FAISS
     embedder = SentenceEmbedder()

@@ -12,10 +12,10 @@ import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi import HTTPException
 
 from adapters.database_adapter import init_db
 from storage import message_store, thread_store
+from storage.errors import ThreadMessageLimitExceeded
 from storage.profile_store import upsert_profile
 
 
@@ -143,10 +143,10 @@ def test_thread_store_handles_corrupt_graph_json(temp_data_dir):
 
 # ── Message cap ───────────────────────────────────────────────────────────────
 
-def test_message_cap_raises_429(temp_data_dir, monkeypatch):
+def test_message_cap_raises_domain_error(temp_data_dir, monkeypatch):
     """
     Appending a message when the thread is already at max_messages_per_thread
-    should raise HTTPException 429.
+    should raise a storage-domain error without depending on the HTTP layer.
     """
     init_db()
     from config import settings
@@ -160,10 +160,8 @@ def test_message_cap_raises_429(temp_data_dir, monkeypatch):
         role = "user" if i % 2 == 0 else "assistant"
         message_store.append(user_id, thread_id, role, f"message {i}")
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(ThreadMessageLimitExceeded):
         message_store.append(user_id, thread_id, "user", "one too many")
-
-    assert exc_info.value.status_code == 429
 
 
 def test_message_cap_allows_up_to_limit(temp_data_dir, monkeypatch):
@@ -252,7 +250,7 @@ async def test_condense_summarises_old_turns_when_over_threshold():
 
     mock_summary = "Summary of old turns."
     with patch(
-        "agent.context_manager._call_haiku_summary",
+        "agent.context_manager._call_summary",
         new=AsyncMock(return_value=mock_summary),
     ):
         result = await maybe_condense_history(
@@ -269,9 +267,9 @@ async def test_condense_summarises_old_turns_when_over_threshold():
 
 
 @pytest.mark.asyncio
-async def test_condense_falls_back_on_haiku_failure():
+async def test_condense_falls_back_on_model_failure():
     """
-    If the Haiku call raises an exception, the original history should be
+    If the summary call raises an exception, the original history should be
     returned unchanged — never blocking the main response.
     """
     from agent.context_manager import maybe_condense_history
@@ -283,8 +281,8 @@ async def test_condense_falls_back_on_haiku_failure():
     ]
 
     with patch(
-        "agent.context_manager._call_haiku_summary",
-        new=AsyncMock(side_effect=Exception("Haiku unavailable")),
+        "agent.context_manager._call_summary",
+        new=AsyncMock(side_effect=Exception("Model unavailable")),
     ):
         result = await maybe_condense_history(
             history,

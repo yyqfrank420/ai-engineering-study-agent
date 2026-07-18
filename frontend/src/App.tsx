@@ -79,6 +79,9 @@ export default function App() {
   const {
     messages,
     graphData,
+    graphCandidate,
+    workflowProgress,
+    explanationPaused,
     workerStatus,
     retrievalNotice,
     graphNotice,
@@ -91,6 +94,7 @@ export default function App() {
     requestSearchTool,
     sendNodeSelected,
     stopGeneration,
+    toggleExplanationPause,
   } = useAgentStream(authSession, activeThreadId);
 
   const [complexity,      setComplexity]      = useState<ComplexityLevel>('auto');
@@ -146,13 +150,13 @@ export default function App() {
   }, [backendReadiness, clearSelection, complexity, graphMode, researchEnabled, selectionReferenceActive, selectionSuggestion, sendMessage]);
 
   // isGenerating: LLM is actively streaming — show Stop button
-  const isGenerating = messages.some(m => m.isStreaming);
+  const isGenerating = streamStatus === 'generating';
   // isStreaming: busy state used to disable sidebar/new-chat during loads
   const isStreaming = isGenerating || loadingThread;
-  const composerLocked = streamStatus === 'generating' || loadingThread;
-  const sendLocked = composerLocked || backendReadiness !== 'ready' || !activeThreadId;
+  const composerLocked = loadingThread;
+  const sendLocked = loadingThread || backendReadiness !== 'ready' || !activeThreadId;
   const showPrepare = !!authSession && backendReadiness !== 'ready';
-  const prepareDisabled = composerLocked || !authSession || backendReadiness === 'preparing';
+  const prepareDisabled = isGenerating || composerLocked || !authSession || backendReadiness === 'preparing';
 
   const handleNodeClick = (node: GraphNode) => {
     setSelectedNode({ node, suggestions: [] });
@@ -341,6 +345,9 @@ export default function App() {
                     selectedNode={selectedNode}
                     onClosePopup={() => setSelectedNode(null)}
                     sourceTexts={[latestAssistantText]}
+                    isBuilding={isGenerating}
+                    workflowProgress={workflowProgress}
+                    graphCandidate={graphCandidate}
                   />
                 </Suspense>
               }
@@ -382,7 +389,13 @@ export default function App() {
                   <Suspense fallback={<div style={panelFallbackStyle}>Loading conversation…</div>}>
                     <MessageList messages={messages} />
                   </Suspense>
-                  <ThinkingIndicator workerStatus={workerStatus} />
+                  <ThinkingIndicator
+                    workerStatus={workerStatus}
+                    workflowProgress={workflowProgress}
+                    isGenerating={isGenerating}
+                    explanationPaused={explanationPaused}
+                    onTogglePause={toggleExplanationPause}
+                  />
                   <RetrievalNoticeBar
                     notice={retrievalNotice}
                     onUseSearchTool={requestSearchTool}

@@ -138,6 +138,19 @@ describe('ChatInput', () => {
     expect(onStop).toHaveBeenCalled();
   });
 
+  it('keeps the composer active and submits steering while generating', () => {
+    const onSend = vi.fn();
+    renderInput('thread-1', { isGenerating: true, onSend });
+    const input = screen.getByPlaceholderText('Steer the active response…');
+
+    fireEvent.change(input, { target: { value: 'focus on the approval boundary' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Steer response' }));
+
+    expect(onSend).toHaveBeenCalledWith('focus on the approval boundary');
+    expect((input as HTMLTextAreaElement).value).toBe('');
+    expect(screen.getByRole('button', { name: 'Stop generation' })).toBeTruthy();
+  });
+
   it('applies hover focus blur handlers and closes the popover on outside click', () => {
     renderInput('thread-1', {
       complexity: 'production',

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import pickle
+# This build step reads only the repository's generated, checksum-pinned artifact.
+import pickle  # nosec B403
 import re
 import shutil
 from collections import defaultdict
@@ -388,7 +389,7 @@ def build_canonical_graph(
     validate_relation_registry(registry)
 
     with parent_docs_path.open("rb") as handle:
-        parent_docs = pickle.load(handle)
+        parent_docs = pickle.load(handle)  # nosec B301
 
     chunks = _prepare_chunks(parent_docs)
     node_candidates, terms_by_chunk = _extract_node_candidates(chunks)

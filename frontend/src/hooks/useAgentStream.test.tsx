@@ -7,19 +7,24 @@ const mocks = vi.hoisted(() => ({
   eventHandler: null as null | ((event: ServerEvent, meta: { kind: 'chat' | 'node-selected'; clientRequestId: string }) => void),
   sendMessage: vi.fn(),
   sendNodeSelected: vi.fn(),
+  isChatActive: vi.fn(),
+  steerGeneration: vi.fn(),
   stopGeneration: vi.fn(),
   useSearchTool: vi.fn(),
   trackEvent: vi.fn(),
 }));
 
-vi.mock('../services/sse', () => ({
-  sseClient: {
+vi.mock('../services/agentTransport', () => ({
+  createClientRequestId: () => crypto.randomUUID(),
+  agentTransport: {
     onEvent: vi.fn((handler: NonNullable<typeof mocks.eventHandler>) => {
       mocks.eventHandler = handler;
       return vi.fn();
     }),
     sendMessage: mocks.sendMessage,
     sendNodeSelected: mocks.sendNodeSelected,
+    isChatActive: mocks.isChatActive,
+    steerGeneration: mocks.steerGeneration,
     stopGeneration: mocks.stopGeneration,
     useSearchTool: mocks.useSearchTool,
   },
@@ -75,12 +80,16 @@ function Harness({
       <div data-testid="retrieval-requested">{agent.retrievalNotice?.requested ? 'yes' : 'no'}</div>
       <div data-testid="graph-notice">{agent.graphNotice?.message ?? ''}</div>
       <div data-testid="graph-title">{agent.graphData?.title ?? ''}</div>
+      <div data-testid="candidate-title">{agent.graphCandidate?.data.title ?? ''}</div>
+      <div data-testid="progress">{JSON.stringify(agent.workflowProgress)}</div>
+      <div data-testid="paused">{agent.explanationPaused ? 'yes' : 'no'}</div>
       <div data-testid="node-detail">{agent.graphData?.nodes[0]?.detail ?? ''}</div>
       <div data-testid="selected">{agent.selectedNode ? `${agent.selectedNode.node.id}:${agent.selectedNode.suggestions.join(',')}` : ''}</div>
       <button onClick={() => agent.sendMessage('hello', { complexity: 'production', graphMode: 'on', researchEnabled: true })}>send</button>
       <button onClick={() => agent.requestSearchTool()}>search</button>
       <button onClick={() => agent.sendNodeSelected('agent', 'Agent', 'Plans tool use.')}>node</button>
       <button onClick={() => agent.stopGeneration()}>stop</button>
+      <button onClick={() => agent.toggleExplanationPause()}>pause</button>
       <button onClick={() => agent.setSelectedNode({ node: graph().nodes[0], suggestions: [] })}>select</button>
       <button onClick={() => agent.hydrateThread({ messages: [{ id: 'm1', role: 'user', content: 'old' }], graphData: graph('2') })}>hydrate</button>
     </div>
@@ -93,6 +102,8 @@ describe('useAgentStream', () => {
     mocks.eventHandler = null;
     mocks.sendMessage.mockResolvedValue(true);
     mocks.sendNodeSelected.mockResolvedValue(true);
+    mocks.isChatActive.mockReturnValue(false);
+    mocks.steerGeneration.mockReturnValue(false);
     mocks.useSearchTool.mockResolvedValue({ ok: true, status: 'search_requested' });
   });
 
@@ -173,6 +184,28 @@ describe('useAgentStream', () => {
       'chat_stream_failed',
       expect.objectContaining({ error_code: 'backend failed' }),
       session,
+    );
+  });
+
+  it('does not count an error followed by done as a completed stream', () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByText('send'));
+    const clientRequestId = mocks.sendMessage.mock.calls[0][4] as string;
+
+    act(() => {
+      mocks.eventHandler?.({ type: 'error', content: 'rejected' }, { kind: 'chat', clientRequestId });
+      mocks.eventHandler?.({ type: 'done' }, { kind: 'chat', clientRequestId });
+    });
+
+    expect(mocks.trackEvent).toHaveBeenCalledWith(
+      'chat_stream_failed',
+      expect.objectContaining({ error_code: 'rejected' }),
+      session,
+    );
+    expect(mocks.trackEvent).not.toHaveBeenCalledWith(
+      'chat_stream_completed',
+      expect.anything(),
+      expect.anything(),
     );
   });
 
@@ -305,6 +338,84 @@ describe('useAgentStream', () => {
       expect.objectContaining({ thread_id: 'thread-1', client_request_id: clientRequestId }),
       session,
     );
+  });
+
+  it('steers the active WebSocket run instead of opening a second run', () => {
+    mocks.steerGeneration.mockReturnValue(true);
+    render(<Harness />);
+
+    fireEvent.click(screen.getByText('send'));
+    fireEvent.click(screen.getByText('send'));
+
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.steerGeneration).toHaveBeenCalledWith('hello');
+    expect(screen.getByTestId('messages').textContent).toContain('user:Steer: hello:done');
+  });
+
+  it('discards partial assistant output when a steer restarts the workflow', () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByText('send'));
+    const clientRequestId = mocks.sendMessage.mock.calls[0][4] as string;
+
+    act(() => {
+      mocks.eventHandler?.({ type: 'response_delta', content: 'obsolete draft' }, { kind: 'chat', clientRequestId });
+      mocks.eventHandler?.({ type: 'response_reset' }, { kind: 'chat', clientRequestId });
+      mocks.eventHandler?.({ type: 'response_delta', content: 'revised answer' }, { kind: 'chat', clientRequestId });
+    });
+
+    expect(screen.getByTestId('messages').textContent).not.toContain('obsolete draft');
+    expect(screen.getByTestId('messages').textContent).toContain('revised answer');
+  });
+
+  it('keeps candidates hidden and queues explanation blocks while reveal is paused', () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByText('send'));
+    const clientRequestId = mocks.sendMessage.mock.calls[0][4] as string;
+
+    act(() => {
+      mocks.eventHandler?.({
+        type: 'workflow_progress',
+        phase: 'architect',
+        status: 'complete',
+        title: 'Primary design ready',
+        detail: 'Runtime loop identified.',
+      }, { kind: 'chat', clientRequestId });
+      mocks.eventHandler?.({
+        type: 'graph_candidate',
+        evaluation_id: 'eval-1',
+        graph_version: 'candidate-v1',
+        data: graph('candidate-v1'),
+      }, { kind: 'chat', clientRequestId });
+    });
+
+    expect(screen.getByTestId('candidate-title').textContent).toBe('Agent Map');
+    expect(screen.getByTestId('graph-title').textContent).toBe('');
+    expect(screen.getByTestId('progress').textContent).toContain('Primary design ready');
+
+    fireEvent.click(screen.getByText('pause'));
+    expect(screen.getByTestId('paused').textContent).toBe('yes');
+    act(() => {
+      mocks.eventHandler?.({
+        type: 'explanation_block',
+        block_id: 'overview',
+        title: 'In one minute',
+        content: 'A queued explanation.',
+        related_node_ids: ['agent'],
+        evidence_refs: [],
+        graph_version: 'candidate-v1',
+      }, { kind: 'chat', clientRequestId });
+    });
+    expect(screen.getByTestId('messages').textContent).not.toContain('A queued explanation.');
+
+    act(() => {
+      mocks.eventHandler?.({ type: 'done' }, { kind: 'chat', clientRequestId });
+    });
+    expect(screen.getByTestId('status').textContent).toBe('connected');
+    expect(screen.getByTestId('progress').textContent).toContain('Primary design ready');
+
+    fireEvent.click(screen.getByText('pause'));
+    expect(screen.getByTestId('messages').textContent).toContain('A queued explanation.');
+    expect(screen.getByTestId('progress').textContent).toBe('[]');
   });
 
   it('shows an auth/thread error when sending without prerequisites', () => {

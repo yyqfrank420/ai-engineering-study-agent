@@ -2,6 +2,7 @@ import json
 import re
 
 from adapters.llm_adapter import stream_response, stream_response_compat
+from agent.prompt_security import protect_system_prompt
 from config import settings
 
 
@@ -53,12 +54,13 @@ async def stream_suggested_questions(
     async for event_type, chunk in stream_response_compat(
         stream_response,
         model=settings.worker_model,
-        system=system,
+        system=protect_system_prompt(system),
         messages=build_chip_prompt(node_title, node_description, history),
         thinking_budget=None,
         temperature=settings.suggestion_chip_temperature,
         top_p=settings.suggestion_chip_top_p,
         top_k=settings.suggestion_chip_top_k,
+        effort="low",
         telemetry=telemetry,
     ):
         if event_type == "provider_switch":

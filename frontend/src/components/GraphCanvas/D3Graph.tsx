@@ -175,7 +175,7 @@ export function D3Graph({
   const [edgeTooltip, setEdgeTooltip] = useState<EdgeTooltip | null>(null);
   const structureKey = graphStructureKey(graphData);
   const detailKey = graphData
-    ? graphData.nodes.map(node => `${node.id}:${node.detail ? '1' : '0'}`).join('|')
+    ? graphData.nodes.map(node => `${node.id}:${node.detail || node.design_origin === 'applied' ? '1' : '0'}`).join('|')
     : 'null';
 
   useEffect(() => {
@@ -213,8 +213,9 @@ export function D3Graph({
     const V_PAD = 72;   // vertical margin (top/bottom of canvas)
     // Minimum column width: node width + comfortable horizontal gap
     const MIN_COL_W = NODE_W + 84;
-    // How far above the canvas return-edge arcs peak (requires SVG overflow:visible)
-    const RETURN_ARC_Y = -80;
+    // Keep feedback arcs inside the initial viewport so the closed loop is
+    // visible to a newcomer and to the screenshot quality gate.
+    const RETURN_ARC_Y = 18;
 
     // ── Arrowhead markers ─────────────────────────────────────────────────────
     const defs = svg.append('defs');
@@ -528,7 +529,7 @@ export function D3Graph({
       .attr('stroke-width', 1.5)
       .attr('stroke-dasharray', (d: RenderLink) => d.edgeType === 'loop' ? '5,4' : d.sync === 'async' ? '6,4' : 'none')
       .attr('marker-end', (d: RenderLink) => (d.edgeType === 'loop' || !isForward(d)) ? 'url(#arrow-ret)' : 'url(#arrow-fwd)')
-      .attr('opacity', 0);
+      .attr('opacity', (d: RenderLink) => d.edgeType === 'loop' ? 0.42 : 0);
 
     // Wide invisible hit area for easier hover targeting
     const linkHit = linkGroup.selectAll('path.edge-hit')
@@ -571,7 +572,7 @@ export function D3Graph({
     // Edge action label (verb phrase) — sits slightly above the edge midpoint
     const edgeLabelGroup = linkGroup.selectAll('g.edge-label')
       .data(links).enter().append('g').attr('class', 'edge-label');
-    edgeLabelGroup.attr('opacity', 0);
+    edgeLabelGroup.attr('opacity', (d: RenderLink) => d.edgeType === 'loop' ? 0.55 : 0);
 
     edgeLabelGroup.append('rect')
       .attr('rx', 3).attr('fill', '#0a0e1a').attr('opacity', 0.9);
@@ -635,9 +636,9 @@ export function D3Graph({
           const edgeHitNodes  = linkGroup.selectAll('path.edge-hit').nodes() as Element[];
           const edgeLblNodes  = linkGroup.selectAll('g.edge-label').nodes() as Element[];
           loopIdxs.forEach(i => {
-            d3.select(edgeVisNodes[i]).interrupt().transition().duration(200).attr('opacity', 0);
-            d3.select(edgeHitNodes[i]).attr('opacity', 0).style('pointer-events', 'none');
-            d3.select(edgeLblNodes[i]).interrupt().transition().duration(200).attr('opacity', 0);
+            d3.select(edgeVisNodes[i]).interrupt().transition().duration(200).attr('opacity', 0.42);
+            d3.select(edgeHitNodes[i]).attr('opacity', 1).style('pointer-events', 'auto');
+            d3.select(edgeLblNodes[i]).interrupt().transition().duration(200).attr('opacity', 0.55);
           });
         }
       });
@@ -681,7 +682,7 @@ export function D3Graph({
       .attr('x', -(NODE_W - 32) / 2).attr('y', NODE_H / 2 - 5)
       .attr('rx', 1)
       .attr('fill', 'rgba(167,139,250,0.3)')
-      .attr('opacity', (d: RenderNode) => d.detail ? 0 : 0.7);
+      .attr('opacity', (d: RenderNode) => d.detail || d.design_origin === 'applied' ? 0 : 0.7);
 
     // Row 1 — type badge (top-left)
     nodeSel.append('text')
@@ -914,7 +915,10 @@ export function D3Graph({
     const renderState = renderStateRef.current;
     if (!renderState || !graphData) return;
 
-    const detailById = new Map(graphData.nodes.map(node => [node.id, Boolean(node.detail)]));
+    const detailById = new Map(graphData.nodes.map(node => [
+      node.id,
+      Boolean(node.detail) || node.design_origin === 'applied',
+    ]));
     renderState.nodeSel
       .select<SVGRectElement>('rect.node-detail-shimmer')
       .interrupt()
@@ -1011,6 +1015,8 @@ export function D3Graph({
       {/* overflow:visible allows return-edge arcs to arc above the SVG viewport */}
       <svg
         ref={svgRef}
+        data-testid="graph-canvas"
+        aria-label="Architecture graph"
         style={{ width: '100%', height: '100%', background: '#080d14', overflow: 'visible' }}
       />
 

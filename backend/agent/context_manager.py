@@ -3,18 +3,18 @@
 # Purpose: Auto-condense long conversation histories before sending to the LLM.
 #          When the total character count of a thread's history exceeds
 #          settings.context_condense_threshold_chars, older turns are
-#          summarised by Haiku and replaced with a single summary message.
+#          summarised at low effort and replaced with a single summary message.
 #          The most recent `settings.context_condense_keep_recent` turns are
 #          always kept verbatim so the LLM has full context for the current
 #          exchange.
 #
 #          This is a safety valve — it should rarely trigger in normal use.
-#          If the Haiku call fails or times out, the function falls back to
+#          If the summary call fails or times out, the function falls back to
 #          returning the original history unchanged so the main response is
 #          never blocked.
 #
 # Language: Python
-# Connects to: adapters/llm_adapter.py (Haiku streaming call), config.py
+# Connects to: adapters/llm_adapter.py (shared streaming call), config.py
 # Inputs:  history list[dict] with keys "role" and "content"
 # Outputs: history list[dict] (same format, possibly condensed)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -23,17 +23,18 @@ import asyncio
 import logging
 
 from adapters.llm_adapter import build_telemetry, stream_response, stream_response_compat
+from agent.prompt_security import protect_system_prompt
 from config import settings
 
 logger = logging.getLogger(__name__)
 
-# How long to wait for Haiku to produce the summary before giving up
+# How long to wait for the summary before giving up
 _CONDENSE_TIMEOUT_S = 5.0
 
 
-async def _call_haiku_summary(old_text: str) -> str:
+async def _call_summary(old_text: str) -> str:
     """
-    Ask Haiku to produce a 2-3 sentence summary of `old_text`.
+    Ask the configured worker model for a low-effort summary of `old_text`.
 
     Collects the full streamed response into a single string.
     Raises on any error so the caller can fall back gracefully.
@@ -53,11 +54,12 @@ async def _call_haiku_summary(old_text: str) -> str:
     async for event_type, content in stream_response_compat(
         stream_response,
         model=settings.worker_model,
-        system=system,
+        system=protect_system_prompt(system),
         messages=messages,
         temperature=settings.condense_temperature,
         top_p=settings.condense_top_p,
         top_k=settings.condense_top_k,
+        effort="low",
         telemetry=build_telemetry("context_condense"),
     ):
         if event_type == "text":
@@ -75,7 +77,7 @@ async def maybe_condense_history(
 
     Decision tree:
         total_chars ≤ threshold  →  return history unchanged
-        total_chars > threshold  →  summarise old turns with Haiku (5s timeout)
+        total_chars > threshold  →  summarise old turns at low effort (5s timeout)
                                      success: return [summary_msg] + recent turns
                                      failure: log warning, return original history
 
@@ -116,7 +118,7 @@ async def maybe_condense_history(
 
     try:
         summary = await asyncio.wait_for(
-            _call_haiku_summary(old_text),
+            _call_summary(old_text),
             timeout=_CONDENSE_TIMEOUT_S,
         )
         condensed: list[dict] = [
@@ -126,7 +128,7 @@ async def maybe_condense_history(
 
     except Exception:
         logger.warning(
-            "context_manager: condense failed (timeout or Haiku error) — using full history",
+            "context_manager: condense failed (timeout or model error) — using full history",
             exc_info=True,
         )
         return history

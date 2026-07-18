@@ -1,7 +1,7 @@
-import posthog from 'posthog-js';
-
 import type { AnalyticsEventName, AnalyticsEventProperties, AuthSession } from '../types';
 import { captureAnalyticsEvent as mirrorAnalyticsEvent } from './api';
+
+type PostHogClient = typeof import('posthog-js')['default'];
 
 const STORAGE_KEY = 'agent.analytics.anonymous_id';
 const POSTHOG_KEY = (import.meta.env.VITE_POSTHOG_KEY as string | undefined)?.trim() ?? '';
@@ -15,6 +15,20 @@ const PUBLIC_EVENTS = new Set<AnalyticsEventName>([
 ]);
 
 let initialised = false;
+let posthogPromise: Promise<PostHogClient | null> | null = null;
+
+function withPostHog(action: (client: PostHogClient) => void): void {
+  if (!POSTHOG_KEY) return;
+  posthogPromise ??= import('posthog-js')
+    .then(module => module.default)
+    .catch(error => {
+      console.warn('[analytics] Failed to load PostHog', error);
+      return null;
+    });
+  void posthogPromise.then(client => {
+    if (client) action(client);
+  });
+}
 
 function ensureAnonymousId(): string {
   const existing = localStorage.getItem(STORAGE_KEY);
@@ -37,13 +51,15 @@ export function initAnalytics(): void {
     initialised = true;
     return;
   }
-  posthog.init(POSTHOG_KEY, {
-    api_host: POSTHOG_HOST,
-    autocapture: false,
-    capture_pageview: false,
-    capture_pageleave: false,
-    disable_session_recording: true,
-    persistence: 'localStorage',
+  withPostHog(client => {
+    client.init(POSTHOG_KEY, {
+      api_host: POSTHOG_HOST,
+      autocapture: false,
+      capture_pageview: false,
+      capture_pageleave: false,
+      disable_session_recording: true,
+      persistence: 'localStorage',
+    });
   });
   initialised = true;
 }
@@ -53,12 +69,12 @@ export function identifyAnalyticsUser(session: AuthSession | null): void {
   if (!ANALYTICS_ENABLED || !POSTHOG_KEY || !session) {
     return;
   }
-  posthog.identify(session.user.id);
+  withPostHog(client => client.identify(session.user.id));
 }
 
 export function resetAnalytics(): void {
-  if (POSTHOG_KEY) {
-    posthog.reset();
+  if (ANALYTICS_ENABLED && POSTHOG_KEY) {
+    withPostHog(client => client.reset());
   }
 }
 
@@ -72,7 +88,7 @@ export async function trackEvent(
   const payload: AnalyticsEventProperties = { ...properties };
 
   if (ANALYTICS_ENABLED && POSTHOG_KEY) {
-    posthog.capture(event, payload);
+    withPostHog(client => client.capture(event, payload));
   }
 
   try {

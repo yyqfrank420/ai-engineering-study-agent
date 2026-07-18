@@ -8,9 +8,19 @@ output "cloud_run_service_url" {
   description = "Public Cloud Run URL for the backend."
 }
 
+output "staging_cloud_run_service_url" {
+  value       = google_cloud_run_v2_service.backend_staging.uri
+  description = "Public Cloud Run URL for the isolated staging service."
+}
+
 output "backend_service_account_email" {
   value       = google_service_account.backend.email
   description = "Service account used by the backend."
+}
+
+output "staging_service_account_email" {
+  value       = google_service_account.backend_staging.email
+  description = "Service account used by the staging backend."
 }
 
 output "artifact_registry_repository" {
@@ -20,7 +30,17 @@ output "artifact_registry_repository" {
 
 output "ci_service_account_email" {
   value       = google_service_account.ci.email
-  description = "Service account email for GitHub Actions. Use as GCP_SERVICE_ACCOUNT secret."
+  description = "Deprecated unprivileged GitHub Actions service account retained for transition rollback."
+}
+
+output "staging_ci_service_account_email" {
+  value       = google_service_account.github_actions_staging.email
+  description = "Set as GCP_SERVICE_ACCOUNT only in the protected staging-eval GitHub Environment."
+}
+
+output "production_ci_service_account_email" {
+  value       = google_service_account.github_actions_production.email
+  description = "Set as GCP_SERVICE_ACCOUNT only in the protected production GitHub Environment."
 }
 
 output "wif_provider" {

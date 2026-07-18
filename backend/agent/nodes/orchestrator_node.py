@@ -13,7 +13,9 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 from adapters.llm_adapter import build_telemetry
+from agent.complexity import is_applied_system_design_request, resolve_complexity
 from agent.context_manager import maybe_condense_history
+from agent.explanation_blocks import stream_explanation_blocks
 from agent.state import AgentState
 from agent.stream_utils import stream_llm
 from config import settings
@@ -69,8 +71,9 @@ SEARCH
 </guardrails>"""
 
 _SYNTHESIS_SYSTEM = """<role>
-You are a study assistant for "AI Engineering" by Chip Huyen (O'Reilly).
-Your audience is new to AI and systems work.
+You are a principal AI engineer who can teach clearly. Use "AI Engineering" by Chip Huyen
+as evidence and design guidance, while answering the user's actual problem rather than
+turning every problem into a summary of the book.
 </role>
 
 <ui_context>
@@ -80,8 +83,10 @@ If the user asks where the graph is, they mean that canvas panel.
 </ui_context>
 
 <core_task>
-Write a concise beginner-friendly explanation grounded in the retrieved book evidence.
-If graph context is provided, anchor the explanation to the exact node labels, sequence steps, lanes, or groups when useful.
+Give a specific, decision-useful answer to the latest request. When a graph exists, explain
+the designed system represented by its exact domain node labels, data flows, control loops,
+assumptions, and boundaries. Retrieved passages support principles; they do not override the
+domain the user asked about.
 </core_task>
 
 <language>
@@ -89,35 +94,28 @@ Answer in the same language as the user's latest message unless they ask to swit
 </language>
 
 <book_scope>
-- Stay grounded in the book.
-- For questions that are not directly covered by the book but are reasonable applications of book ideas,
-  use the book as the foundation and give the best applied answer you can.
+- Use retrieved book passages for directly supported principles and cite only those claims.
+- Treat domain components and implementation choices as recommendations, not book facts.
 - Do not lead with "the book does not cover this" for adjacent application questions like marketing,
   support, sales, operations, education, internal tools, or product workflows.
-- If the user names a product, service, industry, or workflow the book does not cover directly,
-  treat it as an example of broader patterns like agents, planning, retrieval, evaluation,
-  orchestration, serving, monitoring, or tool use.
-- Mention the lack of direct book coverage only when it materially limits the answer.
-- Never invent vendor-specific implementation details.
+- Never claim the user's system has retrieval, live campaign data, a vector database, a named
+  vendor, or another integration unless the request, graph, research, or an explicit assumption says so.
+- If evidence is indirect, state the assumption instead of manufacturing certainty or citations.
 </book_scope>
 
 <style>
-- For non-trivial explanations, use 3-5 short chunks.
-- Each chunk should follow this pattern: `Topic: locator` on one line, then 1-2 short sentences.
-- A locator should use graph anchors when available: node label, step number, lane, or group area.
-- If the user asks several questions in one paragraph, split them into 2-5 chunks and answer them in order.
-- Keep each chunk focused on one or two ideas only.
-- Optional opener: one short human line for ambitious or intricate requests. Keep it under 8 words.
+- Do not force every answer into the same template. Choose the clearest structure for this request.
+- For an applied design, start with your interpretation and material assumptions, then walk the
+  primary runtime loop using exact graph node and edge names. Cover inputs, decisions, actions,
+  outcome measurement, control boundaries, and the biggest failure modes relevant to the depth contract.
+- Explain why each major boundary exists and what crosses it; do not merely restate node descriptions.
+- Distinguish facts supplied by the user, inferred assumptions, and recommendations.
+- Use a compact table when it materially clarifies component responsibilities or contracts.
 - Define technical terms immediately. Write the full phrase first, then the acronym in parentheses.
-- Keep it to about 120-220 words total before follow-up suggestions.
-- Use bullets only for the final follow-up options.
-- Add follow-up bullets only when they would help the user continue; do not force them.
-- If you add follow-up bullets, introduce them with `Next useful angles:` and keep them short.
-- Follow-up bullets should be action-oriented, for example:
-  - explain a part more clearly
-  - expand the graph around a node or area
-  - compare two concepts or steps
-- Cite inline as (Chapter N, p.X) only when it adds value.
+- Be concise relative to the selected depth, but do not omit implementation-critical reasoning
+  merely to satisfy an arbitrary word count.
+- Offer follow-up directions only when genuinely useful and specific to this system.
+- Cite inline as (Chapter N, p.X) only for claims directly supported by retrieved evidence.
 - Use math only when the user clearly needs it.
 </style>
 
@@ -125,10 +123,24 @@ Answer in the same language as the user's latest message unless they ask to swit
 - Do not write dense wall-of-text paragraphs.
 - Do not dump glossary entries.
 - Do not sound like lecture notes.
-- Do not answer with only "the book does not cover this".
+- Do not produce a generic agent recipe that could be pasted into another industry unchanged.
+- Do not use headings such as "Agent (Step 1 node)" or present abstract book concepts as the
+  user's implementation.
+- Do not repeat the graph without adding design reasoning, trade-offs, or operational detail.
 - Do not invent graph positions or edge directions that are not supported by the provided graph context.
 - Do not mention the graph unless it exists or the user asked about it.
 </failure_avoidance>"""
+
+_BLOCK_OUTPUT_CONTRACT = """
+
+<streaming_output_contract>
+Return 3-6 compact JSON objects, one object per line, with no array and no markdown fence.
+Each object must be complete before starting the next:
+{"block_id":"stable_id","title":"short beginner-facing title","content":"concise markdown",
+ "related_node_ids":["exact_graph_node_id"],"evidence_refs":["Chapter N, p.X"]}
+Order the blocks so the UI can reveal them progressively: interpretation, runtime path, controls/evals,
+then trade-offs or next decisions. Cite only retrieved claims. Do not repeat the whole diagram.
+</streaming_output_contract>"""
 
 
 _QUICK_SYNTHESIS_SYSTEM = """<role>
@@ -172,6 +184,10 @@ async def orchestrator_route(state: AgentState) -> AgentState:
 
     if _is_memory_followup(state.get("user_message", ""), state.get("history") or []):
         return {**state, "route": "memory"}
+
+    # Applied system requests must never fall through to the short factual path.
+    if is_applied_system_design_request(state.get("user_message", "")):
+        return {**state, "route": "search"}
 
     history_text = _format_history(state["history"])
     graph_text = _format_route_graph_context(state.get("graph_data"))
@@ -277,7 +293,7 @@ def _is_memory_followup(user_message: str, history: list[dict]) -> bool:
 async def quick_synthesise(state: AgentState) -> AgentState:
     """
     Fast path for simple factual questions.
-    Uses Haiku (worker_model) with a short direct prompt — no RAG, no graph.
+    Uses Sonnet 5 at low effort with a short direct prompt — no RAG, no graph.
     """
     send = state["send"]
     await send({"type": "worker_status", "worker": "orchestrator", "status": "Looking it up…"})
@@ -293,12 +309,13 @@ async def quick_synthesise(state: AgentState) -> AgentState:
         await send({"type": "graph_data", "data": state["graph_data"]})
 
     response_text = await stream_llm(
-        model=settings.worker_model,   # Haiku — fast and cheap for factual Q&A
+        model=settings.orchestrator_model,
         system=_QUICK_SYNTHESIS_SYSTEM,
         messages=messages,
         temperature=settings.quick_synthesis_temperature,
         top_p=settings.quick_synthesis_top_p,
         top_k=settings.quick_synthesis_top_k,
+        effort="low",
         telemetry=build_telemetry(
             "quick_synthesise",
             user_id=state.get("user_id"),
@@ -312,7 +329,6 @@ async def quick_synthesise(state: AgentState) -> AgentState:
         stream_deltas=True,
     )
 
-    await send({"type": "done"})
     return {**state, "response_text": response_text}
 
 
@@ -321,16 +337,24 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
     Phase 2: synthesise worker outputs into a streamed response.
     - Fires graph_data SSE event immediately (before text starts streaming)
     - Streams response_delta events as tokens arrive
-    - Fires done when complete
+
+    The transport owns the terminal event so success is not announced before
+    the completed turn is durably persisted.
     """
     send = state["send"]
     history = state.get("history") or []
     history = await maybe_condense_history(history)
 
+    current_graph = state.get("graph_data") or {}
+    design_query = state.get("user_message", "")
+    if current_graph.get("design_origin") == "applied":
+        design_query = f"{design_query} {current_graph.get('title', '')}".strip()
+    profile = resolve_complexity(state.get("complexity", "auto"), design_query)
+
     await send({
         "type": "worker_status",
         "worker": "orchestrator",
-        "status": "Writing the explanation…",
+        "status": f"Reasoning through the {profile.resolved} design and trade-offs…",
     })
 
     # Always emit graph_data when a graph exists — the frontend deduplicates
@@ -361,34 +385,64 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
                 f"Retrieved book sections:\n{context}\n\n"
                 f"{research_block}"
                 f"{graph_block}"
+                f"Response depth contract:\n{profile.answer_contract}\n\n"
                 f"Question: {state['user_message']}"
             ),
         },
     ]
 
-    response_text = await stream_llm(
-        model=settings.orchestrator_model,
-        system=_SYNTHESIS_SYSTEM,
-        messages=messages,
-        temperature=settings.synthesis_temperature,
-        top_p=settings.synthesis_top_p,
-        top_k=settings.synthesis_top_k,
-        telemetry=build_telemetry(
-            "orchestrator_synthesise",
-            user_id=state.get("user_id"),
-            thread_id=state.get("session_id"),
-            metadata={
-                "route": state.get("route", ""),
-                "request_id": state.get("request_id"),
-                "client_request_id": state.get("client_request_id"),
-            },
-        ),
-        send=send,
-        stream_deltas=True,
-        stream_thinking=True,
+    telemetry = build_telemetry(
+        "orchestrator_synthesise",
+        user_id=state.get("user_id"),
+        thread_id=state.get("session_id"),
+        metadata={
+            "route": state.get("route", ""),
+            "complexity_requested": state.get("complexity", "auto"),
+            "complexity_resolved": profile.resolved,
+            "request_id": state.get("request_id"),
+            "client_request_id": state.get("client_request_id"),
+            "prompt_version": "architecture_blocks_v1",
+        },
     )
+    if current_graph:
+        await send({
+            "type": "workflow_progress",
+            "phase": "explain",
+            "status": "active",
+            "title": "Diagram approved — preparing the walkthrough",
+            "detail": "Explanation cards will appear one at a time and can be paused without another model call.",
+        })
+        response_text = await stream_explanation_blocks(
+            model=settings.orchestrator_model,
+            system=f"{_SYNTHESIS_SYSTEM}{_BLOCK_OUTPUT_CONTRACT}",
+            messages=messages,
+            telemetry=telemetry,
+            send=send,
+            graph_version=current_graph.get("version"),
+            allowed_node_ids={str(node.get("id")) for node in current_graph.get("nodes") or []},
+        )
+        await send({
+            "type": "workflow_progress",
+            "phase": "explain",
+            "status": "complete",
+            "title": "Walkthrough complete",
+            "detail": "You can steer the design at any time with an engineering or product correction.",
+        })
+    else:
+        response_text = await stream_llm(
+            model=settings.orchestrator_model,
+            system=_SYNTHESIS_SYSTEM,
+            messages=messages,
+            effort="low",
+            temperature=settings.synthesis_temperature,
+            top_p=settings.synthesis_top_p,
+            top_k=settings.synthesis_top_k,
+            telemetry=telemetry,
+            send=send,
+            stream_deltas=True,
+            stream_thinking=False,
+        )
 
-    await send({"type": "done"})
     return {**state, "response_text": response_text}
 
 
@@ -432,7 +486,7 @@ def _format_graph_context(graph_data: dict) -> str:
     sequence = graph_data.get("sequence") or []
 
     node_lines = []
-    for node in nodes[:6]:
+    for node in nodes[:16]:
         label = node.get("label", "?")
         description = node.get("description", "").strip()
         tech = node.get("technology", "").strip()
@@ -444,14 +498,14 @@ def _format_graph_context(graph_data: dict) -> str:
         node_lines.append(f"- {label}" + (f": {extras}" if extras else ""))
 
     edge_lines = []
-    for edge in edges[:6]:
+    for edge in edges[:24]:
         source = edge.get("source", "?")
         target = edge.get("target", "?")
         label = edge.get("label", "connects to")
         edge_lines.append(f"- {source} -> {target}: {label}")
 
     sequence_lines = []
-    for step in sequence[:4]:
+    for step in sequence[:10]:
         step_no = step.get("step", "?")
         active_nodes = ", ".join(step.get("nodes") or [])
         description = step.get("description", "").strip()
@@ -471,6 +525,13 @@ def _format_graph_context(graph_data: dict) -> str:
         parts.append("Edges:\n" + "\n".join(edge_lines))
     if group_lines:
         parts.append("Groups:\n" + "\n".join(group_lines))
+    assumptions = [
+        str(item).strip()
+        for item in (graph_data.get("assumptions") or [])
+        if str(item).strip()
+    ]
+    if assumptions:
+        parts.append("Design assumptions:\n" + "\n".join(f"- {item}" for item in assumptions[:8]))
     if sequence_lines:
         parts.append("Sequence (step badges on flow edges):\n" + "\n".join(f"- {line}" for line in sequence_lines))
     return "\n\n".join(parts)

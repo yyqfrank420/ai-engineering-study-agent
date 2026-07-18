@@ -9,9 +9,10 @@
 # Outputs: accumulated text string from the LLM response
 # ─────────────────────────────────────────────────────────────────────────────
 
-from typing import Any, Callable, Awaitable
+from typing import Callable, Awaitable
 
 from adapters.llm_adapter import stream_response, stream_response_compat
+from agent.prompt_security import protect_system_prompt
 
 
 async def stream_llm(
@@ -23,6 +24,7 @@ async def stream_llm(
     temperature: float,
     top_p: float | None = None,
     top_k: int | None = None,
+    effort: str | None = None,
     telemetry: dict | None = None,
     send: Callable[[dict], Awaitable[None]] | None = None,
     stream_deltas: bool = False,
@@ -39,12 +41,13 @@ async def stream_llm(
     async for event_type, content in stream_response_compat(
         stream_response,
         model=model,
-        system=system,
+        system=protect_system_prompt(system),
         messages=messages,
         thinking_budget=thinking_budget,
         temperature=temperature,
         top_p=top_p,
         top_k=top_k,
+        effort=effort,
         telemetry=telemetry,
     ):
         if event_type == "provider_switch" and send:

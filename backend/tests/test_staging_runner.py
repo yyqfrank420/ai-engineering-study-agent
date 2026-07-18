@@ -1,4 +1,17 @@
-from eval.staging_cases import BLOCKING_STAGING_CASE_IDS, STAGING_CASES, StagingStep, StepExpectation
+import base64
+import asyncio
+import json
+from pathlib import Path
+import urllib.request
+
+import pytest
+
+from eval.staging_cases import (
+    BLOCKING_STAGING_CASE_IDS,
+    STAGING_CASES,
+    StagingStep,
+    StepExpectation,
+)
 from eval.staging_runner import (
     _blocking_request,
     build_parser,
@@ -12,14 +25,13 @@ from eval.staging_runner import (
     extract_workers,
     parse_sse_event_line,
     parse_sse_events,
+    _submit_staging_diagram,
     resolve_node_selected_payload,
     run_case,
     run_cases_with_concurrency,
     select_cases,
+    smoke_test_internal_dashboard,
 )
-import asyncio
-from pathlib import Path
-import urllib.request
 
 
 def test_parse_sse_events_extracts_multiple_events():
@@ -114,7 +126,15 @@ def test_resolve_node_selected_payload_uses_first_graph_node():
 def test_staging_suite_covers_multiple_categories():
     categories = {case.category for case in STAGING_CASES}
 
-    assert {"happy_path", "memory_followup", "research_mode", "edge_cases", "real_workflow", "graph_quality"} <= categories
+    assert {
+        "happy_path",
+        "memory_followup",
+        "research_mode",
+        "edge_cases",
+        "real_workflow",
+        "graph_quality",
+        "applied_design_quality",
+    } <= categories
 
 
 def test_staging_suite_has_customer_support_graph_quality_gate():
@@ -124,11 +144,23 @@ def test_staging_suite_has_customer_support_graph_quality_gate():
     first_expect = graph_quality_case.steps[0].expect
     followup_expect = graph_quality_case.steps[1].expect
     assert first_expect.graph_type == "architecture"
-    assert "Billing Agent" in first_expect.graph_node_labels_include
-    assert "Returns Agent" in first_expect.graph_node_labels_include
-    assert "Escalation Agent" in first_expect.graph_node_labels_include
+    assert "billing|account" in first_expect.graph_node_label_keywords_include
+    assert "return|order" in first_expect.graph_node_label_keywords_include
+    assert "escalation|human" in first_expect.graph_node_label_keywords_include
     assert "Tool Use" in first_expect.graph_node_labels_exclude
-    assert "Billing Agent" in followup_expect.graph_node_labels_include
+    assert "billing|account" in followup_expect.graph_node_label_keywords_include
+
+
+def test_staging_suite_gates_reported_growth_marketing_regression():
+    applied_case = next(case for case in STAGING_CASES if case.id == "S11")
+    expectation = applied_case.steps[0].expect
+
+    assert applied_case.category == "applied_design_quality"
+    assert expectation.graph_type == "architecture"
+    assert "objective" in expectation.graph_node_label_keywords_include
+    assert "creative|copy" in expectation.graph_node_label_keywords_include
+    assert "Agent" in expectation.graph_node_labels_exclude
+    assert expectation.graph_max_generic_label_count == 2
 
 
 def test_staging_runner_defaults_case_filter_from_environment(monkeypatch):
@@ -172,8 +204,8 @@ def test_blocking_staging_smoke_set_covers_risky_paths_without_excess_llm_calls(
     smoke_cases = [cases_by_id[case_id] for case_id in BLOCKING_STAGING_CASE_IDS]
     categories = {case.category for case in smoke_cases}
 
-    assert categories == {"happy_path", "mode_controls", "edge_cases", "graph_quality"}
-    assert "S10" in BLOCKING_STAGING_CASE_IDS
+    assert categories == {"happy_path", "mode_controls", "edge_cases", "applied_design_quality"}
+    assert "S11" in BLOCKING_STAGING_CASE_IDS
 
     model_backed_chat_steps = [
         step
@@ -194,11 +226,80 @@ def test_graph_off_staging_case_avoids_brittle_keyword_requirements():
     assert step.expect.response_contains == ["RAG"]
 
 
-def test_ci_staging_eval_is_serial_and_single_attempt():
-    workflow = Path(".github/workflows/deploy.yml").read_text(encoding="utf-8")
+def test_pr_live_eval_is_globally_serial_and_uses_the_reviewed_browser_suite():
+    workflow = Path(".github/workflows/live-eval.yml").read_text(encoding="utf-8")
 
-    assert 'STAGING_EVAL_CONCURRENCY: "1"' in workflow
-    assert 'STAGING_EVAL_ATTEMPTS: "1"' in workflow
+    assert "group: staging-live-eval-global" in workflow
+    assert "cancel-in-progress: false" in workflow
+    assert "./scripts/ci browser --suite pr" in workflow
+    assert "--require-approved-corpus" in workflow
+    assert "environment: staging-eval" in workflow
+
+
+def test_dashboard_smoke_checks_every_frontend_endpoint_sequentially(monkeypatch):
+    expected_responses = {
+        "/api/internal/dashboard/overview": {"kpis": {}, "providers": {}},
+        "/api/internal/dashboard/trends?bucket=day": {"bucket": "day", "points": []},
+        "/api/internal/dashboard/trends?bucket=hour": {"bucket": "hour", "points": []},
+        "/api/internal/dashboard/funnel": {"window_days": 7, "steps": []},
+        "/api/internal/dashboard/failures": {
+            "recent_failed_requests": [],
+            "slow_requests": [],
+            "provider_fallbacks": [],
+        },
+        "/api/internal/dashboard/llm-performance": {
+            "operations": [],
+            "recent_fallbacks": [],
+        },
+    }
+    requested_paths = []
+
+    async def fake_request(client, method, url, auth_token, json_payload=None):
+        path = url.removeprefix("https://candidate.example")
+        requested_paths.append(path)
+        assert method == "GET"
+        assert auth_token == "admin-token"
+        return {
+            "status_code": 200,
+            "json_body": expected_responses[path],
+            "body_text": "",
+        }
+
+    monkeypatch.setattr("eval.staging_runner.perform_json_request", fake_request)
+
+    asyncio.run(
+        smoke_test_internal_dashboard("https://candidate.example/", "admin-token")
+    )
+
+    assert requested_paths == list(expected_responses)
+
+
+@pytest.mark.parametrize("status_code", [401, 403, 500])
+def test_dashboard_smoke_blocks_promotion_on_auth_config_or_server_failure(
+    monkeypatch,
+    status_code,
+):
+    async def fake_request(client, method, url, auth_token, json_payload=None):
+        return {
+            "status_code": status_code,
+            "json_body": {"detail": "dashboard unavailable"},
+            "body_text": '{"detail":"dashboard unavailable"}',
+        }
+
+    monkeypatch.setattr("eval.staging_runner.perform_json_request", fake_request)
+
+    with pytest.raises(RuntimeError, match=rf"HTTP {status_code}"):
+        asyncio.run(smoke_test_internal_dashboard("https://candidate.example", "token"))
+
+
+def test_dashboard_smoke_rejects_an_incomplete_response_contract(monkeypatch):
+    async def fake_request(client, method, url, auth_token, json_payload=None):
+        return {"status_code": 200, "json_body": {"kpis": {}}, "body_text": ""}
+
+    monkeypatch.setattr("eval.staging_runner.perform_json_request", fake_request)
+
+    with pytest.raises(RuntimeError, match="missing: providers"):
+        asyncio.run(smoke_test_internal_dashboard("https://candidate.example", "token"))
 
 
 def test_extract_helpers_return_expected_values():
@@ -216,6 +317,58 @@ def test_extract_helpers_return_expected_values():
     assert extract_response_text(events) == "Hello world"
 
 
+def test_extract_response_text_includes_progressive_explanation_blocks():
+    events = [
+        {"type": "explanation_block", "content": "Interpretation"},
+        {"type": "explanation_block", "content": "Runtime path"},
+    ]
+
+    assert extract_response_text(events) == "Interpretation\n\nRuntime path"
+
+
+def test_staging_diagram_upload_uses_bounded_protocol_frames(monkeypatch):
+    class FakeWebSocket:
+        def __init__(self):
+            self.frames = []
+
+        async def send(self, raw):
+            self.frames.append(json.loads(raw))
+
+    encoded = base64.b64encode(b"rendered-jpeg").decode("ascii")
+    monkeypatch.setattr(
+        "eval.staging_runner.render_staging_diagram",
+        lambda graph: (
+            encoded,
+            "image/jpeg",
+            {
+                "rendered_nodes": len(graph["nodes"]),
+                "rendered_edges": len(graph["edges"]),
+                "overlap_count": 0,
+                "clipped_nodes": 0,
+                "minimum_text_px": 11,
+            },
+        ),
+    )
+    websocket = FakeWebSocket()
+    candidate = {
+        "evaluation_id": "eval-1",
+        "graph_version": "v1",
+        "data": {"nodes": [{"id": "n1"}], "edges": []},
+    }
+
+    asyncio.run(_submit_staging_diagram(websocket, candidate))
+
+    assert websocket.frames[0]["type"] == "diagram_evaluation_start"
+    assert websocket.frames[0]["graph_version"] == "v1"
+    assert websocket.frames[1] == {
+        "type": "diagram_evaluation_chunk",
+        "evaluation_id": "eval-1",
+        "index": 0,
+        "data": encoded,
+    }
+    assert websocket.frames[-1]["type"] == "diagram_evaluation_complete"
+
+
 def test_evaluate_expectation_checks_graph_quality_contract():
     step = StagingStep(
         kind="chat",
@@ -226,6 +379,8 @@ def test_evaluate_expectation_checks_graph_quality_contract():
             graph_title_contains="Customer Support",
             graph_node_labels_include=["Billing Agent", "Returns Agent"],
             graph_node_labels_exclude=["Tool Use", "Planning"],
+            graph_node_label_keywords_include=["billing", "return|order"],
+            graph_max_generic_label_count=1,
         ),
     )
     run = {

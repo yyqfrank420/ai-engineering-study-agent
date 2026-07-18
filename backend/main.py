@@ -10,7 +10,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 from contextlib import asynccontextmanager
-import os
+import logging
 import time
 import uuid
 
@@ -26,10 +26,35 @@ from api.analytics_route import router as analytics_router
 from api.health_route import router as health_router
 from api.internal_dashboard_route import router as internal_dashboard_router
 from api.sse_handler import router as sse_router
+from api.chat_websocket import router as websocket_router
 from api.thread_route import router as thread_router
 from config import settings
 from observability import SpanKind, configure_observability, current_trace_context, record_request_metrics, start_span
 from storage.telemetry_store import record_http_request_log
+from storage.retention import prune_expired_observability_data
+
+
+_BODY_METHODS = frozenset({"POST", "PUT", "PATCH"})
+logger = logging.getLogger(__name__)
+
+
+async def _buffer_request_body(request: Request, max_bytes: int) -> tuple[int, bool]:
+    """Buffer a request body up to ``max_bytes`` and make it replayable.
+
+    Content-Length is only a hint: HTTP/2 and chunked requests can omit it, and
+    clients can lie. Reading the ASGI stream enforces the limit on actual bytes.
+    Starlette's request body cache lets downstream FastAPI parsing consume the
+    buffered body without reading the socket a second time.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > max_bytes:
+            return total, True
+        chunks.append(chunk)
+    request._body = b"".join(chunks)  # Starlette's documented body cache behavior.
+    return total, False
 
 
 def create_app(*, load_resources: bool = True) -> FastAPI:
@@ -41,15 +66,15 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
         """
         configure_observability()
 
-        if os.getenv("K_SERVICE"):
-            if not settings.use_postgres:
-                raise RuntimeError("SUPABASE_DB_URL must be configured in Cloud Run; refusing SQLite fallback.")
-            if settings.dev_bypass_auth:
-                raise RuntimeError("DEV_BYPASS_AUTH must be false in Cloud Run.")
+        if settings.k_service:
+            settings.validate_for_cloud_run()
 
         app.state.startup_step = "database"
         print("[startup] Initialising database…")
         init_db()
+        prune_expired_observability_data(
+            older_than_epoch=time.time() - (settings.telemetry_retention_days * 86400),
+        )
         start_analytics_worker()
         if not hasattr(app.state, "vectorstore"):
             app.state.vectorstore = None
@@ -92,7 +117,11 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
         allow_headers=["*"],
     )
 
-    def apply_response_headers(response, request_id: str | None = None):
+    def apply_response_headers(
+        response,
+        request_id: str | None = None,
+        request_path: str | None = None,
+    ):
         if request_id:
             response.headers["X-Request-Id"] = request_id
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -100,14 +129,19 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        if request_path and request_path.startswith("/api"):
+            # Auth and thread payloads must never be retained by shared caches.
+            response.headers.setdefault("Cache-Control", "no-store")
         return response
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception):
-        print(f"[error] Unhandled request failed: {type(exc).__name__}: {exc}")
+        logger.error("Unhandled request failed: %s", type(exc).__name__)
         return apply_response_headers(
             JSONResponse(status_code=500, content={"detail": "Internal server error"}),
             getattr(request.state, "request_id", None),
+            request.url.path,
         )
 
     @app.middleware("http")
@@ -121,7 +155,8 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
         authorization = request.headers.get("authorization", "")
         if authorization.startswith("Bearer "):
             token = authorization.split(" ", 1)[1].strip()
-            if settings.dev_bypass_auth and token == "dev-local":
+            # This sentinel is accepted only when the production-forbidden dev bypass is enabled.
+            if settings.dev_bypass_auth and token == "dev-local":  # nosec B105
                 user_id = "00000000-0000-0000-0000-000000000dev"
             else:
                 try:
@@ -134,7 +169,7 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
         body_size = 0
         if content_length:
             try:
-                body_size = int(content_length)
+                body_size = max(0, int(content_length))
             except ValueError:
                 body_size = 0
             if body_size > settings.max_request_body_bytes:
@@ -155,6 +190,30 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
                         content={"detail": "Request body too large"},
                     ),
                     request.state.request_id,
+                    request.url.path,
+                )
+
+        if request.method in _BODY_METHODS:
+            body_size, body_too_large = await _buffer_request_body(
+                request,
+                settings.max_request_body_bytes,
+            )
+            if body_too_large:
+                enqueue_analytics_event(
+                    event_name="request_rejected",
+                    event_category="request",
+                    request_id=request.state.request_id,
+                    properties={
+                        "method": request.method,
+                        "path": request.url.path,
+                        "reason": "body_too_large",
+                        "body_size_bytes": body_size,
+                    },
+                )
+                return apply_response_headers(
+                    JSONResponse(status_code=413, content={"detail": "Request body too large"}),
+                    request.state.request_id,
+                    request.url.path,
                 )
 
         enqueue_analytics_event(
@@ -218,12 +277,10 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
                         status_code=status_code,
                         latency_ms=latency_ms,
                         user_id=user_id,
-                        ip_address=request.client.host if request.client else None,
-                        user_agent=request.headers.get("user-agent"),
                         metadata=metadata,
                     )
                 except Exception as exc:
-                    print(f"[telemetry] HTTP request log failed: {type(exc).__name__}: {exc}")
+                    logger.warning("HTTP request telemetry write failed: %s", type(exc).__name__)
                 enqueue_analytics_event(
                     event_name="request_completed",
                     event_category="request",
@@ -243,7 +300,11 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
                     },
                 )
 
-        return apply_response_headers(response, request.state.request_id) if response is not None else response
+        return (
+            apply_response_headers(response, request.state.request_id, request.url.path)
+            if response is not None
+            else response
+        )
 
     app.include_router(health_router)
     app.include_router(auth_router)
@@ -251,6 +312,7 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
     app.include_router(thread_router)
     app.include_router(internal_dashboard_router)
     app.include_router(sse_router)
+    app.include_router(websocket_router)
     return app
 
 

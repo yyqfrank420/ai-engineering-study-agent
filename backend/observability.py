@@ -91,7 +91,8 @@ class _RecordingSpanExporter(SpanExporter):
 
 
 def _resource():
-    assert Resource is not None
+    if Resource is None:
+        raise RuntimeError("OpenTelemetry resources are unavailable")
     return Resource.create(
         {
             "service.name": settings.otel_service_name,
@@ -201,6 +202,9 @@ def get_metrics_snapshot() -> dict[str, Any]:
 
 
 def reset_observability_test_state() -> None:
+    global _REQUEST_COUNTER, _REQUEST_LATENCY, _ACTIVE_CHAT_STREAMS
+    global _AGENT_DURATION, _LLM_DURATION, _FALLBACK_COUNTER, _TIMEOUT_COUNTER, _CANCEL_COUNTER
+
     _RECORDED_SPANS.clear()
     _METRIC_SNAPSHOT["request_count"] = 0
     _METRIC_SNAPSHOT["fallback_count"] = 0
@@ -210,6 +214,18 @@ def reset_observability_test_state() -> None:
     _METRIC_SNAPSHOT["request_latency_ms"].clear()
     _METRIC_SNAPSHOT["agent_duration_ms"].clear()
     _METRIC_SNAPSHOT["llm_duration_ms"].clear()
+    # Tests replace instrument factories with fakes; configure_observability()
+    # assigns those fakes to module globals outside monkeypatch's own tracking.
+    # Resetting the references makes test order irrelevant while retaining the
+    # enabled tracer used by span assertions.
+    _REQUEST_COUNTER = None
+    _REQUEST_LATENCY = None
+    _ACTIVE_CHAT_STREAMS = None
+    _AGENT_DURATION = None
+    _LLM_DURATION = None
+    _FALLBACK_COUNTER = None
+    _TIMEOUT_COUNTER = None
+    _CANCEL_COUNTER = None
 
 
 def get_recorded_spans() -> list[dict[str, Any]]:

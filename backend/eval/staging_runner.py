@@ -6,7 +6,13 @@ import time
 from datetime import datetime
 from pathlib import Path
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
+
+from websockets.asyncio.client import connect
+
+from eval.diagram_renderer import render_staging_diagram
 
 try:
     from rich import box
@@ -20,6 +26,21 @@ except ModuleNotFoundError:
 from eval.staging_cases import STAGING_CASES, StagingCase, StagingStep
 
 _console = Console() if Console is not None else None
+
+_DASHBOARD_SMOKE_ENDPOINTS = (
+    ("/api/internal/dashboard/overview", frozenset({"kpis", "providers"})),
+    ("/api/internal/dashboard/trends?bucket=day", frozenset({"bucket", "points"})),
+    ("/api/internal/dashboard/trends?bucket=hour", frozenset({"bucket", "points"})),
+    ("/api/internal/dashboard/funnel", frozenset({"window_days", "steps"})),
+    (
+        "/api/internal/dashboard/failures",
+        frozenset({"recent_failed_requests", "slow_requests", "provider_fallbacks"}),
+    ),
+    (
+        "/api/internal/dashboard/llm-performance",
+        frozenset({"operations", "recent_fallbacks"}),
+    ),
+)
 
 
 def _console_print(message: str = "") -> None:
@@ -64,6 +85,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Attempts per staging case; increase only for manual transient-failure checks",
     )
     parser.add_argument("--keep-threads", action="store_true", help="Do not auto-delete eval threads")
+    parser.add_argument(
+        "--check-dashboard",
+        action="store_true",
+        help="Require the authenticated internal dashboard API to pass before running evals",
+    )
     return parser
 
 
@@ -145,6 +171,28 @@ async def ensure_auth_token(args: argparse.Namespace) -> str:
     raise RuntimeError("Pass --auth-token, or --email with --internal-password, or --email with --otp")
 
 
+async def smoke_test_internal_dashboard(base_url: str, auth_token: str) -> None:
+    """Exercise the same dashboard requests the frontend makes before promotion."""
+    root_url = base_url.rstrip("/")
+    for path, required_keys in _DASHBOARD_SMOKE_ENDPOINTS:
+        result = await perform_json_request(None, "GET", f"{root_url}{path}", auth_token)
+        if result["status_code"] != 200:
+            body = result.get("body_text", "")[:500]
+            raise RuntimeError(
+                f"Dashboard smoke check failed for {path}: "
+                f"HTTP {result['status_code']} {body}"
+            )
+
+        body = result.get("json_body")
+        if not isinstance(body, dict):
+            raise RuntimeError(f"Dashboard smoke check returned non-object JSON for {path}")
+
+        missing_keys = required_keys.difference(body)
+        if missing_keys:
+            missing = ", ".join(sorted(missing_keys))
+            raise RuntimeError(f"Dashboard smoke check for {path} is missing: {missing}")
+
+
 def parse_sse_events(text: str) -> list[dict]:
     events: list[dict] = []
     for chunk in text.split("\n\n"):
@@ -168,7 +216,17 @@ def parse_sse_event_line(line: str) -> dict | None:
 
 
 def extract_response_text(events: list[dict]) -> str:
-    return "".join(event.get("content", "") for event in events if event.get("type") == "response_delta")
+    streamed_text = "".join(
+        str(event.get("content") or "")
+        for event in events
+        if event.get("type") == "response_delta"
+    )
+    explanation_blocks = [
+        str(event.get("content") or "")
+        for event in events
+        if event.get("type") == "explanation_block" and event.get("content")
+    ]
+    return "\n\n".join(part for part in [streamed_text, *explanation_blocks] if part)
 
 
 def extract_workers(events: list[dict]) -> set[str]:
@@ -255,6 +313,102 @@ async def perform_sse_request(
     return await asyncio.to_thread(_blocking_request, "POST", url, auth_token, json_payload, True)
 
 
+async def perform_websocket_chat(
+    base_url: str,
+    auth_token: str,
+    *,
+    json_payload: dict,
+) -> dict:
+    """Run one chat over the production WebSocket and satisfy diagram gates."""
+    parsed_url = urllib.parse.urlparse(base_url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        raise ValueError("Staging requests require an absolute HTTP(S) URL")
+    ws_scheme = "wss" if parsed_url.scheme == "https" else "ws"
+    base_path = parsed_url.path.rstrip("/")
+    websocket_url = urllib.parse.urlunparse(
+        (ws_scheme, parsed_url.netloc, f"{base_path}/api/chat/ws", "", "", "")
+    )
+    events: list[dict] = []
+
+    async with asyncio.timeout(210):
+        async with connect(
+            websocket_url,
+            open_timeout=20,
+            close_timeout=5,
+            max_size=1_000_000,
+        ) as websocket:
+            await websocket.send(json.dumps({"type": "auth", "access_token": auth_token}))
+            ready = _decode_websocket_event(await websocket.recv())
+            if ready.get("type") != "ready":
+                raise RuntimeError(f"WebSocket authentication failed: {ready}")
+
+            start_payload = {
+                "type": "start",
+                **json_payload,
+                "client_request_id": json_payload.get("client_request_id") or str(uuid.uuid4()),
+            }
+            await websocket.send(json.dumps(start_payload))
+
+            async for raw_event in websocket:
+                event = _decode_websocket_event(raw_event)
+                events.append(event)
+                if event.get("type") == "graph_candidate":
+                    await _submit_staging_diagram(websocket, event)
+                if event.get("type") == "done":
+                    break
+
+    return {
+        # The shared expectation model describes the logical request result,
+        # not the HTTP 101 protocol upgrade.
+        "status_code": 200,
+        "events": events,
+        "json_body": None,
+        "body_text": "\n".join(json.dumps(event, ensure_ascii=False) for event in events),
+    }
+
+
+def _decode_websocket_event(raw_event: str | bytes) -> dict:
+    if isinstance(raw_event, bytes):
+        raw_event = raw_event.decode("utf-8")
+    event = json.loads(raw_event)
+    if not isinstance(event, dict):
+        raise RuntimeError("WebSocket server returned a non-object event")
+    return event
+
+
+async def _submit_staging_diagram(websocket, candidate: dict) -> None:
+    graph = candidate.get("data")
+    if not isinstance(graph, dict):
+        raise RuntimeError("graph_candidate did not contain graph data")
+    encoded, media_type, report = render_staging_diagram(graph)
+    evaluation_id = str(candidate.get("evaluation_id") or "")
+    graph_version = candidate.get("graph_version")
+    chunk_size = 8_000
+    chunks = [encoded[offset : offset + chunk_size] for offset in range(0, len(encoded), chunk_size)]
+    if not chunks:
+        raise RuntimeError("staging diagram renderer returned an empty image")
+
+    await websocket.send(json.dumps({
+        "type": "diagram_evaluation_start",
+        "evaluation_id": evaluation_id,
+        "graph_version": graph_version,
+        "media_type": media_type,
+        "total_chunks": len(chunks),
+        "report": report,
+    }))
+    for index, data in enumerate(chunks):
+        await websocket.send(json.dumps({
+            "type": "diagram_evaluation_chunk",
+            "evaluation_id": evaluation_id,
+            "index": index,
+            "data": data,
+        }))
+    await websocket.send(json.dumps({
+        "type": "diagram_evaluation_complete",
+        "evaluation_id": evaluation_id,
+    }))
+
+
 def _blocking_request(
     method: str,
     url: str,
@@ -262,6 +416,9 @@ def _blocking_request(
     json_payload: dict | None,
     expect_sse: bool,
 ) -> dict:
+    parsed_url = urllib.parse.urlparse(url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        raise ValueError("Staging requests require an absolute HTTP(S) URL")
     request = urllib.request.Request(url, method=method)
     if auth_token:
         request.add_header("Authorization", f"Bearer {auth_token}")
@@ -272,7 +429,8 @@ def _blocking_request(
         data = json.dumps(json_payload).encode("utf-8")
 
     try:
-        with urllib.request.urlopen(request, data=data, timeout=120) as response:
+        # urlopen is safe here because the absolute HTTP(S) scheme was validated above.
+        with urllib.request.urlopen(request, data=data, timeout=120) as response:  # nosec B310
             status_code = response.status
             if expect_sse:
                 raw_lines: list[str] = []
@@ -362,6 +520,8 @@ def evaluate_expectation(step: StagingStep, run: dict, case_state: dict) -> list
         or expect.graph_title_contains is not None
         or expect.graph_node_labels_include
         or expect.graph_node_labels_exclude
+        or expect.graph_node_label_keywords_include
+        or expect.graph_max_generic_label_count is not None
     ):
         if graph_data is None:
             failures.append("graph quality expectations were set but no graph_data was emitted")
@@ -384,6 +544,31 @@ def evaluate_expectation(step: StagingStep, run: dict, case_state: dict) -> list
             for label in expect.graph_node_labels_exclude:
                 if label in labels:
                     failures.append(f"graph unexpectedly included node label '{label}'")
+
+            label_text = " ".join(labels).lower()
+            for keyword in expect.graph_node_label_keywords_include:
+                alternatives = [item.strip().lower() for item in keyword.split("|") if item.strip()]
+                if not any(alternative in label_text for alternative in alternatives):
+                    failures.append(f"graph node labels missing domain keyword '{keyword}'")
+
+            if expect.graph_max_generic_label_count is not None:
+                generic_labels = {
+                    "agent",
+                    "application",
+                    "evaluation",
+                    "foundation model",
+                    "generation",
+                    "memory",
+                    "planning",
+                    "tokenization",
+                    "tool use",
+                }
+                generic_count = sum(label.lower() in generic_labels for label in labels)
+                if generic_count > expect.graph_max_generic_label_count:
+                    failures.append(
+                        "graph generic label count exceeded "
+                        f"({generic_count} > {expect.graph_max_generic_label_count})"
+                    )
 
     for worker in expect.workers_include:
         if worker not in workers:
@@ -472,7 +657,7 @@ async def run_step(
             "graph_mode": step.payload.get("graph_mode", "auto"),
             "research_enabled": step.payload.get("research_enabled", False),
         }
-        return await perform_sse_request(client, f"{base_url}/api/chat", auth_token, json_payload=payload)
+        return await perform_websocket_chat(base_url, auth_token, json_payload=payload)
 
     if step.kind == "node_selected":
         payload = resolve_node_selected_payload(step, case_state)
@@ -652,6 +837,10 @@ async def main() -> None:
     ready = await perform_json_request(None, "GET", f"{args.base_url}/api/prepare", "")
     if ready["status_code"] >= 400:
         raise RuntimeError(f"Backend not ready: {ready['body_text']}")
+
+    if args.check_dashboard:
+        await smoke_test_internal_dashboard(args.base_url, auth_token)
+        _console_print("Dashboard smoke check: PASS")
 
     _console_rule("[bold]Staging Eval Suite[/]")
     _console_print(f"Base URL: [bold]{args.base_url}[/]" if _console is not None else f"Base URL: {args.base_url}")

@@ -1,9 +1,8 @@
 import uuid
 
-from fastapi import HTTPException
-
 from adapters.database_adapter import execute, fetchall, fetchone
 from config import settings
+from storage.errors import ThreadMessageLimitExceeded
 
 
 def count_messages(user_id: str, thread_id: str) -> int:
@@ -17,9 +16,8 @@ def count_messages(user_id: str, thread_id: str) -> int:
 
 def append(user_id: str, thread_id: str, role: str, content: str) -> None:
     if count_messages(user_id, thread_id) >= settings.max_messages_per_thread:
-        raise HTTPException(
-            status_code=429,
-            detail="Thread message limit reached. Start a new chat to continue.",
+        raise ThreadMessageLimitExceeded(
+            "Thread message limit reached. Start a new chat to continue."
         )
     execute(
         """

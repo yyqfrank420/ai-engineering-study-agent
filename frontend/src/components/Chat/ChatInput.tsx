@@ -84,6 +84,7 @@ function SegRow<T extends string>({
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
       <span style={miniLabelStyle}>{label}</span>
       <SegmentedControl
+        ariaLabel={label.toLowerCase()}
         options={options}
         value={value}
         onChange={onChange}
@@ -121,6 +122,13 @@ interface PopoverProps {
   onResearchChange:   (v: boolean) => void;
 }
 
+const COMPLEXITY_HELP: Record<ComplexityLevel, string> = {
+  auto: 'Adapts depth; design requests use prototype reasoning.',
+  low: 'Direct answer with the main trade-off.',
+  prototype: 'Buildable components, interfaces, and control loop.',
+  production: 'Deep review: failures, safety, operations, and rollout.',
+};
+
 function ModePopover({
   complexity, graphMode, researchEnabled,
   onComplexityChange, onGraphModeChange, onResearchChange,
@@ -138,6 +146,9 @@ function ModePopover({
         value={complexity}
         onChange={onComplexityChange}
       />
+      <div style={{ fontSize: '0.62rem', color: '#6e7681', lineHeight: 1.4 }}>
+        {COMPLEXITY_HELP[complexity]}
+      </div>
 
       <div style={popoverDivStyle} />
 
@@ -163,7 +174,17 @@ function ModePopover({
           </div>
         </div>
         <div
+          role="switch"
+          aria-label="research"
+          aria-checked={researchEnabled}
+          tabIndex={0}
           onClick={() => onResearchChange(!researchEnabled)}
+          onKeyDown={event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              onResearchChange(!researchEnabled);
+            }
+          }}
           style={{
             width:        '32px',
             height:       '18px',
@@ -282,7 +303,9 @@ export function ChatInput({
   }, [threadId]);
 
   const isReady = !disabled && !sendDisabled && !!value.trim();
-  const placeholder = (selectionReferenceActive || !!selectionSuggestion)
+  const placeholder = isGenerating
+    ? 'Steer the active response…'
+    : (selectionReferenceActive || !!selectionSuggestion)
     ? 'Ask a question about the highlighted text…'
     : 'Ask a question…';
 
@@ -420,17 +443,27 @@ export function ChatInput({
           }}
         />
 
-        {/* Send / Stop — Stop only when LLM is actively generating */}
+        {/* An active WebSocket can accept a steer without ending the run. */}
         {isGenerating ? (
-          <button
-            onClick={onStop}
-            aria-label="Stop generation"
-            style={stopButtonStyle}
-            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(248, 81, 73, 0.2)'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(248, 81, 73, 0.1)'; }}
-          >
-            Stop
-          </button>
+          <div style={{ display: 'flex', gap: '0.4rem' }}>
+            <button
+              onClick={submit}
+              disabled={!isReady}
+              aria-label="Steer response"
+              style={sendButtonStyle(isReady, 'Send')}
+            >
+              Steer
+            </button>
+            <button
+              onClick={onStop}
+              aria-label="Stop generation"
+              style={stopButtonStyle}
+              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(248, 81, 73, 0.2)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'rgba(248, 81, 73, 0.1)'; }}
+            >
+              Stop
+            </button>
+          </div>
         ) : showPrepare ? (
           <button
             onClick={() => void onPrepare?.()}

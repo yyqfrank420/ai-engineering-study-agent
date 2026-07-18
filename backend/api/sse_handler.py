@@ -14,28 +14,38 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 import asyncio
+import logging
 import uuid
 from contextlib import suppress
 import time
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from starlette.requests import HTTPConnection
 
 from analytics.events import enqueue_analytics_event, output_shape_from_final_state
 from adapters.supabase_auth_adapter import get_current_user
 from agent.graph import run_agent
 from agent.state import AgentState
-from api.chat_guards import byte_len, check_prompt_injection, check_rate_limit, knowledge_base_ready
+from api.chat_guards import (
+    byte_len,
+    check_prompt_injection,
+    check_rate_limit,
+    knowledge_base_ready,
+    truncate_utf8,
+)
 from api.node_selected_service import stream_suggested_questions
 from api.sse_utils import sse, sse_error, streaming_response
 from config import settings
 from storage import message_store, runtime_state_store, thread_store
+from storage.errors import ThreadMessageLimitExceeded
 from storage.profile_store import upsert_profile
 
 router = APIRouter(prefix="/api")
+logger = logging.getLogger(__name__)
 
 
-def _make_agent_tools(request: Request):
+def _make_agent_tools(request: HTTPConnection):
     from agent.tools.graph_worker_tools.generate_graph_tool import generate_graph
     from agent.tools.rag_worker_tools.get_section_tool import make_get_section_tool
     from agent.tools.rag_worker_tools.rag_search_tool import make_rag_search_tool
@@ -52,14 +62,14 @@ _VALID_GRAPH_MODE  = {"auto", "on", "off"}
 
 
 class ChatRequest(BaseModel):
-    thread_id: str
+    thread_id: str = Field(min_length=1, max_length=64)
     content: str
     complexity: str = "auto"
     graph_mode: str = "auto"
     research_enabled: bool = False
-    client_request_id: str | None = None
+    client_request_id: str | None = Field(default=None, min_length=1, max_length=128)
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     @field_validator("complexity")
     @classmethod
@@ -77,20 +87,20 @@ class ChatRequest(BaseModel):
 
 
 class NodeSelectedRequest(BaseModel):
-    thread_id: str
-    node_id: str
-    title: str
-    description: str
-    client_request_id: str | None = None
+    thread_id: str = Field(min_length=1, max_length=64)
+    node_id: str = Field(max_length=256)
+    title: str = Field(max_length=1024)
+    description: str = Field(max_length=4096)
+    client_request_id: str | None = Field(default=None, min_length=1, max_length=128)
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
 
 class SearchToolRequest(BaseModel):
-    thread_id: str
-    request_id: str
+    thread_id: str = Field(min_length=1, max_length=64)
+    request_id: str = Field(min_length=1, max_length=128)
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -142,6 +152,37 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
         record_chat_rejected("empty_message")
         return sse_error("Empty message")
 
+    try:
+        completed_turn = thread_store.get_completed_turn(
+            user_id,
+            thread_id,
+            body.client_request_id,
+        )
+    except RuntimeError:
+        logger.exception("Stored idempotent turn is incomplete")
+        record_chat_rejected("incomplete_stored_turn")
+        return sse_error("Previous request is incomplete — start a new request")
+    if completed_turn is not None:
+        enqueue_analytics_event(
+            event_name="stream_replayed",
+            event_category="stream",
+            user_id=user_id,
+            session_id=thread_id,
+            thread_id=thread_id,
+            request_id=request_id,
+            client_request_id=body.client_request_id,
+            properties={"stream_type": "chat"},
+        )
+
+        async def replay_completed_turn():
+            yield sse({
+                "type": "response_delta",
+                "content": completed_turn["assistant_content"],
+            })
+            yield sse({"type": "done"})
+
+        return streaming_response(replay_completed_turn())
+
     message_count = message_store.count_messages(user_id, thread_id)
     if message_count + 2 > settings.max_messages_per_thread:
         record_chat_rejected("message_limit")
@@ -178,9 +219,9 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
 
         # Queue bridges the agent (which calls send()) and the SSE generator (which yields).
         # run_agent is launched as a task; we drain the queue while it runs.
-        queue: asyncio.Queue[dict] = asyncio.Queue()
-        done_sent = False
-
+        queue: asyncio.Queue[dict] = asyncio.Queue(
+            maxsize=max(1, settings.max_sse_queue_events),
+        )
         request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
         started_at = time.perf_counter()
         first_token_latency_ms: int | None = None
@@ -207,9 +248,10 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
         )
 
         async def send(event: dict) -> None:
-            nonlocal done_sent
+            # Only the transport may publish the terminal event, after the
+            # completed turn has been durably persisted.
             if event.get("type") == "done":
-                done_sent = True
+                return
             await queue.put(event)
 
         async def await_search_tool_request(request_id: str, timeout_s: float) -> bool:
@@ -270,6 +312,30 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
             # Hard wall-clock timeout aborts the task if it runs too long.
             loop_start = asyncio.get_event_loop().time()
             while True:
+                elapsed = asyncio.get_event_loop().time() - loop_start
+                if elapsed > settings.agent_timeout_s:
+                    agent_task.cancel()
+                    record_timeout()
+                    enqueue_analytics_event(
+                        event_name="stream_timeout",
+                        event_category="stream",
+                        user_id=user_id,
+                        session_id=thread_id,
+                        thread_id=thread_id,
+                        request_id=request_id,
+                        client_request_id=body.client_request_id,
+                        numeric_value=max(1, int((time.perf_counter() - started_at) * 1000)),
+                        unit="ms",
+                        properties={
+                            "stream_type": "chat",
+                            "first_token_latency_ms": first_token_latency_ms,
+                            "response_delta_count": response_delta_count,
+                            "graph_event_count": graph_event_count,
+                        },
+                    )
+                    yield sse({"type": "error", "content": "Response timed out — please try again"})
+                    yield sse({"type": "done"})
+                    return
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=0.05)
                     if event.get("type") == "response_delta":
@@ -318,30 +384,6 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
                         return
                     if agent_task.done() and queue.empty():
                         break
-                    elapsed = asyncio.get_event_loop().time() - loop_start
-                    if elapsed > settings.agent_timeout_s:
-                        agent_task.cancel()
-                        record_timeout()
-                        enqueue_analytics_event(
-                            event_name="stream_timeout",
-                            event_category="stream",
-                            user_id=user_id,
-                            session_id=thread_id,
-                            thread_id=thread_id,
-                            request_id=request_id,
-                            client_request_id=body.client_request_id,
-                            numeric_value=max(1, int((time.perf_counter() - started_at) * 1000)),
-                            unit="ms",
-                            properties={
-                                "stream_type": "chat",
-                                "first_token_latency_ms": first_token_latency_ms,
-                                "response_delta_count": response_delta_count,
-                                "graph_event_count": graph_event_count,
-                            },
-                        )
-                        yield sse({"type": "error", "content": "Response timed out — please try again"})
-                        yield sse({"type": "done"})
-                        return
         except asyncio.CancelledError:
             agent_task.cancel()
             record_cancel()
@@ -349,7 +391,8 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
         finally:
             change_active_chat_streams(-1)
             runtime_state_store.release_active_stream(stream_id)
-            if agent_task.cancelled():
+            if not agent_task.done():
+                agent_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await agent_task
             record_agent_duration(
@@ -379,7 +422,8 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
                         "graph_event_count": graph_event_count,
                     },
                 )
-                yield sse({"type": "error", "content": f"Server error: {str(exc)}"})
+                logger.error("Agent stream failed: %s", type(exc).__name__)
+                yield sse({"type": "error", "content": "Response failed — please try again"})
                 return
 
             final_state = agent_task.result()
@@ -387,21 +431,32 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
             try:
                 title = thread["title"]
                 if title == "New chat":
-                    title = content[:60]
-                thread_store.touch_thread(user_id, thread_id, title=title)
-                message_store.append(user_id, thread_id, "user", content)
-                message_store.append(user_id, thread_id, "assistant", final_state["response_text"])
-                if final_state.get("graph_data"):
-                    saved = thread_store.save_graph(user_id, thread_id, final_state["graph_data"])
-                    if not saved:
-                        yield sse({
-                            "type": "error",
-                            "content": (
-                                "Graph is large — it's displayed above but won't be saved. "
-                                "Start a new chat to reset."
-                            ),
-                        })
-            except Exception as exc:
+                    title = truncate_utf8(content, min(60, settings.max_thread_title_bytes))
+                graph_saved = thread_store.persist_turn(
+                    user_id,
+                    thread_id,
+                    title=title,
+                    user_content=content,
+                    assistant_content=final_state["response_text"],
+                    graph_data=final_state.get("graph_data"),
+                    client_request_id=body.client_request_id,
+                )
+                if not graph_saved:
+                    yield sse({
+                        "type": "error",
+                        "content": (
+                            "Graph is large — it's displayed above but won't be saved. "
+                            "Start a new chat to reset."
+                        ),
+                    })
+            except ThreadMessageLimitExceeded:
+                yield sse({
+                    "type": "error",
+                    "content": "Thread message limit reached. Start a new chat to continue.",
+                })
+                return
+            except Exception:
+                logger.exception("Chat result persistence failed")
                 enqueue_analytics_event(
                     event_name="stream_failed",
                     event_category="stream",
@@ -419,7 +474,7 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
                         **output_shape,
                     },
                 )
-                yield sse({"type": "error", "content": f"Persistence error: {str(exc)}"})
+                yield sse({"type": "error", "content": "Response could not be saved — please try again"})
                 return
 
             duration_ms = max(1, int((time.perf_counter() - started_at) * 1000))
@@ -461,8 +516,7 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
                 },
             )
 
-            if not done_sent:
-                yield sse({"type": "done"})
+            yield sse({"type": "done"})
 
     return streaming_response(stream())
 

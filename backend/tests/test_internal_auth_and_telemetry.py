@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from adapters.database_adapter import init_db
+from adapters.database_adapter import fetchall
 from adapters.llm_adapter import stream_response
 from config import settings
 from storage.profile_store import upsert_profile
@@ -107,6 +108,32 @@ def test_internal_login_rate_limits_after_failures(monkeypatch):
     assert second.status_code == 429
 
 
+def test_auth_rate_limit_storage_hashes_identifiers(temp_data_dir, monkeypatch):
+    from main import create_app
+
+    monkeypatch.setattr(settings, "supabase_jwt_secret", "x" * 32)
+    monkeypatch.setattr(settings, "supabase_jwt_issuer", "https://project.supabase.co/auth/v1")
+    monkeypatch.setattr(settings, "internal_test_password", "expected-secret")
+    monkeypatch.setattr(settings, "internal_test_email_allowlist_raw", "friend@example.com")
+    app = create_app(load_resources=False)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/auth/internal-login",
+            json={"email": "friend@example.com", "password": "wrong-secret"},
+        )
+
+    rows = fetchall(
+        "SELECT key_hash, event_type, created_at_epoch, expires_at_epoch "
+        "FROM rate_limit_events"
+    )
+    assert response.status_code == 401
+    assert len(rows) == 1
+    assert rows[0]["event_type"] == "internal_login_failure"
+    assert "friend@example.com" not in rows[0]["key_hash"]
+    assert rows[0]["expires_at_epoch"] > rows[0]["created_at_epoch"]
+
+
 def test_internal_login_requires_jwt_secret(monkeypatch):
     from fastapi import HTTPException
     from api import auth_route
@@ -119,6 +146,22 @@ def test_internal_login_requires_jwt_secret(monkeypatch):
 
     assert exc_info.value.status_code == 500
     assert "not configured" in exc_info.value.detail
+
+
+def test_internal_login_requires_existing_postgres_profile(monkeypatch):
+    from fastapi import HTTPException
+    from api import auth_route
+
+    monkeypatch.setattr(settings, "supabase_db_url", "postgresql://example")
+    monkeypatch.setattr(settings, "supabase_jwt_secret", "x" * 32)
+    monkeypatch.setattr(settings, "supabase_jwt_issuer", "https://project.supabase.co/auth/v1")
+    monkeypatch.setattr(auth_route, "get_profile_by_email", lambda _email: None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        auth_route._mint_internal_session("friend@example.com")
+
+    assert exc_info.value.status_code == 503
+    assert "normal sign-in" in exc_info.value.detail
 
 
 def test_internal_login_uses_generic_error_for_unlisted_email(temp_data_dir, monkeypatch):
@@ -311,6 +354,39 @@ def test_verify_otp_records_failure_requires_captcha_and_clears_on_success(monke
     assert missing_user.status_code == 400
     assert good.json()["session"]["user"] == {"id": "user-1", "email": "friend@example.com"}
     assert upserts == [("user-1", "friend@example.com")]
+
+
+def test_verify_otp_rate_limits_failures_across_distinct_emails_by_ip(monkeypatch):
+    from fastapi import HTTPException
+    from main import create_app
+    import api.auth_route as auth_route
+
+    monkeypatch.setattr(settings, "otp_verify_failure_limit", 100)
+    monkeypatch.setattr(settings, "otp_verify_failure_per_ip_limit", 2)
+
+    async def reject_otp(_email, _token):
+        raise HTTPException(status_code=400, detail="bad token")
+
+    monkeypatch.setattr(auth_route, "verify_email_otp", reject_otp)
+    app = create_app(load_resources=False)
+
+    with TestClient(app) as client:
+        first = client.post(
+            "/api/auth/verify-otp",
+            json={"email": "first@example.com", "token": "bad"},
+        )
+        second = client.post(
+            "/api/auth/verify-otp",
+            json={"email": "second@example.com", "token": "bad"},
+        )
+        blocked = client.post(
+            "/api/auth/verify-otp",
+            json={"email": "third@example.com", "token": "bad"},
+        )
+
+    assert first.status_code == 400
+    assert second.status_code == 400
+    assert blocked.json() == {"ok": False, "captcha_required": True}
 
 
 def test_latest_thread_endpoint_auto_creates_first_thread(temp_data_dir):

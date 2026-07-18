@@ -1,7 +1,5 @@
-import base64
-import json
-import time
 from functools import lru_cache
+import logging
 
 import httpx
 import jwt
@@ -9,6 +7,8 @@ from fastapi import Header, HTTPException
 from jwt import PyJWKClient
 
 from config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _require_supabase_settings() -> None:
@@ -26,13 +26,9 @@ def _get_jwk_client() -> PyJWKClient:
 def _jwt_algorithm(token: str) -> str:
     """Read the alg field from the JWT header without verifying the token."""
     try:
-        header_b64 = token.split('.')[0]
-        # Restore padding that base64url encoding strips
-        padding = (4 - len(header_b64) % 4) % 4
-        header = json.loads(base64.b64decode(header_b64 + '=' * padding))
-        return header.get('alg', 'RS256')
+        return str(jwt.get_unverified_header(token).get("alg") or "RS256")
     except Exception:
-        return 'RS256'
+        return "RS256"
 
 
 def verify_access_token(token: str) -> dict:
@@ -75,14 +71,13 @@ def verify_access_token(token: str) -> dict:
     except HTTPException:
         raise
     except Exception as exc:
-        print(f"[auth] JWT verification failed ({alg}): {type(exc).__name__}: {exc}")
+        logger.info("JWT verification failed: %s", type(exc).__name__)
         raise HTTPException(status_code=401, detail="Invalid or expired access token") from exc
 
 
 _DEV_USER = {
     "id": "00000000-0000-0000-0000-000000000dev",
     "email": "dev@local",
-    "token": "dev-local",
     "claims": {},
 }
 

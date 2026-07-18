@@ -4,7 +4,7 @@
 #          Allows GitHub Actions to impersonate the CI service account without
 #          storing long-lived JSON keys in GitHub Secrets.
 # Language: HCL (Terraform)
-# Connects to: github.com (OIDC token issuer), google_service_account.ci
+# Connects to: github.com (OIDC token issuer), environment-scoped deploy identities
 # Inputs:  github_repo variable
 # Outputs: wif_provider_name (via outputs.tf)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -46,9 +46,22 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   attribute_condition = "assertion.repository == '${var.github_repo}'"
 }
 
-# Allow GitHub Actions from this repo to impersonate the CI service account.
-# `principalSet` matches any token from the repo (any branch, any workflow).
-resource "google_service_account_iam_member" "ci_wif_binding" {
+# GitHub includes the protected Environment in the OIDC subject. Binding exact
+# subjects prevents a staging-eval job from ever impersonating production.
+resource "google_service_account_iam_member" "staging_ci_wif_binding" {
+  service_account_id = google_service_account.github_actions_staging.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principal://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/subject/repo:${var.github_repo}:environment:staging-eval"
+}
+
+resource "google_service_account_iam_member" "production_ci_wif_binding" {
+  service_account_id = google_service_account.github_actions_production.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principal://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/subject/repo:${var.github_repo}:environment:production"
+}
+
+resource "google_service_account_iam_member" "legacy_ci_wif_binding" {
+  count              = var.retain_legacy_ci_access ? 1 : 0
   service_account_id = google_service_account.ci.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.github_repo}"

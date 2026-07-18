@@ -12,6 +12,14 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = None
+ALLOWED_SCHEMAS = {"public", "staging"}
+
+
+def _database_schema() -> str:
+    schema = os.environ.get("DB_SCHEMA", "public").strip().lower()
+    if schema not in ALLOWED_SCHEMAS:
+        raise RuntimeError("DB_SCHEMA must be either 'public' or 'staging'")
+    return schema
 
 
 def _database_url() -> str:
@@ -26,11 +34,14 @@ def _database_url() -> str:
 
 
 def run_migrations_offline() -> None:
+    schema = _database_schema()
     context.configure(
         url=_database_url(),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        version_table_schema=schema,
+        include_schemas=True,
     )
 
     with context.begin_transaction():
@@ -38,10 +49,17 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    schema = _database_schema()
     connectable = create_engine(_database_url(), poolclass=pool.NullPool)
 
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        connection.exec_driver_sql(f'SET search_path TO "{schema}", auth')
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            version_table_schema=schema,
+            include_schemas=True,
+        )
 
         with context.begin_transaction():
             context.run_migrations()

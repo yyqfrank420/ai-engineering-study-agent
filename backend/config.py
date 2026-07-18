@@ -9,6 +9,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -24,12 +25,18 @@ class Settings(BaseSettings):
     # ── LLM ───────────────────────────────────────────────────────────────────
     anthropic_api_key: str = ""
 
-    # Orchestrator: high-quality reasoning + synthesis
-    orchestrator_model: str = "claude-sonnet-4-6"
-    # Workers: fast + cheap for retrieval / generation subtasks
-    worker_model: str = "claude-haiku-4-5-20251001"
+    # Sonnet 5 is the single runtime model. Role-specific ``effort`` settings,
+    # rather than a weaker worker model, control latency and spend per node.
+    orchestrator_model: str = "claude-sonnet-5"
+    worker_model: str = "claude-sonnet-5"
+    # Used only after the combined architecture/render gate requests a repair.
+    graph_repair_model: str = "claude-opus-4-8"
     # Extended thinking budget per agent call (tokens)
-    thinking_budget_tokens: int = 5000
+    # Extended reasoning budgets used by prototype and production design paths.
+    # max_tokens must leave room for both hidden reasoning and the final answer.
+    thinking_budget_tokens: int = 6000
+    production_thinking_budget_tokens: int = 9000
+    graph_critic_thinking_budget_tokens: int = 3000
 
     # ── OpenAI fallback ───────────────────────────────────────────────────────
     # Used when Anthropic fails after llm_max_retries attempts.
@@ -37,18 +44,22 @@ class Settings(BaseSettings):
     # gpt-5.4 with medium reasoning effort ≈ claude-sonnet-4-6
     orchestrator_fallback_model: str = "gpt-5.4"
     orchestrator_fallback_reasoning_effort: str = "medium"
-    # gpt-5.4-mini ≈ claude-haiku-4-5
-    worker_fallback_model: str = "gpt-5.4-mini"
+    worker_fallback_model: str = "gpt-5.4"
     # Retry budget: how many Anthropic attempts before switching to OpenAI
-    llm_max_retries: int = 3
+    # Initial provider attempt plus one bounded retry before fallback/failure.
+    llm_max_retries: int = 2
     llm_retry_delay_s: float = 1.0
     # Anthropic enforces a low concurrent streaming connection cap on smaller plans.
     # Queue locally instead of letting bursty evals/users turn into 429 errors.
     anthropic_max_concurrent_streams: int = 2
     # Cap per LLM call — prevents runaway generation eating tokens
-    llm_max_tokens: int = 4096
+    llm_max_tokens: int = 12000
     # Hard timeout on the whole agent run (seconds); yields a timeout error event
-    agent_timeout_s: int = 120
+    agent_timeout_s: int = 180
+    # A browser renders candidate graphs off-screen and returns a bounded image
+    # plus layout metrics before an applied diagram may be published.
+    diagram_evaluation_timeout_s: float = 15.0
+    max_diagram_screenshot_bytes: int = 400_000
     # Backend-wide request body guard. Must exceed max_graph_data_bytes plus JSON envelope.
     max_request_body_bytes: int = 600000
     # Sampling controls. Keep top_p / top_k unset unless you have a measured reason.
@@ -99,6 +110,9 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_anon_key: str = ""
     supabase_db_url: str = ""
+    # Application SQL is unqualified and every Postgres connection pins its
+    # search_path to this allowlisted schema. No arbitrary schema names are accepted.
+    db_schema: Literal["public", "staging"] = "public"
     supabase_jwt_issuer: str = ""
     supabase_jwt_audience: str = "authenticated"
     # Required for HS256 projects (most Supabase projects).
@@ -108,6 +122,11 @@ class Settings(BaseSettings):
     faiss_artifact_url: str = ""
     faiss_artifact_sha256: str = ""
     faiss_artifact_timeout_s: int = 120
+    # Artifact bundles contain pickle files, so downloads are checksum-pinned and
+    # bounded before extraction to limit disk/memory exhaustion from a bad host.
+    faiss_artifact_max_download_bytes: int = 268435456  # 256 MiB
+    faiss_artifact_max_extracted_bytes: int = 536870912  # 512 MiB
+    faiss_artifact_max_files: int = 1000
 
     # ── Internal test access ────────────────────────────────────────────────
     # Explicit internal-only login path for production testing without OTP.
@@ -126,16 +145,16 @@ class Settings(BaseSettings):
     # Base OTLP/HTTP endpoint, e.g. https://collector.example.com
     otel_exporter_otlp_endpoint: str = ""
     otel_exporter_otlp_headers_raw: str = ""
-    posthog_api_key: str = ""
-    posthog_host: str = "https://us.i.posthog.com"
-    # Optional server-side credentials for future dashboard reads.
-    posthog_project_id: str = ""
-    posthog_personal_api_key: str = ""
     internal_dashboard_allowlist_raw: str = ""
     analytics_queue_max_size: int = 1000
     analytics_event_schema_version: int = 1
+    telemetry_retention_days: int = 30
+    dashboard_query_max_rows: int = 20000
 
     # ── Dev ───────────────────────────────────────────────────────────────────
+    # Cloud Run injects this automatically. Keeping it in Settings preserves
+    # the single configuration boundary used by application code.
+    k_service: str = ""
     # Set to true in local .env only. NEVER enable in production.
     # Accepts the token "dev-local" as a valid auth token for any request.
     dev_bypass_auth: bool = False
@@ -162,6 +181,7 @@ class Settings(BaseSettings):
     otp_request_per_email_limit: int = 3
     otp_request_per_ip_limit: int = 10
     otp_verify_failure_limit: int = 3
+    otp_verify_failure_per_ip_limit: int = 10
     otp_verify_window_s: int = 600
 
     # ── Resource limits ───────────────────────────────────────────────────────
@@ -183,6 +203,8 @@ class Settings(BaseSettings):
     rag_top_k: int = 5          # child chunks retrieved from FAISS
     max_graph_nodes: int = 10   # cap on parallel Node Detail Workers
     search_tool_decision_timeout_s: float = 3.0
+    # Backpressure for the temporary HTTP/SSE compatibility transport.
+    max_sse_queue_events: int = 256
 
     # ── Research worker (DuckDuckGo) ──────────────────────────────────────────
     # Max results fetched per search query (3 queries × this = total raw results)
@@ -244,6 +266,74 @@ class Settings(BaseSettings):
     def internal_dashboard_allowlist(self) -> list[str]:
         raw = self.internal_dashboard_allowlist_raw.replace("\n", ",")
         return [email.strip().lower() for email in raw.split(",") if email.strip()]
+
+    def validate_for_cloud_run(self) -> None:
+        """Fail closed when production starts with unsafe or unusable config."""
+        if not self.use_postgres:
+            raise RuntimeError("SUPABASE_DB_URL must be configured in Cloud Run; refusing SQLite fallback.")
+        if self.dev_bypass_auth:
+            raise RuntimeError("DEV_BYPASS_AUTH must be false in Cloud Run.")
+
+        required_strings = {
+            "ANTHROPIC_API_KEY": self.anthropic_api_key,
+            "SUPABASE_URL": self.supabase_url,
+            "SUPABASE_ANON_KEY": self.supabase_anon_key,
+            "SUPABASE_JWT_ISSUER": self.effective_supabase_jwt_issuer,
+            "SUPABASE_JWT_AUDIENCE": self.effective_supabase_jwt_audience,
+            "TURNSTILE_SECRET_KEY": self.turnstile_secret_key,
+        }
+        missing = sorted(name for name, value in required_strings.items() if not value.strip())
+        if missing:
+            raise RuntimeError(f"Cloud Run configuration is incomplete: {', '.join(missing)}")
+
+        if not self.frontend_origin.startswith("https://"):
+            raise RuntimeError("FRONTEND_ORIGIN must use HTTPS in Cloud Run.")
+        if not self.supabase_url.startswith("https://"):
+            raise RuntimeError("SUPABASE_URL must use HTTPS in Cloud Run.")
+        if self.internal_test_password and len(self.internal_test_password) < 16:
+            raise RuntimeError("INTERNAL_TEST_PASSWORD must be at least 16 characters when enabled.")
+
+        positive_limits = {
+            "AGENT_TIMEOUT_S": self.agent_timeout_s,
+            "LLM_MAX_RETRIES": self.llm_max_retries,
+            "LLM_MAX_TOKENS": self.llm_max_tokens,
+            "THINKING_BUDGET_TOKENS": self.thinking_budget_tokens,
+            "PRODUCTION_THINKING_BUDGET_TOKENS": self.production_thinking_budget_tokens,
+            "GRAPH_CRITIC_THINKING_BUDGET_TOKENS": self.graph_critic_thinking_budget_tokens,
+            "DIAGRAM_EVALUATION_TIMEOUT_S": self.diagram_evaluation_timeout_s,
+            "MAX_DIAGRAM_SCREENSHOT_BYTES": self.max_diagram_screenshot_bytes,
+            "MAX_REQUEST_BODY_BYTES": self.max_request_body_bytes,
+            "MAX_MESSAGE_BYTES": self.max_message_bytes,
+            "MAX_THREADS_PER_USER": self.max_threads_per_user,
+            "MAX_MESSAGES_PER_THREAD": self.max_messages_per_thread,
+            "MAX_SSE_QUEUE_EVENTS": self.max_sse_queue_events,
+            "ANALYTICS_QUEUE_MAX_SIZE": self.analytics_queue_max_size,
+            "ANTHROPIC_MAX_CONCURRENT_STREAMS": self.anthropic_max_concurrent_streams,
+            "RATE_LIMIT_PER_MINUTE": self.rate_limit_per_minute,
+            "RATE_LIMIT_PER_HOUR": self.rate_limit_per_hour,
+            "MAX_ACTIVE_CHAT_STREAMS_PER_USER": self.max_active_chat_streams_per_user,
+            "MAX_ACTIVE_NODE_STREAMS_PER_USER": self.max_active_node_streams_per_user,
+            "OTP_REQUEST_WINDOW_S": self.otp_request_window_s,
+            "OTP_REQUEST_PER_EMAIL_LIMIT": self.otp_request_per_email_limit,
+            "OTP_REQUEST_PER_IP_LIMIT": self.otp_request_per_ip_limit,
+            "OTP_VERIFY_FAILURE_LIMIT": self.otp_verify_failure_limit,
+            "OTP_VERIFY_FAILURE_PER_IP_LIMIT": self.otp_verify_failure_per_ip_limit,
+            "OTP_VERIFY_WINDOW_S": self.otp_verify_window_s,
+            "INTERNAL_TEST_ATTEMPT_WINDOW_S": self.internal_test_attempt_window_s,
+            "INTERNAL_TEST_ATTEMPT_LIMIT": self.internal_test_attempt_limit,
+            "TELEMETRY_RETENTION_DAYS": self.telemetry_retention_days,
+            "DASHBOARD_QUERY_MAX_ROWS": self.dashboard_query_max_rows,
+            "FAISS_ARTIFACT_MAX_DOWNLOAD_BYTES": self.faiss_artifact_max_download_bytes,
+            "FAISS_ARTIFACT_MAX_EXTRACTED_BYTES": self.faiss_artifact_max_extracted_bytes,
+            "FAISS_ARTIFACT_MAX_FILES": self.faiss_artifact_max_files,
+        }
+        invalid = sorted(name for name, value in positive_limits.items() if value <= 0)
+        if invalid:
+            raise RuntimeError(f"Cloud Run limits must be positive: {', '.join(invalid)}")
+        if self.llm_max_tokens <= self.production_thinking_budget_tokens:
+            raise RuntimeError(
+                "LLM_MAX_TOKENS must be greater than PRODUCTION_THINKING_BUDGET_TOKENS."
+            )
 
 
 # Module-level singleton — import this everywhere
