@@ -29,6 +29,8 @@ def _state(**overrides):
         "graph_changed": False,
         "graph_notice_sent": False,
         "user_message": "How do agents use tools?",
+        "user_id": "user-1",
+        "session_id": "thread-1",
         "request_id": "req-1",
         "send": send,
         "await_search_tool_request": await_search_tool_request,
@@ -208,4 +210,6 @@ async def test_node_enrichment_requires_graph_and_tool(monkeypatch):
     assert calls[0]["rag_search_tool"] == "rag-search"
     assert calls[0]["send"] is state["send"]
     assert calls[0]["graph_version"] == 3
+    assert calls[0]["user_id"] == state["user_id"]
+    assert calls[0]["thread_id"] == state["session_id"]
     assert events == []

@@ -145,4 +145,6 @@ async def maybe_start_node_enrichment(state: AgentState, node_detail_tools: list
         rag_search_tool=rag_search_tool,
         send=state["send"],
         graph_version=graph_data.get("version"),
+        user_id=state.get("user_id"),
+        thread_id=state.get("session_id"),
     )

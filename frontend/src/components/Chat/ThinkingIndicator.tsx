@@ -82,11 +82,17 @@ export function ThinkingIndicator({
             {workflowProgress.slice(-4).map(item => (
               <div key={item.phase} style={{ display: 'grid', gridTemplateColumns: '14px 1fr', columnGap: '0.45rem' }}>
                 <span style={{
-                  color: item.status === 'complete' ? '#3fb950' : item.status === 'retry' ? '#f59e0b' : '#a78bfa',
+                  color: item.status === 'complete'
+                    ? '#3fb950'
+                    : item.status === 'retry'
+                      ? '#f59e0b'
+                      : item.status === 'rejected'
+                        ? '#f87171'
+                        : '#a78bfa',
                   fontSize: '0.72rem',
                   lineHeight: 1.35,
                 }}>
-                  {item.status === 'complete' ? '✓' : item.status === 'retry' ? '↻' : '●'}
+                  {item.status === 'complete' ? '✓' : item.status === 'retry' ? '↻' : item.status === 'rejected' ? '×' : '●'}
                 </span>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ color: '#aeb6c2', fontSize: '0.68rem', lineHeight: 1.35 }}>{item.title}</div>

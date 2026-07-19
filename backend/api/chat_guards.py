@@ -46,11 +46,24 @@ _PROMPT_INJECTION_PATTERNS: tuple[tuple[re.Pattern[str], float], ...] = (
     (re.compile(r"\b(sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|BEGIN (RSA|OPENSSH|PRIVATE) KEY)\b"), 0.75),
 )
 
+_EXPLICIT_UNTRUSTED_QUOTE = re.compile(
+    r"\b(?:treat|analy[sz]e|review|explain)\b"
+    r"[^'\"]{0,240}"
+    r"\b(?:quoted\s+(?:text|instruction)|untrusted\s+(?:text|notes|instruction)|prompt[- ]injection\s+example)\b"
+    r"[^'\"]{0,240}"
+    r"(?P<quote>['\"]).*?(?P=quote)",
+    re.I | re.S,
+)
+
 
 def check_prompt_injection(text: str) -> bool:
     """Return False for obvious instruction-override or secret-exfiltration prompts."""
     normalized = " ".join(text.split())
-    score = sum(weight for pattern, weight in _PROMPT_INJECTION_PATTERNS if pattern.search(normalized))
+    # Ignore only the explicitly framed quotation. Injection-like text outside
+    # it is still scored, and a malicious prompt cannot self-label as safe from
+    # inside its own quoted payload.
+    text_to_score = _EXPLICIT_UNTRUSTED_QUOTE.sub("", normalized)
+    score = sum(weight for pattern, weight in _PROMPT_INJECTION_PATTERNS if pattern.search(text_to_score))
     return score < settings.prompt_injection_threshold
 
 

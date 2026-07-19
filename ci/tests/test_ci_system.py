@@ -150,6 +150,18 @@ def test_gcp_federation_separates_staging_and_production_credentials():
     assert "default     = false" in transition
 
 
+def test_staging_allows_control_traffic_without_parallel_schema_mutation():
+    cloud_run = (ROOT / "infra/terraform/gcp/cloud_run.tf").read_text(encoding="utf-8")
+    staging = cloud_run.split(
+        'resource "google_cloud_run_v2_service" "backend_staging"', 1
+    )[1]
+    staging_template = staging.split("containers {", 1)[0]
+
+    assert "max_instance_request_concurrency = var.container_concurrency" in staging_template
+    assert "min_instance_count = 0" in staging_template
+    assert "max_instance_count = 1" in staging_template
+
+
 def test_required_check_names_are_stable():
     workflows = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / ".github/workflows").glob("*.yml"))
 

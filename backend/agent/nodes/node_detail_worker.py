@@ -61,6 +61,9 @@ async def enrich_node(
     rag_search_tool,
     send: Callable[[dict], Awaitable[None]],
     graph_version: str | None = None,
+    *,
+    user_id: str | None = None,
+    thread_id: str | None = None,
 ) -> None:
     """
     Enrich a single graph node with a description and book citations.
@@ -147,6 +150,8 @@ async def enrich_node(
         effort="low",
         telemetry=build_telemetry(
             "node_detail_worker",
+            user_id=user_id,
+            thread_id=thread_id,
             metadata={
                 "node_id": node["id"],
                 "node_label": node["label"],
@@ -191,6 +196,9 @@ async def enrich_all_nodes(
     rag_search_tool,
     send: Callable[[dict], Awaitable[None]],
     graph_version: str | None = None,
+    *,
+    user_id: str | None = None,
+    thread_id: str | None = None,
 ) -> None:
     """
     Enrich canonical graph nodes in parallel, capped at
@@ -206,7 +214,15 @@ async def enrich_all_nodes(
     """
     capped_nodes = nodes[:settings.max_graph_nodes]
     tasks = [
-        enrich_node(node, edges, rag_search_tool, send, graph_version=graph_version)
+        enrich_node(
+            node,
+            edges,
+            rag_search_tool,
+            send,
+            graph_version=graph_version,
+            user_id=user_id,
+            thread_id=thread_id,
+        )
         for node in capped_nodes
     ]
     # Run all node workers concurrently — errors in one don't kill others

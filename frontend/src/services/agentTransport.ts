@@ -14,6 +14,9 @@
 import type { AuthSession, ComplexityLevel, DiagramLayoutReport, GraphMode, ServerEvent } from '../types';
 import { API_BASE } from './config';
 
+const PRE_START_CONNECT_RETRIES = 1;
+const PRE_START_RETRY_DELAY_MS = 250;
+
 export interface StreamMeta {
   kind: 'chat' | 'node-selected';
   clientRequestId: string;
@@ -103,18 +106,14 @@ export class AgentTransport {
     clientRequestId = createClientRequestId(),
   ): Promise<boolean> {
     this._chatSocket?.close(1000, 'Superseded by a new request');
-    const socket = new WebSocket(websocketUrl('/api/chat/ws'));
-    this._chatSocket = socket;
     this._chatClientRequestId = clientRequestId;
     this._chatCommandsReady = false;
     this._pendingSteers = [];
 
     return await new Promise<boolean>((resolve, reject) => {
-      let sawDone = false;
-      let startSent = false;
       let settled = false;
 
-      const settle = (value: boolean, error?: Error) => {
+      const settle = (socket: WebSocket, value: boolean, error?: Error) => {
         if (settled) return;
         settled = true;
         if (this._chatSocket === socket) {
@@ -126,47 +125,82 @@ export class AgentTransport {
         else resolve(value);
       };
 
-      socket.onopen = () => {
-        socket.send(JSON.stringify({ type: 'auth', access_token: session.access_token }));
-      };
-      socket.onmessage = (message) => {
-        try {
-          const event = JSON.parse(String(message.data)) as ServerEvent | { type: 'ready' };
-          if (event.type === 'ready') {
-            if (!startSent && this._chatSocket === socket) {
-              startSent = true;
-              socket.send(JSON.stringify({
-                type: 'start',
-                thread_id: threadId,
-                content,
-                complexity: opts?.complexity ?? 'auto',
-                graph_mode: opts?.graphMode ?? 'auto',
-                research_enabled: opts?.researchEnabled ?? false,
-                client_request_id: clientRequestId,
-              }));
-              this._chatCommandsReady = true;
-              for (const steering of this._pendingSteers.splice(0)) {
+      const connect = (attempt: number) => {
+        const socket = new WebSocket(websocketUrl('/api/chat/ws'));
+        this._chatSocket = socket;
+        this._chatCommandsReady = false;
+        let sawDone = false;
+        let startSent = false;
+        let retryScheduled = false;
+
+        const retryBeforeStart = () => {
+          if (
+            settled
+            || retryScheduled
+            || startSent
+            || attempt >= PRE_START_CONNECT_RETRIES
+            || this._chatSocket !== socket
+          ) {
+            return false;
+          }
+          retryScheduled = true;
+          socket.onerror = null;
+          socket.onclose = null;
+          socket.close(1000, 'Retrying pre-start connection');
+          window.setTimeout(() => {
+            if (!settled) connect(attempt + 1);
+          }, PRE_START_RETRY_DELAY_MS);
+          return true;
+        };
+
+        socket.onopen = () => {
+          socket.send(JSON.stringify({ type: 'auth', access_token: session.access_token }));
+        };
+        socket.onmessage = (message) => {
+          try {
+            const event = JSON.parse(String(message.data)) as ServerEvent | { type: 'ready' };
+            if (event.type === 'ready') {
+              if (!startSent && this._chatSocket === socket) {
+                startSent = true;
                 socket.send(JSON.stringify({
-                  type: 'steer',
-                  content: steering,
+                  type: 'start',
+                  thread_id: threadId,
+                  content,
+                  complexity: opts?.complexity ?? 'auto',
+                  graph_mode: opts?.graphMode ?? 'auto',
+                  research_enabled: opts?.researchEnabled ?? false,
                   client_request_id: clientRequestId,
                 }));
+                this._chatCommandsReady = true;
+                for (const steering of this._pendingSteers.splice(0)) {
+                  socket.send(JSON.stringify({
+                    type: 'steer',
+                    content: steering,
+                    client_request_id: clientRequestId,
+                  }));
+                }
               }
+              return;
             }
-            return;
+            this.eventHandlers.forEach(handler => handler(event, { kind: 'chat', clientRequestId }));
+            if (event.type === 'done') {
+              sawDone = true;
+              socket.close(1000, 'Complete');
+              settle(socket, true);
+            }
+          } catch {
+            console.error('[ws] Failed to parse event:', message.data);
           }
-          this.eventHandlers.forEach(handler => handler(event, { kind: 'chat', clientRequestId }));
-          if (event.type === 'done') {
-            sawDone = true;
-            socket.close(1000, 'Complete');
-            settle(true);
-          }
-        } catch {
-          console.error('[ws] Failed to parse event:', message.data);
-        }
+        };
+        socket.onerror = () => {
+          if (!retryBeforeStart()) settle(socket, false, new Error('WebSocket connection failed'));
+        };
+        socket.onclose = () => {
+          if (!retryBeforeStart()) settle(socket, sawDone);
+        };
       };
-      socket.onerror = () => settle(false, new Error('WebSocket connection failed'));
-      socket.onclose = () => settle(sawDone);
+
+      connect(0);
     });
   }
 
