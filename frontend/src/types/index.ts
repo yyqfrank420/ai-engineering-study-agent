@@ -190,7 +190,7 @@ export type WorkflowPhase =
 export interface WorkflowProgressEvent {
   type: 'workflow_progress';
   phase: WorkflowPhase;
-  status: 'active' | 'complete' | 'retry';
+  status: 'active' | 'complete' | 'retry' | 'rejected';
   title: string;
   detail: string;
 }
@@ -339,7 +339,7 @@ export interface GraphCandidate {
 
 export interface WorkflowProgress {
   phase: WorkflowPhase;
-  status: 'active' | 'complete' | 'retry';
+  status: 'active' | 'complete' | 'retry' | 'rejected';
   title: string;
   detail: string;
 }

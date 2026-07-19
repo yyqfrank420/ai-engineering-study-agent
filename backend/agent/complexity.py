@@ -123,7 +123,7 @@ def resolve_complexity(requested: str, query: str) -> ComplexityProfile:
             resolved=resolved,
             thinking_budget=settings.production_thinking_budget_tokens,
             min_graph_nodes=6,
-            max_graph_nodes=10,
+            max_graph_nodes=7,
             answer_contract=(
                 "Production depth: give an implementable design, including component boundaries, "
                 "data contracts, the decision/feedback loop, safety controls, approval where "
@@ -138,7 +138,7 @@ def resolve_complexity(requested: str, query: str) -> ComplexityProfile:
             resolved=resolved,
             thinking_budget=settings.thinking_budget_tokens,
             min_graph_nodes=5,
-            max_graph_nodes=10,
+            max_graph_nodes=7,
             answer_contract=(
                 "Prototype depth: produce a concrete buildable design with responsibilities, key "
                 "interfaces, the main data/control loop, important assumptions, and the first "

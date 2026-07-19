@@ -17,7 +17,6 @@ from agent.architecture_playbook import build_evidence_bundle
 from agent.complexity import is_applied_system_design_request
 from agent.nodes.architecture_workers import architect_node, challenger_node
 from agent.nodes.graph_critic import graph_critic_node
-from agent.nodes.graph_worker import graph_worker_node
 from agent.nodes.orchestrator_node import orchestrator_route, orchestrator_synthesise, quick_synthesise
 from agent.pipeline_steps import (
     apply_graph_worker,
@@ -120,22 +119,6 @@ def build_agent_workflow(
     async def review_graph(state: AgentState) -> AgentState:
         return await graph_critic_node(state)
 
-    async def revise_graph(state: AgentState) -> AgentState:
-        revision_state: AgentState = {
-            **state,
-            "graph_revision_count": state.get("graph_revision_count", 0) + 1,
-        }
-        await state["send"]({
-            "type": "worker_status",
-            "worker": "graph",
-            "status": "Revising the architecture against the independent review…",
-        })
-        revised = await graph_worker_node(revision_state, graph_tools)
-        new_graph = revised.get("graph_data")
-        if new_graph is None:
-            return {**revision_state, "graph_data": None, "graph_changed": False}
-        return {**revised, "graph_changed": True}
-
     async def reject_graph(state: AgentState) -> AgentState:
         review = state.get("graph_review") or {}
         await state["send"]({
@@ -183,7 +166,6 @@ def build_agent_workflow(
     workflow.add_node("challenger", _traced("agent.challenger", challenge_plan))
     workflow.add_node("expand_context", _traced("agent.search_tool_wait", expand_context))
     workflow.add_node("review_graph", _traced("agent.graph_review", review_graph))
-    workflow.add_node("revise_graph", _traced("agent.graph_revision", revise_graph))
     workflow.add_node("reject_graph", _traced("agent.graph_rejected", reject_graph))
     workflow.add_node(
         "synthesise",
@@ -213,9 +195,8 @@ def build_agent_workflow(
     workflow.add_conditional_edges(
         "review_graph",
         _route_after_review,
-        {"accept": "synthesise", "revise": "revise_graph", "reject": "reject_graph"},
+        {"accept": "synthesise", "reject": "reject_graph"},
     )
-    workflow.add_edge("revise_graph", "review_graph")
     workflow.add_edge("reject_graph", "synthesise")
     workflow.add_edge("synthesise", "enrich")
     workflow.add_edge("enrich", END)
@@ -234,17 +215,13 @@ def _should_run_applied_design_roles(state: AgentState) -> bool:
     )
 
 
-def _route_after_review(state: AgentState) -> Literal["accept", "revise", "reject"]:
+def _route_after_review(state: AgentState) -> Literal["accept", "reject"]:
     graph = state.get("graph_data") or {}
     if not state.get("graph_changed") or graph.get("design_origin") != "applied":
         return "accept"
     review = state.get("graph_review") or {}
     if review.get("approved"):
         return "accept"
-    if review.get("terminal"):
-        return "reject"
-    if state.get("graph_revision_count", 0) < 1:
-        return "revise"
     return "reject"
 
 

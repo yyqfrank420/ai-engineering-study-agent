@@ -58,6 +58,7 @@ describe('AgentTransport WebSocket protocol', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -136,6 +137,57 @@ describe('AgentTransport WebSocket protocol', () => {
       client_request_id: 'client-auth',
     });
     socket.receive({ type: 'done' });
+  });
+
+  it('retries one failed connection before sending the start frame', async () => {
+    vi.useFakeTimers();
+    const transport = new AgentTransport();
+    const completed = transport.sendMessage(
+      session,
+      'thread-1',
+      'design',
+      undefined,
+      'client-retry',
+    );
+    const first = MockWebSocket.instances[0];
+
+    expect(transport.steerGeneration('retain this steer')).toBe(true);
+    first.onerror?.();
+    await vi.advanceTimersByTimeAsync(250);
+
+    const second = MockWebSocket.instances[1];
+    second.open();
+    second.receive({ type: 'ready' });
+    expect(JSON.parse(second.sent[1])).toMatchObject({
+      type: 'start',
+      client_request_id: 'client-retry',
+    });
+    expect(JSON.parse(second.sent[2])).toMatchObject({
+      type: 'steer',
+      content: 'retain this steer',
+      client_request_id: 'client-retry',
+    });
+    second.receive({ type: 'done' });
+
+    await expect(completed).resolves.toBe(true);
+    vi.useRealTimers();
+  });
+
+  it('does not replay a request after its start frame was sent', async () => {
+    vi.useFakeTimers();
+    const transport = new AgentTransport();
+    const completed = transport.sendMessage(session, 'thread-1', 'design', undefined, 'client-started');
+    const socket = MockWebSocket.instances[0];
+    socket.open();
+    socket.receive({ type: 'ready' });
+    const rejected = expect(completed).rejects.toThrow('WebSocket connection failed');
+
+    socket.onerror?.();
+    await vi.advanceTimersByTimeAsync(250);
+
+    await rejected;
+    expect(MockWebSocket.instances).toHaveLength(1);
+    vi.useRealTimers();
   });
 
   it('uploads a rendered diagram in bounded idempotent chunks', () => {

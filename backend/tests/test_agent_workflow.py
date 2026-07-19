@@ -41,12 +41,11 @@ def test_graph_off_skips_paid_applied_design_roles():
 
 
 @pytest.mark.asyncio
-async def test_langgraph_runs_one_independent_review_revision_loop(monkeypatch):
+async def test_langgraph_rejects_a_failed_review_without_a_paid_revision(monkeypatch):
     import agent.graph as agent_graph
 
     events = []
     reviews = []
-    revisions = []
     parallel_roles = set()
     both_roles_started = asyncio.Event()
 
@@ -91,24 +90,13 @@ async def test_langgraph_runs_one_independent_review_revision_loop(monkeypatch):
 
     async def fake_review(state):
         reviews.append(state["graph_data"]["title"])
-        approved = len(reviews) == 2
         return {
             **state,
             "graph_review": {
-                "approved": approved,
-                "score": 0.9 if approved else 0.4,
-                "missing": [] if approved else ["Missing approval boundary"],
+                "approved": False,
+                "score": 0.4,
+                "missing": ["Missing approval boundary"],
                 "revision_instruction": "Add a concrete approval boundary",
-            },
-        }
-
-    async def fake_revision(state, _tools):
-        revisions.append(state["graph_review"]["revision_instruction"])
-        return {
-            **state,
-            "graph_data": {
-                **state["graph_data"],
-                "title": "Reviewed domain design",
             },
         }
 
@@ -125,16 +113,15 @@ async def test_langgraph_runs_one_independent_review_revision_loop(monkeypatch):
     monkeypatch.setattr(agent_graph, "apply_graph_worker", fake_apply)
     monkeypatch.setattr(agent_graph, "maybe_expand_with_search_tool", fake_expand)
     monkeypatch.setattr(agent_graph, "graph_critic_node", fake_review)
-    monkeypatch.setattr(agent_graph, "graph_worker_node", fake_revision)
     monkeypatch.setattr(agent_graph, "orchestrator_synthesise", fake_synth)
     monkeypatch.setattr(agent_graph, "maybe_start_node_enrichment", fake_enrich)
 
     result = await agent_graph.run_agent(_state(send), [], [], [])
 
-    assert reviews == ["First draft", "Reviewed domain design"]
-    assert revisions == ["Add a concrete approval boundary"]
-    assert result["graph_revision_count"] == 1
-    assert result["graph_data"]["title"] == "Reviewed domain design"
+    assert reviews == ["First draft"]
+    assert result["graph_revision_count"] == 0
+    assert result["graph_data"] is None
+    assert result["graph_notice_sent"] is True
     assert result["response_text"] == "reviewed answer"
     assert parallel_roles == {"architect", "challenger"}
-    assert any(event.get("worker") == "graph" and "Revising" in event.get("status", "") for event in events)
+    assert any(event.get("type") == "graph_notice" for event in events)

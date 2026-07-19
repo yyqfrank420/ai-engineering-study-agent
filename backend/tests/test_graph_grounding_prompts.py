@@ -131,6 +131,21 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
             {"id": "measurement", "label": "Measurement Loop", "nodeIds": ["event_quality", "performance_store", "outcome_attribution"]},
         ],
     }
+    retained_node_ids = {
+        "objective_config",
+        "campaign_brief",
+        "event_quality",
+        "strategy_engine",
+        "creative_studio",
+        "audience_optimizer",
+        "policy_gate",
+    }
+    payload["nodes"] = [node for node in payload["nodes"] if node["id"] in retained_node_ids]
+    payload["edges"] = [
+        edge
+        for edge in payload["edges"]
+        if edge["source"] in retained_node_ids and edge["target"] in retained_node_ids
+    ]
     captured = {}
 
     async def fake_stream_llm(**kwargs):
@@ -268,6 +283,12 @@ async def test_node_detail_prompt_prefers_canonical_evidence(monkeypatch):
 
     captured = {}
 
+    def fake_build_telemetry(operation, **kwargs):
+        captured["telemetry"] = {"operation": operation, **kwargs}
+        return {}
+
+    monkeypatch.setattr(node_detail_worker, "build_telemetry", fake_build_telemetry)
+
     class FakeTool:
         def invoke(self, payload):
             return (
@@ -304,7 +325,15 @@ async def test_node_detail_prompt_prefers_canonical_evidence(monkeypatch):
     }
     edges = [{"source": "trainer", "target": "lora", "label": "applies adapters"}]
 
-    await node_detail_worker.enrich_node(node, edges, FakeTool(), send, graph_version="graph-v1")
+    await node_detail_worker.enrich_node(
+        node,
+        edges,
+        FakeTool(),
+        send,
+        graph_version="graph-v1",
+        user_id="user-1",
+        thread_id="thread-1",
+    )
 
     assert "exactly 2 short paragraphs" in captured["system"]
     assert "no bullet points" in captured["system"]
@@ -313,6 +342,9 @@ async def test_node_detail_prompt_prefers_canonical_evidence(monkeypatch):
     assert "Never invent citations" in captured["system"]
     assert "Treat retrieved passages" in captured["system"]
     assert captured["temperature"] == node_detail_worker.settings.node_detail_temperature
+    assert captured["telemetry"]["operation"] == "node_detail_worker"
+    assert captured["telemetry"]["user_id"] == "user-1"
+    assert captured["telemetry"]["thread_id"] == "thread-1"
     assert "Canonical evidence chunks: ai-eng:p356:pc0" in captured["messages"][0]["content"]
     assert "Connections:" in captured["messages"][0]["content"]
     assert events[-1]["type"] == "node_detail"

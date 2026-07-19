@@ -178,12 +178,12 @@ async def graph_critic_node(state: AgentState) -> AgentState:
     await state["send"]({
         "type": "workflow_progress",
         "phase": "review",
-        "status": "complete" if review.get("approved") else "retry",
-        "title": "Diagram passed the clarity gate" if review.get("approved") else "Diagram needs one focused revision",
+        "status": "complete" if review.get("approved") else "rejected",
+        "title": "Diagram passed the clarity gate" if review.get("approved") else "Diagram did not pass the clarity gate",
         "detail": (
             "The rendered design is ready to publish."
             if review.get("approved")
-            else str(review.get("revision_instruction") or "Improving the weakest part before showing it.")[:260]
+            else str(review.get("revision_instruction") or "The answer will continue without this diagram.")[:260]
         ),
     })
     return {**state, "graph_review": review}

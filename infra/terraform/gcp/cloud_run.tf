@@ -93,9 +93,12 @@ resource "google_cloud_run_v2_service" "backend_staging" {
   ingress  = "INGRESS_TRAFFIC_ALL"
 
   template {
-    service_account                  = google_service_account.backend_staging.email
-    timeout                          = "${var.request_timeout_seconds}s"
-    max_instance_request_concurrency = 1
+    service_account = google_service_account.backend_staging.email
+    timeout         = "${var.request_timeout_seconds}s"
+    # One long-lived eval WebSocket must not starve thread, telemetry, and
+    # readiness requests. Global workflow serialization and max instances = 1
+    # still guarantee that only one staging evaluation mutates the schema.
+    max_instance_request_concurrency = var.container_concurrency
 
     scaling {
       min_instance_count = 0
