@@ -148,8 +148,10 @@ async def _capture_bootstrap_failure(
     auth_overlay_visible = False
     try:
         auth_overlay_visible = await page.get_by_role("heading", name="Sign in").is_visible()
-    except Exception:
-        pass
+    except Exception as exc:
+        browser_events.append(
+            {"type": "diagnostic_error", "text": f"{type(exc).__name__}: {exc}"[:1000]}
+        )
     diagnostics = {
         "format_version": 1,
         "phase": "browser_bootstrap",
