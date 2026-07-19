@@ -147,7 +147,7 @@ async def test_parallel_research_phase_merges_rag_and_research(monkeypatch):
 
     async def fake_research_worker_node(incoming_state):
         await asyncio.sleep(0)
-        return {**incoming_state, "research_context": "- source"}
+        return {**incoming_state, "research_context": "- source", "research_status": "ready"}
 
     monkeypatch.setattr("agent.pipeline_steps.rag_worker_node", fake_rag_worker_node)
     monkeypatch.setattr("agent.pipeline_steps.research_worker_node", fake_research_worker_node)
@@ -156,6 +156,7 @@ async def test_parallel_research_phase_merges_rag_and_research(monkeypatch):
 
     assert result["rag_chunks"] == [{"text": "book"}]
     assert result["research_context"] == "- source"
+    assert result["research_status"] == "ready"
 
 
 @pytest.mark.asyncio
@@ -164,7 +165,7 @@ async def test_maybe_expand_with_search_tool_runs_research_then_graph(monkeypatc
     graph_inputs = []
 
     async def fake_research_worker_node(incoming_state):
-        return {**incoming_state, "research_context": "- external"}
+        return {**incoming_state, "research_context": "- external", "research_status": "ready"}
 
     async def fake_apply_graph_worker(incoming_state, graph_tools):
         graph_inputs.append((incoming_state["research_context"], graph_tools))
@@ -176,6 +177,7 @@ async def test_maybe_expand_with_search_tool_runs_research_then_graph(monkeypatc
     result = await maybe_expand_with_search_tool(state, ["graph-tool"], asyncio.create_task(asyncio.sleep(0, True)))
 
     assert result["research_context"] == "- external"
+    assert result["research_status"] == "ready"
     assert result["graph_data"] == {"nodes": []}
     assert graph_inputs == [("- external", ["graph-tool"])]
 

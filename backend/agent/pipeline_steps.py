@@ -104,6 +104,7 @@ async def run_parallel_research_phase(state: AgentState, rag_tools: list) -> Age
         "retrieval_relevance": rag_state.get("retrieval_relevance", "strong"),
         "retrieval_notice": rag_state.get("retrieval_notice", ""),
         "research_context": research_state.get("research_context", ""),
+        "research_status": research_state.get("research_status", "unavailable"),
     }
 
 
@@ -120,7 +121,11 @@ async def maybe_expand_with_search_tool(
         return state
 
     research_state = await research_worker_node(state)
-    expanded_state = {**state, "research_context": research_state.get("research_context", "")}
+    expanded_state = {
+        **state,
+        "research_context": research_state.get("research_context", ""),
+        "research_status": research_state.get("research_status", "unavailable"),
+    }
     return await apply_graph_worker(expanded_state, graph_tools)
 
 

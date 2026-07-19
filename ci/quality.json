@@ -155,6 +155,51 @@
       {"glob": "ci/tests/test_*.py", "group": "pipeline-policy"}
     ]
   },
+  "offline_selection": {
+    "always": ["pipeline-policy"],
+    "full_run_paths": [
+      ".github/**", "ci/quality.json", "scripts/ci", "scripts/ci_runner.py",
+      "scripts/prepush_check.sh", "backend/config.py", "backend/requirements*.txt",
+      "pytest.ini", ".coveragerc"
+    ],
+    "groups": {
+      "api-integration": [
+        "backend/api/**", "backend/main.py", "backend/observability.py",
+        "backend/analytics/**", "backend/adapters/database_adapter.py",
+        "backend/adapters/supabase_auth_adapter.py"
+      ],
+      "agent-rag-llm": [
+        "backend/agent/**", "backend/rag/**", "backend/graph/**",
+        "backend/adapters/llm_adapter.py"
+      ],
+      "storage-security": [
+        "backend/storage/**", "backend/analytics/**", "backend/adapters/database_adapter.py",
+        "backend/adapters/supabase_auth_adapter.py"
+      ],
+      "eval-quality": ["backend/eval/**", "scripts/run_staging_eval.py"],
+      "frontend": ["frontend/**"],
+      "ingestion-artifacts": [
+        "ingestion/**", "scripts/package_faiss_artifact.py",
+        "scripts/validate_canonical_graph_artifacts.py"
+      ],
+      "static-security": [
+        "backend/*.py", "backend/**/*.py", "ingestion/*.py", "ingestion/**/*.py",
+        "scripts/*.py", "ci/**/*.py"
+      ],
+      "infra-migrations": [
+        "infra/**", "backend/db/**", "alembic.ini", "scripts/apply_supabase_config.py",
+        "scripts/apply_supabase_schema.sh", "scripts/populate_secrets.sh",
+        "scripts/provision_staging_role.py", "scripts/staging_database.py"
+      ],
+      "container": [
+        "backend/Dockerfile", "backend/main.py", "backend/observability.py",
+        "backend/adapters/**", "backend/agent/**",
+        "backend/analytics/**", "backend/api/**", "backend/db/**", "backend/eval/**",
+        "backend/graph/**", "backend/rag/**", "backend/storage/**", ".dockerignore"
+      ],
+      "pipeline-policy": ["ci/**", "scripts/configure_main_branch_protection.sh"]
+    }
+  },
   "impact": {
     "documentation": ["*.md", "docs/**", ".cursor/**"],
     "visual_only": ["frontend/src/*.css", "frontend/src/**/*.css", "frontend/public/**"],

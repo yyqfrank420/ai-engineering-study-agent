@@ -8,9 +8,9 @@
 #          to ground responses in current real-world practice.
 #
 #          DuckDuckGo is queried synchronously inside asyncio.to_thread() to
-#          avoid blocking the event loop. Any exception (timeout, rate-limit,
-#          network error) is silently swallowed — research is additive, not
-#          required for the pipeline to succeed.
+#          avoid blocking the event loop. An unavailable provider degrades to
+#          book evidence with an explicit status instead of being presented as
+#          successful current research.
 # Language: Python
 # Connects to: agent/state.py, config.py
 # Inputs:  AgentState (user_message, send callback)
@@ -19,6 +19,7 @@
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -29,8 +30,9 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 # Max characters for title and body in each bullet to keep prompts lean
-_TITLE_MAX  = 80
-_BODY_MAX   = 120
+_TITLE_MAX = 80
+_BODY_MAX = 120
+_TOPIC_MAX = 160
 
 
 async def research_worker_node(state: AgentState) -> AgentState:
@@ -38,13 +40,13 @@ async def research_worker_node(state: AgentState) -> AgentState:
     Run three DuckDuckGo searches in a background thread and format results
     as a compact bullet list for downstream workers.
 
-    Returns state with research_context set. On any failure, research_context
-    is an empty string so downstream nodes degrade gracefully.
+    Returns state with research_context and research_status set. On failure,
+    downstream nodes degrade explicitly to book-only evidence.
     """
     send = state["send"]
     await send({"type": "worker_status", "worker": "research", "status": "Searching the web…"})
 
-    topic = state["user_message"][:60].strip()
+    topic = _normalise_topic(state["user_message"])
     queries = _build_queries(topic)
 
     try:
@@ -54,12 +56,47 @@ async def research_worker_node(state: AgentState) -> AgentState:
             settings.research_results_per_query,
         )
     except Exception as exc:
-        # Research is additive, so provider failure degrades to book context.
         logger.warning("Web research failed: %s", type(exc).__name__)
-        return {**state, "research_context": ""}
+        await _send_unavailable(send)
+        return {**state, "research_context": "", "research_status": "unavailable"}
 
     context = _format_results(raw, settings.research_noise_domains)
-    return {**state, "research_context": context}
+    if not context:
+        logger.warning("Web research returned no citable sources")
+        await _send_unavailable(send)
+        return {**state, "research_context": "", "research_status": "unavailable"}
+    await send({
+        "type": "worker_status",
+        "worker": "research",
+        "status": "Web evidence ready — citable sources found.",
+        "sources": _source_urls(context),
+    })
+    return {**state, "research_context": context, "research_status": "ready"}
+
+
+async def _send_unavailable(send) -> None:
+    await send({
+        "type": "worker_status",
+        "worker": "research",
+        "status": "Web research unavailable — continuing with book evidence only.",
+    })
+
+
+def _normalise_topic(message: str) -> str:
+    topic = " ".join(message.split())
+    if len(topic) <= _TOPIC_MAX:
+        return topic
+    shortened = topic[:_TOPIC_MAX].rsplit(" ", 1)[0].strip()
+    return shortened or topic[:_TOPIC_MAX]
+
+
+def _source_urls(context: str) -> list[str]:
+    """Return the exact links emitted by this worker for audit and evaluation."""
+    return [
+        segment.split(">", 1)[0]
+        for segment in context.split("<")[1:]
+        if segment.startswith(("http://", "https://")) and ">" in segment
+    ]
 
 
 def _build_queries(topic: str) -> list[str]:
@@ -89,24 +126,46 @@ def _run_ddg_searches(queries: list[str], results_per_query: int) -> list[dict]:
                 # One failed query shouldn't abort the rest
                 logger.debug("DuckDuckGo query failed", exc_info=True)
                 continue
+    if results or not queries:
+        return results
+
+    # Retry the provider once with a fresh session. Retrying the whole query
+    # set would multiply traffic during an outage without improving evidence.
+    time.sleep(0.2)
+    try:
+        with DDGS(timeout=4) as ddg:
+            results.extend(ddg.text(queries[0], max_results=results_per_query))
+    except Exception:
+        logger.debug("DuckDuckGo bounded retry failed", exc_info=True)
     return results
 
 
 def _format_results(raw: list[dict], noise_domains: list[str]) -> str:
     """
     Filter noise, deduplicate URLs, and format up to 6 bullets.
-    Each bullet: [source domain] title snippet: body snippet.
+    Each bullet preserves the exact source URL for downstream citation.
     Returns an empty string if nothing useful was found.
     """
     seen_urls: set[str] = set()
     bullets: list[str] = []
+    normalised_noise_domains = [noise.lower().removeprefix("www.") for noise in noise_domains]
 
     for item in raw:
-        href  = item.get("href") or item.get("url", "")
+        href = str(item.get("href") or item.get("url", "")).strip()
         title = (item.get("title") or "").strip()
-        body  = (item.get("body") or "").strip()
+        body = (item.get("body") or "").strip()
 
         if not href or not body:
+            continue
+
+        parsed = urlparse(href)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.username
+            or len(href) > 500
+            or any(character.isspace() or character in "<>" for character in href)
+        ):
             continue
 
         # Deduplicate by URL
@@ -115,15 +174,22 @@ def _format_results(raw: list[dict], noise_domains: list[str]) -> str:
         seen_urls.add(href)
 
         # Filter low-quality domains
-        domain = urlparse(href).netloc.lstrip("www.")
-        if any(noise in domain for noise in noise_domains):
+        domain = (parsed.hostname or "").lower().removeprefix("www.")
+        if any(
+            domain == noise or domain.endswith(f".{noise}")
+            for noise in normalised_noise_domains
+        ):
             continue
 
         # Truncate for prompt economy
-        title_trunc = title[:_TITLE_MAX] + ("…" if len(title) > _TITLE_MAX else "")
-        body_trunc  = body[:_BODY_MAX]   + ("…" if len(body)  > _BODY_MAX  else "")
+        safe_title = " ".join(
+            title.replace("[", "(").replace("]", ")").replace("<", "(").replace(">", ")").split()
+        ) or domain
+        safe_body = " ".join(body.replace("<", "(").replace(">", ")").split())
+        title_trunc = safe_title[:_TITLE_MAX] + ("…" if len(safe_title) > _TITLE_MAX else "")
+        body_trunc = safe_body[:_BODY_MAX] + ("…" if len(safe_body) > _BODY_MAX else "")
 
-        bullets.append(f"- [{domain}] {title_trunc}: {body_trunc}")
+        bullets.append(f"- {title_trunc} — <{href}>: {body_trunc}")
 
         if len(bullets) >= 6:
             break

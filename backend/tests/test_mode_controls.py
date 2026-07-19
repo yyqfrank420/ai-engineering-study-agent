@@ -3,7 +3,7 @@
 # Purpose: Tests for the new mode-control features:
 #            - ChatRequest field validation (complexity, graph_mode, research_enabled)
 #            - research_worker _format_results (noise filtering, dedup, bullet format)
-#            - research_worker silent failure when DDG raises
+#            - research_worker explicit degradation when DDG raises
 # ─────────────────────────────────────────────────────────────────────────────
 
 import asyncio
@@ -204,9 +204,27 @@ class TestFormatResults:
 
         raw = [self._make_result("https://docs.anthropic.com/guide", "Claude Docs", "Helpful text")]
         result = _format_results(raw, noise_domains=[])
-        assert result.startswith("- [docs.anthropic.com]")
+        assert result.startswith("- Claude Docs — <https://docs.anthropic.com/guide>")
         assert "Claude Docs" in result
         assert "Helpful text" in result
+
+    def test_extracts_exact_formatted_source_urls(self):
+        from agent.nodes.research_worker import _source_urls
+
+        context = "- Source — <https://example.com/report?q=agent>: body"
+
+        assert _source_urls(context) == ["https://example.com/report?q=agent"]
+
+    def test_rejects_non_http_and_credential_bearing_source_urls(self):
+        from agent.nodes.research_worker import _format_results
+
+        raw = [
+            self._make_result("javascript:alert(1)", "Unsafe", "body"),
+            self._make_result("https://user@example.com/private", "Credentials", "body"),
+            self._make_result("https://example.com/public", "Public", "body"),
+        ]
+
+        assert _format_results(raw, noise_domains=[]) == "- Public — <https://example.com/public>: body"
 
 
 # ── research_worker_node error resilience ─────────────────────────────────────
@@ -231,7 +249,7 @@ class TestResearchWorkerResilience:
         }
 
     def test_ddg_exception_returns_empty_context(self, monkeypatch):
-        """When DDG raises any exception, research_context is empty string."""
+        """When DDG raises, the pipeline degrades explicitly to book evidence."""
         import agent.nodes.research_worker as rw
 
         def raise_on_search(queries, results_per_query):
@@ -245,6 +263,8 @@ class TestResearchWorkerResilience:
         )
 
         assert result["research_context"] == ""
+        assert result["research_status"] == "unavailable"
+        assert any("unavailable" in event.get("status", "").lower() for event in state["_events"])
 
     def test_worker_emits_status_event(self, monkeypatch):
         """A worker_status event is always sent, even before the search runs."""
@@ -271,6 +291,26 @@ class TestResearchWorkerResilience:
         )
 
         assert result["research_context"] == ""
+        assert result["research_status"] == "unavailable"
+
+    def test_success_status_exposes_source_provenance(self, monkeypatch):
+        import agent.nodes.research_worker as rw
+
+        monkeypatch.setattr(
+            rw,
+            "_run_ddg_searches",
+            lambda _queries, _limit: [{
+                "href": "https://example.com/report",
+                "title": "Report",
+                "body": "Current evidence",
+            }],
+        )
+        state = self._make_state()
+
+        result = asyncio.run(rw.research_worker_node(state))
+
+        assert result["research_status"] == "ready"
+        assert state["_events"][-1]["sources"] == ["https://example.com/report"]
 
     def test_build_queries_uses_current_year_instead_of_hard_coded_year(self, monkeypatch):
         from datetime import datetime
@@ -289,6 +329,14 @@ class TestResearchWorkerResilience:
         assert queries[0] == "RAG pipeline architecture"
         assert queries[1] == "RAG pipeline best practices"
         assert queries[2] == "RAG pipeline implementation 2032"
+
+    def test_topic_truncation_preserves_word_boundaries(self):
+        from agent.nodes.research_worker import _normalise_topic
+
+        topic = _normalise_topic("word " * 60)
+
+        assert len(topic) <= 160
+        assert topic.endswith("word")
 
     def test_run_ddg_searches_continues_after_single_query_failure(self, monkeypatch):
         import sys
@@ -320,3 +368,37 @@ class TestResearchWorkerResilience:
             {"href": "https://example.com/later", "title": "later", "body": "body"},
         ]
         assert calls == [("good", 2), ("bad", 2), ("later", 2)]
+
+    def test_run_ddg_searches_retries_one_empty_provider_session(self, monkeypatch):
+        import sys
+        import types
+        from agent.nodes.research_worker import _run_ddg_searches
+
+        sessions = []
+
+        class _DDGS:
+            def __init__(self, timeout):
+                sessions.append(self)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def text(self, query, max_results):
+                if len(sessions) == 1:
+                    return []
+                return [{
+                    "href": "https://example.com/recovered",
+                    "title": query,
+                    "body": "recovered",
+                }]
+
+        monkeypatch.setitem(sys.modules, "ddgs", types.SimpleNamespace(DDGS=_DDGS))
+        monkeypatch.setattr("agent.nodes.research_worker.time.sleep", lambda _seconds: None)
+
+        results = _run_ddg_searches(["first", "second"], 2)
+
+        assert len(sessions) == 2
+        assert results[0]["href"] == "https://example.com/recovered"

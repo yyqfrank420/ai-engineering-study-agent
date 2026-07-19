@@ -1,12 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import type { GraphEdge } from '../../types';
-import { filterRenderableEdges, selectGraphOrientation, wrapNodeLabel } from './graphLayout';
+import {
+  filterRenderableEdges,
+  initialFitScale,
+  selectGraphOrientation,
+  VERTICAL_LEVEL_H,
+  VERTICAL_PAD,
+  wrapNodeLabel,
+} from './graphLayout';
 
 
 describe('graph layout policy', () => {
   it('uses vertical flow when a deep graph would make labels unreadable', () => {
     expect(selectGraphOrientation(720, 7)).toBe('vertical');
     expect(selectGraphOrientation(1200, 3)).toBe('horizontal');
+  });
+
+  it('keeps the maximum supported deep graph readable in the evaluation viewport', () => {
+    const tenLevelLayoutHeight = 2 * VERTICAL_PAD + 10 * VERTICAL_LEVEL_H;
+
+    expect(initialFitScale(760, 500, 760, tenLevelLayoutHeight)).toBeGreaterThanOrEqual(0.5);
   });
 
   it('keeps backward edges when both endpoints exist', () => {

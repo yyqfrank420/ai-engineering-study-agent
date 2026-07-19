@@ -8,7 +8,13 @@ import pytest
 
 from config import Settings
 from eval.browser_runner import _session_expires_soon, run_browser
-from scripts.ci_runner import classify_paths, load_manifest, trust_for_event, validate_manifest
+from scripts.ci_runner import (
+    classify_paths,
+    load_manifest,
+    select_offline_groups,
+    trust_for_event,
+    validate_manifest,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -43,6 +49,45 @@ def test_manifest_validation_fails_when_a_tracked_test_is_omitted():
 
     with pytest.raises(ValueError, match="unassigned tests: backend/tests/test_api_security.py"):
         validate_manifest(manifest)
+
+
+@pytest.mark.parametrize(
+    ("paths", "expected_groups"),
+    [
+        (["docs/current-architecture.md"], {"pipeline-policy"}),
+        (
+            ["backend/agent/nodes/research_worker.py"],
+            {"agent-rag-llm", "static-security", "container", "pipeline-policy"},
+        ),
+        (
+            ["backend/tests/test_quality_corpus.py"],
+            {"eval-quality", "static-security", "pipeline-policy"},
+        ),
+        (["frontend/src/index.css"], {"frontend", "pipeline-policy"}),
+    ],
+)
+def test_offline_selection_runs_only_owning_groups(paths, expected_groups):
+    selected = select_offline_groups(paths, load_manifest())
+
+    assert {group["name"] for group in selected} == expected_groups
+
+
+@pytest.mark.parametrize("path", ["unknown/new_surface.txt", "ci/quality.json", "backend/config.py"])
+def test_offline_selection_falls_back_to_every_group_for_risky_changes(path):
+    manifest = load_manifest()
+
+    selected = select_offline_groups([path], manifest)
+
+    assert [group["name"] for group in selected] == [
+        group["name"] for group in manifest["offline_groups"]
+    ]
+
+
+def test_ci_workflow_selects_groups_from_the_checked_out_event_range():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert "fetch-depth: 0" in workflow
+    assert './scripts/ci groups --event-file "$GITHUB_EVENT_PATH" --github-output' in workflow
 
 
 @pytest.mark.parametrize(
