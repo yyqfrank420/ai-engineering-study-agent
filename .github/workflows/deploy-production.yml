@@ -130,10 +130,10 @@ jobs:
       - name: Start production-candidate frontend
         run: |
           mkdir -p artifacts/production-smoke
-          VITE_EVAL_AUTH_BOOTSTRAP=true VITE_API_PROXY_TARGET="$CANDIDATE_URL" npm --prefix frontend run dev -- --host 127.0.0.1 --port 4173 > artifacts/production-smoke/vite.log 2>&1 &
+          VITE_EVAL_AUTH_BOOTSTRAP=true VITE_API_PROXY_TARGET="$CANDIDATE_URL" npm --prefix frontend run dev -- --host localhost --port 5173 --strictPort > artifacts/production-smoke/vite.log 2>&1 &
           echo "VITE_PID=$!" >> "$GITHUB_ENV"
           for attempt in $(seq 1 30); do
-            curl --fail --silent "$CANDIDATE_URL/api/prepare" > /dev/null && curl --fail --silent http://127.0.0.1:4173 > /dev/null && exit 0
+            curl --fail --silent "$CANDIDATE_URL/api/prepare" > /dev/null && curl --fail --silent http://localhost:5173 > /dev/null && exit 0
             sleep 5
           done
           exit 1
@@ -141,7 +141,7 @@ jobs:
       - name: Run authentication, dashboard, persistence, graph, and real-model smoke
         env:
           EVAL_BACKEND_URL: ${{ env.CANDIDATE_URL }}
-        run: ./scripts/ci browser --suite smoke --target http://127.0.0.1:4173 --output artifacts/production-smoke/browser-results.json
+        run: ./scripts/ci browser --suite smoke --target http://localhost:5173 --output artifacts/production-smoke/browser-results.json
 
       - name: Promote only the tested revision
         env:

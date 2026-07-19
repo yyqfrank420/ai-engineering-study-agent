@@ -8,7 +8,7 @@ change-impact rules, live suites, and PR budgets. `scripts/ci` is the only runne
 ```bash
 ./scripts/ci offline
 ./scripts/ci offline --group api-integration
-./scripts/ci browser --suite pr --target http://127.0.0.1:4173
+./scripts/ci browser --suite pr --target http://localhost:5173
 ./scripts/ci live --suite pr --target https://candidate.example \
   --input artifacts/live-eval/browser-results.json
 ```
