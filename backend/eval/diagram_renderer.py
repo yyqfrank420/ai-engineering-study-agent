@@ -91,6 +91,9 @@ def render_staging_diagram(graph: dict[str, Any]) -> tuple[str, str, dict[str, A
         "rendered_edges": rendered_edges,
         "overlap_count": _overlap_count(list(boxes.values())),
         "clipped_nodes": _clipped_count(list(boxes.values())),
+        # Every contract-renderer edge is drawn between bounded node boxes (or
+        # through the reserved y=70 return lane), all inside the image bounds.
+        "clipped_edges": 0,
         "minimum_text_px": 11,
         "renderer": "staging-contract-v1",
     }

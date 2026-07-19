@@ -366,6 +366,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
 
       case 'suggested_questions':
         if (meta.kind !== 'node-selected') break;
+        if (event.questions.length === 0) break;
         setSelectedNode(prev => {
           if (prev) {
             // Cache so the next click on this node skips the LLM call

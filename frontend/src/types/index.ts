@@ -352,6 +352,7 @@ export interface DiagramLayoutReport {
   rendered_edges: number;
   overlap_count: number;
   clipped_nodes: number;
+  clipped_edges: number;
   minimum_text_px: number;
   capture_error?: string;
 }

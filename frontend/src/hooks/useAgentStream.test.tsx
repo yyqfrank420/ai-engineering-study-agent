@@ -90,7 +90,7 @@ function Harness({
       <button onClick={() => agent.sendNodeSelected('agent', 'Agent', 'Plans tool use.')}>node</button>
       <button onClick={() => agent.stopGeneration()}>stop</button>
       <button onClick={() => agent.toggleExplanationPause()}>pause</button>
-      <button onClick={() => agent.setSelectedNode({ node: graph().nodes[0], suggestions: [] })}>select</button>
+      <button onClick={() => agent.setSelectedNode({ node: graph().nodes[0], suggestions: ['Immediate'] })}>select</button>
       <button onClick={() => agent.hydrateThread({ messages: [{ id: 'm1', role: 'user', content: 'old' }], graphData: graph('2') })}>hydrate</button>
     </div>
   );
@@ -305,6 +305,19 @@ describe('useAgentStream', () => {
 
     expect(mocks.sendNodeSelected).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('selected').textContent).toBe('agent:Explain,Expand');
+  });
+
+  it('keeps immediate node suggestions when model refinement is empty', () => {
+    render(<Harness />);
+
+    fireEvent.click(screen.getByText('select'));
+    fireEvent.click(screen.getByText('node'));
+    const clientRequestId = mocks.sendNodeSelected.mock.calls[0][5] as string;
+    act(() => {
+      mocks.eventHandler?.({ type: 'suggested_questions', questions: [] }, { kind: 'node-selected', clientRequestId });
+    });
+
+    expect(screen.getByTestId('selected').textContent).toBe('agent:Immediate');
   });
 
   it('logs node-selected request failures', async () => {
