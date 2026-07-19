@@ -6,6 +6,7 @@ from eval.judge_adapter import (
     _RawJudgment,
     _artifact_sources,
     _judge_prompt,
+    _response_schema,
     _validate_evidence,
     judge_with_transport_retry,
 )
@@ -95,12 +96,11 @@ def test_judge_evidence_uses_typed_bounded_artifact_sources():
     }
     sources = _artifact_sources(evidence)
     raw = _RawJudgment.model_validate({
-        "dimensions": [{
-            "dimension": "correctness",
+        "dimensions": {"correctness": {
             "grade": "pass",
             "evidence": [{"source_id": "answer-1"}],
             "rationale": "The answer states the promotion guard.",
-        }],
+        }},
     })
 
     _validate_evidence(raw, sources)
@@ -129,15 +129,32 @@ def test_judge_evidence_preserves_ordered_conversation_turns():
     }
 
 
+def test_judge_schema_has_exact_dimension_keys():
+    schema = _response_schema(
+        ("turn-1-answer-1",),
+        ("correctness", "instruction_following"),
+    )
+    dimensions = schema["properties"]["dimensions"]
+
+    assert dimensions["type"] == "object"
+    assert dimensions["additionalProperties"] is False
+    assert dimensions["required"] == ["correctness", "instruction_following"]
+    assert set(dimensions["properties"]) == {"correctness", "instruction_following"}
+    assert (
+        dimensions["properties"]["correctness"]["properties"]["evidence"]
+        ["items"]["properties"]["source_id"]["enum"]
+        == ["turn-1-answer-1"]
+    )
+
+
 def test_judge_evidence_rejects_an_unknown_source():
     sources = _artifact_sources({"answer": "answer text", "events": [{"status": "ready"}]})
     raw = _RawJudgment.model_validate({
-        "dimensions": [{
-            "dimension": "correctness",
+        "dimensions": {"correctness": {
             "grade": "pass",
             "evidence": [{"source_id": "missing-source"}],
             "rationale": "Invalid provenance.",
-        }],
+        }},
     })
 
     with pytest.raises(RuntimeError, match="unknown artifact source"):
