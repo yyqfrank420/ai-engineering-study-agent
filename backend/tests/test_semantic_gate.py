@@ -114,6 +114,21 @@ def test_judge_evidence_uses_typed_bounded_artifact_sources():
     assert [len(source) for source in long_token_sources.values()] == [500, 500, 1]
 
 
+def test_judge_evidence_preserves_ordered_conversation_turns():
+    sources = _artifact_sources({
+        "answer": "legacy concatenated answer",
+        "turns": [
+            {"turn": 1, "answer": "First explanation."},
+            {"turn": 2, "answer": "Two concise mitigations."},
+        ],
+    })
+
+    assert sources == {
+        "turn-1-answer-1": "First explanation.",
+        "turn-2-answer-1": "Two concise mitigations.",
+    }
+
+
 def test_judge_evidence_rejects_an_unknown_source():
     sources = _artifact_sources({"answer": "answer text", "events": [{"status": "ready"}]})
     raw = _RawJudgment.model_validate({
@@ -166,6 +181,28 @@ def test_judge_payload_removes_duplicate_graph_events_and_internal_graph_metadat
     assert payload["events"] == [
         {"type": "worker_status", "worker": "graph", "status": "ready"}
     ]
+
+
+def test_judge_payload_reconstructs_turns_and_discards_reset_drafts():
+    payload = _judge_payload({
+        "answer": "first answerobsolete draftrevised answer",
+        "events": [
+            {"type": "ready"},
+            {"type": "response_delta", "content": "first answer"},
+            {"type": "done"},
+            {"type": "ready"},
+            {"type": "response_delta", "content": "obsolete draft"},
+            {"type": "response_reset"},
+            {"type": "response_delta", "content": "revised answer"},
+            {"type": "done"},
+        ],
+    })
+
+    assert payload["turns"] == [
+        {"turn": 1, "answer": "first answer"},
+        {"turn": 2, "answer": "revised answer"},
+    ]
+    assert "answer" not in payload
 
 
 @pytest.mark.asyncio

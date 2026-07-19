@@ -13,6 +13,7 @@ import uuid
 from websockets.asyncio.client import connect
 
 from eval.diagram_renderer import render_staging_diagram
+from eval.response_capture import extract_response_text
 
 try:
     from rich import box
@@ -213,20 +214,6 @@ def parse_sse_event_line(line: str) -> dict | None:
         return json.loads(line[6:])
     except json.JSONDecodeError:
         return None
-
-
-def extract_response_text(events: list[dict]) -> str:
-    streamed_text = "".join(
-        str(event.get("content") or "")
-        for event in events
-        if event.get("type") == "response_delta"
-    )
-    explanation_blocks = [
-        str(event.get("content") or "")
-        for event in events
-        if event.get("type") == "explanation_block" and event.get("content")
-    ]
-    return "\n\n".join(part for part in [streamed_text, *explanation_blocks] if part)
 
 
 def extract_workers(events: list[dict]) -> set[str]:

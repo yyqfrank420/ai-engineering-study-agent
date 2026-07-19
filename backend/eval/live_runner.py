@@ -17,6 +17,7 @@ from eval.judge_adapter import (
     judge_with_transport_retry,
 )
 from eval.quality_corpus import corpus_sha256, load_corpus
+from eval.response_capture import extract_response_turns
 from eval.semantic_gate import EvaluationBudget, GateDecision, decide_semantic_gate
 
 
@@ -102,8 +103,18 @@ def _judge_payload(result: dict[str, Any]) -> dict[str, Any]:
             for edge in graph.get("edges") or []
             if isinstance(edge, dict)
         ]
-    return {
-        "answer": str(result.get("answer") or "")[:40_000],
+    captured_turns = result.get("turns")
+    if isinstance(captured_turns, list) and captured_turns:
+        turn_answers = [
+            str(turn.get("answer") or "") if isinstance(turn, dict) else str(turn or "")
+            for turn in captured_turns
+        ]
+    else:
+        turn_answers = extract_response_turns(result.get("events") or [])
+    turn_answers = [answer for answer in turn_answers if answer]
+    per_turn_limit = max(1, 40_000 // len(turn_answers)) if turn_answers else 0
+
+    payload = {
         "graph": compact_graph,
         "events": [
             event
@@ -118,6 +129,14 @@ def _judge_payload(result: dict[str, Any]) -> dict[str, Any]:
             }
         ],
     }
+    if turn_answers:
+        payload["turns"] = [
+            {"turn": index, "answer": answer[:per_turn_limit]}
+            for index, answer in enumerate(turn_answers, start=1)
+        ]
+    else:
+        payload["answer"] = str(result.get("answer") or "")[:40_000]
+    return payload
 
 
 def _result_to_json(result) -> dict[str, Any]:
