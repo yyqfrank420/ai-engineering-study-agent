@@ -103,7 +103,7 @@ If `VERCEL_TOKEN`, `VERCEL_ORG_ID`, and `VERCEL_PROJECT_ID` are set, that script
 Protected staging evaluation commands:
 
 ```bash
-./scripts/ci browser --suite pr --target http://127.0.0.1:4173 \
+./scripts/ci browser --suite pr --target http://localhost:5173 \
   --output artifacts/live-eval/browser-results.json
 ./scripts/ci live --suite pr --target 'https://<candidate>.run.app' \
   --input artifacts/live-eval/browser-results.json \

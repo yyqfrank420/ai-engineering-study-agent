@@ -6,6 +6,7 @@ import time
 
 import pytest
 
+from config import Settings
 from eval.browser_runner import _session_expires_soon, run_browser
 from scripts.ci_runner import classify_paths, load_manifest, trust_for_event, validate_manifest
 
@@ -95,6 +96,21 @@ def test_workflows_do_not_use_pull_request_target():
     workflow_text = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / ".github/workflows").glob("*.yml"))
 
     assert "pull_request_target" not in workflow_text
+
+
+def test_browser_workflows_use_the_websocket_allowlisted_dev_origin():
+    workflow_paths = [
+        ROOT / ".github/workflows/scheduled-eval.yml",
+        ROOT / ".github/workflows/live-eval.yml",
+        ROOT / ".github/workflows/deploy-production.yml",
+    ]
+    workflow_text = "\n".join(path.read_text(encoding="utf-8") for path in workflow_paths)
+    dev_origin = "http://localhost:5173"
+
+    assert "http://127.0.0.1:4173" not in workflow_text
+    assert dev_origin in Settings(_env_file=None).cors_allowed_origins
+    assert workflow_text.count(f"--target {dev_origin}") == len(workflow_paths)
+    assert workflow_text.count("--host localhost --port 5173 --strictPort") == len(workflow_paths)
 
 
 def test_workflow_dispatch_inputs_are_never_interpolated_into_shell_scripts():
