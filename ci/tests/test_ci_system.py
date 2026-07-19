@@ -132,12 +132,19 @@ def test_pending_corpus_has_a_trusted_full_suite_bootstrap_path():
     assert "Approved corpus requires an existing exact-tree image approval." in workflow
     assert "A pending corpus can be bootstrapped only by a manually dispatched full-suite run." in workflow
     assert 'gcloud artifacts docker tags delete "$IMAGE:$BOOTSTRAP_IMAGE_TAG"' in workflow
+    assert 'EVAL_EMAIL="$email" python scripts/staging_database.py reset' in workflow
+    assert "artifacts/live-eval/run-context.json" in workflow
+    assert "name: Wait for candidate readiness" in workflow
+    assert '[ "$frontend_ready" = true ]' in workflow
 
     approval_state = workflow.index("name: Resolve corpus approval state without installing dependencies")
     dependency_setup = workflow.index("uses: actions/setup-python@v5")
     candidate_resolution = workflow.index("name: Resolve approved digest or build the one-time corpus candidate")
+    candidate_readiness = workflow.index("name: Wait for candidate readiness")
     browser_capture = workflow.index("name: Start frontend and capture journeys")
-    assert approval_state < dependency_setup < candidate_resolution < browser_capture
+    assert approval_state < dependency_setup < candidate_resolution < candidate_readiness < browser_capture
+    assert workflow.index('echo "BOOTSTRAP_IMAGE_TAG=$bootstrap_tag"') < workflow.index("docker buildx build")
+    assert workflow.index('echo "REVISION_TAG=$tag"') < workflow.index("gcloud run deploy")
 
 
 def test_pending_corpus_pr_skips_expensive_live_work_successfully():
