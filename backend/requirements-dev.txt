@@ -1,7 +1,6 @@
 -r requirements.txt
 -r requirements-eval.txt
 
-alembic==1.14.1
 bandit==1.9.4
 coverage==7.14.3
 pip-audit==2.10.1

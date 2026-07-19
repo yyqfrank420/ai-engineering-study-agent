@@ -35,6 +35,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
+      - name: Initialize evaluation evidence directory
+        run: mkdir -p artifacts/live-eval
       - name: Select nightly rotation or weekly full corpus
         env:
           DISPATCH_SUITE: ${{ inputs.suite }}

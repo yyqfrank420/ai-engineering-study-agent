@@ -45,11 +45,15 @@ advisory lock is held while the constant `staging` schema is dropped, recreated,
 and migrated from scratch. `DB_SCHEMA` accepts only `public` or `staging`;
 application connections and Alembic both pin their search path. Before and after
 reset, probes must show that the staging login cannot select from or update
-`public.profiles`. While the lock is still held, reset copies only the allowlisted
-test user's `id` and `email` from shared Supabase Auth into `staging.profiles`.
-The staging role has column-scoped `SELECT`/`REFERENCES` privileges on those two
-Auth columns solely to preserve the production foreign-key shape; it has no
-production application-table privileges.
+`public.profiles`. The staging login has no database-wide schema-creation privilege;
+it can invoke only a fixed, security-definer reset function that recreates the
+constant `staging` schema. While the lock is still held, reset derives a stable UUID
+from the allowlisted internal-test email and inserts that identity into
+`staging.profiles`. The browser then authenticates through the app's protected
+internal-login flow. The staging role has no access to managed Supabase Auth or
+production application tables. Production retains its `auth.users` foreign key and
+`auth.uid()` policies; staging uses the equivalent request-JWT subject expression in
+its policies because Supabase intentionally restricts the managed `auth` schema.
 
 One-time database setup is an explicit write:
 
@@ -59,9 +63,10 @@ SUPABASE_ADMIN_DB_URL='...' STAGING_DB_PASSWORD='...' \
 ```
 
 Review the script and recovery plan first. It creates/rotates only
-`agent_staging`, revokes its explicit public privileges, and makes it owner of the
-`staging` schema. Store its URL as `staging-supabase-db-url`. Store a separate,
-main-only migration identity as `production-migration-db-url`.
+`agent_staging`, revokes its explicit public privileges, grants object creation only
+inside `staging`, and exposes the fixed reset function. Store its URL as
+`staging-supabase-db-url`. Store a separate, main-only migration identity as
+`production-migration-db-url`.
 
 ## Browser evidence and budgets
 

@@ -1,4 +1,6 @@
+import importlib
 from pathlib import Path
+import uuid
 
 import pytest
 from pydantic import ValidationError
@@ -59,11 +61,10 @@ def test_staging_reset_uses_constant_target_and_holds_advisory_lock(monkeypatch)
     statements = [statement for statement, _params in connection.statements]
     assert statements == [
         "SELECT pg_advisory_lock(hashtext(%s))",
-        "DROP SCHEMA IF EXISTS staging CASCADE",
-        "CREATE SCHEMA staging AUTHORIZATION CURRENT_USER",
+        "SELECT agent_eval_admin.reset_staging_schema()",
         """
         INSERT INTO staging.profiles (id, email)
-        SELECT id, email FROM auth.users WHERE lower(email) = lower(%s)
+        VALUES (%s, %s)
         ON CONFLICT(id) DO UPDATE
         SET email = excluded.email, updated_at = CURRENT_TIMESTAMP
         RETURNING id
@@ -71,10 +72,12 @@ def test_staging_reset_uses_constant_target_and_holds_advisory_lock(monkeypatch)
         "SELECT pg_advisory_unlock(hashtext(%s))",
     ]
     assert migrations == ["ran"]
-    assert connection.statements[3][1] == ("eval@example.com",)
+    user_id, email = connection.statements[2][1]
+    assert isinstance(user_id, uuid.UUID)
+    assert email == "eval@example.com"
 
 
-def test_staging_identity_provisioning_requires_an_explicit_shared_auth_user():
+def test_staging_identity_provisioning_requires_an_explicit_internal_user():
     connection = FakeConnection()
     for invalid in (None, "", "not-an-email"):
         with pytest.raises(RuntimeError, match="EVAL_EMAIL"):
@@ -95,3 +98,30 @@ def test_migrations_do_not_hardcode_the_production_schema():
     )
 
     assert "public." not in migration_text
+
+
+def test_initial_migration_keeps_managed_auth_out_of_staging(monkeypatch):
+    initial = importlib.import_module(
+        "db.migrations.versions.20260705_0001_initial_supabase_schema"
+    )
+
+    monkeypatch.setenv("DB_SCHEMA", "staging")
+    profile_identity, request_user_id = initial._identity_constraints()
+    assert "auth.users" not in profile_identity
+    assert "auth." not in request_user_id
+    assert "request.jwt.claim.sub" in request_user_id
+
+    monkeypatch.setenv("DB_SCHEMA", "public")
+    profile_identity, request_user_id = initial._identity_constraints()
+    assert "references auth.users(id)" in profile_identity
+    assert request_user_id == "auth.uid()"
+
+
+def test_initial_migration_rejects_arbitrary_schema(monkeypatch):
+    initial = importlib.import_module(
+        "db.migrations.versions.20260705_0001_initial_supabase_schema"
+    )
+    monkeypatch.setenv("DB_SCHEMA", "attacker_controlled")
+
+    with pytest.raises(RuntimeError, match="public.*staging"):
+        initial._identity_constraints()

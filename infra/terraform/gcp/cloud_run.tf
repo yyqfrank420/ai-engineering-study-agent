@@ -72,6 +72,7 @@ resource "google_cloud_run_v2_service" "backend" {
     ignore_changes = [
       client,
       client_version,
+      scaling,
       traffic,
       template[0].labels,
       template[0].revision,
@@ -159,6 +160,7 @@ resource "google_cloud_run_v2_service" "backend_staging" {
     ignore_changes = [
       client,
       client_version,
+      scaling,
       traffic,
       template[0].labels,
       template[0].revision,

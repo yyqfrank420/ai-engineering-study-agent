@@ -22,7 +22,7 @@ GCP_PROJECT_ID='<project-id>' bash scripts/populate_secrets.sh
 ## Expected workflow
 
 1. Apply Terraform when infrastructure or stable runtime config changes
-2. Provision the `agent_staging` database role once with `scripts/provision_staging_role.py --apply`
+2. Provision the `agent_staging` database role and fixed reset function once with `scripts/provision_staging_role.py --apply`
 3. Protect the `staging-eval` and `production` GitHub Environments
 4. A trusted PR builds one image, resets only the `staging` schema, and evaluates a tagged no-traffic revision
 5. Main locates the exact tree-approved digest, migrates `public`, runs a no-traffic production smoke, and then promotes traffic

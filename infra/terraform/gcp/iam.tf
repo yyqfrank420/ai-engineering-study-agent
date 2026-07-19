@@ -48,11 +48,15 @@ resource "google_cloud_run_v2_service_iam_member" "staging_public_invoker" {
 
 # ── Environment-scoped GitHub Actions permissions ──────────────────────────
 
-# Staging builds candidate images and manages ephemeral/approved tags.
-resource "google_project_iam_member" "staging_ci_artifact_registry_writer" {
-  project = var.project_id
-  role    = "roles/artifactregistry.writer"
-  member  = "serviceAccount:${google_service_account.github_actions_staging.email}"
+# Staging builds candidate images and manages ephemeral/approved tags. Writer
+# cannot delete tags, so grant repository-scoped admin instead of project-wide
+# admin access.
+resource "google_artifact_registry_repository_iam_member" "staging_ci_artifact_registry_admin" {
+  project    = var.project_id
+  location   = var.region
+  repository = google_artifact_registry_repository.backend.name
+  role       = "roles/artifactregistry.repoAdmin"
+  member     = "serviceAccount:${google_service_account.github_actions_staging.email}"
 }
 
 # Cloud Run does not offer service-level deploy IAM, so both identities have
