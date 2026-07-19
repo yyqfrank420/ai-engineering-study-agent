@@ -18,7 +18,12 @@ import zipfile
 from playwright.async_api import BrowserContext, Page, WebSocket, async_playwright
 
 from eval.quality_corpus import EvaluationCase, corpus_sha256, load_corpus
-from eval.staging_runner import detect_route, extract_graph_data, extract_response_text, extract_workers
+from eval.response_capture import extract_response_text, extract_response_turns
+from eval.staging_runner import (
+    detect_route,
+    extract_graph_data,
+    extract_workers,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -432,6 +437,17 @@ async def run_browser(args: argparse.Namespace) -> dict[str, Any]:
                     "risk_tags": case.risk_tags,
                     "deterministic_failures": deterministic,
                     "answer": extract_response_text(case_events),
+                    "turns": [
+                        {
+                            "turn": turn_index,
+                            "prompt": case.steps[turn_index - 1].prompt,
+                            "answer": answer,
+                        }
+                        for turn_index, answer in enumerate(
+                            extract_response_turns(case_events),
+                            start=1,
+                        )
+                    ],
                     "events": case_events,
                     "graph": graph,
                     "rendered_nodes": rendered_nodes,
