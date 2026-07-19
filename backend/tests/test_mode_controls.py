@@ -312,10 +312,10 @@ class TestResearchWorkerResilience:
         assert result["research_status"] == "ready"
         assert state["_events"][-1]["sources"] == ["https://example.com/report"]
 
-    def test_success_emits_bounded_research_evidence_only_for_staging_eval_identity(self, monkeypatch):
+    def test_success_emits_bounded_research_evidence_for_allowlisted_internal_identity(self, monkeypatch):
         import agent.nodes.research_worker as rw
 
-        monkeypatch.setattr(rw.settings, "db_schema", "staging")
+        monkeypatch.setattr(rw.settings, "db_schema", "public")
         monkeypatch.setattr(
             rw.settings,
             "internal_test_email_allowlist_raw",
@@ -342,6 +342,25 @@ class TestResearchWorkerResilience:
                 "- Report — <https://example.com/report>: Current external evidence"
             ],
         }
+
+    def test_success_does_not_emit_research_evidence_for_non_allowlisted_identity(self, monkeypatch):
+        import agent.nodes.research_worker as rw
+
+        monkeypatch.setattr(rw.settings, "internal_test_email_allowlist_raw", "eval@example.com")
+        monkeypatch.setattr(
+            rw,
+            "_run_ddg_searches",
+            lambda _queries, _limit: [{
+                "href": "https://example.com/report",
+                "title": "Report",
+                "body": "Current external evidence",
+            }],
+        )
+        state = {**self._make_state(), "user_email": "customer@example.com"}
+
+        asyncio.run(rw.research_worker_node(state))
+
+        assert [event["type"] for event in state["_events"]] == ["worker_status", "worker_status"]
 
     def test_build_queries_uses_current_year_instead_of_hard_coded_year(self, monkeypatch):
         from datetime import datetime
