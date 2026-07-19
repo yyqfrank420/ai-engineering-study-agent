@@ -136,6 +136,7 @@ def test_pending_corpus_has_a_trusted_full_suite_bootstrap_path():
     assert "artifacts/live-eval/run-context.json" in workflow
     assert "name: Wait for candidate readiness" in workflow
     assert '[ "$frontend_ready" = true ]' in workflow
+    assert "VITE_EVAL_AUTH_BOOTSTRAP=true" in workflow
 
     approval_state = workflow.index("name: Resolve corpus approval state without installing dependencies")
     dependency_setup = workflow.index("uses: actions/setup-python@v5")
@@ -156,6 +157,13 @@ def test_pending_corpus_pr_skips_expensive_live_work_successfully():
     corpus_state = workflow.index("name: Resolve corpus approval state without installing dependencies")
     dependency_setup = workflow.index("uses: actions/setup-python@v5")
     assert corpus_state < dependency_setup
+
+
+def test_browser_workflows_use_development_only_internal_auth_bootstrap():
+    for name in ("live-eval.yml", "scheduled-eval.yml", "deploy-production.yml"):
+        workflow = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+        assert "VITE_EVAL_AUTH_BOOTSTRAP=true" in workflow
+        assert "./scripts/ci browser" in workflow
 
 
 def test_pending_corpus_does_not_trigger_production_rollout():

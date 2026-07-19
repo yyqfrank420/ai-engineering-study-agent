@@ -15,7 +15,7 @@ import urllib.parse
 from urllib.error import HTTPError
 import zipfile
 
-from playwright.async_api import Page, WebSocket, async_playwright
+from playwright.async_api import BrowserContext, Page, WebSocket, async_playwright
 
 from eval.quality_corpus import EvaluationCase, corpus_sha256, load_corpus
 from eval.staging_runner import detect_route, extract_graph_data, extract_response_text, extract_workers
@@ -23,6 +23,7 @@ from eval.staging_runner import detect_route, extract_graph_data, extract_respon
 
 ROOT = Path(__file__).resolve().parents[2]
 QUALITY_MANIFEST = ROOT / "ci" / "quality.json"
+EVAL_AUTH_STORAGE_KEY = "ai-engineering-eval-auth"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -86,6 +87,89 @@ async def _internal_session(backend_target: str, email: str, password: str) -> d
         raise RuntimeError("internal browser bootstrap did not return a session")
     session["expires_at"] = int(time.time()) + int(session.get("expires_in") or 1800)
     return session
+
+
+def _serialized_session(session: dict[str, Any]) -> str:
+    return json.dumps(session, separators=(",", ":"))
+
+
+def _session_expires_soon(session: dict[str, Any], *, buffer_seconds: int = 600) -> bool:
+    expires_at = session.get("expires_at")
+    return not isinstance(expires_at, int | float) or expires_at - time.time() <= buffer_seconds
+
+
+async def _replace_page_session(page: Page, session: dict[str, Any]) -> None:
+    await page.evaluate(
+        "([key, value]) => window.localStorage.setItem(key, value)",
+        [EVAL_AUTH_STORAGE_KEY, _serialized_session(session)],
+    )
+
+
+async def _wait_for_send_ready(page: Page, *, timeout_seconds: int = 30) -> None:
+    send = page.get_by_label("Send message")
+    await send.wait_for(state="visible", timeout=timeout_seconds * 1000)
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if await send.is_enabled():
+            return
+        await asyncio.sleep(0.25)
+    raise RuntimeError("evaluation frontend did not create an authenticated thread")
+
+
+async def _capture_bootstrap_failure(
+    page: Page,
+    context: BrowserContext,
+    artifact_dir: Path,
+    session: dict[str, Any],
+    internal_password: str,
+    error: Exception,
+    browser_events: list[dict[str, str]],
+) -> None:
+    screenshot_error = ""
+    try:
+        await page.screenshot(path=artifact_dir / "browser-bootstrap-failure.png", full_page=True)
+    except Exception as exc:
+        screenshot_error = f"{type(exc).__name__}: {exc}"
+
+    trace_error = ""
+    raw_trace = artifact_dir / ".playwright-trace.bootstrap.raw.zip"
+    try:
+        await context.tracing.stop(path=raw_trace)
+        _redact_trace(
+            raw_trace,
+            artifact_dir / "playwright-trace.zip",
+            [session.get("access_token", ""), session.get("refresh_token", ""), internal_password],
+        )
+    except Exception as exc:
+        trace_error = f"{type(exc).__name__}: {exc}"
+    finally:
+        raw_trace.unlink(missing_ok=True)
+
+    auth_overlay_visible = False
+    try:
+        auth_overlay_visible = await page.get_by_role("heading", name="Sign in").is_visible()
+    except Exception as exc:
+        browser_events.append(
+            {"type": "diagnostic_error", "text": f"{type(exc).__name__}: {exc}"[:1000]}
+        )
+    diagnostics = {
+        "format_version": 1,
+        "phase": "browser_bootstrap",
+        "error": f"{type(error).__name__}: {error}",
+        "page_url": page.url,
+        "auth_overlay_visible": auth_overlay_visible,
+        "browser_events": browser_events[-50:],
+        "screenshot_error": screenshot_error,
+        "trace_error": trace_error,
+    }
+    serialized_diagnostics = json.dumps(diagnostics, indent=2, ensure_ascii=False) + "\n"
+    for secret in (session.get("access_token", ""), session.get("refresh_token", ""), internal_password):
+        if secret:
+            serialized_diagnostics = serialized_diagnostics.replace(secret, "[REDACTED]")
+    (artifact_dir / "browser-bootstrap-diagnostics.json").write_text(
+        serialized_diagnostics,
+        encoding="utf-8",
+    )
 
 
 def _capture_socket(frames: list[dict[str, Any]], socket: WebSocket) -> None:
@@ -218,24 +302,58 @@ async def run_browser(args: argparse.Namespace) -> dict[str, Any]:
             browser = await playwright.chromium.launch(headless=not args.headed)
             context = await browser.new_context(viewport={"width": 1440, "height": 960})
             await context.tracing.start(screenshots=True, snapshots=True, sources=True)
-            serialized_session = json.dumps(session, separators=(",", ":"))
             await context.add_init_script(
-                "localStorage.setItem('ai-engineering-auth', "
-                + json.dumps(serialized_session)
+                "if (!localStorage.getItem("
+                + json.dumps(EVAL_AUTH_STORAGE_KEY)
+                + ")) localStorage.setItem("
+                + json.dumps(EVAL_AUTH_STORAGE_KEY)
+                + ", "
+                + json.dumps(_serialized_session(session))
                 + ");"
             )
             page = await context.new_page()
+            browser_events: list[dict[str, str]] = []
+            page.on(
+                "console",
+                lambda message: browser_events.append(
+                    {"type": f"console.{message.type}", "text": message.text[:1000]}
+                ),
+            )
+            page.on(
+                "pageerror",
+                lambda error: browser_events.append(
+                    {"type": "pageerror", "text": str(error)[:1000]}
+                ),
+            )
             page.on("websocket", lambda socket: _capture_socket(frames, socket))
-            await page.goto(args.target, wait_until="networkidle", timeout=60_000)
-            prepare = page.get_by_label("Prepare backend")
-            if await prepare.is_visible():
-                await prepare.click()
-            await page.get_by_label("Send message").wait_for(state="visible", timeout=90_000)
+            try:
+                await page.goto(args.target, wait_until="networkidle", timeout=60_000)
+                if await page.get_by_role("heading", name="Sign in").is_visible():
+                    raise RuntimeError("evaluation frontend did not accept the internal session")
+                prepare = page.get_by_label("Prepare backend")
+                if await prepare.is_visible():
+                    await prepare.click()
+                await _wait_for_send_ready(page)
+            except Exception as exc:
+                await _capture_bootstrap_failure(
+                    page,
+                    context,
+                    artifact_dir,
+                    session,
+                    args.internal_password,
+                    exc,
+                    browser_events,
+                )
+                await browser.close()
+                raise
 
             for index, case in enumerate(cases):
                 if index:
+                    if _session_expires_soon(session):
+                        session = await _internal_session(args.backend_target, args.email, args.internal_password)
+                        await _replace_page_session(page, session)
                     await page.reload(wait_until="networkidle", timeout=60_000)
-                    await page.get_by_label("Send message").wait_for(state="visible", timeout=30_000)
+                    await _wait_for_send_ready(page)
                 case_started = time.monotonic()
                 case_events: list[dict[str, Any]] = []
                 start_frame = len(frames)
