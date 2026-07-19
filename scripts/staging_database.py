@@ -3,21 +3,26 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+
 # Migrations run as a fixed argument vector rather than through a shell.
 import subprocess  # nosec B404
 import sys
 from typing import Callable
+import uuid
 
 
 ROOT = Path(__file__).resolve().parents[1]
 STAGING_SCHEMA = "staging"
 ADVISORY_LOCK_KEY = "agent-staging-live-eval-v1"
+STAGING_IDENTITY_NAMESPACE = uuid.UUID("b17b6c8d-80d3-48f7-9cf7-2a15ae17cb7c")
 
 
 def require_staging_schema(value: str | None) -> str:
     schema = (value or "").strip().lower()
     if schema != STAGING_SCHEMA:
-        raise RuntimeError("staging reset is fail-closed and requires DB_SCHEMA=staging")
+        raise RuntimeError(
+            "staging reset is fail-closed and requires DB_SCHEMA=staging"
+        )
     return schema
 
 
@@ -45,19 +50,24 @@ def verify_public_isolation(connection) -> None:
 def provision_internal_identity(connection, email: str | None) -> str:
     normalized_email = (email or "").strip().lower()
     if not normalized_email or "@" not in normalized_email:
-        raise RuntimeError("EVAL_EMAIL must identify the allowlisted shared Auth user")
+        raise RuntimeError(
+            "EVAL_EMAIL must identify the allowlisted internal test user"
+        )
+    user_id = uuid.uuid5(STAGING_IDENTITY_NAMESPACE, normalized_email)
     row = connection.execute(
         """
         INSERT INTO staging.profiles (id, email)
-        SELECT id, email FROM auth.users WHERE lower(email) = lower(%s)
+        VALUES (%s, %s)
         ON CONFLICT(id) DO UPDATE
         SET email = excluded.email, updated_at = CURRENT_TIMESTAMP
         RETURNING id
         """,
-        (normalized_email,),
+        (user_id, normalized_email),
     ).fetchone()
     if not row:
-        raise RuntimeError("the allowlisted evaluation identity does not exist in shared Supabase Auth")
+        raise RuntimeError(
+            "the allowlisted evaluation identity could not be provisioned"
+        )
     connection.commit()
     return str(row[0])
 
@@ -71,13 +81,14 @@ def reset_staging_schema(
     require_staging_schema(os.getenv("DB_SCHEMA"))
     connection.execute("SELECT pg_advisory_lock(hashtext(%s))", (ADVISORY_LOCK_KEY,))
     try:
-        connection.execute("DROP SCHEMA IF EXISTS staging CASCADE")
-        connection.execute("CREATE SCHEMA staging AUTHORIZATION CURRENT_USER")
+        connection.execute("SELECT agent_eval_admin.reset_staging_schema()")
         connection.commit()
         run_migrations()
         provision_internal_identity(connection, eval_email)
     finally:
-        connection.execute("SELECT pg_advisory_unlock(hashtext(%s))", (ADVISORY_LOCK_KEY,))
+        connection.execute(
+            "SELECT pg_advisory_unlock(hashtext(%s))", (ADVISORY_LOCK_KEY,)
+        )
         connection.commit()
 
 
@@ -86,7 +97,15 @@ def _migration_command() -> None:
     environment["DB_SCHEMA"] = STAGING_SCHEMA
     # Fixed interpreter/module/arguments; no shell or operator-provided executable.
     subprocess.run(  # nosec B603
-        [sys.executable, "-m", "alembic", "-c", str(ROOT / "alembic.ini"), "upgrade", "head"],
+        [
+            sys.executable,
+            "-m",
+            "alembic",
+            "-c",
+            str(ROOT / "alembic.ini"),
+            "upgrade",
+            "head",
+        ],
         cwd=ROOT,
         env=environment,
         check=True,
@@ -103,7 +122,9 @@ def _connect():
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Reset and verify the isolated staging application schema")
+    parser = argparse.ArgumentParser(
+        description="Reset and verify the isolated staging application schema"
+    )
     parser.add_argument("command", choices=["reset", "verify-isolation"])
     args = parser.parse_args()
     require_staging_schema(os.getenv("DB_SCHEMA"))

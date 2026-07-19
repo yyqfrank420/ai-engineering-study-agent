@@ -25,7 +25,9 @@ def _database_schema() -> str:
 def _database_url() -> str:
     url = os.environ.get("SUPABASE_DB_URL") or os.environ.get("DATABASE_URL")
     if not url:
-        raise RuntimeError("SUPABASE_DB_URL or DATABASE_URL is required to run Alembic migrations")
+        raise RuntimeError(
+            "SUPABASE_DB_URL or DATABASE_URL is required to run Alembic migrations"
+        )
     if url.startswith("postgres://"):
         return "postgresql+psycopg://" + url.removeprefix("postgres://")
     if url.startswith("postgresql://"):
@@ -53,7 +55,12 @@ def run_migrations_online() -> None:
     connectable = create_engine(_database_url(), poolclass=pool.NullPool)
 
     with connectable.connect() as connection:
-        connection.exec_driver_sql(f'SET search_path TO "{schema}", auth')
+        search_path = f'"{schema}", auth' if schema == "public" else f'"{schema}"'
+        connection.exec_driver_sql(f"SET search_path TO {search_path}")
+        # SQLAlchemy autobegins on SET. End that implicit transaction before
+        # Alembic takes ownership so migrations can use autocommit blocks for
+        # concurrent indexes without losing the session-level search path.
+        connection.commit()
         context.configure(
             connection=connection,
             target_metadata=target_metadata,

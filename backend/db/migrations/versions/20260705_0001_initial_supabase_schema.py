@@ -5,6 +5,8 @@ Revises:
 Create Date: 2026-07-05 00:00:00.000000+00:00
 """
 
+import os
+
 from alembic import op
 
 revision = "20260705_0001"
@@ -12,12 +14,31 @@ down_revision = None
 branch_labels = None
 depends_on = None
 
+ALLOWED_SCHEMAS = {"public", "staging"}
+
+
+def _identity_constraints() -> tuple[str, str]:
+    """Keep production Auth integrity without granting staging access to Auth."""
+    schema = os.environ.get("DB_SCHEMA", "public").strip().lower()
+    if schema not in ALLOWED_SCHEMAS:
+        raise RuntimeError("DB_SCHEMA must be either 'public' or 'staging'")
+    if schema == "staging":
+        return (
+            "id uuid primary key",
+            "nullif(current_setting('request.jwt.claim.sub', true), '')::uuid",
+        )
+    return (
+        "id uuid primary key references auth.users(id) on delete cascade",
+        "auth.uid()",
+    )
+
 
 def upgrade() -> None:
+    profile_identity, request_user_id = _identity_constraints()
     op.execute(
-        """
+        f"""
         create table if not exists profiles (
-          id uuid primary key references auth.users(id) on delete cascade,
+          {profile_identity},
           email text not null unique,
           created_at timestamptz not null default now(),
           updated_at timestamptz not null default now()
@@ -152,23 +173,23 @@ def upgrade() -> None:
 
         drop policy if exists "profiles_select_own" on profiles;
         create policy "profiles_select_own" on profiles
-        for select using (auth.uid() = id);
+        for select using ({request_user_id} = id);
 
         drop policy if exists "profiles_update_own" on profiles;
         create policy "profiles_update_own" on profiles
-        for update using (auth.uid() = id);
+        for update using ({request_user_id} = id);
 
         drop policy if exists "threads_all_own" on chat_threads;
         create policy "threads_all_own" on chat_threads
-        for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+        for all using ({request_user_id} = user_id) with check ({request_user_id} = user_id);
 
         drop policy if exists "messages_all_own" on chat_messages;
         create policy "messages_all_own" on chat_messages
-        for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+        for all using ({request_user_id} = user_id) with check ({request_user_id} = user_id);
 
         drop policy if exists "active_streams_all_own" on active_streams;
         create policy "active_streams_all_own" on active_streams
-        for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+        for all using ({request_user_id} = user_id) with check ({request_user_id} = user_id);
         """
     )
 
