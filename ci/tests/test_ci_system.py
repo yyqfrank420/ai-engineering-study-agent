@@ -169,6 +169,17 @@ def test_required_check_names_are_stable():
     assert "name: Live eval required" in workflows
 
 
+def test_feature_pull_requests_do_not_duplicate_required_workflows_on_push():
+    for name in ("ci.yml", "live-eval.yml"):
+        workflow = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+        triggers = workflow.split("on:\n", 1)[1].split("\npermissions:", 1)[0]
+
+        assert "pull_request:\n    branches: [main]" in triggers
+        assert "push:\n    branches: [main]" in triggers
+        assert "merge_group:" in triggers
+        assert "codex/**" not in triggers
+
+
 def test_pending_corpus_has_a_trusted_full_suite_bootstrap_path():
     workflow = (ROOT / ".github/workflows/scheduled-eval.yml").read_text(encoding="utf-8")
 
