@@ -12,53 +12,18 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_EXTERNAL_MUTATION_TERMS = (
-    "adjust",
-    "apply",
-    "charge",
-    "delete",
-    "deploy",
-    "execute",
-    "modify",
-    "publish",
-    "purchase",
-    "send",
-    "target",
-    "transfer",
-    "update",
-    "write",
-)
-
-_PRODUCTION_SIGNAL_TERMS = (
-    "alert",
-    "audit",
-    "compensat",
-    "dead letter",
-    "error",
-    "failure",
-    "idempoten",
-    "metric",
-    "monitor",
-    "observ",
-    "outcome",
-    "performance",
-    "retry",
-    "rollback",
-    "telemetry",
-    "timeout",
-)
-
-_OBJECTIVE_RENDER_CLAIM = re.compile(
-    r"\b(?:clip(?:ped|ping)?|off[- ]screen|outside (?:the )?(?:canvas|viewport)|"
-    r"not (?:fully )?visible|fully visible within|overlap(?:ped|ping)?)\b",
+_RENDER_ONLY_CONCERN = re.compile(
+    r"\b(?:canvas|clip(?:ped|ping)?|font|geometry|layout|legib(?:le|ility)|"
+    r"off[- ]screen|overlap(?:ped|ping)?|readab(?:le|ility)|render(?:ed|ing)?|"
+    r"scale|text size|viewport|visual|zoom(?:ed|ing)?)\b",
     re.I,
 )
 
 
 _GRAPH_CRITIC_SYSTEM = """<role>
-You are the independent architecture reviewer in a multi-agent system. You did not create the
-diagram. Your job is to reject plausible-looking, generic, or visually confusing diagrams before
-the user sees them. When an image is supplied, judge the rendered image—not an imagined layout.
+You are the independent semantic architecture reviewer in a multi-agent system. You did not create
+the diagram. Your job is to reject plausible-looking, generic, unsafe, or incomplete architectures
+before the user sees them.
 </role>
 
 <review_contract>
@@ -71,11 +36,14 @@ Compare the diagram with the user's exact request. Check all of the following:
 6. assumption hygiene: important unknowns are explicit instead of invented as facts;
 7. selected depth: production designs include failure, observability, and rollout concerns.
 8. novice clarity: a newcomer can identify the entry, main path, controls, and outcome without help;
-9. logical flow: spatial direction and arrows agree with the described runtime sequence;
-10. succinctness: labels are scannable and the canvas is not overloaded;
-11. visual readability: no clipping, overlap, illegible text, or ambiguous edge labels;
-12. MECE-ish scope: major responsibilities have clear homes without needless duplicates, while
+9. logical flow: edge direction and the stated sequence agree with the described runtime behavior;
+10. succinctness: labels and responsibilities are concise rather than repetitive;
+11. MECE-ish scope: major responsibilities have clear homes without needless duplicates, while
     cross-cutting evaluation, security, and observability may intentionally span components.
+
+A separate deterministic browser gate exclusively owns rendered geometry. Do not assess or mention
+clipping, overlap, font size, zoom, scale, canvas fit, or other physical layout properties. Judge
+the architecture JSON and its semantics only.
 
 Reject a diagram dominated by labels such as Agent, Tool Use, Planning, Evaluation, Generation,
 Foundation Model, Memory, or Application. Reject invented retrieval, live data, or vendor details.
@@ -159,29 +127,13 @@ async def graph_critic_node(state: AgentState) -> AgentState:
         review_text = (
             f"User request:\n{query}\n\n"
             f"Resolved depth: {profile.resolved}\n\n"
-            f"Browser layout report:\n{json.dumps(render_result.get('report') or {}, ensure_ascii=False)}\n\n"
             "Candidate architecture:\n"
             f"{json.dumps(graph, ensure_ascii=False)[:16000]}"
         )
-        screenshot = str(render_result.get("screenshot_base64") or "")
-        media_type = str(render_result.get("media_type") or "image/jpeg")
-        content: str | list[dict[str, Any]] = review_text
-        if screenshot:
-            content = [
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": media_type,
-                        "data": screenshot,
-                    },
-                },
-                {"type": "text", "text": review_text},
-            ]
         raw = await stream_llm(
             model=settings.orchestrator_model,
             system=_GRAPH_CRITIC_SYSTEM,
-            messages=[{"role": "user", "content": content}],
+            messages=[{"role": "user", "content": review_text}],
             thinking_budget=(
                 min(profile.thinking_budget, settings.graph_critic_thinking_budget_tokens)
                 if profile.thinking_budget is not None
@@ -233,48 +185,20 @@ async def graph_critic_node(state: AgentState) -> AgentState:
 
 
 def _deterministic_review(query: str, graph: dict[str, Any], resolved_complexity: str) -> dict[str, Any]:
-    labels = [str(node.get("label") or "").strip().lower() for node in graph.get("nodes") or []]
+    # Semantic completeness belongs to the independent model review. Local
+    # checks enforce only explicit graph contracts so vocabulary choices cannot
+    # become false-negative publication failures.
+    _ = query, resolved_complexity
     edges = graph.get("edges") or []
-    descriptions = " ".join(
-        str(value or "").lower()
-        for collection in (graph.get("nodes") or [], edges)
-        for item in collection
-        for value in (item.get("label"), item.get("description"), item.get("technology"))
-    )
-    generic = {
-        "agent", "application", "evaluation", "foundation model", "generation",
-        "memory", "planning", "tokenization", "tool use",
-    }
     missing: list[str] = []
-    if sum(label in generic for label in labels) >= 3:
-        missing.append("Replace generic AI taxonomy labels with domain responsibilities.")
     if not any(edge.get("type") == "loop" for edge in edges):
         missing.append("Add the measured outcome feedback edge that closes the runtime loop.")
-    if _has_external_mutation(descriptions) and not any(
-        term in descriptions
-        for term in ("approval", "policy", "guardrail", "rollback", "audit")
-    ):
-        missing.append("Show the policy, approval, audit, or rollback boundary around external actions.")
-    if resolved_complexity == "production" and not any(
-        term in descriptions for term in _PRODUCTION_SIGNAL_TERMS
-    ):
-        missing.append("Add production observability and failure recovery responsibilities.")
-
-    # Require at least one meaningful request noun to survive into the design.
-    request_terms = {
-        token.strip(".,:;!?()[]{}")
-        for token in query.lower().split()
-        if len(token.strip(".,:;!?()[]{}")) >= 6
-    }
-    design_terms = set(descriptions.split()) | {part for label in labels for part in label.split()}
-    if request_terms and not request_terms.intersection(design_terms):
-        missing.append("Preserve the user's domain vocabulary in component and boundary names.")
 
     score = max(0.0, 0.92 - (0.22 * len(missing)))
     return {
         "approved": not missing and score >= 0.78,
         "score": score,
-        "strengths": ["The diagram passed deterministic structure and control-boundary checks"] if not missing else [],
+        "strengths": ["The diagram passed deterministic structure checks"] if not missing else [],
         "missing": missing,
         "revision_instruction": (
             " ".join(missing) if missing else ""
@@ -376,11 +300,10 @@ def _reconcile_objective_render_claims(
     graph: dict[str, Any],
     render_result: dict[str, Any],
 ) -> dict[str, Any]:
-    """Downgrade only visual claims contradicted by complete browser geometry.
+    """Keep render-only model claims from overriding complete browser evidence.
 
-    The model remains authoritative for semantic and novice-clarity concerns.
-    Objective clipping/overlap claims are instead checked against the actual
-    rendered SVG so a vision false positive cannot hide a valid diagram.
+    The semantic critic is not given the screenshot or layout report. This is a
+    defensive protocol boundary in case it nevertheless emits a render concern.
     """
     report = render_result.get("report") or {}
     geometry_complete = (
@@ -399,7 +322,7 @@ def _reconcile_objective_render_claims(
         return review
 
     blocking = list(review.get("missing") or [])
-    contradicted = [item for item in blocking if _OBJECTIVE_RENDER_CLAIM.search(item)]
+    contradicted = [item for item in blocking if _RENDER_ONLY_CONCERN.search(item)]
     if not contradicted:
         return review
     remaining = [item for item in blocking if item not in contradicted]
@@ -408,13 +331,16 @@ def _reconcile_objective_render_claims(
         f"Unreproduced visual concern: {item}"
         for item in contradicted
     )
+    revision_instruction = str(review.get("revision_instruction") or "")
+    if _RENDER_ONLY_CONCERN.search(revision_instruction):
+        revision_instruction = " ".join(remaining)
     return {
         **review,
         "approved": not remaining,
         "score": max(float(review.get("score") or 0), 0.78) if not remaining else review.get("score", 0),
         "missing": remaining,
         "advice": list(dict.fromkeys(advice))[:8],
-        "revision_instruction": "" if not remaining else review.get("revision_instruction", ""),
+        "revision_instruction": revision_instruction,
     }
 
 
@@ -426,10 +352,3 @@ def _clean_list(value: Any) -> list[str]:
         for item in value[:8]
         if isinstance(item, str) and item.strip()
     ]
-
-
-def _has_external_mutation(descriptions: str) -> bool:
-    return any(
-        re.search(rf"\b{re.escape(term)}\w*\b", descriptions) is not None
-        for term in _EXTERNAL_MUTATION_TERMS
-    )

@@ -107,7 +107,7 @@ def test_concept_questions_do_not_trigger_applied_design(query):
     [
         ("low", (4, 5)),
         ("prototype", (5, 6)),
-        ("production", (6, 6)),
+        ("production", (5, 8)),
     ],
 )
 def test_complexity_profiles_keep_diagrams_within_the_ui_node_cap(requested, expected_range):

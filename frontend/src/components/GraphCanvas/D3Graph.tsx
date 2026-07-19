@@ -624,6 +624,9 @@ export function D3Graph({
     const nodeSel = nodeGroup.selectAll<SVGGElement, RenderNode>('g.node')
       .data(nodes).enter().append('g')
       .attr('class', 'node')
+      .attr('role', 'button')
+      .attr('tabindex', 0)
+      .attr('aria-label', (d: RenderNode) => `Explore ${d.label}`)
       .attr('opacity', 0)
       .style('cursor', 'pointer')
       .call(
@@ -641,6 +644,11 @@ export function D3Graph({
           })
       )
       .on('click', (_event: MouseEvent, d: RenderNode) => onNodeClickRef.current(d))
+      .on('keydown', (event: KeyboardEvent, d: RenderNode) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        onNodeClickRef.current(d);
+      })
       .on('mouseover', function(_ev: MouseEvent, d: RenderNode) {
         d3.select(this).select('.node-card')
           .attr('stroke-width', 2)

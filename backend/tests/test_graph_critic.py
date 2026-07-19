@@ -1,9 +1,15 @@
+import json
+
+import pytest
+
 from agent.nodes.graph_critic import (
+    _GRAPH_CRITIC_SYSTEM,
     _deterministic_render_review,
     _deterministic_review,
     _merge_reviews,
     _normalise_review,
     _reconcile_objective_render_claims,
+    graph_critic_node,
 )
 
 
@@ -42,7 +48,7 @@ def test_deterministic_review_accepts_a_domain_control_loop():
     assert review["score"] >= 0.78
 
 
-def test_production_review_recognises_measured_outcomes_as_observability():
+def test_deterministic_gate_does_not_guess_semantics_from_prose_vocabulary():
     graph = _domain_graph()
     graph["nodes"][-1] = {
         "label": "Outcome Evaluator",
@@ -56,10 +62,10 @@ def test_production_review_recognises_measured_outcomes_as_observability():
     )
 
     assert review["approved"] is True
-    assert not any("observability" in item for item in review["missing"])
+    assert review["missing"] == []
 
 
-def test_deterministic_review_rejects_the_reported_generic_taxonomy():
+def test_semantic_vocabulary_is_not_a_deterministic_publication_gate():
     graph = {
         "nodes": [
             {"label": label, "description": "Generic book concept"}
@@ -67,7 +73,12 @@ def test_deterministic_review_rejects_the_reported_generic_taxonomy():
                 "Agent", "Tool Use", "Planning", "Evaluation", "Foundation Model", "Generation"
             )
         ],
-        "edges": [{"source": "agent", "target": "planning", "label": "depends on"}],
+        "edges": [{
+            "source": "agent",
+            "target": "planning",
+            "label": "returns measured outcome",
+            "type": "loop",
+        }],
     }
 
     review = _deterministic_review(
@@ -76,9 +87,8 @@ def test_deterministic_review_rejects_the_reported_generic_taxonomy():
         "production",
     )
 
-    assert review["approved"] is False
-    assert any("generic AI taxonomy" in item for item in review["missing"])
-    assert any("feedback edge" in item for item in review["missing"])
+    assert review["approved"] is True
+    assert review["missing"] == []
 
 
 def test_read_only_design_does_not_invent_an_external_write_boundary():
@@ -227,6 +237,34 @@ def test_complete_browser_geometry_downgrades_a_contradicted_clipping_claim():
     assert "Unreproduced visual concern" in reconciled["advice"][0]
 
 
+def test_complete_browser_geometry_owns_font_scale_and_zoom_claims():
+    graph = {"nodes": [{"id": "store"}], "edges": [{"source": "store", "target": "store"}]}
+    model = _normalise_review({
+        "approved": False,
+        "score": 0.7,
+        "blocking_failures": [
+            "Re-render at a larger scale so node titles and edge labels are clearly legible without zooming."
+        ],
+        "revision_instruction": "Increase the font size and node dimensions.",
+    })
+
+    reconciled = _reconcile_objective_render_claims(model, graph, {
+        "screenshot_base64": "measured-image",
+        "report": {
+            "rendered_nodes": 1,
+            "rendered_edges": 1,
+            "overlap_count": 0,
+            "clipped_nodes": 0,
+            "clipped_edges": 0,
+            "minimum_text_px": 8,
+        },
+    })
+
+    assert reconciled["approved"] is True
+    assert reconciled["missing"] == []
+    assert "Unreproduced visual concern" in reconciled["advice"][0]
+
+
 def test_browser_geometry_does_not_override_a_real_clipped_edge():
     graph = {"nodes": [{"id": "store"}], "edges": [{"source": "store", "target": "store"}]}
     model = _normalise_review({
@@ -249,3 +287,84 @@ def test_browser_geometry_does_not_override_a_real_clipped_edge():
 
     assert reconciled["approved"] is False
     assert reconciled["missing"] == ["One edge is clipped outside the canvas."]
+
+
+def test_visual_revision_instruction_cannot_hide_a_remaining_semantic_failure():
+    graph = {"nodes": [{"id": "executor"}], "edges": []}
+    model = _normalise_review({
+        "approved": False,
+        "score": 0.6,
+        "blocking_failures": [
+            "Increase the font size for legibility.",
+            "The executor has no rollback boundary.",
+        ],
+        "revision_instruction": "Zoom the canvas and use a larger font.",
+    })
+
+    reconciled = _reconcile_objective_render_claims(model, graph, {
+        "screenshot_base64": "measured-image",
+        "report": {
+            "rendered_nodes": 1,
+            "rendered_edges": 0,
+            "overlap_count": 0,
+            "clipped_nodes": 0,
+            "clipped_edges": 0,
+            "minimum_text_px": 8,
+        },
+    })
+
+    assert reconciled["approved"] is False
+    assert reconciled["missing"] == ["The executor has no rollback boundary."]
+    assert reconciled["revision_instruction"] == "The executor has no rollback boundary."
+
+
+@pytest.mark.asyncio
+async def test_semantic_critic_never_receives_the_rendered_image(monkeypatch):
+    captured = {}
+
+    async def fake_stream_llm(**kwargs):
+        captured.update(kwargs)
+        return json.dumps({
+            "approved": True,
+            "score": 0.9,
+            "strengths": ["Domain responsibilities are explicit."],
+            "blocking_failures": [],
+            "advice": [],
+            "revision_instruction": "",
+        })
+
+    async def send(_event):
+        return None
+
+    async def await_diagram(_graph):
+        return {
+            "screenshot_base64": "private-render-must-not-reach-the-semantic-model",
+            "report": {
+                "rendered_nodes": 6,
+                "rendered_edges": 1,
+                "overlap_count": 0,
+                "clipped_nodes": 0,
+                "clipped_edges": 0,
+                "minimum_text_px": 8,
+            },
+        }
+
+    monkeypatch.setattr("agent.nodes.graph_critic.stream_llm", fake_stream_llm)
+    graph = _domain_graph()
+    graph["design_origin"] = "applied"
+    result = await graph_critic_node({
+        "graph_data": graph,
+        "graph_changed": True,
+        "user_message": "Design a production growth marketing agent system",
+        "complexity": "production",
+        "send": send,
+        "await_diagram_evaluation": await_diagram,
+        "user_id": "user-1",
+        "session_id": "thread-1",
+    })
+
+    assert result["graph_review"]["approved"] is True
+    assert isinstance(captured["messages"][0]["content"], str)
+    assert "private-render-must-not-reach-the-semantic-model" not in captured["messages"][0]["content"]
+    assert "Browser layout report" not in captured["messages"][0]["content"]
+    assert "Do not assess or mention" in _GRAPH_CRITIC_SYSTEM
