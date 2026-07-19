@@ -40,8 +40,28 @@ def test_graph_off_skips_paid_applied_design_roles():
     assert _should_run_applied_design_roles(state) is False
 
 
+def test_failed_review_gets_exactly_one_bounded_revision():
+    from agent.graph import _route_after_review, _route_after_revision
+
+    failed = {
+        "graph_changed": True,
+        "graph_data": {"design_origin": "applied"},
+        "graph_review": {"approved": False},
+    }
+
+    assert _route_after_review({**failed, "graph_revision_count": 0}) == "revise"
+    assert _route_after_review({**failed, "graph_revision_count": 1}) == "reject"
+    assert _route_after_review({
+        **failed,
+        "graph_revision_count": 0,
+        "graph_review": {"approved": False, "terminal": True},
+    }) == "reject"
+    assert _route_after_revision({**failed, "graph_changed": True}) == "review"
+    assert _route_after_revision({**failed, "graph_changed": False}) == "reject"
+
+
 @pytest.mark.asyncio
-async def test_langgraph_rejects_a_failed_review_without_a_paid_revision(monkeypatch):
+async def test_langgraph_repairs_one_failed_review_then_publishes(monkeypatch):
     import agent.graph as agent_graph
 
     events = []
@@ -59,12 +79,13 @@ async def test_langgraph_rejects_a_failed_review_without_a_paid_revision(monkeyp
         return state, None
 
     async def fake_apply(state, _tools):
+        revision_count = state.get("graph_revision_count", 0)
         return {
             **state,
             "graph_changed": True,
             "graph_data": {
                 "design_origin": "applied",
-                "title": "First draft",
+                "title": "Repaired draft" if revision_count else "First draft",
                 "nodes": [],
                 "edges": [],
                 "sequence": [],
@@ -90,6 +111,11 @@ async def test_langgraph_rejects_a_failed_review_without_a_paid_revision(monkeyp
 
     async def fake_review(state):
         reviews.append(state["graph_data"]["title"])
+        if state.get("graph_revision_count") == 1:
+            return {
+                **state,
+                "graph_review": {"approved": True, "score": 0.9, "missing": []},
+            }
         return {
             **state,
             "graph_review": {
@@ -118,10 +144,11 @@ async def test_langgraph_rejects_a_failed_review_without_a_paid_revision(monkeyp
 
     result = await agent_graph.run_agent(_state(send), [], [], [])
 
-    assert reviews == ["First draft"]
-    assert result["graph_revision_count"] == 0
-    assert result["graph_data"] is None
-    assert result["graph_notice_sent"] is True
+    assert reviews == ["First draft", "Repaired draft"]
+    assert result["graph_revision_count"] == 1
+    assert result["graph_data"]["title"] == "Repaired draft"
+    assert result["graph_notice_sent"] is False
     assert result["response_text"] == "reviewed answer"
     assert parallel_roles == {"architect", "challenger"}
-    assert any(event.get("type") == "graph_notice" for event in events)
+    assert any(event.get("phase") == "revise" and event.get("status") == "retry" for event in events)
+    assert not any(event.get("type") == "graph_notice" for event in events)

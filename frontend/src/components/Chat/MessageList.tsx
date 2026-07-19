@@ -24,7 +24,7 @@ interface MessageListProps {
 
 type Segment = { type: 'text'; value: string } | { type: 'inline-math' | 'block-math'; value: string };
 type MarkdownChildrenProps = { children?: ReactNode };
-type MarkdownCodeProps = MarkdownChildrenProps & { className?: string; inline?: boolean };
+type MarkdownCodeProps = MarkdownChildrenProps & { className?: string };
 type MarkdownAnchorProps = MarkdownChildrenProps & { href?: string };
 type MarkdownImageProps = { alt?: string };
 
@@ -79,39 +79,41 @@ const mdComponents = {
   li: ({ children }: MarkdownChildrenProps) => (
     <li style={{ margin: '0.15rem 0' }}>{children}</li>
   ),
-  // Inline code
-  code: ({ inline, children, className }: MarkdownCodeProps) => {
-    if (inline) {
-      return (
-        <code style={{
-          background: '#0d1117',
-          border: '1px solid #21262d',
-          borderRadius: '4px',
-          padding: '1px 5px',
-          fontSize: '0.82rem',
-          fontFamily: '"SF Mono", "Fira Code", "Cascadia Code", monospace',
-          color: '#a78bfa',
-        }}>
-          {children}
-        </code>
-      );
-    }
+  // react-markdown v10 no longer supplies the old `inline` prop. Fenced code
+  // retains a trailing newline (or language class); paragraphs do not. The
+  // `pre` renderer owns block layout so this component never nests a <pre>
+  // inside the paragraph or <pre> that react-markdown already created.
+  code: ({ children, className }: MarkdownCodeProps) => {
+    const isBlock = Boolean(className) || String(children ?? '').endsWith('\n');
     return (
-      <pre style={{
-        background: '#0d1117',
-        border: '1px solid #21262d',
-        borderRadius: '6px',
-        padding: '0.75rem 1rem',
-        overflowX: 'auto',
+      <code className={className} style={{
+        background: isBlock ? 'transparent' : '#0d1117',
+        border: isBlock ? 'none' : '1px solid #21262d',
+        borderRadius: isBlock ? 0 : '4px',
+        padding: isBlock ? 0 : '1px 5px',
         fontSize: '0.82rem',
-        lineHeight: 1.6,
-        margin: '0.5rem 0',
         fontFamily: '"SF Mono", "Fira Code", "Cascadia Code", monospace',
+        color: isBlock ? '#c9d1d9' : '#a78bfa',
       }}>
-        <code className={className}>{children}</code>
-      </pre>
+        {children}
+      </code>
     );
   },
+  pre: ({ children }: MarkdownChildrenProps) => (
+    <pre style={{
+      background: '#0d1117',
+      border: '1px solid #21262d',
+      borderRadius: '6px',
+      padding: '0.75rem 1rem',
+      overflowX: 'auto',
+      fontSize: '0.82rem',
+      lineHeight: 1.6,
+      margin: '0.5rem 0',
+      fontFamily: '"SF Mono", "Fira Code", "Cascadia Code", monospace',
+    }}>
+      {children}
+    </pre>
+  ),
   // Block quotes
   blockquote: ({ children }: MarkdownChildrenProps) => (
     <blockquote style={{

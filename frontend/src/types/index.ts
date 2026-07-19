@@ -187,6 +187,7 @@ export type WorkflowPhase =
   | 'integrate'
   | 'render'
   | 'review'
+  | 'revise'
   | 'explain';
 
 export interface WorkflowProgressEvent {

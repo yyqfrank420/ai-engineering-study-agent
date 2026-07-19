@@ -20,6 +20,9 @@ from agent.state import AgentState
 from agent.stream_utils import stream_llm
 from config import settings
 
+_SYNTHESIS_PROMPT_VERSION = "architecture_blocks_v2"
+_QUICK_SYNTHESIS_PROMPT_VERSION = "quick_synthesis_v2"
+
 _ROUTER_SYSTEM = """<role>
 You are the router for an AI study assistant specialised in the book "AI Engineering" by Chip Huyen.
 </role>
@@ -94,7 +97,16 @@ Answer in the same language as the user's latest message unless they ask to swit
 </language>
 
 <book_scope>
-- Use retrieved book passages for directly supported principles and cite only those claims.
+- Treat the retrieved book sections in the current request as the complete citation allowlist.
+- Cite only a claim directly supported by a supplied passage, using that passage's exact
+  (Chapter N, p.X) label. Never infer a chapter, page, author attribution, or book claim from
+  general knowledge, conversation history, graph metadata, or the app's subject area.
+- A citation supports only the immediately preceding claim. Do not attach a valid citation to a
+  broader sentence containing unsupported cost, latency, safety, performance, or comparison claims.
+- When the user asks for a book-grounded answer, label useful facts not present in the retrieved
+  passages as an "Engineering inference" or "Recommendation" and leave them uncited.
+- If no retrieved section supports a claim, present it as engineering reasoning without a book
+  attribution or citation. Never use vague citations such as "the serving chapter".
 - Treat domain components and implementation choices as recommendations, not book facts.
 - Do not lead with "the book does not cover this" for adjacent application questions like marketing,
   support, sales, operations, education, internal tools, or product workflows.
@@ -175,7 +187,8 @@ Answer in the same language as the user's latest message unless they ask to swit
 <guardrails>
 - Do not guess vendor-specific details not grounded in the book.
 - Do not inflate a simple answer into a long explanation.
-- Cite inline as (Chapter N, p.X) only when it adds value.
+- This fast path receives no retrieved book evidence. Do not attribute claims to Chip Huyen,
+  the book, or a chapter, and do not produce chapter/page citations. Answer from general knowledge.
 </guardrails>"""
 
 
@@ -221,6 +234,7 @@ async def orchestrator_route(state: AgentState) -> AgentState:
             metadata={
                 "request_id": state.get("request_id"),
                 "client_request_id": state.get("client_request_id"),
+                "prompt_version": _QUICK_SYNTHESIS_PROMPT_VERSION,
             },
         ),
         send=send,
@@ -416,7 +430,7 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
             "complexity_resolved": profile.resolved,
             "request_id": state.get("request_id"),
             "client_request_id": state.get("client_request_id"),
-            "prompt_version": "architecture_blocks_v1",
+            "prompt_version": _SYNTHESIS_PROMPT_VERSION,
         },
     )
     if current_graph:
