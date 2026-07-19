@@ -153,7 +153,7 @@ jobs:
           exit 1
       - name: Start frontend and capture journeys
         run: |
-          VITE_API_PROXY_TARGET="$CANDIDATE_URL" npm --prefix frontend run dev -- --host 127.0.0.1 --port 4173 > artifacts/live-eval/vite.log 2>&1 &
+          VITE_EVAL_AUTH_BOOTSTRAP=true VITE_API_PROXY_TARGET="$CANDIDATE_URL" npm --prefix frontend run dev -- --host 127.0.0.1 --port 4173 > artifacts/live-eval/vite.log 2>&1 &
           echo "VITE_PID=$!" >> "$GITHUB_ENV"
           frontend_ready=false
           for attempt in $(seq 1 30); do

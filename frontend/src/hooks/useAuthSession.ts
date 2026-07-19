@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { AuthSession } from '../types';
 import { identifyAnalyticsUser, initAnalytics, resetAnalytics } from '../services/analytics';
 import { getStoredSession, onAuthSessionChange } from '../services/auth';
+import { readEvalAuthSession } from '../services/evalAuthBootstrap';
 
 const DEV_BYPASS_REQUESTED = import.meta.env.VITE_DEV_BYPASS_AUTH === 'true';
 
@@ -20,14 +21,17 @@ const DEV_SESSION: AuthSession | null = DEV_BYPASS
     }
   : null;
 
+const EVAL_SESSION = readEvalAuthSession();
+const INITIAL_SESSION = DEV_SESSION ?? EVAL_SESSION;
+
 export function useAuthSession() {
-  const [authSession, setAuthSession] = useState<AuthSession | null>(DEV_SESSION);
-  const [authReady, setAuthReady] = useState(Boolean(DEV_SESSION));
+  const [authSession, setAuthSession] = useState<AuthSession | null>(INITIAL_SESSION);
+  const [authReady, setAuthReady] = useState(Boolean(INITIAL_SESSION));
 
   useEffect(() => {
     initAnalytics();
 
-    if (DEV_SESSION) {
+    if (INITIAL_SESSION) {
       return;
     }
 
