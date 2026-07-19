@@ -5,22 +5,22 @@ import { ThinkingIndicator } from './ThinkingIndicator';
 
 
 describe('ThinkingIndicator', () => {
-  it('shows a rejected diagram gate as terminal instead of retrying', () => {
+  it('shows a bounded diagram repair clearly', () => {
     render(
       <ThinkingIndicator
         workerStatus={{ rag: null, graph: null, critic: null, orchestrator: null, research: null }}
         workflowProgress={[{
-          phase: 'review',
-          status: 'rejected',
-          title: 'Diagram did not pass the clarity gate',
-          detail: 'The answer will continue without this diagram.',
+          phase: 'revise',
+          status: 'retry',
+          title: 'Refining the diagram',
+          detail: 'Applying the clarity review once.',
         }]}
         isGenerating
       />,
     );
 
-    expect(screen.getByText('×')).not.toBeNull();
-    expect(screen.queryByText('↻')).toBeNull();
+    expect(screen.getByText('↻')).not.toBeNull();
+    expect(screen.getByText('Designing your system')).not.toBeNull();
   });
 
   it('keeps resume available after generation finishes with queued blocks', () => {

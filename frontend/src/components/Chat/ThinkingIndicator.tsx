@@ -53,10 +53,10 @@ export function ThinkingIndicator({
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
             <div>
               <div style={{ color: '#d8dee9', fontSize: '0.74rem', fontWeight: 650 }}>
-                {explanationPaused ? 'Explanation reveal paused' : 'Building your architecture'}
+                {explanationPaused ? 'Explanation reveal paused' : 'Designing your system'}
               </div>
               <div style={{ color: '#6e7681', fontSize: '0.64rem', marginTop: 2 }}>
-                Candidate diagrams stay private until the clarity check passes.
+                The diagram appears as soon as its content and layout checks pass.
               </div>
             </div>
             {(isGenerating || explanationPaused) && onTogglePause && (

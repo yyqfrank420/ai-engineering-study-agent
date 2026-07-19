@@ -36,6 +36,25 @@ def test_synthesis_prompts_answer_adjacent_applications_directly():
     assert "answer the application directly" in _QUICK_SYNTHESIS_SYSTEM
 
 
+def test_synthesis_prompts_enforce_evidence_bounded_attribution():
+    from agent.nodes.orchestrator_node import (
+        _QUICK_SYNTHESIS_PROMPT_VERSION,
+        _QUICK_SYNTHESIS_SYSTEM,
+        _SYNTHESIS_PROMPT_VERSION,
+        _SYNTHESIS_SYSTEM,
+    )
+
+    assert _SYNTHESIS_PROMPT_VERSION == "architecture_blocks_v2"
+    assert _QUICK_SYNTHESIS_PROMPT_VERSION == "quick_synthesis_v2"
+    assert "complete citation allowlist" in _SYNTHESIS_SYSTEM
+    assert "Never infer a chapter, page, author attribution, or book claim" in _SYNTHESIS_SYSTEM
+    assert "A citation supports only the immediately preceding claim" in _SYNTHESIS_SYSTEM
+    assert 'as an "Engineering inference" or "Recommendation"' in _SYNTHESIS_SYSTEM
+    assert 'Never use vague citations such as "the serving chapter"' in _SYNTHESIS_SYSTEM
+    assert "This fast path receives no retrieved book evidence" in _QUICK_SYNTHESIS_SYSTEM
+    assert "do not produce chapter/page citations" in _QUICK_SYNTHESIS_SYSTEM
+
+
 @pytest.mark.asyncio
 async def test_orchestrator_routes_applied_agent_design_without_short_path(monkeypatch):
     import agent.nodes.orchestrator_node as orchestrator
