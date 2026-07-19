@@ -5,18 +5,16 @@ export function measureDiagram(svg: SVGSVGElement, expectedEdges: number): Diagr
   const viewport = svg.getBoundingClientRect();
   const nodes = Array.from(svg.querySelectorAll<SVGGElement>('g.node'));
   const rects = nodes.map(node => node.getBoundingClientRect());
+  const edgeRects = Array.from(svg.querySelectorAll<SVGPathElement>('path.edge-vis'))
+    .map(edge => edge.getBoundingClientRect());
   let overlapCount = 0;
   for (let left = 0; left < rects.length; left += 1) {
     for (let right = left + 1; right < rects.length; right += 1) {
       if (overlapArea(rects[left], rects[right]) > 12) overlapCount += 1;
     }
   }
-  const clippedNodes = rects.filter(rect => (
-    rect.left < viewport.left - 1
-    || rect.right > viewport.right + 1
-    || rect.top < viewport.top - 1
-    || rect.bottom > viewport.bottom + 1
-  )).length;
+  const clippedNodes = rects.filter(rect => isClipped(rect, viewport)).length;
+  const clippedEdges = edgeRects.filter(rect => isClipped(rect, viewport)).length;
   // The node title is the essential scan target. Type/tier/entry badges are
   // deliberately secondary metadata and should not fail an otherwise readable
   // architecture merely because their decorative text is smaller.
@@ -38,8 +36,16 @@ export function measureDiagram(svg: SVGSVGElement, expectedEdges: number): Diagr
     ),
     overlap_count: overlapCount,
     clipped_nodes: clippedNodes,
+    clipped_edges: clippedEdges,
     minimum_text_px: fontSizes.length ? Math.min(...fontSizes) : 0,
   };
+}
+
+function isClipped(rect: DOMRect, viewport: DOMRect): boolean {
+  return rect.left < viewport.left - 1
+    || rect.right > viewport.right + 1
+    || rect.top < viewport.top - 1
+    || rect.bottom > viewport.bottom + 1;
 }
 
 function overlapArea(left: DOMRect, right: DOMRect): number {

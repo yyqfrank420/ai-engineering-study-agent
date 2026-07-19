@@ -9,6 +9,7 @@ import { ThreadSidebar } from './components/Layout/ThreadSidebar';
 import { ThinkingIndicator } from './components/Chat/ThinkingIndicator';
 import { RetrievalNoticeBar } from './components/Chat/RetrievalNoticeBar';
 import { ContextBar } from './components/Chat/ContextBar';
+import { initialNodeSuggestions } from './components/Chat/nodeSuggestions';
 import { ChatInput } from './components/Chat/ChatInput';
 import { AuthScreen } from './components/Auth/AuthScreen';
 import { signOut } from './services/auth';
@@ -159,7 +160,10 @@ export default function App() {
   const prepareDisabled = isGenerating || composerLocked || !authSession || backendReadiness === 'preparing';
 
   const handleNodeClick = (node: GraphNode) => {
-    setSelectedNode({ node, suggestions: [] });
+    // Useful actions appear immediately. The low-cost model request may refine
+    // them asynchronously, but latency or a provider failure never leaves an
+    // empty context bar.
+    setSelectedNode({ node, suggestions: initialNodeSuggestions(node.label) });
     void trackEvent('node_selected', {
       thread_id: activeThreadId ?? undefined,
       node_id: node.id,

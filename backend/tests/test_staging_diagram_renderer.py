@@ -30,6 +30,7 @@ def test_staging_renderer_produces_a_bounded_visible_diagram():
     assert report["rendered_edges"] == 4
     assert report["overlap_count"] == 0
     assert report["clipped_nodes"] == 0
+    assert report["clipped_edges"] == 0
     assert report["minimum_text_px"] >= 6
 
 

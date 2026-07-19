@@ -29,6 +29,31 @@ _EXTERNAL_MUTATION_TERMS = (
     "write",
 )
 
+_PRODUCTION_SIGNAL_TERMS = (
+    "alert",
+    "audit",
+    "compensat",
+    "dead letter",
+    "error",
+    "failure",
+    "idempoten",
+    "metric",
+    "monitor",
+    "observ",
+    "outcome",
+    "performance",
+    "retry",
+    "rollback",
+    "telemetry",
+    "timeout",
+)
+
+_OBJECTIVE_RENDER_CLAIM = re.compile(
+    r"\b(?:clip(?:ped|ping)?|off[- ]screen|outside (?:the )?(?:canvas|viewport)|"
+    r"not (?:fully )?visible|fully visible within|overlap(?:ped|ping)?)\b",
+    re.I,
+)
+
 
 _GRAPH_CRITIC_SYSTEM = """<role>
 You are the independent architecture reviewer in a multi-agent system. You did not create the
@@ -179,7 +204,13 @@ async def graph_critic_node(state: AgentState) -> AgentState:
             ),
             send=state.get("send"),
         )
-        review = _merge_reviews(deterministic_review, _normalise_review(_parse_json_object(raw)))
+        model_review = _normalise_review(_parse_json_object(raw))
+        model_review = _reconcile_objective_render_claims(
+            model_review,
+            graph,
+            render_result,
+        )
+        review = _merge_reviews(deterministic_review, model_review)
         if deterministic_review.get("terminal"):
             review["terminal"] = True
     except Exception as exc:
@@ -225,7 +256,7 @@ def _deterministic_review(query: str, graph: dict[str, Any], resolved_complexity
     ):
         missing.append("Show the policy, approval, audit, or rollback boundary around external actions.")
     if resolved_complexity == "production" and not any(
-        term in descriptions for term in ("observe", "telemetry", "alert", "failure", "retry", "dead letter")
+        term in descriptions for term in _PRODUCTION_SIGNAL_TERMS
     ):
         missing.append("Add production observability and failure recovery responsibilities.")
 
@@ -292,6 +323,8 @@ def _deterministic_render_review(
         missing.append("Ensure every declared edge is visible in the rendered diagram.")
     if int(report.get("clipped_nodes") or 0) > 0:
         missing.append("Fit every node fully inside the initial viewport.")
+    if int(report.get("clipped_edges") or 0) > 0:
+        missing.append("Fit every edge fully inside the initial viewport.")
     if float(report.get("minimum_text_px") or 0) < 6:
         missing.append("Increase the smallest rendered text to a readable size.")
     score = max(0.0, 0.95 - 0.24 * len(missing))
@@ -335,6 +368,53 @@ def _normalise_review(payload: dict[str, Any]) -> dict[str, Any]:
         "missing": missing,
         "advice": advice,
         "revision_instruction": revision_instruction,
+    }
+
+
+def _reconcile_objective_render_claims(
+    review: dict[str, Any],
+    graph: dict[str, Any],
+    render_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Downgrade only visual claims contradicted by complete browser geometry.
+
+    The model remains authoritative for semantic and novice-clarity concerns.
+    Objective clipping/overlap claims are instead checked against the actual
+    rendered SVG so a vision false positive cannot hide a valid diagram.
+    """
+    report = render_result.get("report") or {}
+    geometry_complete = (
+        bool(render_result.get("screenshot_base64"))
+        and not render_result.get("capture_error")
+        and int(report.get("rendered_nodes") or 0) == len(graph.get("nodes") or [])
+        and int(report.get("rendered_edges") or 0) == len(graph.get("edges") or [])
+        and int(report.get("overlap_count") or 0) == 0
+        and int(report.get("clipped_nodes") or 0) == 0
+        and "clipped_edges" in report
+        and int(report.get("clipped_edges") or 0) == 0
+        and not report.get("capture_error")
+        and float(report.get("minimum_text_px") or 0) >= 6
+    )
+    if not geometry_complete:
+        return review
+
+    blocking = list(review.get("missing") or [])
+    contradicted = [item for item in blocking if _OBJECTIVE_RENDER_CLAIM.search(item)]
+    if not contradicted:
+        return review
+    remaining = [item for item in blocking if item not in contradicted]
+    advice = list(review.get("advice") or [])
+    advice.extend(
+        f"Unreproduced visual concern: {item}"
+        for item in contradicted
+    )
+    return {
+        **review,
+        "approved": not remaining,
+        "score": max(float(review.get("score") or 0), 0.78) if not remaining else review.get("score", 0),
+        "missing": remaining,
+        "advice": list(dict.fromkeys(advice))[:8],
+        "revision_instruction": "" if not remaining else review.get("revision_instruction", ""),
     }
 
 

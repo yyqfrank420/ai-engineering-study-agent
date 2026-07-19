@@ -3,6 +3,7 @@ from agent.nodes.graph_critic import (
     _deterministic_review,
     _merge_reviews,
     _normalise_review,
+    _reconcile_objective_render_claims,
 )
 
 
@@ -39,6 +40,23 @@ def test_deterministic_review_accepts_a_domain_control_loop():
     assert review["approved"] is True
     assert review["missing"] == []
     assert review["score"] >= 0.78
+
+
+def test_production_review_recognises_measured_outcomes_as_observability():
+    graph = _domain_graph()
+    graph["nodes"][-1] = {
+        "label": "Outcome Evaluator",
+        "description": "Computes campaign performance metrics for the feedback loop",
+    }
+
+    review = _deterministic_review(
+        "Design a production growth marketing agent for campaign performance",
+        graph,
+        "production",
+    )
+
+    assert review["approved"] is True
+    assert not any("observability" in item for item in review["missing"])
 
 
 def test_deterministic_review_rejects_the_reported_generic_taxonomy():
@@ -153,6 +171,7 @@ def test_render_gate_rejects_overlap_clipping_or_missing_capture():
             "rendered_edges": 0,
             "overlap_count": 1,
             "clipped_nodes": 1,
+            "clipped_edges": 1,
             "minimum_text_px": 8,
         },
     })
@@ -171,8 +190,62 @@ def test_render_gate_accepts_a_complete_readable_browser_capture():
             "rendered_edges": 0,
             "overlap_count": 0,
             "clipped_nodes": 0,
+            "clipped_edges": 0,
             "minimum_text_px": 7,
         },
     })
 
     assert review["approved"] is True
+
+
+def test_complete_browser_geometry_downgrades_a_contradicted_clipping_claim():
+    graph = {"nodes": [{"id": "store"}], "edges": [{"source": "store", "target": "store"}]}
+    model = _normalise_review({
+        "approved": False,
+        "score": 0.7,
+        "blocking_failures": [
+            "Re-lay out the Document Store so all edges are fully visible within the canvas, with no clipped connections."
+        ],
+        "revision_instruction": "Move the clipped Document Store on-screen.",
+    })
+
+    reconciled = _reconcile_objective_render_claims(model, graph, {
+        "screenshot_base64": "measured-image",
+        "report": {
+            "rendered_nodes": 1,
+            "rendered_edges": 1,
+            "overlap_count": 0,
+            "clipped_nodes": 0,
+            "clipped_edges": 0,
+            "minimum_text_px": 8,
+        },
+    })
+
+    assert reconciled["approved"] is True
+    assert reconciled["missing"] == []
+    assert reconciled["revision_instruction"] == ""
+    assert "Unreproduced visual concern" in reconciled["advice"][0]
+
+
+def test_browser_geometry_does_not_override_a_real_clipped_edge():
+    graph = {"nodes": [{"id": "store"}], "edges": [{"source": "store", "target": "store"}]}
+    model = _normalise_review({
+        "approved": False,
+        "score": 0.7,
+        "blocking_failures": ["One edge is clipped outside the canvas."],
+    })
+
+    reconciled = _reconcile_objective_render_claims(model, graph, {
+        "screenshot_base64": "measured-image",
+        "report": {
+            "rendered_nodes": 1,
+            "rendered_edges": 1,
+            "overlap_count": 0,
+            "clipped_nodes": 0,
+            "clipped_edges": 1,
+            "minimum_text_px": 8,
+        },
+    })
+
+    assert reconciled["approved"] is False
+    assert reconciled["missing"] == ["One edge is clipped outside the canvas."]

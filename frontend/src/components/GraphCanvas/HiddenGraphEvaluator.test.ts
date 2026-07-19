@@ -31,14 +31,30 @@ describe('measureDiagram', () => {
     badge.getScreenCTM = () => ({ a: 0.6, b: 0 } as DOMMatrix);
     node.append(title, badge);
     svg.append(node, document.createElementNS('http://www.w3.org/2000/svg', 'path'));
-    svg.querySelector('path')?.classList.add('edge-vis');
+    const edge = svg.querySelector('path');
+    edge?.classList.add('edge-vis');
     svg.getBoundingClientRect = () => rect(0, 0, 720, 800);
     node.getBoundingClientRect = () => rect(100, 100, 180, 56);
+    if (edge) edge.getBoundingClientRect = () => rect(280, 120, 120, 2);
 
     const report = measureDiagram(svg, 1);
 
     expect(report.rendered_edges).toBe(1);
     expect(report.minimum_text_px).toBeCloseTo(7.2);
     expect(report.clipped_nodes).toBe(0);
+    expect(report.clipped_edges).toBe(0);
+  });
+
+  it('reports an edge whose rendered geometry leaves the viewport', () => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const edge = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    edge.classList.add('edge-vis');
+    svg.append(edge);
+    svg.getBoundingClientRect = () => rect(0, 0, 720, 800);
+    edge.getBoundingClientRect = () => rect(-12, 100, 80, 2);
+
+    const report = measureDiagram(svg, 1);
+
+    expect(report.clipped_edges).toBe(1);
   });
 });

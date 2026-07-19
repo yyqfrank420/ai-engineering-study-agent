@@ -208,6 +208,7 @@ describe('AgentTransport WebSocket protocol', () => {
         rendered_edges: 9,
         overlap_count: 0,
         clipped_nodes: 0,
+        clipped_edges: 0,
         minimum_text_px: 7,
       },
       `data:image/jpeg;base64,${encoded}`,
