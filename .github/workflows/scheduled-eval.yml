@@ -36,7 +36,9 @@ jobs:
         with:
           fetch-depth: 1
       - name: Initialize evaluation evidence directory
-        run: mkdir -p artifacts/live-eval
+        run: |
+          mkdir -p artifacts/live-eval
+          printf '{"run_id":"%s","commit_sha":"%s"}\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" > artifacts/live-eval/run-context.json
       - name: Select nightly rotation or weekly full corpus
         env:
           DISPATCH_SUITE: ${{ inputs.suite }}
@@ -67,6 +69,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-eval.txt
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -90,12 +96,16 @@ jobs:
           password="$(gcloud secrets versions access latest --secret=internal-test-password)"
           allowlist="$(gcloud secrets versions access latest --secret=internal-test-email-allowlist-raw)"
           email="$(printf '%s\n' "$allowlist" | tr ',;' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d' | head -n1)"
+          if [ -z "$db_url" ] || [ -z "$password" ] || [ -z "$email" ]; then
+            echo "Protected staging credentials are incomplete." >&2
+            exit 1
+          fi
           echo "::add-mask::$db_url"; echo "::add-mask::$password"; echo "::add-mask::$email"
           echo "SUPABASE_DB_URL=$db_url" >> "$GITHUB_ENV"
           echo "DB_SCHEMA=staging" >> "$GITHUB_ENV"
           echo "EVAL_INTERNAL_PASSWORD=$password" >> "$GITHUB_ENV"
           echo "EVAL_EMAIL=$email" >> "$GITHUB_ENV"
-          DB_SCHEMA=staging SUPABASE_DB_URL="$db_url" python scripts/staging_database.py reset
+          DB_SCHEMA=staging SUPABASE_DB_URL="$db_url" EVAL_EMAIL="$email" python scripts/staging_database.py reset
       - name: Resolve approved digest or build the one-time corpus candidate
         env:
           CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
@@ -111,6 +121,7 @@ jobs:
             fi
             commit_sha="$(git rev-parse HEAD)"
             bootstrap_tag="corpus-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            echo "BOOTSTRAP_IMAGE_TAG=$bootstrap_tag" >> "$GITHUB_ENV"
             docker buildx build \
               --file backend/Dockerfile \
               --cache-from "type=registry,ref=$IMAGE:buildcache" \
@@ -120,23 +131,39 @@ jobs:
               --push .
             digest="$(gcloud artifacts docker images describe "$IMAGE:$bootstrap_tag" --format='value(image_summary.digest)')"
             [ -n "$digest" ] || { echo "Corpus bootstrap build did not produce an immutable digest." >&2; exit 1; }
-            echo "BOOTSTRAP_IMAGE_TAG=$bootstrap_tag" >> "$GITHUB_ENV"
           fi
           echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
       - name: Deploy evaluation digest to a tagged staging revision
         run: |
           tag="scheduled-${GITHUB_RUN_ID}"
+          echo "REVISION_TAG=$tag" >> "$GITHUB_ENV"
           gcloud run deploy "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE@$IMAGE_DIGEST" --no-traffic --tag "$tag" --quiet
           url="$(gcloud run services describe "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json | python -c 'import json,os,sys; d=json.load(sys.stdin); t="scheduled-"+os.environ["GITHUB_RUN_ID"]; print(next((x.get("url", "") for x in d.get("status",{}).get("traffic",[]) if x.get("tag")==t), ""))')"
           [ -n "$url" ] || { echo "Cloud Run did not expose the tagged evaluation URL." >&2; exit 1; }
           echo "CANDIDATE_URL=$url" >> "$GITHUB_ENV"
-          echo "REVISION_TAG=$tag" >> "$GITHUB_ENV"
+      - name: Wait for candidate readiness
+        run: |
+          for attempt in $(seq 1 24); do
+            if curl --fail --silent --show-error "$CANDIDATE_URL/api/prepare" > /dev/null; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Scheduled staging candidate did not become ready." >&2
+          exit 1
       - name: Start frontend and capture journeys
         run: |
-          mkdir -p artifacts/live-eval
           VITE_API_PROXY_TARGET="$CANDIDATE_URL" npm --prefix frontend run dev -- --host 127.0.0.1 --port 4173 > artifacts/live-eval/vite.log 2>&1 &
           echo "VITE_PID=$!" >> "$GITHUB_ENV"
-          for attempt in $(seq 1 30); do curl --fail --silent http://127.0.0.1:4173 > /dev/null && break; sleep 2; done
+          frontend_ready=false
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:4173 > /dev/null; then
+              frontend_ready=true
+              break
+            fi
+            sleep 2
+          done
+          [ "$frontend_ready" = true ] || { echo "Evaluation frontend did not become ready." >&2; exit 1; }
           EVAL_BACKEND_URL="$CANDIDATE_URL" ./scripts/ci browser --suite "$EVAL_SUITE" --target http://127.0.0.1:4173 --output artifacts/live-eval/browser-results.json
       - id: semantic
         name: Generate semantic proposals or apply the approved gate
