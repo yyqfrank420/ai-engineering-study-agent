@@ -122,8 +122,11 @@ def resolve_complexity(requested: str, query: str) -> ComplexityProfile:
             requested=requested,
             resolved=resolved,
             thinking_budget=settings.production_thinking_budget_tokens,
-            min_graph_nodes=6,
-            max_graph_nodes=6,
+            # Node count is a bounded readability budget, not a quality score.
+            # Production responsibilities may be consolidated differently by
+            # domain; the browser render gate decides whether the result fits.
+            min_graph_nodes=5,
+            max_graph_nodes=8,
             answer_contract=(
                 "Production depth: give an implementable design, including component boundaries, "
                 "data contracts, the decision/feedback loop, safety controls, approval where "

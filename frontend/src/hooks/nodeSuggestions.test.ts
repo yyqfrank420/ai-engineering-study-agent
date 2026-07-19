@@ -2,9 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import { initialNodeSuggestions } from './nodeSuggestions';
 
-
 describe('initialNodeSuggestions', () => {
-  it('returns immediate actions scoped to a concise node label', () => {
+  it('normalizes and bounds the selected node label', () => {
     expect(initialNodeSuggestions('  Write   Confirmation Approval Boundary  ')).toEqual([
       'Explain Write Confirmation Approval Boundary clearly',
       'Expand graph around Write Confirmation Approval Boundary',
@@ -12,7 +11,7 @@ describe('initialNodeSuggestions', () => {
     ]);
   });
 
-  it('uses a safe fallback for an empty label', () => {
+  it('falls back for an empty label', () => {
     expect(initialNodeSuggestions('')[0]).toBe('Explain this component clearly');
   });
 });

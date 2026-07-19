@@ -87,10 +87,9 @@ function Harness({
       <div data-testid="selected">{agent.selectedNode ? `${agent.selectedNode.node.id}:${agent.selectedNode.suggestions.join(',')}` : ''}</div>
       <button onClick={() => agent.sendMessage('hello', { complexity: 'production', graphMode: 'on', researchEnabled: true })}>send</button>
       <button onClick={() => agent.requestSearchTool()}>search</button>
-      <button onClick={() => agent.sendNodeSelected('agent', 'Agent', 'Plans tool use.')}>node</button>
+      <button onClick={() => agent.selectNode(graph().nodes[0])}>node</button>
       <button onClick={() => agent.stopGeneration()}>stop</button>
       <button onClick={() => agent.toggleExplanationPause()}>pause</button>
-      <button onClick={() => agent.setSelectedNode({ node: graph().nodes[0], suggestions: ['Immediate'] })}>select</button>
       <button onClick={() => agent.hydrateThread({ messages: [{ id: 'm1', role: 'user', content: 'old' }], graphData: graph('2') })}>hydrate</button>
     </div>
   );
@@ -291,9 +290,12 @@ describe('useAgentStream', () => {
   it('streams node-selected suggestions and reuses cached suggestions on repeat click', async () => {
     render(<Harness />);
 
-    fireEvent.click(screen.getByText('select'));
     fireEvent.click(screen.getByText('node'));
     const clientRequestId = mocks.sendNodeSelected.mock.calls[0][5] as string;
+
+    expect(screen.getByTestId('selected').textContent).toBe(
+      'agent:Explain Agent clearly,Expand graph around Agent,Compare Agent trade-offs',
+    );
 
     act(() => {
       mocks.eventHandler?.({ type: 'suggested_questions', questions: ['Explain', 'Expand'] }, { kind: 'node-selected', clientRequestId });
@@ -310,14 +312,15 @@ describe('useAgentStream', () => {
   it('keeps immediate node suggestions when model refinement is empty', () => {
     render(<Harness />);
 
-    fireEvent.click(screen.getByText('select'));
     fireEvent.click(screen.getByText('node'));
     const clientRequestId = mocks.sendNodeSelected.mock.calls[0][5] as string;
     act(() => {
       mocks.eventHandler?.({ type: 'suggested_questions', questions: [] }, { kind: 'node-selected', clientRequestId });
     });
 
-    expect(screen.getByTestId('selected').textContent).toBe('agent:Immediate');
+    expect(screen.getByTestId('selected').textContent).toBe(
+      'agent:Explain Agent clearly,Expand graph around Agent,Compare Agent trade-offs',
+    );
   });
 
   it('logs node-selected request failures', async () => {

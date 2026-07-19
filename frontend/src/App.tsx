@@ -9,7 +9,6 @@ import { ThreadSidebar } from './components/Layout/ThreadSidebar';
 import { ThinkingIndicator } from './components/Chat/ThinkingIndicator';
 import { RetrievalNoticeBar } from './components/Chat/RetrievalNoticeBar';
 import { ContextBar } from './components/Chat/ContextBar';
-import { initialNodeSuggestions } from './components/Chat/nodeSuggestions';
 import { ChatInput } from './components/Chat/ChatInput';
 import { AuthScreen } from './components/Auth/AuthScreen';
 import { signOut } from './services/auth';
@@ -87,13 +86,13 @@ export default function App() {
     retrievalNotice,
     graphNotice,
     selectedNode,
-    setSelectedNode,
+    selectNode,
+    clearSelectedNode,
     streamStatus,
     providerNotice,
     hydrateThread,
     sendMessage,
     requestSearchTool,
-    sendNodeSelected,
     stopGeneration,
     toggleExplanationPause,
   } = useAgentStream(authSession, activeThreadId);
@@ -163,13 +162,12 @@ export default function App() {
     // Useful actions appear immediately. The low-cost model request may refine
     // them asynchronously, but latency or a provider failure never leaves an
     // empty context bar.
-    setSelectedNode({ node, suggestions: initialNodeSuggestions(node.label) });
+    selectNode(node);
     void trackEvent('node_selected', {
       thread_id: activeThreadId ?? undefined,
       node_id: node.id,
       node_label: node.label,
     }, authSession);
-    sendNodeSelected(node.id, node.label, node.detail ?? node.description ?? '');
   };
 
   const handleTellMeMore = useCallback((node: GraphNode) => {
@@ -180,7 +178,7 @@ export default function App() {
 
   const handleExpandGraph = useCallback((node: GraphNode) => {
     clearSelection();
-    setSelectedNode(null);
+    clearSelectedNode();
     void trackEvent('expand_graph_clicked', {
       thread_id: activeThreadId ?? undefined,
       node_id: node.id,
@@ -208,7 +206,7 @@ export default function App() {
         hasSelectedTextContext: false,
       },
     );
-  }, [activeThreadId, authSession, backendReadiness, clearSelection, complexity, researchEnabled, sendMessage, setSelectedNode]);
+  }, [activeThreadId, authSession, backendReadiness, clearSelectedNode, clearSelection, complexity, researchEnabled, sendMessage]);
 
   const effectiveThreadTitle = useMemo(
     () => threadTitle || 'New chat',
@@ -347,7 +345,7 @@ export default function App() {
                     onTellMeMore={handleTellMeMore}
                     onExpandGraph={handleExpandGraph}
                     selectedNode={selectedNode}
-                    onClosePopup={() => setSelectedNode(null)}
+                    onClosePopup={clearSelectedNode}
                     sourceTexts={[latestAssistantText]}
                     isBuilding={isGenerating}
                     workflowProgress={workflowProgress}
@@ -410,7 +408,7 @@ export default function App() {
                   <ContextBar
                     selectedNode={selectedNode}
                     onSendMessage={handleSend}
-                    onClear={() => setSelectedNode(null)}
+                    onClear={clearSelectedNode}
                   />
                   <ChatInput
                     onSend={handleSend}

@@ -2,7 +2,7 @@
 // File: frontend/src/hooks/useAgentStream.ts
 // Purpose: React hook that wraps the agent transport and dispatches incoming
 //          WebSocket/SSE events to the correct state update handlers.
-//          Components call sendMessage/sendNodeSelected — they never touch
+//          Components call sendMessage/selectNode — they never touch
 //          transport details directly.
 //
 //          streamStatus semantics:
@@ -27,6 +27,7 @@ import type {
   GraphNotice,
   GraphData,
   GraphMode,
+  GraphNode,
   Message,
   RetrievalNotice,
   SelectedNode,
@@ -36,6 +37,7 @@ import type {
 } from '../types';
 import { graphStructureKey } from '../utils/graphStructureKey';
 import { normalizeGraphData } from '../utils/graphData';
+import { initialNodeSuggestions } from './nodeSuggestions';
 
 function makeId() {
   return createClientRequestId();
@@ -330,10 +332,15 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
             setGraphNotice(null);
             const currentSelected = selectedNodeRef.current;
             if (!currentSelected || !nextGraph) {
+              selectedNodeRef.current = null;
               setSelectedNode(null);
             } else {
               const liveNode = nextGraph.nodes.find((node) => node.id === currentSelected.node.id);
-              setSelectedNode(liveNode ? { node: liveNode, suggestions: [] } : null);
+              const nextSelection = liveNode
+                ? { node: liveNode, suggestions: initialNodeSuggestions(liveNode.label) }
+                : null;
+              selectedNodeRef.current = nextSelection;
+              setSelectedNode(nextSelection);
             }
           }
 
@@ -371,7 +378,9 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
           if (prev) {
             // Cache so the next click on this node skips the LLM call
             suggestionsCacheRef.current.set(prev.node.id, event.questions);
-            return { ...prev, suggestions: event.questions };
+            const nextSelection = { ...prev, suggestions: event.questions };
+            selectedNodeRef.current = nextSelection;
+            return nextSelection;
           }
           return prev;
         });
@@ -648,18 +657,32 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
     }
   }, [activeThreadId, authSession, retrievalNotice]);
 
-  const sendNodeSelected = useCallback((nodeId: string, title: string, description: string) => {
+  const selectNode = useCallback((node: GraphNode) => {
+    const cached = suggestionsCacheRef.current.get(node.id);
+    const nextSelection = {
+      node,
+      suggestions: cached ?? initialNodeSuggestions(node.label),
+    };
+    // Keep the synchronous ref and rendered state in lockstep so a nearby
+    // graph event cannot clear a just-selected node before React commits.
+    selectedNodeRef.current = nextSelection;
+    setSelectedNode(nextSelection);
     if (!authSession || !activeThreadId) return;
     // Check cache — if we already have questions for this node, apply immediately
     // without hitting the backend (saves LLM cost + latency on repeat clicks)
-    const cached = suggestionsCacheRef.current.get(nodeId);
     if (cached) {
-      setSelectedNode(prev => prev ? { ...prev, suggestions: cached } : prev);
       return;
     }
     const clientRequestId = makeId();
     activeNodeStreamIdRef.current = clientRequestId;
-    agentTransport.sendNodeSelected(authSession, activeThreadId, nodeId, title, description, clientRequestId).catch(err => {
+    agentTransport.sendNodeSelected(
+      authSession,
+      activeThreadId,
+      node.id,
+      node.label,
+      node.detail ?? node.description ?? '',
+      clientRequestId,
+    ).catch(err => {
       console.error('[sse] node-selected error:', err);
     }).finally(() => {
       if (activeNodeStreamIdRef.current === clientRequestId) {
@@ -667,6 +690,11 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
       }
     });
   }, [activeThreadId, authSession]);
+
+  const clearSelectedNode = useCallback(() => {
+    selectedNodeRef.current = null;
+    setSelectedNode(null);
+  }, []);
 
   const stopGeneration = useCallback(() => {
     const analytics = activeChatAnalyticsRef.current;
@@ -733,13 +761,13 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
     retrievalNotice,
     graphNotice,
     selectedNode,
-    setSelectedNode,
+    selectNode,
+    clearSelectedNode,
     streamStatus,
     providerNotice,
     hydrateThread,
     sendMessage,
     requestSearchTool,
-    sendNodeSelected,
     stopGeneration,
     toggleExplanationPause,
   };

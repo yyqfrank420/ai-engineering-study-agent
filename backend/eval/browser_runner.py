@@ -362,12 +362,17 @@ async def run_browser(args: argparse.Namespace) -> dict[str, Any]:
                     for step_index in range(len(case.steps)):
                         case_events.extend(await _send_step(page, case, step_index, frames))
                     if case.id == "node-followup":
-                        # The private render evaluator also owns an off-screen SVG.
-                        # Exercise the user-visible canvas, never its inert duplicate.
-                        first_node = page.locator(
-                            '[data-testid="graph-canvas"]:visible g.node'
+                        # Use the same accessible activation path available to
+                        # keyboard users and prove the optional refinement starts.
+                        first_node = page.get_by_role(
+                            "button", name=re.compile(r"^Explore ")
                         ).first
-                        await first_node.click(timeout=10_000)
+                        async with page.expect_request(
+                            lambda request: request.method == "POST"
+                            and request.url.rstrip("/").endswith("/api/node-selected"),
+                            timeout=10_000,
+                        ):
+                            await first_node.press("Enter", timeout=10_000)
                         await page.locator('[data-testid="suggested-question"]').first.wait_for(timeout=10_000)
                 except Exception as exc:
                     failure = f"{type(exc).__name__}: {exc}"
