@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
+import time
 
 import pytest
 
+from eval.browser_runner import _session_expires_soon, run_browser
 from scripts.ci_runner import classify_paths, load_manifest, trust_for_event, validate_manifest
 
 
@@ -12,6 +15,22 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_manifest_tracks_every_backend_test():
     validate_manifest(load_manifest())
+
+
+def test_browser_navigation_does_not_wait_for_long_lived_connections_to_close():
+    source = inspect.getsource(run_browser)
+
+    assert 'wait_until="networkidle"' not in source
+    assert source.count('wait_until="domcontentloaded"') == 2
+    assert source.count("_wait_for_composer_ready(page)") == 2
+
+
+def test_internal_session_is_renewed_before_its_expiry_buffer():
+    now = time.time()
+
+    assert _session_expires_soon({"expires_at": now + 599})
+    assert not _session_expires_soon({"expires_at": now + 601})
+    assert _session_expires_soon({})
 
 
 def test_manifest_validation_fails_when_a_tracked_test_is_omitted():

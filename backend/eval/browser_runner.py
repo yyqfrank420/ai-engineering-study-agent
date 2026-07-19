@@ -105,12 +105,12 @@ async def _replace_page_session(page: Page, session: dict[str, Any]) -> None:
     )
 
 
-async def _wait_for_send_ready(page: Page, *, timeout_seconds: int = 30) -> None:
-    send = page.get_by_label("Send message")
-    await send.wait_for(state="visible", timeout=timeout_seconds * 1000)
+async def _wait_for_composer_ready(page: Page, *, timeout_seconds: int = 30) -> None:
+    composer = page.get_by_placeholder(re.compile(r"Ask a question"))
+    await composer.wait_for(state="visible", timeout=timeout_seconds * 1000)
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        if await send.is_enabled():
+        if await composer.is_enabled():
             return
         await asyncio.sleep(0.25)
     raise RuntimeError("evaluation frontend did not create an authenticated thread")
@@ -327,13 +327,13 @@ async def run_browser(args: argparse.Namespace) -> dict[str, Any]:
             )
             page.on("websocket", lambda socket: _capture_socket(frames, socket))
             try:
-                await page.goto(args.target, wait_until="networkidle", timeout=60_000)
+                await page.goto(args.target, wait_until="domcontentloaded", timeout=60_000)
                 if await page.get_by_role("heading", name="Sign in").is_visible():
                     raise RuntimeError("evaluation frontend did not accept the internal session")
                 prepare = page.get_by_label("Prepare backend")
                 if await prepare.is_visible():
                     await prepare.click()
-                await _wait_for_send_ready(page)
+                await _wait_for_composer_ready(page)
             except Exception as exc:
                 await _capture_bootstrap_failure(
                     page,
@@ -352,8 +352,8 @@ async def run_browser(args: argparse.Namespace) -> dict[str, Any]:
                     if _session_expires_soon(session):
                         session = await _internal_session(args.backend_target, args.email, args.internal_password)
                         await _replace_page_session(page, session)
-                    await page.reload(wait_until="networkidle", timeout=60_000)
-                    await _wait_for_send_ready(page)
+                    await page.reload(wait_until="domcontentloaded", timeout=60_000)
+                    await _wait_for_composer_ready(page)
                 case_started = time.monotonic()
                 case_events: list[dict[str, Any]] = []
                 start_frame = len(frames)
