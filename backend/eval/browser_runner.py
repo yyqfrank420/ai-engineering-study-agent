@@ -248,8 +248,34 @@ def _deterministic_failures(case: EvaluationCase, events: list[dict[str, Any]], 
     if bool(errors) != expected.error_expected:
         failures.append("unexpected error events: " + "; ".join(errors))
     answer = extract_response_text(events)
-    if expected.citations_required and not re.search(r"(?:Chapter\s+\d+|https?://|\[[0-9]+\])", answer, re.I):
-        failures.append("required citation evidence was not visible in the answer")
+    if expected.citations_required:
+        if expected.citation_source == "web":
+            research_unavailable = any(
+                event.get("type") == "worker_status"
+                and event.get("worker") == "research"
+                and "unavailable" in str(event.get("status") or "").lower()
+                for event in events
+            )
+            supplied_sources: set[str] = set()
+            for event in events:
+                if event.get("type") != "worker_status" or event.get("worker") != "research":
+                    continue
+                sources = event.get("sources")
+                if not isinstance(sources, list):
+                    continue
+                supplied_sources.update(
+                    source
+                    for source in sources
+                    if isinstance(source, str) and source.startswith(("http://", "https://"))
+                )
+            if research_unavailable:
+                failures.append("research infrastructure unavailable: no citable web sources")
+            elif not supplied_sources:
+                failures.append("research completed without source provenance telemetry")
+            elif not any(source in answer for source in supplied_sources):
+                failures.append("required web citation did not match supplied research evidence")
+        elif not re.search(r"(?:Chapter\s+\d+|https?://|\[[0-9]+\])", answer, re.I):
+            failures.append("required citation evidence was not visible in the answer")
     return failures
 
 

@@ -109,6 +109,7 @@ class AgentState(TypedDict):
     search_tool_wait_task: NotRequired[Any]
     # Web search results from research_worker (empty string if not run)
     research_context: str
+    research_status: NotRequired[str]  # "ready" | "unavailable" | "not_requested"
     # Static book-informed frame plus the one scenario-specific retrieval result.
     evidence_bundle: NotRequired[dict[str, Any]]
     is_applied_design: NotRequired[bool]

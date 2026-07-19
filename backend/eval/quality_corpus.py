@@ -80,8 +80,15 @@ class DeterministicExpectation(BaseModel):
     graph_emitted: bool | None
     graph_renderable: bool | None
     citations_required: bool
+    citation_source: Literal["any", "web"] = "any"
     error_expected: bool
     cleanup: bool
+
+    @model_validator(mode="after")
+    def validate_citation_contract(self) -> "DeterministicExpectation":
+        if self.citation_source == "web" and not self.citations_required:
+            raise ValueError("web citation provenance requires citations_required")
+        return self
 
 
 class EvaluationCase(BaseModel):
@@ -117,6 +124,11 @@ class EvaluationCorpus(BaseModel):
             unknown = sorted(set(case.rubric_dimensions) - rubric_names)
             if unknown:
                 raise ValueError(f"case {case.id} references unknown rubrics: {unknown}")
+            if case.deterministic.citation_source == "web":
+                if "research" not in case.deterministic.workers_include:
+                    raise ValueError(f"web-citation case {case.id} must require the research worker")
+                if not any(step.ui.research_enabled for step in case.steps):
+                    raise ValueError(f"web-citation case {case.id} must enable research")
             if case.approval.status == "approved":
                 if not case.approval.reviewer or not case.approval.reviewed_at:
                     raise ValueError(f"approved case {case.id} must identify its reviewer and review time")

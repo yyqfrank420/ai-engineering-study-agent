@@ -16,11 +16,15 @@ import {
   filterRenderableEdges,
   GRAPH_LAYOUT_VERSION,
   H_PAD,
+  INITIAL_FIT_PADDING,
+  initialFitScale,
   MIN_COL_W,
   NODE_H,
   NODE_RX,
   NODE_W,
   selectGraphOrientation,
+  VERTICAL_LEVEL_H,
+  VERTICAL_PAD,
   V_PAD,
   wrapNodeLabel,
 } from './graphLayout';
@@ -373,7 +377,6 @@ export function D3Graph({
     const effectiveMainH = Math.max(canvasMainH, maxMainInCol * MIN_ROW_H);
 
     const maxNodesInLevel = Math.max(1, ...Array.from(colBuckets.values()).map(bucket => bucket.length));
-    const LEVEL_H = NODE_H + 48;
     const verticalLayoutW = Math.max(width, maxNodesInLevel * MIN_COL_W + 2 * H_PAD);
     const verticalRowW = (verticalLayoutW - 2 * H_PAD) / maxNodesInLevel;
 
@@ -382,7 +385,7 @@ export function D3Graph({
         const rowOffset = (maxNodesInLevel - bucket.length) / 2;
         bucket.forEach((node: RenderNode, index: number) => {
           node.x = H_PAD + (rowOffset + index + 0.5) * verticalRowW;
-          node.y = V_PAD + (c + 0.5) * LEVEL_H;
+          node.y = VERTICAL_PAD + (c + 0.5) * VERTICAL_LEVEL_H;
         });
         continue;
       }
@@ -414,7 +417,7 @@ export function D3Graph({
       ? verticalLayoutW
       : numCols * colWidth + 2 * H_PAD;
     const layoutH = orientation === 'vertical'
-      ? 2 * V_PAD + numCols * LEVEL_H
+      ? 2 * VERTICAL_PAD + numCols * VERTICAL_LEVEL_H
       : V_PAD + effectiveMainH + BOTTOM_BAND_H + V_PAD;
 
     // ── Resolve edges to node object references ───────────────────────────────
@@ -930,17 +933,12 @@ export function D3Graph({
     // ── Auto-fit: zoom to show the full diagram on first render ───────────────
     // Scale down to fit (never scale up — max 1.0), centre horizontally,
     // add a small top margin so return arcs (which arc above y=0) are visible.
-    const FIT_PADDING = 32;
-    const fitScale = Math.min(
-      1.0,
-      (width  - 2 * FIT_PADDING) / layoutW,
-      (height - 2 * FIT_PADDING) / layoutH,
-    );
+    const fitScale = initialFitScale(width, height, layoutW, layoutH);
     // Clamp fitTx so the leftmost node is never off-screen.
     // When height is the limiting dimension, (width - layoutW*fitScale)/2 can go
     // negative, sliding the entire graph behind the left edge of the container.
-    const fitTx = Math.max(FIT_PADDING, (width  - layoutW * fitScale) / 2);
-    const fitTy = Math.max(FIT_PADDING, (height - layoutH * fitScale) / 2);
+    const fitTx = Math.max(INITIAL_FIT_PADDING, (width  - layoutW * fitScale) / 2);
+    const fitTy = Math.max(INITIAL_FIT_PADDING, (height - layoutH * fitScale) / 2);
     const initialTransform = restoreViewState?.viewport
       ? d3.zoomIdentity
           .translate(restoreViewState.viewport.x, restoreViewState.viewport.y)

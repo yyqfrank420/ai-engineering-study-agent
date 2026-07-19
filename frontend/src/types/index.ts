@@ -155,6 +155,7 @@ export interface WorkerStatusEvent {
   type: 'worker_status';
   worker: 'orchestrator' | 'rag' | 'graph' | 'critic' | 'research';
   status: string;
+  sources?: string[];
 }
 
 export interface ThinkingDeltaEvent {

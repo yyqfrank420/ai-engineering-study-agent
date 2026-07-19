@@ -29,6 +29,76 @@ def test_empty_and_oversized_inputs_are_not_live_model_cases():
     assert all(len(prompt.encode("utf-8")) <= 12_000 for prompt in prompts)
 
 
+def test_current_research_cases_require_verifiable_web_sources():
+    corpus = load_corpus()
+    research_cases = [case for case in corpus.cases if "web" in case.risk_tags]
+
+    assert research_cases
+    assert all(case.deterministic.citations_required for case in research_cases)
+    assert all(case.deterministic.citation_source == "web" for case in research_cases)
+
+
+def test_web_research_does_not_accept_a_book_citation_as_current_evidence():
+    from eval.browser_runner import _deterministic_failures
+
+    case = load_corpus().by_id["research"]
+    graph = {"nodes": [{"id": "agent"}], "edges": []}
+    base_events = [
+        {
+            "type": "worker_status",
+            "worker": worker,
+            "status": "ready",
+            **({"sources": ["https://example.com/report"]} if worker == "research" else {}),
+        }
+        for worker in case.deterministic.workers_include
+    ] + [
+        {"type": "graph_data", "data": graph},
+        {"type": "done"},
+    ]
+
+    book_only = _deterministic_failures(
+        case,
+        [*base_events, {"type": "response_delta", "content": "Supported (Chapter 3, p.42)."}],
+        rendered_nodes=1,
+    )
+    web_cited = _deterministic_failures(
+        case,
+        [*base_events, {"type": "response_delta", "content": "Supported https://example.com/report"}],
+        rendered_nodes=1,
+    )
+    fabricated = _deterministic_failures(
+        case,
+        [*base_events, {"type": "response_delta", "content": "Supported https://made-up.invalid"}],
+        rendered_nodes=1,
+    )
+
+    assert "required web citation did not match supplied research evidence" in book_only
+    assert "required web citation did not match supplied research evidence" in fabricated
+    assert not any("citation" in failure for failure in web_cited)
+
+
+def test_web_research_provider_failure_is_classified_as_infrastructure():
+    from eval.browser_runner import _deterministic_failures
+
+    case = load_corpus().by_id["research"]
+    events = [
+        {
+            "type": "worker_status",
+            "worker": worker,
+            "status": "Web research unavailable" if worker == "research" else "ready",
+        }
+        for worker in case.deterministic.workers_include
+    ] + [
+        {"type": "graph_data", "data": {"nodes": [{"id": "agent"}], "edges": []}},
+        {"type": "response_delta", "content": "Book-grounded answer (Chapter 3, p.42)."},
+        {"type": "done"},
+    ]
+
+    failures = _deterministic_failures(case, events, rendered_nodes=1)
+
+    assert "research infrastructure unavailable: no citable web sources" in failures
+
+
 def test_pending_corpus_cannot_enable_the_blocking_judge():
     with pytest.raises(RuntimeError, match="pending human review"):
         load_corpus(require_approved=True)

@@ -22,8 +22,10 @@ jobs:
       matrix: ${{ steps.groups.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - id: groups
-        run: ./scripts/ci groups --github-output
+        run: ./scripts/ci groups --event-file "$GITHUB_EVENT_PATH" --github-output
 
   offline:
     name: Offline (${{ matrix.group }})
@@ -68,11 +70,6 @@ jobs:
         with:
           terraform_version: 1.11.4
 
-      - name: Initialize Terraform providers
-        if: matrix.runtime == 'infra'
-        working-directory: infra/terraform/gcp
-        run: terraform init -backend=false -input=false
-
       - name: Run canonical offline group
         run: ./scripts/ci offline --group '${{ matrix.group }}'
 
@@ -82,7 +79,7 @@ jobs:
     if: always()
     needs: [manifest, offline]
     steps:
-      - name: Require every canonical offline group
+      - name: Require every selected canonical offline group
         env:
           MANIFEST_RESULT: ${{ needs.manifest.result }}
           OFFLINE_RESULT: ${{ needs.offline.result }}
@@ -91,4 +88,4 @@ jobs:
             echo "Canonical offline quality checks failed." >&2
             exit 1
           fi
-          echo "All canonical offline quality groups passed."
+          echo "All selected canonical offline quality groups passed."

@@ -179,6 +179,44 @@ def _explicit_test_paths(manifest: dict[str, Any]) -> set[str]:
     return paths
 
 
+def _test_owners(manifest: dict[str, Any]) -> dict[str, set[str]]:
+    owners: dict[str, set[str]] = {}
+    owning_groups = set(manifest["test_tracking"]["explicit_backend_groups"])
+    for group in manifest["offline_groups"]:
+        if group["name"] not in owning_groups:
+            continue
+        for command in group["commands"]:
+            for argument in command["argv"]:
+                if argument.startswith("backend/tests/test_") and argument.endswith(".py"):
+                    owners.setdefault(argument, set()).add(group["name"])
+    return owners
+
+
+def select_offline_groups(paths: list[str], manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """Select owning groups, falling back to the full matrix for unknown or policy changes."""
+    groups = group_map(manifest)
+    selection = manifest["offline_selection"]
+    normalized = sorted({path.strip().removeprefix("./") for path in paths if path.strip()})
+    if not normalized or any(_matches(path, selection["full_run_paths"]) for path in normalized):
+        return list(groups.values())
+
+    selected = set(selection["always"])
+    test_owners = _test_owners(manifest)
+    documentation_patterns = manifest["impact"]["documentation"]
+    for path in normalized:
+        owners = set(test_owners.get(path, set()))
+        owners.update(
+            group_name
+            for group_name, patterns in selection["groups"].items()
+            if _matches(path, patterns)
+        )
+        if not owners and not _matches(path, documentation_patterns):
+            return list(groups.values())
+        selected.update(owners)
+
+    return [group for group in groups.values() if group["name"] in selected]
+
+
 def validate_manifest(manifest: dict[str, Any]) -> None:
     groups = group_map(manifest)
     for group in groups.values():
@@ -186,6 +224,22 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             raise ValueError(f"unsupported runtime for {group['name']}")
         if not group.get("commands"):
             raise ValueError(f"offline group {group['name']} has no commands")
+    selection = manifest.get("offline_selection")
+    if not isinstance(selection, dict):
+        raise ValueError("ci/quality.json must define offline_selection")
+    selection_groups = set(selection.get("groups", {}))
+    unknown_selection_groups = sorted(selection_groups - set(groups))
+    missing_selection_groups = sorted(set(groups) - selection_groups)
+    if unknown_selection_groups or missing_selection_groups:
+        raise ValueError(
+            "offline selection group mismatch: unknown="
+            f"{unknown_selection_groups}, missing={missing_selection_groups}"
+        )
+    unknown_always_groups = sorted(set(selection.get("always", [])) - set(groups))
+    if unknown_always_groups:
+        raise ValueError(f"offline selection has unknown always groups: {unknown_always_groups}")
+    if not selection.get("full_run_paths"):
+        raise ValueError("offline selection must define fail-safe full_run_paths")
     tracked = {str(path.relative_to(ROOT)) for path in ROOT.glob(manifest["test_tracking"]["explicit_backend_glob"])}
     explicit = _explicit_test_paths(manifest)
     missing = sorted(tracked - explicit)
@@ -215,11 +269,23 @@ def _dispatch_eval(kind: str, args: argparse.Namespace) -> None:
     subprocess.run(argv, cwd=ROOT, env=_command_environment(), check=True)  # nosec B603
 
 
-def _groups_json(manifest: dict[str, Any]) -> str:
+def _groups_json(groups: list[dict[str, Any]]) -> str:
     return json.dumps(
-        {"include": [{"group": group["name"], "runtime": group["runtime"]} for group in manifest["offline_groups"]]},
+        {"include": [{"group": group["name"], "runtime": group["runtime"]} for group in groups]},
         separators=(",", ":"),
     )
+
+
+def _changed_paths_for_args(args: argparse.Namespace) -> list[str] | None:
+    if args.paths_from:
+        return Path(args.paths_from).read_text(encoding="utf-8").splitlines()
+    if args.event_file:
+        event = json.loads(Path(args.event_file).read_text(encoding="utf-8"))
+        base, head = _event_revisions(event)
+        return _git_changed_paths(base, head)
+    if args.base and args.head:
+        return _git_changed_paths(args.base, args.head)
+    return None
 
 
 def _record_override(args: argparse.Namespace) -> None:
@@ -245,6 +311,10 @@ def build_parser() -> argparse.ArgumentParser:
     offline = subparsers.add_parser("offline")
     offline.add_argument("--group", choices=[group["name"] for group in load_manifest()["offline_groups"]])
     groups = subparsers.add_parser("groups")
+    groups.add_argument("--base")
+    groups.add_argument("--head")
+    groups.add_argument("--paths-from")
+    groups.add_argument("--event-file")
     groups.add_argument("--github-output", action="store_true")
     impact = subparsers.add_parser("impact")
     impact.add_argument("--base")
@@ -276,7 +346,13 @@ def main() -> None:
     if args.command == "offline":
         run_offline(manifest, args.group)
     elif args.command == "groups":
-        payload = _groups_json(manifest)
+        changed_paths = _changed_paths_for_args(args)
+        selected_groups = (
+            select_offline_groups(changed_paths, manifest)
+            if changed_paths is not None
+            else list(group_map(manifest).values())
+        )
+        payload = _groups_json(selected_groups)
         if args.github_output:
             _write_github_output({"matrix": json.loads(payload)})
         print(payload)
