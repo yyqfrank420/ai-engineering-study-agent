@@ -74,6 +74,7 @@ export interface GraphGroup {
 }
 
 export interface GraphViewState {
+  layoutVersion?: number;
   nodePositions: Record<string, { x: number; y: number }>;
   viewport: {
     x: number;

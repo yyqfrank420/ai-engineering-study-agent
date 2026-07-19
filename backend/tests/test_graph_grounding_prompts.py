@@ -3,6 +3,18 @@ import json
 import pytest
 
 
+def test_applied_graph_text_limits_preserve_sentence_or_word_boundaries():
+    from agent.nodes.graph_worker import _required_text
+
+    complete = "A complete first sentence. A second sentence that exceeds the diagram field."
+    assert _required_text(complete, "description", 34) == "A complete first sentence."
+
+    long_phrase = "one two three four five six seven eight"
+    bounded = _required_text(long_phrase, "technology", 24)
+    assert bounded.endswith("…")
+    assert not bounded.endswith(" …")
+
+
 @pytest.mark.asyncio
 async def test_graph_worker_uses_canonical_artifacts_without_llm(monkeypatch, tmp_path):
     from tests.test_canonical_graph import SCHEMA_DIR, _write_parent_docs
@@ -134,7 +146,6 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
     retained_node_ids = {
         "objective_config",
         "campaign_brief",
-        "event_quality",
         "strategy_engine",
         "creative_studio",
         "audience_optimizer",
@@ -179,12 +190,13 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
     assert graph is not None
     assert graph["graph_type"] == "architecture"
     labels = {node["label"] for node in graph["nodes"]}
-    assert {"Objective Config", "Event Quality Gate", "Creative Studio", "Audience Optimizer"} <= labels
+    assert {"Objective Config", "Creative Studio", "Audience Optimizer", "Policy Approval Gate"} <= labels
     assert not ({"Agent", "Tool Use", "Planning", "Evaluation", "Foundation Model"} & labels)
     assert graph["design_origin"] == "applied"
     assert graph["resolved_complexity"] == "prototype"
     assert graph["assumptions"]
     assert captured["thinking_budget"] == graph_worker.settings.thinking_budget_tokens
+    assert captured["effort"] == "medium"
     assert "Preserve their domain nouns" in captured["system"]
     assert "Designing a prototype domain architecture" in events[0]["status"]
 

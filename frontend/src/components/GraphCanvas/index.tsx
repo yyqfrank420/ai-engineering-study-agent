@@ -33,6 +33,7 @@ interface GraphCanvasProps {
 
 function sameGraphViewState(a: GraphViewState | null | undefined, b: GraphViewState | null | undefined): boolean {
   if (!a || !b) return a === b;
+  if (a.layoutVersion !== b.layoutVersion) return false;
   if (a.viewport.x !== b.viewport.x || a.viewport.y !== b.viewport.y || a.viewport.k !== b.viewport.k) {
     return false;
   }

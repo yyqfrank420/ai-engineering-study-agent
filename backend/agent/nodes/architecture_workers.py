@@ -90,7 +90,7 @@ async def architect_node(state: AgentState) -> dict[str, Any]:
             model=settings.orchestrator_model,
             system=_ARCHITECT_SYSTEM,
             messages=[{"role": "user", "content": _worker_context(state, profile.answer_contract)}],
-            effort="high",
+            effort="medium",
             temperature=settings.graph_temperature,
             top_p=settings.graph_top_p,
             top_k=settings.graph_top_k,

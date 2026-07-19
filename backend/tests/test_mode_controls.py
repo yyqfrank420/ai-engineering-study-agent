@@ -105,9 +105,9 @@ def test_concept_questions_do_not_trigger_applied_design(query):
 @pytest.mark.parametrize(
     ("requested", "expected_range"),
     [
-        ("low", (4, 7)),
-        ("prototype", (5, 7)),
-        ("production", (6, 7)),
+        ("low", (4, 5)),
+        ("prototype", (5, 6)),
+        ("production", (6, 6)),
     ],
 )
 def test_complexity_profiles_keep_diagrams_within_the_ui_node_cap(requested, expected_range):

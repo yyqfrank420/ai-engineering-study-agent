@@ -116,6 +116,35 @@ def test_review_requires_a_json_boolean_and_string_lists():
     assert review["strengths"] == ["Specific"]
 
 
+def test_optional_model_advice_does_not_block_a_publishable_diagram():
+    local = {"approved": True, "score": 0.92, "missing": [], "strengths": ["Safe boundary"]}
+    model = _normalise_review({
+        "approved": True,
+        "score": 0.84,
+        "blocking_failures": [],
+        "advice": ["Consider a secondary on-call route."],
+        "strengths": ["Domain specific"],
+    })
+
+    merged = _merge_reviews(local, model)
+
+    assert merged["approved"] is True
+    assert merged["missing"] == []
+    assert merged["advice"] == ["Consider a secondary on-call route."]
+
+
+def test_explicit_model_blocking_failure_still_rejects_the_diagram():
+    review = _normalise_review({
+        "approved": False,
+        "score": 0.7,
+        "blocking_failures": ["The requested rollback path is absent."],
+        "advice": [],
+    })
+
+    assert review["approved"] is False
+    assert review["missing"] == ["The requested rollback path is absent."]
+
+
 def test_render_gate_rejects_overlap_clipping_or_missing_capture():
     graph = {"nodes": [{"id": "a"}, {"id": "b"}], "edges": []}
     review = _deterministic_render_review(graph, {

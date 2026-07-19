@@ -55,6 +55,17 @@ Compare the diagram with the user's exact request. Check all of the following:
 Reject a diagram dominated by labels such as Agent, Tool Use, Planning, Evaluation, Generation,
 Foundation Model, Memory, or Application. Reject invented retrieval, live data, or vendor details.
 Do not reward node count or polished wording when the architecture is not implementable.
+
+Use `blocking_failures` only for a clear omission or defect that makes the diagram unsafe,
+misleading, unusable, or fails an explicit part of the user's request at the selected depth.
+Put optional hardening, an additional component, or a different-but-valid design preference in
+`advice`; advisory improvements must not cause rejection. Accept consolidated responsibilities
+when their descriptions and edges make the boundary clear. Concise node descriptions are expected.
+Review the architecture artifact only: prose answers, suggested follow-up questions, and other
+interaction elements are delivered downstream and do not belong in the diagram.
+
+Score anchors: 0.90-1.00 is clear and complete; 0.78-0.89 is publishable with optional advice;
+0.50-0.77 has a blocking omission; below 0.50 is unsafe, generic, or unusable.
 </review_contract>
 
 <output_contract>
@@ -63,7 +74,8 @@ Return one JSON object and nothing else:
   "approved": true,
   "score": 0.0,
   "strengths": ["specific strength"],
-  "missing": ["specific missing or weak design element"],
+  "blocking_failures": ["clear blocking defect; empty when approved"],
+  "advice": ["optional improvement that does not block publication"],
   "revision_instruction": "one precise instruction for the designer; empty when approved"
 }
 </output_contract>"""
@@ -253,6 +265,7 @@ def _merge_reviews(local: dict[str, Any], model: dict[str, Any]) -> dict[str, An
         "score": score,
         "strengths": list(dict.fromkeys([*(local.get("strengths") or []), *(model.get("strengths") or [])]))[:8],
         "missing": missing,
+        "advice": list(dict.fromkeys([*(local.get("advice") or []), *(model.get("advice") or [])]))[:8],
         "revision_instruction": " ".join(instructions)[:800],
     }
 
@@ -307,7 +320,9 @@ def _normalise_review(payload: dict[str, Any]) -> dict[str, Any]:
         score = min(1.0, max(0.0, float(payload.get("score", 0))))
     except (TypeError, ValueError):
         score = 0.0
-    missing = _clean_list(payload.get("missing"))
+    blocking_value = payload.get("blocking_failures")
+    missing = _clean_list(blocking_value if blocking_value is not None else payload.get("missing"))
+    advice = _clean_list(payload.get("advice"))
     strengths = _clean_list(payload.get("strengths"))
     approved = payload.get("approved") is True and score >= 0.78 and not missing
     revision_instruction = " ".join(str(payload.get("revision_instruction") or "").split())[:800]
@@ -318,6 +333,7 @@ def _normalise_review(payload: dict[str, Any]) -> dict[str, Any]:
         "score": score,
         "strengths": strengths,
         "missing": missing,
+        "advice": advice,
         "revision_instruction": revision_instruction,
     }
 
