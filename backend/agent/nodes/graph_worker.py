@@ -39,6 +39,10 @@ names and connections must carry the design—not generic explanatory prose.
   such as depends on, uses, evaluates, or connects to.
 - Domain components are design recommendations, not book claims. Never fabricate citations.
 - State material assumptions explicitly in the assumptions array.
+- Keep each technology phrase under 60 characters and each description to one complete sentence
+  under 220 characters. Consolidate related responsibilities to stay inside the supplied node budget.
+- Make every explicitly requested safety or reliability mechanism visible in a node responsibility
+  or edge, even when it is consolidated into a broader boundary.
 </non_negotiable_quality_bar>
 
 <depth>
@@ -200,7 +204,7 @@ async def _generate_applied_architecture(state: AgentState, query: str, profile)
         temperature=settings.graph_temperature,
         top_p=settings.graph_top_p,
         top_k=settings.graph_top_k,
-        effort="high",
+        effort="medium",
         telemetry=build_telemetry(
             "graph_worker_applied_design",
             user_id=state.get("user_id"),
@@ -269,8 +273,8 @@ def _normalise_applied_graph(
             "id": node_id,
             "label": label,
             "type": node_type,
-            "technology": _required_text(raw_node.get("technology"), "node technology", 100),
-            "description": _required_text(raw_node.get("description"), "node description", 300),
+            "technology": _required_text(raw_node.get("technology"), "node technology", 60),
+            "description": _required_text(raw_node.get("description"), "node description", 220),
             "tier": tier if tier in {"public", "private"} else "private",
             "lane": lane if lane in {"main", "bottom"} else "main",
             "detail": None,
@@ -332,9 +336,9 @@ def _normalise_edges(raw_edges: Any, id_map: dict[str, str], *, max_edges: int) 
             "source": source,
             "target": target,
             "label": label,
-            "technology": _required_text(raw_edge.get("technology"), "edge technology", 120),
+            "technology": _required_text(raw_edge.get("technology"), "edge technology", 80),
             "sync": "async" if raw_edge.get("sync") == "async" else "sync",
-            "description": _required_text(raw_edge.get("description"), "edge description", 300),
+            "description": _required_text(raw_edge.get("description"), "edge description", 220),
             "edge_id": f"applied:{source}__{_slug(label)}__{target}",
             "relation": _slug(label),
         }
@@ -363,7 +367,7 @@ def _normalise_sequence(raw_sequence: Any, id_map: dict[str, str]) -> list[dict[
         sequence.append({
             "step": index,
             "nodes": node_ids,
-            "description": _required_text(raw_step.get("description"), "sequence description", 260),
+            "description": _required_text(raw_step.get("description"), "sequence description", 200),
         })
     return sequence
 
@@ -396,7 +400,14 @@ def _required_text(value: Any, field: str, max_length: int) -> str:
     text = " ".join(str(value or "").split())
     if not text:
         raise ValueError(f"{field} cannot be empty")
-    return text[:max_length].rstrip()
+    if len(text) <= max_length:
+        return text
+    sentence_end = max(text.rfind(mark, 0, max_length + 1) for mark in (".", "!", "?"))
+    if sentence_end >= max_length // 2:
+        return text[: sentence_end + 1]
+    word_end = text.rfind(" ", 0, max_length)
+    cutoff = word_end if word_end >= max_length // 2 else max_length - 1
+    return f"{text[:cutoff].rstrip(' ,;:-')}…"
 
 
 def _slug(value: str) -> str:

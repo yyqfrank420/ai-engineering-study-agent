@@ -1,10 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // File: frontend/src/components/GraphCanvas/D3Graph.tsx
-// Purpose: Architecture diagram rendered with a STATIC left-to-right column
-//          layout (no force simulation). Follows AWS architecture diagram
-//          conventions: strict left→right data flow, numbered steps on edges,
-//          forward edges as straight horizontal lines, return/back edges as
-//          cubic-bezier arcs routing above the diagram.
+// Purpose: Architecture diagram rendered with a STATIC directional layout
+//          (no force simulation). Shallow graphs flow left-to-right; deep
+//          graphs flow top-to-bottom so their labels remain readable.
 // Language: TypeScript / React / D3 v7
 // Connects to: types/index.ts, hooks/useGraph.ts
 // ─────────────────────────────────────────────────────────────────────────────
@@ -14,12 +12,19 @@ import * as d3 from 'd3';
 import type { GraphData, GraphEdge, GraphGroup, GraphNode, GraphViewState } from '../../types';
 import { graphStructureKey } from '../../utils/graphStructureKey';
 import { TYPE_STYLE, FALLBACK_STYLE } from '../../utils/graphColors';
+import {
+  filterRenderableEdges,
+  GRAPH_LAYOUT_VERSION,
+  H_PAD,
+  MIN_COL_W,
+  NODE_H,
+  NODE_RX,
+  NODE_W,
+  selectGraphOrientation,
+  V_PAD,
+  wrapNodeLabel,
+} from './graphLayout';
 
-// ── Node dimensions ─────────────────────────────────────────────────────────
-// NODE_W is wide enough to show labels up to ~24 chars without truncation.
-const NODE_W  = 186;
-const NODE_H  = 56;
-const NODE_RX = 6;
 const EDGE_LABEL_MAX_CHARS = 18;
 
 // Color palette imported from ../../utils/graphColors (TYPE_STYLE, FALLBACK_STYLE)
@@ -209,13 +214,7 @@ export function D3Graph({
     const height = svgRef.current.clientHeight || 500;
 
     // ── Layout constants ──────────────────────────────────────────────────────
-    const H_PAD = 44;   // horizontal margin (left/right of first/last column)
-    const V_PAD = 72;   // vertical margin (top/bottom of canvas)
-    // Minimum column width: node width + comfortable horizontal gap
-    const MIN_COL_W = NODE_W + 84;
-    // Keep feedback arcs inside the initial viewport so the closed loop is
-    // visible to a newcomer and to the screenshot quality gate.
-    const RETURN_ARC_Y = 18;
+    const RETURN_ARC_OFFSET = 18;
 
     // ── Arrowhead markers ─────────────────────────────────────────────────────
     const defs = svg.append('defs');
@@ -243,6 +242,7 @@ export function D3Graph({
     const g = svg.append('g');
     const emitViewState = (nodesToPersist: RenderNode[], transform: d3.ZoomTransform) => {
       onViewStateChangeRef.current?.({
+        layoutVersion: GRAPH_LAYOUT_VERSION,
         nodePositions: Object.fromEntries(
           nodesToPersist.map((node) => [
             node.id,
@@ -278,6 +278,10 @@ export function D3Graph({
     // ── Assign topological columns ────────────────────────────────────────────
     const colMap  = assignColumns(nodes.map(n => n.id), renderGraphData.edges);
     const numCols = Math.max(1, ...colMap.values()) + 1;
+    const orientation = selectGraphOrientation(width, numCols);
+    const restoreViewState = renderInitialViewState?.layoutVersion === GRAPH_LAYOUT_VERSION
+      ? renderInitialViewState
+      : undefined;
     const colWidth = Math.max(MIN_COL_W, (width - 2 * H_PAD) / numCols);
 
     // Group nodes by column, then assign fixed (x, y) positions
@@ -368,33 +372,50 @@ export function D3Graph({
     const canvasMainH    = height - 2 * V_PAD - BOTTOM_BAND_H;
     const effectiveMainH = Math.max(canvasMainH, maxMainInCol * MIN_ROW_H);
 
-    for (const [c, bucket] of colBuckets) {
-      const x = H_PAD + (c + 0.5) * colWidth;
-      const mainNodes   = bucket.filter((n: RenderNode) => n.lane !== 'bottom');
-      const bottomNodes = bucket.filter((n: RenderNode) => n.lane === 'bottom');
+    const maxNodesInLevel = Math.max(1, ...Array.from(colBuckets.values()).map(bucket => bucket.length));
+    const LEVEL_H = NODE_H + 48;
+    const verticalLayoutW = Math.max(width, maxNodesInLevel * MIN_COL_W + 2 * H_PAD);
+    const verticalRowW = (verticalLayoutW - 2 * H_PAD) / maxNodesInLevel;
 
-      mainNodes.forEach((n: RenderNode, i: number) => {
-        n.x = x;
-        n.y = V_PAD + (effectiveMainH / Math.max(mainNodes.length, 1)) * (i + 0.5);
+    for (const [c, bucket] of colBuckets) {
+      if (orientation === 'vertical') {
+        const rowOffset = (maxNodesInLevel - bucket.length) / 2;
+        bucket.forEach((node: RenderNode, index: number) => {
+          node.x = H_PAD + (rowOffset + index + 0.5) * verticalRowW;
+          node.y = V_PAD + (c + 0.5) * LEVEL_H;
+        });
+        continue;
+      }
+
+      const x = H_PAD + (c + 0.5) * colWidth;
+      const mainNodes = bucket.filter((node: RenderNode) => node.lane !== 'bottom');
+      const bottomNodes = bucket.filter((node: RenderNode) => node.lane === 'bottom');
+
+      mainNodes.forEach((node: RenderNode, index: number) => {
+        node.x = x;
+        node.y = V_PAD + (effectiveMainH / Math.max(mainNodes.length, 1)) * (index + 0.5);
       });
 
-      // Bottom-lane nodes sit in the band below the main flow
-      bottomNodes.forEach((n: RenderNode, i: number) => {
-        n.x = x;
-        n.y = V_PAD + effectiveMainH + (BOTTOM_BAND_H / Math.max(bottomNodes.length, 1)) * (i + 0.5);
+      bottomNodes.forEach((node: RenderNode, index: number) => {
+        node.x = x;
+        node.y = V_PAD + effectiveMainH + (BOTTOM_BAND_H / Math.max(bottomNodes.length, 1)) * (index + 0.5);
       });
     }
 
     for (const node of nodes) {
-      const persistedPosition = renderInitialViewState?.nodePositions[node.id];
+      const persistedPosition = restoreViewState?.nodePositions[node.id];
       if (!persistedPosition) continue;
       node.x = persistedPosition.x;
       node.y = persistedPosition.y;
     }
 
     // Total layout dimensions (used for auto-fit zoom below)
-    const layoutW = numCols * colWidth + 2 * H_PAD;
-    const layoutH = V_PAD + effectiveMainH + BOTTOM_BAND_H + V_PAD;
+    const layoutW = orientation === 'vertical'
+      ? verticalLayoutW
+      : numCols * colWidth + 2 * H_PAD;
+    const layoutH = orientation === 'vertical'
+      ? 2 * V_PAD + numCols * LEVEL_H
+      : V_PAD + effectiveMainH + BOTTOM_BAND_H + V_PAD;
 
     // ── Resolve edges to node object references ───────────────────────────────
     // Also attach the sequence step number for each edge so we can badge it.
@@ -409,19 +430,16 @@ export function D3Graph({
         }
       }
     }
-    // Build all links, then drop backward non-loop edges.
-    // Backward arcs (target.x ≤ source.x) arc above the diagram and create clutter.
-    // Only edges with type:"loop" are allowed to flow right-to-left; they are hidden
-    // by default and revealed on node hover. This also silently removes any model-
-    // generated return arcs that slip through despite the prompt constraint.
-    const links = renderGraphData.edges.map(e => {
+    // Preserve every declared edge with valid endpoints. Backward links are
+    // routed around the diagram; silently dropping them makes the picture lie.
+    const nodeIds = new Set(nodes.map(node => node.id));
+    const links = filterRenderableEdges(renderGraphData.edges, nodeIds).map(e => {
       let stepNum: number | null = null;
       for (const step of sequence) {
         if ((step.nodes ?? []).includes(e.target)) { stepNum = step.step; break; }
       }
-      const src = nodeById[e.source];
-      const tgt = nodeById[e.target];
-      if (!src || !tgt) return null;
+      const src = nodeById[e.source]!;
+      const tgt = nodeById[e.target]!;
       return {
         source:      src,
         target:      tgt,
@@ -432,9 +450,7 @@ export function D3Graph({
         stepNum,
         edgeType:    (e.type ?? 'normal') as 'normal' | 'loop',
       };
-    }).filter((link): link is RenderLink => (
-      link !== null && (link.edgeType === 'loop' || link.target.x > link.source.x + 4)
-    ));
+    });
 
     // Pre-build lookup: source node id → indices of its outgoing loop edges.
     // Used by node hover to reveal/hide the right edges instantly.
@@ -454,34 +470,51 @@ export function D3Graph({
     //   exits the TOP border of source, enters the TOP border of target.
     //   The path arcs above the canvas, keeping the forward edges clean.
 
-    const isForward = (d: RenderLink): boolean => d.target.x > d.source.x + 4;
+    const isForward = (d: RenderLink): boolean => orientation === 'vertical'
+      ? d.target.y > d.source.y + 4
+      : d.target.x > d.source.x + 4;
 
     // Hinge point X
-    const hx1 = (d: RenderLink): number => isForward(d) ? d.source.x + NODE_W / 2 : d.source.x;
-    const hy1 = (d: RenderLink): number => isForward(d) ? d.source.y              : d.source.y - NODE_H / 2;
-    const hx2 = (d: RenderLink): number => isForward(d) ? d.target.x - NODE_W / 2 : d.target.x;
-    const hy2 = (d: RenderLink): number => isForward(d) ? d.target.y              : d.target.y - NODE_H / 2;
+    const hx1 = (d: RenderLink): number => {
+      if (orientation === 'vertical') return isForward(d) ? d.source.x : d.source.x - NODE_W / 2;
+      return isForward(d) ? d.source.x + NODE_W / 2 : d.source.x;
+    };
+    const hy1 = (d: RenderLink): number => {
+      if (orientation === 'vertical') return isForward(d) ? d.source.y + NODE_H / 2 : d.source.y;
+      return isForward(d) ? d.source.y : d.source.y - NODE_H / 2;
+    };
+    const hx2 = (d: RenderLink): number => {
+      if (orientation === 'vertical') return isForward(d) ? d.target.x : d.target.x - NODE_W / 2;
+      return isForward(d) ? d.target.x - NODE_W / 2 : d.target.x;
+    };
+    const hy2 = (d: RenderLink): number => {
+      if (orientation === 'vertical') return isForward(d) ? d.target.y - NODE_H / 2 : d.target.y;
+      return isForward(d) ? d.target.y : d.target.y - NODE_H / 2;
+    };
 
     // SVG path string for an edge
     const pathD = (d: RenderLink): string => {
       const x1 = hx1(d), y1 = hy1(d), x2 = hx2(d), y2 = hy2(d);
       if (isForward(d)) {
-        // Straight horizontal line (classic AWS arrow)
         return `M${x1},${y1} L${x2},${y2}`;
       }
-      // Cubic bezier: exit top of source, arc above canvas, enter top of target.
-      // Control points sit at the RETURN_ARC_Y level, directly above entry/exit X.
-      // This creates a smooth U-arc that clears all nodes and group boxes.
-      return `M${x1},${y1} C${x1},${RETURN_ARC_Y} ${x2},${RETURN_ARC_Y} ${x2},${y2}`;
+      if (orientation === 'vertical') {
+        return `M${x1},${y1} C${RETURN_ARC_OFFSET},${y1} ${RETURN_ARC_OFFSET},${y2} ${x2},${y2}`;
+      }
+      return `M${x1},${y1} C${x1},${RETURN_ARC_OFFSET} ${x2},${RETURN_ARC_OFFSET} ${x2},${y2}`;
     };
 
     // Midpoint of edge path (used to place labels and step badges)
-    const midX = (d: RenderLink): number => (hx1(d) + hx2(d)) / 2;
+    const midX = (d: RenderLink): number => {
+      if (!isForward(d) && orientation === 'vertical') {
+        return (hx1(d) + hx2(d) + 6 * RETURN_ARC_OFFSET) / 8;
+      }
+      return (hx1(d) + hx2(d)) / 2;
+    };
     const midY = (d: RenderLink): number => {
       if (isForward(d)) return (hy1(d) + hy2(d)) / 2;
-      // For the cubic bezier arc, t=0.5 midpoint is above the canvas
-      // By(0.5) = (y1 + 3*cpY + 3*cpY + y2) / 8  where cpY = RETURN_ARC_Y
-      return (hy1(d) + hy2(d) + 6 * RETURN_ARC_Y) / 8;
+      if (orientation === 'vertical') return (hy1(d) + hy2(d)) / 2;
+      return (hy1(d) + hy2(d) + 6 * RETURN_ARC_OFFSET) / 8;
     };
 
     // ── Entry / exit detection ────────────────────────────────────────────────
@@ -704,26 +737,38 @@ export function D3Graph({
       .attr('fill', (d: RenderNode) => d.tier === 'public' ? '#fbbf24' : '#6e7681')
       .style('pointer-events', 'none');
 
-    // Row 2 — node label (centered, white, main title)
-    // Max 24 chars — agent is constrained to ≤20 chars; this is a safety truncation only.
-    nodeSel.append('text')
-      .text((d: RenderNode) => d.label.length > 24 ? d.label.slice(0, 23) + '…' : d.label)
+    // Row 2 — node label (centered, white, main title). Long domain labels
+    // wrap instead of losing their distinguishing words to truncation.
+    const nodeTitles = nodeSel.append('text')
+      .attr('class', 'node-title')
       .attr('text-anchor', 'middle').attr('dominant-baseline', 'middle')
-      .attr('y', 1)
       .attr('font-size', '0.76rem').attr('font-weight', 500)
       .attr('fill', '#e6edf3')
       .style('pointer-events', 'none');
+
+    nodeTitles.each(function(d: RenderNode) {
+      const lines = wrapNodeLabel(d.label);
+      const startY = lines.length === 1 ? 2 : -5;
+      d3.select(this).selectAll('tspan')
+        .data(lines)
+        .enter()
+        .append('tspan')
+        .attr('x', 0)
+        .attr('y', (_line: string, index: number) => startY + index * 13)
+        .text((line: string) => line);
+    });
 
     // Row 3 — technology subtitle (centered, muted)
     // Max 28 chars — agent is constrained to ≤25 chars; this is a safety truncation only.
     nodeSel.filter((d: RenderNode) => Boolean(d.technology))
       .append('text')
+      .attr('class', 'node-technology')
       .text((d: RenderNode) => {
         const t = d.technology || '';
         return t.length > 28 ? t.slice(0, 27) + '…' : t;
       })
       .attr('text-anchor', 'middle').attr('dominant-baseline', 'middle')
-      .attr('y', 15)
+      .attr('y', 24)
       .attr('font-size', '0.52rem')
       .attr('fill', '#6e7681')
       .style('pointer-events', 'none');
@@ -888,10 +933,10 @@ export function D3Graph({
     // negative, sliding the entire graph behind the left edge of the container.
     const fitTx = Math.max(FIT_PADDING, (width  - layoutW * fitScale) / 2);
     const fitTy = Math.max(FIT_PADDING, (height - layoutH * fitScale) / 2);
-    const initialTransform = renderInitialViewState?.viewport
+    const initialTransform = restoreViewState?.viewport
       ? d3.zoomIdentity
-          .translate(renderInitialViewState.viewport.x, renderInitialViewState.viewport.y)
-          .scale(renderInitialViewState.viewport.k)
+          .translate(restoreViewState.viewport.x, restoreViewState.viewport.y)
+          .scale(restoreViewState.viewport.k)
       : d3.zoomIdentity.translate(fitTx, fitTy).scale(fitScale);
     svg.call(zoomBehavior.transform, initialTransform);
 
