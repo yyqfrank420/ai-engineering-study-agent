@@ -71,6 +71,12 @@ async def research_worker_node(state: AgentState) -> AgentState:
         "status": "Web evidence ready — citable sources found.",
         "sources": _source_urls(context),
     })
+    if _may_emit_eval_evidence(state):
+        await send({
+            "type": "research_evidence",
+            "query": topic,
+            "results": context.splitlines(),
+        })
     return {**state, "research_context": context, "research_status": "ready"}
 
 
@@ -80,6 +86,12 @@ async def _send_unavailable(send) -> None:
         "worker": "research",
         "status": "Web research unavailable — continuing with book evidence only.",
     })
+
+
+def _may_emit_eval_evidence(state: AgentState) -> bool:
+    """Keep external snippets inside the isolated, allowlisted staging evaluator."""
+    email = str(state.get("user_email") or "").strip().lower()
+    return settings.db_schema == "staging" and email in settings.internal_test_email_allowlist
 
 
 def _normalise_topic(message: str) -> str:

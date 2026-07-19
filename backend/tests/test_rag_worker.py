@@ -57,6 +57,61 @@ async def test_rag_worker_handles_missing_search_tool_as_weak_retrieval():
     assert "closest book patterns" in result["retrieval_notice"]
 
 
+@pytest.mark.asyncio
+async def test_rag_worker_emits_bounded_source_evidence_only_for_staging_eval_identity(monkeypatch):
+    monkeypatch.setattr(settings, "db_schema", "staging")
+    monkeypatch.setattr(settings, "internal_test_email_allowlist_raw", "eval@example.com")
+    events = []
+    chunks = [{
+        "text": "source text " * 1_000,
+        "book": "AI Engineering",
+        "chapter": 4,
+        "chapter_title": "Evaluate AI Systems",
+        "section": "Design Your Evaluation Pipeline",
+        "page_number": 224,
+        "parent_chunk_id": "ai-engineering:4:224:4",
+    }]
+
+    async def send(event):
+        events.append(event)
+
+    await rag_worker_node(
+        {
+            "user_message": "How should evaluation data grow?",
+            "user_email": "eval@example.com",
+            "send": send,
+        },
+        [_Tool(chunks)],
+    )
+
+    evidence = events[1]
+    assert evidence["type"] == "retrieval_evidence"
+    assert evidence["query"] == "How should evaluation data grow?"
+    assert evidence["chunks"][0]["page_number"] == 224
+    assert len(evidence["chunks"][0]["text"]) == 4_000
+
+
+@pytest.mark.asyncio
+async def test_rag_worker_does_not_emit_source_evidence_outside_staging(monkeypatch):
+    monkeypatch.setattr(settings, "db_schema", "public")
+    monkeypatch.setattr(settings, "internal_test_email_allowlist_raw", "eval@example.com")
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    await rag_worker_node(
+        {
+            "user_message": "How should evaluation data grow?",
+            "user_email": "eval@example.com",
+            "send": send,
+        },
+        [_Tool([{"text": "source"}])],
+    )
+
+    assert [event["type"] for event in events] == ["worker_status"]
+
+
 def test_retrieval_relevance_flags_indirect_single_hit():
     relevance, notice = _assess_retrieval_relevance(
         "How does this apply to sales operations?",

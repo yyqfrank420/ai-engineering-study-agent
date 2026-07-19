@@ -278,6 +278,8 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
 
       case 'steer_applied':
       case 'stopped':
+      case 'retrieval_evidence':
+      case 'research_evidence':
         break;
 
       case 'done':

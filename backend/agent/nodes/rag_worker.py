@@ -22,6 +22,9 @@ _STOP_WORDS = {
     "this", "to", "what", "when", "where", "which", "why", "with", "you", "your",
 }
 
+_EVAL_EVIDENCE_MAX_CHUNKS = 8
+_EVAL_EVIDENCE_MAX_TEXT_CHARS = 4_000
+
 
 async def rag_worker_node(state: AgentState, tools: list) -> AgentState:
     """
@@ -42,6 +45,13 @@ async def rag_worker_node(state: AgentState, tools: list) -> AgentState:
         result_json = search_tool.invoke({"query": state["user_message"], "k": settings.rag_top_k})
         rag_chunks = json.loads(result_json)
 
+    if _may_emit_eval_evidence(state):
+        await send({
+            "type": "retrieval_evidence",
+            "query": str(state["user_message"])[: settings.max_message_bytes],
+            "chunks": _bounded_eval_evidence(rag_chunks),
+        })
+
     relevance, notice = _assess_retrieval_relevance(state["user_message"], rag_chunks)
     return {
         **state,
@@ -49,6 +59,27 @@ async def rag_worker_node(state: AgentState, tools: list) -> AgentState:
         "retrieval_relevance": relevance,
         "retrieval_notice": notice,
     }
+
+
+def _may_emit_eval_evidence(state: AgentState) -> bool:
+    """Keep source passages inside the isolated, allowlisted staging evaluator."""
+    email = str(state.get("user_email") or "").strip().lower()
+    return settings.db_schema == "staging" and email in settings.internal_test_email_allowlist
+
+
+def _bounded_eval_evidence(rag_chunks: list[dict]) -> list[dict]:
+    evidence: list[dict] = []
+    for chunk in rag_chunks[:_EVAL_EVIDENCE_MAX_CHUNKS]:
+        evidence.append({
+            "book": str(chunk.get("book") or "")[:200],
+            "chapter": chunk.get("chapter"),
+            "chapter_title": str(chunk.get("chapter_title") or "")[:300],
+            "section": str(chunk.get("section") or "")[:300],
+            "page_number": chunk.get("page_number"),
+            "parent_chunk_id": str(chunk.get("parent_chunk_id") or "")[:200],
+            "text": str(chunk.get("text") or "")[:_EVAL_EVIDENCE_MAX_TEXT_CHARS],
+        })
+    return evidence
 
 
 def _assess_retrieval_relevance(query: str, rag_chunks: list[dict]) -> tuple[str, str]:

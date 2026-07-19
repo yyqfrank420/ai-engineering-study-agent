@@ -226,6 +226,26 @@ export interface RetrievalNoticeEvent {
   message: string;
 }
 
+export interface RetrievalEvidenceEvent {
+  type: 'retrieval_evidence';
+  query: string;
+  chunks: Array<{
+    book: string;
+    chapter: number | null;
+    chapter_title: string;
+    section: string;
+    page_number: number | null;
+    parent_chunk_id: string;
+    text: string;
+  }>;
+}
+
+export interface ResearchEvidenceEvent {
+  type: 'research_evidence';
+  query: string;
+  results: string[];
+}
+
 export interface GraphNoticeEvent {
   type: 'graph_notice';
   message: string;
@@ -275,6 +295,8 @@ export type ServerEvent =
   | NodeDetailEvent
   | SuggestedQuestionsEvent
   | RetrievalNoticeEvent
+  | RetrievalEvidenceEvent
+  | ResearchEvidenceEvent
   | GraphNoticeEvent
   | DoneEvent
   | ErrorEvent

@@ -41,6 +41,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", default="artifacts/live-eval/live-results.json")
     parser.add_argument("--require-approved-corpus", action="store_true")
     parser.add_argument(
+        "--case",
+        action="append",
+        default=[],
+        help="Expected explicit corpus case in the diagnostic suite (repeatable)",
+    )
+    parser.add_argument(
         "--capture-replay",
         action="store_true",
         help="Rejudge saved browser evidence without charging application calls again",
@@ -114,8 +120,47 @@ def _judge_payload(result: dict[str, Any]) -> dict[str, Any]:
     turn_answers = [answer for answer in turn_answers if answer]
     per_turn_limit = max(1, 40_000 // len(turn_answers)) if turn_answers else 0
 
+    retrieval_chunks: list[dict[str, Any]] = []
+    research_results: list[dict[str, str]] = []
+    for event in result.get("events") or []:
+        if event.get("type") == "research_evidence":
+            query = str(event.get("query") or "")[:500]
+            event_results = event.get("results")
+            if isinstance(event_results, list):
+                research_results.extend(
+                    {"query": query, "result": str(item)[:1_000]}
+                    for item in event_results[:6]
+                )
+            continue
+        if event.get("type") != "retrieval_evidence":
+            continue
+        query = str(event.get("query") or "")[:500]
+        for chunk in event.get("chunks") or []:
+            if not isinstance(chunk, dict):
+                continue
+            retrieval_chunks.append({
+                "query": query,
+                **{
+                    key: chunk.get(key)
+                    for key in (
+                        "book",
+                        "chapter",
+                        "chapter_title",
+                        "section",
+                        "page_number",
+                        "parent_chunk_id",
+                    )
+                },
+                "text": str(chunk.get("text") or ""),
+            })
+    retrieval_text_limit = max(500, 20_000 // len(retrieval_chunks)) if retrieval_chunks else 0
+    for chunk in retrieval_chunks:
+        chunk["text"] = chunk["text"][:retrieval_text_limit]
+
     payload = {
         "graph": compact_graph,
+        "retrieval_evidence": retrieval_chunks,
+        "research_evidence": research_results[:12],
         "events": [
             event
             for event in result.get("events") or []
@@ -182,7 +227,16 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     corpus = load_corpus(require_approved=args.require_approved_corpus)
     capture = _load_capture(args)
     expected_ids = manifest["live"]["suites"].get(args.suite)
-    if expected_ids is None and args.suite != "nightly":
+    if args.suite == "diagnostic":
+        expected_ids = args.case
+        if not expected_ids or len(expected_ids) > 8 or len(expected_ids) != len(set(expected_ids)):
+            raise RuntimeError("diagnostic live suite requires one to eight unique --case values")
+        unknown = sorted(set(expected_ids) - set(corpus.by_id))
+        if unknown:
+            raise RuntimeError("unknown diagnostic live cases: " + ", ".join(unknown))
+    elif args.case:
+        raise RuntimeError("--case is accepted only with --suite diagnostic")
+    elif expected_ids is None and args.suite != "nightly":
         raise RuntimeError(f"unknown live suite: {args.suite}")
     actual_ids = [result["id"] for result in capture["results"]]
     if expected_ids is not None and actual_ids != expected_ids:
@@ -190,7 +244,7 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     if args.suite == "pr" and len(actual_ids) > limits["pr_cases"]:
         raise RuntimeError("PR case budget exceeded")
 
-    is_pr_budget = args.suite in {"pr", "smoke"}
+    is_pr_budget = args.suite in {"pr", "smoke", "diagnostic"}
     budget = EvaluationBudget(
         application_calls=limits["application_calls"] if is_pr_budget else 150,
         judge_calls=limits["judge_calls"] if is_pr_budget else 40,
