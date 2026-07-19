@@ -1,8 +1,15 @@
 import pytest
 
 from eval.calibration import calculate_calibration
-from eval.judge_adapter import judge_with_transport_retry
-from eval.live_runner import _write_outputs
+from eval.judge_adapter import (
+    JUDGE_PROMPT_RELEASE,
+    _RawJudgment,
+    _artifact_sources,
+    _judge_prompt,
+    _validate_evidence,
+    judge_with_transport_retry,
+)
+from eval.live_runner import _judge_payload, _write_outputs
 from eval.quality_corpus import load_corpus
 from eval.semantic_gate import (
     DimensionJudgment,
@@ -80,6 +87,87 @@ def test_budget_exhaustion_is_explicit():
         budget.record_judge_call()
 
 
+def test_judge_evidence_uses_typed_bounded_artifact_sources():
+    evidence = {
+        "answer": 'The service says "ready" before promotion.',
+        "graph": {"nodes": [{"id": "candidate"}]},
+        "events": [{"type": "done"}],
+    }
+    sources = _artifact_sources(evidence)
+    raw = _RawJudgment.model_validate({
+        "dimensions": [{
+            "dimension": "correctness",
+            "grade": "pass",
+            "evidence": [{"source_id": "answer-1"}],
+            "rationale": "The answer states the promotion guard.",
+        }],
+    })
+
+    _validate_evidence(raw, sources)
+
+    assert sources["answer-1"] == 'The service says "ready" before promotion.'
+    assert sources["graph-node-1-1"] == '{"id": "candidate"}'
+    assert sources["event-1-1"] == '{"type": "done"}'
+    assert all(len(source) <= 500 for source in sources.values())
+
+    long_token_sources = _artifact_sources({"answer": "x" * 1001})
+    assert [len(source) for source in long_token_sources.values()] == [500, 500, 1]
+
+
+def test_judge_evidence_rejects_an_unknown_source():
+    sources = _artifact_sources({"answer": "answer text", "events": [{"status": "ready"}]})
+    raw = _RawJudgment.model_validate({
+        "dimensions": [{
+            "dimension": "correctness",
+            "grade": "pass",
+            "evidence": [{"source_id": "missing-source"}],
+            "rationale": "Invalid provenance.",
+        }],
+    })
+
+    with pytest.raises(RuntimeError, match="unknown artifact source"):
+        _validate_evidence(raw, sources)
+
+
+def test_judge_prompt_excludes_human_approval_labels():
+    corpus = load_corpus()
+    case = corpus.by_id["rag-grounding"].model_copy(deep=True)
+    case.approval.reviewed_grades = {"correctness": "fail"}
+    case.approval.approved_exemplar = "HUMAN_ONLY_EXEMPLAR"
+
+    _system, user = _judge_prompt(corpus, case, {"answer": "assistant artifact"})
+
+    assert "HUMAN_ONLY_EXEMPLAR" not in user
+    assert "reviewed_grades" not in user
+    assert '"artifact_sources"' in user
+
+
+def test_judge_payload_removes_duplicate_graph_events_and_internal_graph_metadata():
+    payload = _judge_payload({
+        "answer": "answer",
+        "graph": {
+            "title": "Candidate",
+            "nodes": [{
+                "id": "service",
+                "label": "Service",
+                "description": "Handles requests.",
+                "evidence_chunk_ids": ["private-internal-id"],
+            }],
+            "edges": [],
+        },
+        "events": [
+            {"type": "graph_data", "data": {"duplicate": True}},
+            {"type": "worker_status", "worker": "graph", "status": "ready"},
+        ],
+    })
+
+    assert payload["graph"]["title"] == "Candidate"
+    assert "evidence_chunk_ids" not in payload["graph"]["nodes"][0]
+    assert payload["events"] == [
+        {"type": "worker_status", "worker": "graph", "status": "ready"}
+    ]
+
+
 @pytest.mark.asyncio
 async def test_judge_transport_retry_counts_every_provider_attempt(monkeypatch):
     expected = result(("correctness", "pass", False))
@@ -140,6 +228,7 @@ def test_calibration_report_uses_every_reviewed_case_and_dimension():
     report = calculate_calibration(corpus, {"evaluations": evaluations})
 
     assert report["passed"] is True
+    assert report["judge_release"] == JUDGE_PROMPT_RELEASE
     assert report["agreement"] == 1
     assert report["labels"] == label_count
 

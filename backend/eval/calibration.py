@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from eval.judge_adapter import JUDGE_PROMPT_RELEASE
 from eval.quality_corpus import EvaluationCorpus, load_corpus
 from eval.semantic_gate import calibration_passes
 
@@ -40,7 +41,7 @@ def calculate_calibration(
     passed, agreement, critical_false_passes = calibration_passes(expected, actual)
     return {
         "format_version": 1,
-        "judge_release": "semantic-rubric-judge-v1",
+        "judge_release": JUDGE_PROMPT_RELEASE,
         "corpus_version": corpus.corpus_version,
         "evaluated_at": datetime.now(UTC).isoformat(),
         "labels": len(expected),
