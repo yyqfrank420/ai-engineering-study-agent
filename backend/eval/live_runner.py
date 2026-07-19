@@ -10,7 +10,12 @@ from pathlib import Path
 import re
 from typing import Any
 
-from eval.judge_adapter import SemanticJudge, estimated_judge_cost_usd, judge_with_transport_retry
+from eval.judge_adapter import (
+    JUDGE_PROMPT_RELEASE,
+    SemanticJudge,
+    estimated_judge_cost_usd,
+    judge_with_transport_retry,
+)
 from eval.quality_corpus import corpus_sha256, load_corpus
 from eval.semantic_gate import EvaluationBudget, GateDecision, decide_semantic_gate
 
@@ -34,6 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", help="Browser capture JSON from eval.browser_runner")
     parser.add_argument("--output", default="artifacts/live-eval/live-results.json")
     parser.add_argument("--require-approved-corpus", action="store_true")
+    parser.add_argument(
+        "--capture-replay",
+        action="store_true",
+        help="Rejudge saved browser evidence without charging application calls again",
+    )
     return parser
 
 
@@ -57,9 +67,44 @@ def _load_capture(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _judge_payload(result: dict[str, Any]) -> dict[str, Any]:
+    graph = result.get("graph")
+    compact_graph = None
+    if isinstance(graph, dict):
+        compact_graph = {
+            key: graph[key]
+            for key in (
+                "graph_type",
+                "title",
+                "design_origin",
+                "resolved_complexity",
+                "assumptions",
+                "groups",
+                "sequence",
+                "version",
+            )
+            if graph.get(key) is not None
+        }
+        compact_graph["nodes"] = [
+            {
+                key: node[key]
+                for key in ("id", "label", "type", "technology", "description", "tier", "layer")
+                if node.get(key) is not None
+            }
+            for node in graph.get("nodes") or []
+            if isinstance(node, dict)
+        ]
+        compact_graph["edges"] = [
+            {
+                key: edge[key]
+                for key in ("source", "target", "label", "technology")
+                if edge.get(key) is not None
+            }
+            for edge in graph.get("edges") or []
+            if isinstance(edge, dict)
+        ]
     return {
         "answer": str(result.get("answer") or "")[:40_000],
-        "graph": result.get("graph"),
+        "graph": compact_graph,
         "events": [
             event
             for event in result.get("events") or []
@@ -67,7 +112,6 @@ def _judge_payload(result: dict[str, Any]) -> dict[str, Any]:
                 "worker_status",
                 "retrieval_notice",
                 "graph_notice",
-                "graph_data",
                 "provider_switch",
                 "done",
                 "error",
@@ -80,7 +124,7 @@ def _result_to_json(result) -> dict[str, Any]:
     return {
         "provider": result.provider,
         "model": result.model,
-        "prompt_release": "semantic-rubric-judge-v1",
+        "prompt_release": JUDGE_PROMPT_RELEASE,
         "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,
         "estimated_cost_usd": estimated_judge_cost_usd(result),
@@ -197,9 +241,11 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
 
     statuses = {item["decision"] for item in evaluations}
     exit_code = 1 if "fail" in statuses else 2 if "infrastructure" in statuses else 3 if "manual_review" in statuses else 0
+    source_application_cost = _application_cost(app_telemetry)
     report = {
         "format_version": 1,
         "kind": "live_gate",
+        "execution_mode": "semantic_replay" if args.capture_replay else "staging_gate",
         "suite": args.suite,
         "target": args.target,
         "corpus_version": corpus.corpus_version,
@@ -218,7 +264,8 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "estimated_cost": {
             "currency": "USD",
             "price_release": "2026-07-18",
-            "application_usd": _application_cost(app_telemetry),
+            "application_usd": 0 if args.capture_replay else source_application_cost,
+            "source_application_usd": source_application_cost,
             "judge_usd": round(
                 sum(
                     judgment["estimated_cost_usd"]

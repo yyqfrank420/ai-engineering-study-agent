@@ -265,6 +265,8 @@ def _dispatch_eval(kind: str, args: argparse.Namespace) -> None:
         argv.extend(["--input", args.input])
     if getattr(args, "require_approved_corpus", False):
         argv.append("--require-approved-corpus")
+    if getattr(args, "capture_replay", False):
+        argv.append("--capture-replay")
     # Module and argument structure are fixed; user values remain individual argv entries.
     subprocess.run(argv, cwd=ROOT, env=_command_environment(), check=True)  # nosec B603
 
@@ -331,6 +333,7 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "live":
             evaluation.add_argument("--input")
             evaluation.add_argument("--require-approved-corpus", action="store_true")
+            evaluation.add_argument("--capture-replay", action="store_true")
     override = subparsers.add_parser("override")
     override.add_argument("--run-id", required=True)
     override.add_argument("--commit-sha", required=True)

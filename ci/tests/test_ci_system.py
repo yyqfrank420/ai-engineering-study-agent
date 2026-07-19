@@ -251,6 +251,23 @@ def test_pending_corpus_has_a_trusted_full_suite_bootstrap_path():
     assert workflow.index('echo "REVISION_TAG=$tag"') < workflow.index("gcloud run deploy")
 
 
+def test_semantic_review_can_replay_authenticated_browser_evidence_without_app_calls():
+    workflow = (ROOT / ".github/workflows/semantic-review-replay.yml").read_text(encoding="utf-8")
+
+    assert "workflow_dispatch:" in workflow
+    assert "environment: staging-eval" in workflow
+    assert "actions: read" in workflow
+    assert "scheduled-eval-$SOURCE_RUN_ID" in workflow
+    assert "scheduled-eval-replay-$SOURCE_RUN_ID" in workflow
+    assert "source artifact commit mismatch" in workflow
+    assert "./scripts/ci live" in workflow
+    assert "./scripts/ci browser" not in workflow
+    assert "gcloud " not in workflow
+
+    scheduled = (ROOT / ".github/workflows/scheduled-eval.yml").read_text(encoding="utf-8")
+    assert "scheduled-eval-replay-${{ github.run_id }}" in scheduled
+
+
 def test_pending_corpus_pr_skips_expensive_live_work_successfully():
     workflow = (ROOT / ".github/workflows/live-eval.yml").read_text(encoding="utf-8")
 
