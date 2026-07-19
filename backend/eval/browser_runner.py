@@ -29,6 +29,10 @@ from eval.staging_runner import (
 ROOT = Path(__file__).resolve().parents[2]
 QUALITY_MANIFEST = ROOT / "ci" / "quality.json"
 EVAL_AUTH_STORAGE_KEY = "ai-engineering-eval-auth"
+_BOOK_CITATION = re.compile(
+    r"Chapter\s+(?P<chapter>\d+)\s*[,;:]?\s*(?:p(?:age)?\.?\s*)(?P<page>\d+)",
+    re.I,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -40,12 +44,32 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--internal-password", default=os.getenv("EVAL_INTERNAL_PASSWORD", ""))
     parser.add_argument("--output", default="artifacts/live-eval/browser-results.json")
     parser.add_argument("--headed", action="store_true")
+    parser.add_argument(
+        "--case",
+        action="append",
+        default=[],
+        help="Run an explicit corpus case in the diagnostic suite (repeatable, maximum eight)",
+    )
     return parser
 
 
-def _suite_case_ids(suite: str) -> list[str]:
+def _suite_case_ids(suite: str, selected_cases: list[str] | None = None) -> list[str]:
     manifest = json.loads(QUALITY_MANIFEST.read_text(encoding="utf-8"))
     suites = manifest["live"]["suites"]
+    selected = selected_cases or []
+    if suite == "diagnostic":
+        if not selected:
+            raise ValueError("diagnostic browser suite requires at least one --case")
+        if len(selected) > 8:
+            raise ValueError("diagnostic browser suite is limited to eight cases")
+        if len(selected) != len(set(selected)):
+            raise ValueError("diagnostic browser suite contains duplicate cases")
+        unknown = sorted(set(selected) - set(suites["full"]))
+        if unknown:
+            raise ValueError("unknown diagnostic browser cases: " + ", ".join(unknown))
+        return selected
+    if selected:
+        raise ValueError("--case is accepted only with --suite diagnostic")
     if suite == "nightly":
         full = suites["full"]
         day = datetime.now(UTC).timetuple().tm_yday
@@ -279,8 +303,26 @@ def _deterministic_failures(case: EvaluationCase, events: list[dict[str, Any]], 
                 failures.append("research completed without source provenance telemetry")
             elif not any(source in answer for source in supplied_sources):
                 failures.append("required web citation did not match supplied research evidence")
-        elif not re.search(r"(?:Chapter\s+\d+|https?://|\[[0-9]+\])", answer, re.I):
-            failures.append("required citation evidence was not visible in the answer")
+        else:
+            cited_book_refs = {
+                (int(match.group("chapter")), int(match.group("page")))
+                for match in _BOOK_CITATION.finditer(answer)
+            }
+            supplied_book_refs = {
+                (int(chunk["chapter"]), int(chunk["page_number"]))
+                for event in events
+                if event.get("type") == "retrieval_evidence"
+                for chunk in event.get("chunks") or []
+                if isinstance(chunk, dict)
+                and str(chunk.get("chapter") or "").isdigit()
+                and str(chunk.get("page_number") or "").isdigit()
+            }
+            if not cited_book_refs:
+                failures.append("required chapter-and-page citation was not visible in the answer")
+            elif not supplied_book_refs:
+                failures.append("book retrieval completed without source provenance telemetry")
+            elif not cited_book_refs.issubset(supplied_book_refs):
+                failures.append("book citation did not match supplied retrieval evidence")
     return failures
 
 
@@ -312,7 +354,7 @@ async def _delete_thread(backend_target: str, token: str, thread_id: str) -> Non
 
 async def run_browser(args: argparse.Namespace) -> dict[str, Any]:
     corpus = load_corpus()
-    case_ids = _suite_case_ids(args.suite)
+    case_ids = _suite_case_ids(args.suite, args.case)
     cases = [corpus.by_id[case_id] for case_id in case_ids]
     if args.suite == "pr" and len(cases) != 8:
         raise RuntimeError("the PR browser suite must contain exactly eight journeys")
@@ -327,7 +369,7 @@ async def run_browser(args: argparse.Namespace) -> dict[str, Any]:
     started = time.monotonic()
     started_at = datetime.now(UTC)
 
-    timeout_seconds = 900 if args.suite in {"pr", "smoke"} else 3600
+    timeout_seconds = 900 if args.suite in {"pr", "smoke", "diagnostic"} else 3600
     async with asyncio.timeout(timeout_seconds):
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=not args.headed)
@@ -544,10 +586,20 @@ def _write_html(path: Path, report: dict[str, Any]) -> None:
     for result in report["results"]:
         answer = html.escape(result["answer"][:4000])
         failures = html.escape("; ".join(result["deterministic_failures"]) or "none")
+        evidence = html.escape(json.dumps(
+            [
+                event
+                for event in result.get("events") or []
+                if event.get("type") in {"retrieval_evidence", "research_evidence"}
+            ],
+            indent=2,
+            ensure_ascii=False,
+        )[:20_000])
         rows.append(
             f"<article><h2>{html.escape(result['id'])} — {'PASS' if result['passed'] else 'FAIL'}</h2>"
             f"<p><b>Deterministic:</b> {failures}</p><img src='{html.escape(result['screenshot'])}' loading='lazy'>"
-            f"<details><summary>Answer</summary><pre>{answer}</pre></details></article>"
+            f"<details><summary>Answer</summary><pre>{answer}</pre></details>"
+            f"<details><summary>Retrieved evidence</summary><pre>{evidence}</pre></details></article>"
         )
     body = "".join(rows)
     path.write_text(

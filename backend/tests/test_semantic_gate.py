@@ -129,6 +129,31 @@ def test_judge_evidence_preserves_ordered_conversation_turns():
     }
 
 
+def test_judge_evidence_keeps_retrieval_text_and_provenance_separate():
+    sources = _artifact_sources({
+        "retrieval_evidence": [{
+            "query": "Why should eval data grow?",
+            "book": "AI Engineering",
+            "chapter": 8,
+            "page_number": 404,
+            "parent_chunk_id": "ai-engineering:8:404:0",
+            "text": "Evaluation examples can seed synthesized data.",
+        }],
+    })
+
+    assert sources["retrieval-1-text-1"] == "Evaluation examples can seed synthesized data."
+    assert '"page_number": 404' in sources["retrieval-1-metadata-1"]
+    assert "text" not in sources["retrieval-1-metadata-1"]
+
+    research_sources = _artifact_sources({
+        "research_evidence": [{
+            "query": "current agent practice",
+            "result": "Report — <https://example.com/report>: external snippet",
+        }],
+    })
+    assert "https://example.com/report" in research_sources["research-1-result-1"]
+
+
 def test_judge_schema_has_exact_dimension_keys():
     schema = _response_schema(
         ("turn-1-answer-1",),
@@ -220,6 +245,38 @@ def test_judge_payload_reconstructs_turns_and_discards_reset_drafts():
         {"turn": 2, "answer": "revised answer"},
     ]
     assert "answer" not in payload
+
+
+def test_judge_payload_bounds_and_preserves_retrieval_evidence():
+    payload = _judge_payload({
+        "answer": "Grounded answer (Chapter 8, p.404).",
+        "events": [
+            {
+                "type": "retrieval_evidence",
+                "query": "Why should eval data grow?",
+                "chunks": [{
+                    "book": "AI Engineering",
+                    "chapter": 8,
+                    "page_number": 404,
+                    "parent_chunk_id": "ai-engineering:8:404:0",
+                    "text": "x" * 25_000,
+                }],
+            },
+            {
+                "type": "research_evidence",
+                "query": "current practice",
+                "results": ["Report — <https://example.com/report>: current evidence"],
+            },
+        ],
+    })
+
+    assert payload["retrieval_evidence"][0]["page_number"] == 404
+    assert len(payload["retrieval_evidence"][0]["text"]) == 20_000
+    assert payload["research_evidence"] == [{
+        "query": "current practice",
+        "result": "Report — <https://example.com/report>: current evidence",
+    }]
+    assert payload["events"] == []
 
 
 @pytest.mark.asyncio

@@ -29,6 +29,21 @@ def test_empty_and_oversized_inputs_are_not_live_model_cases():
     assert all(len(prompt.encode("utf-8")) <= 12_000 for prompt in prompts)
 
 
+def test_diagnostic_browser_suite_accepts_only_bounded_corpus_case_selection():
+    from eval.browser_runner import _suite_case_ids
+
+    assert _suite_case_ids("diagnostic", ["citations", "rag-grounding"]) == [
+        "citations",
+        "rag-grounding",
+    ]
+    with pytest.raises(ValueError, match="at least one"):
+        _suite_case_ids("diagnostic", [])
+    with pytest.raises(ValueError, match="unknown diagnostic"):
+        _suite_case_ids("diagnostic", ["not-a-case"])
+    with pytest.raises(ValueError, match="only with --suite diagnostic"):
+        _suite_case_ids("full", ["citations"])
+
+
 def test_current_research_cases_require_verifiable_web_sources():
     corpus = load_corpus()
     research_cases = [case for case in corpus.cases if "web" in case.risk_tags]
@@ -97,6 +112,64 @@ def test_web_research_provider_failure_is_classified_as_infrastructure():
     failures = _deterministic_failures(case, events, rendered_nodes=1)
 
     assert "research infrastructure unavailable: no citable web sources" in failures
+
+
+def test_book_citations_must_match_retrieval_provenance():
+    from eval.browser_runner import _deterministic_failures
+
+    case = load_corpus().by_id["citations"]
+    base_events = [
+        {"type": "worker_status", "worker": "rag", "status": "ready"},
+        {"type": "done"},
+    ]
+    evidence = {
+        "type": "retrieval_evidence",
+        "query": "Why should eval data grow?",
+        "chunks": [
+            {"chapter": 4, "page_number": 224, "text": "rubrics are refined"},
+            {"chapter": 8, "page_number": 404, "text": "evaluation examples can seed data"},
+        ],
+    }
+    answer = {
+        "type": "response_delta",
+        "content": "Rubrics evolve (Chapter 4, p.224), and examples seed data (Chapter 8, p.404).",
+    }
+
+    matching = _deterministic_failures(case, [*base_events, evidence, answer], rendered_nodes=0)
+    missing = _deterministic_failures(case, [*base_events, answer], rendered_nodes=0)
+    unsupported = _deterministic_failures(
+        case,
+        [*base_events, evidence, {**answer, "content": "Unsupported (Chapter 9, p.999)."}],
+        rendered_nodes=0,
+    )
+
+    assert not any("citation" in failure or "provenance" in failure for failure in matching)
+    assert "book retrieval completed without source provenance telemetry" in missing
+    assert "book citation did not match supplied retrieval evidence" in unsupported
+
+
+def test_browser_review_includes_retrieved_evidence_for_human_review(tmp_path):
+    from eval.browser_runner import _write_html
+
+    output = tmp_path / "review.html"
+    _write_html(output, {
+        "corpus_version": "test-v1",
+        "results": [{
+            "id": "citations",
+            "passed": True,
+            "answer": "Grounded answer (Chapter 8, p.404).",
+            "deterministic_failures": [],
+            "screenshot": "screenshots/citations.png",
+            "events": [{
+                "type": "retrieval_evidence",
+                "chunks": [{"chapter": 8, "page_number": 404, "text": "source passage"}],
+            }],
+        }],
+    })
+
+    review = output.read_text(encoding="utf-8")
+    assert "Retrieved evidence" in review
+    assert "source passage" in review
 
 
 def test_pending_corpus_cannot_enable_the_blocking_judge():

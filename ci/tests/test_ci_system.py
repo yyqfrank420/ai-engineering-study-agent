@@ -233,7 +233,9 @@ def test_pending_corpus_has_a_trusted_full_suite_bootstrap_path():
     assert "corpus-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" in workflow
     assert 'if [ "$CORPUS_STATUS" = approved ]; then' in workflow
     assert "Approved corpus requires an existing exact-tree image approval." in workflow
-    assert "A pending corpus can be bootstrapped only by a manually dispatched full-suite run." in workflow
+    assert "A pending corpus can be bootstrapped only by a manually dispatched full or diagnostic run." in workflow
+    assert "Diagnostic suite requires one to eight unique case IDs." in workflow
+    assert 'for case_id in "${selected_cases[@]}"; do case_args+=(--case "$case_id"); done' in workflow
     assert 'gcloud artifacts docker tags delete "$IMAGE:$BOOTSTRAP_IMAGE_TAG"' in workflow
     assert 'EVAL_EMAIL="$email" python scripts/staging_database.py reset' in workflow
     assert "artifacts/live-eval/run-context.json" in workflow

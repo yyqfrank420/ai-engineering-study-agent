@@ -10,7 +10,12 @@ on:
         required: true
         default: nightly
         type: choice
-        options: [nightly, full]
+        options: [nightly, full, diagnostic]
+      case_ids:
+        description: Space-separated corpus case IDs (diagnostic suite only, maximum eight)
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -42,6 +47,7 @@ jobs:
       - name: Select nightly rotation or weekly full corpus
         env:
           DISPATCH_SUITE: ${{ inputs.suite }}
+          DISPATCH_CASE_IDS: ${{ inputs.case_ids }}
         run: |
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             suite="$DISPATCH_SUITE"
@@ -50,8 +56,16 @@ jobs:
           else
             suite=nightly
           fi
-          case "$suite" in nightly|full) ;; *) echo "Unsupported suite." >&2; exit 1 ;; esac
+          case "$suite" in nightly|full|diagnostic) ;; *) echo "Unsupported suite." >&2; exit 1 ;; esac
+          case_ids="$(python3 -c 'import json,os,re; values=os.environ.get("DISPATCH_CASE_IDS", "").split(); known={case["id"] for case in json.load(open("backend/eval/corpus/v1/cases.json"))["cases"]}; valid=bool(values) and len(values) <= 8 and len(values) == len(set(values)) and all(re.fullmatch(r"[a-z0-9-]+", value) for value in values) and set(values) <= known; print(" ".join(values) if valid else "")')"
+          if [ "$suite" = diagnostic ]; then
+            [ -n "$case_ids" ] || { echo "Diagnostic suite requires one to eight unique case IDs." >&2; exit 1; }
+          elif [ -n "${DISPATCH_CASE_IDS//[[:space:]]/}" ]; then
+            echo "case_ids is accepted only for the diagnostic suite." >&2
+            exit 1
+          fi
           echo "EVAL_SUITE=$suite" >> "$GITHUB_ENV"
+          echo "EVAL_CASE_IDS=$case_ids" >> "$GITHUB_ENV"
       - id: corpus
         name: Resolve corpus approval state without installing dependencies
         run: |
@@ -62,8 +76,8 @@ jobs:
         env:
           CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
         run: |
-          if [ "$CORPUS_STATUS" != approved ] && { [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || [ "$EVAL_SUITE" != full ]; }; then
-            echo "A pending corpus can be bootstrapped only by a manually dispatched full-suite run." >&2
+          if [ "$CORPUS_STATUS" != approved ] && { [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || { [ "$EVAL_SUITE" != full ] && [ "$EVAL_SUITE" != diagnostic ]; }; }; then
+            echo "A pending corpus can be bootstrapped only by a manually dispatched full or diagnostic run." >&2
             exit 1
           fi
       - uses: actions/setup-python@v5
@@ -115,8 +129,8 @@ jobs:
             digest="$(gcloud artifacts docker images describe "$IMAGE:approved-tree-$tree_sha" --format='value(image_summary.digest)')"
             [ -n "$digest" ] || { echo "Approved corpus requires an existing exact-tree image approval." >&2; exit 1; }
           else
-            if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || [ "$EVAL_SUITE" != full ]; then
-              echo "A pending corpus can be bootstrapped only by a manually dispatched full-suite run." >&2
+            if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || { [ "$EVAL_SUITE" != full ] && [ "$EVAL_SUITE" != diagnostic ]; }; then
+              echo "A pending corpus can be bootstrapped only by a manually dispatched full or diagnostic run." >&2
               exit 1
             fi
             commit_sha="$(git rev-parse HEAD)"
@@ -164,7 +178,12 @@ jobs:
             sleep 2
           done
           [ "$frontend_ready" = true ] || { echo "Evaluation frontend did not become ready." >&2; exit 1; }
-          EVAL_BACKEND_URL="$CANDIDATE_URL" ./scripts/ci browser --suite "$EVAL_SUITE" --target http://localhost:5173 --output artifacts/live-eval/browser-results.json
+          case_args=()
+          if [ "$EVAL_SUITE" = diagnostic ]; then
+            read -r -a selected_cases <<< "$EVAL_CASE_IDS"
+            for case_id in "${selected_cases[@]}"; do case_args+=(--case "$case_id"); done
+          fi
+          EVAL_BACKEND_URL="$CANDIDATE_URL" ./scripts/ci browser --suite "$EVAL_SUITE" --target http://localhost:5173 --output artifacts/live-eval/browser-results.json "${case_args[@]}"
       - id: semantic
         name: Generate semantic proposals or apply the approved gate
         continue-on-error: true
@@ -173,10 +192,15 @@ jobs:
           CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
         run: |
           approval_args=()
+          case_args=()
           if [ "$CORPUS_STATUS" = approved ]; then
             approval_args+=(--require-approved-corpus)
           fi
-          ./scripts/ci live --suite "$EVAL_SUITE" --target "$CANDIDATE_URL" --input artifacts/live-eval/browser-results.json --output artifacts/live-eval/live-results.json "${approval_args[@]}"
+          if [ "$EVAL_SUITE" = diagnostic ]; then
+            read -r -a selected_cases <<< "$EVAL_CASE_IDS"
+            for case_id in "${selected_cases[@]}"; do case_args+=(--case "$case_id"); done
+          fi
+          ./scripts/ci live --suite "$EVAL_SUITE" --target "$CANDIDATE_URL" --input artifacts/live-eval/browser-results.json --output artifacts/live-eval/live-results.json "${approval_args[@]}" "${case_args[@]}"
       - name: Cleanup tagged revision
         if: always()
         run: |

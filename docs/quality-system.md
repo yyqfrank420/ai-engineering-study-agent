@@ -77,9 +77,20 @@ oversized input stay in deterministic API tests and spend no model calls.
 Playwright uses the real frontend and production WebSocket protocol. It records
 received events, final answers, graph JSON, rendered-node counts, screenshots,
 persistence, cleanup, latency, fallback, dashboard readiness, and per-thread model
-telemetry. Its trace is rewritten before upload so bearer credentials and the
-internal password are redacted. JSON, JUnit, HTML, screenshots, and traces are
-retained for 30 days and are not committed as answer truth.
+telemetry. For the allowlisted internal identity on the isolated `staging` schema
+only, the retrieval workers also emit bounded book passages, external search
+snippets, and provenance so citations can be verified; production users never
+receive these evidence events. Its
+trace is rewritten before upload so bearer credentials and the internal password
+are redacted. JSON, JUnit, HTML, screenshots, and traces are retained for 30 days
+and are not committed as answer truth.
+
+To diagnose a small set without replaying the whole corpus, manually dispatch
+`Scheduled evaluation` with suite `diagnostic` and one to eight space-separated
+case IDs. The same targeted mode is available locally by repeating `--case`, for
+example `./scripts/ci browser --suite diagnostic --case citations ...`. Diagnostic
+runs use the PR-sized time, application-call, and judge-call budgets and cannot
+approve or replace the full corpus review.
 
 PR limits are eight cases, 50 application calls, 16 judge calls, and 15 minutes.
 The report includes provider, model, input/output tokens, latency, fallback, and an
