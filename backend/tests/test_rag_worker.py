@@ -58,8 +58,8 @@ async def test_rag_worker_handles_missing_search_tool_as_weak_retrieval():
 
 
 @pytest.mark.asyncio
-async def test_rag_worker_emits_bounded_source_evidence_only_for_staging_eval_identity(monkeypatch):
-    monkeypatch.setattr(settings, "db_schema", "staging")
+async def test_rag_worker_emits_bounded_source_evidence_for_allowlisted_internal_identity(monkeypatch):
+    monkeypatch.setattr(settings, "db_schema", "public")
     monkeypatch.setattr(settings, "internal_test_email_allowlist_raw", "eval@example.com")
     events = []
     chunks = [{
@@ -92,7 +92,7 @@ async def test_rag_worker_emits_bounded_source_evidence_only_for_staging_eval_id
 
 
 @pytest.mark.asyncio
-async def test_rag_worker_does_not_emit_source_evidence_outside_staging(monkeypatch):
+async def test_rag_worker_does_not_emit_source_evidence_for_non_allowlisted_identity(monkeypatch):
     monkeypatch.setattr(settings, "db_schema", "public")
     monkeypatch.setattr(settings, "internal_test_email_allowlist_raw", "eval@example.com")
     events = []
@@ -103,7 +103,7 @@ async def test_rag_worker_does_not_emit_source_evidence_outside_staging(monkeypa
     await rag_worker_node(
         {
             "user_message": "How should evaluation data grow?",
-            "user_email": "eval@example.com",
+            "user_email": "customer@example.com",
             "send": send,
         },
         [_Tool([{"text": "source"}])],

@@ -89,9 +89,13 @@ async def _send_unavailable(send) -> None:
 
 
 def _may_emit_eval_evidence(state: AgentState) -> bool:
-    """Keep external snippets inside the isolated, allowlisted staging evaluator."""
+    """Expose bounded provenance only to the explicit internal test identity.
+
+    This keeps production-candidate smoke evidence available without making
+    external snippets visible to ordinary production users.
+    """
     email = str(state.get("user_email") or "").strip().lower()
-    return settings.db_schema == "staging" and email in settings.internal_test_email_allowlist
+    return email in settings.internal_test_email_allowlist
 
 
 def _normalise_topic(message: str) -> str:

@@ -62,9 +62,14 @@ async def rag_worker_node(state: AgentState, tools: list) -> AgentState:
 
 
 def _may_emit_eval_evidence(state: AgentState) -> bool:
-    """Keep source passages inside the isolated, allowlisted staging evaluator."""
+    """Expose bounded provenance only to the explicit internal test identity.
+
+    Production-candidate smoke tests use the production schema, so schema is not
+    an authorization boundary here.  The authenticated allowlist is: ordinary
+    production users must never receive raw retrieved passages in stream events.
+    """
     email = str(state.get("user_email") or "").strip().lower()
-    return settings.db_schema == "staging" and email in settings.internal_test_email_allowlist
+    return email in settings.internal_test_email_allowlist
 
 
 def _bounded_eval_evidence(rag_chunks: list[dict]) -> list[dict]:
