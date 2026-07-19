@@ -2,7 +2,10 @@ name: Deploy production
 
 on:
   workflow_run:
-    workflows: ["Live eval required"]
+    # A manual override only publishes the immutable digest after verifying the
+    # original staging artifact, commit, and tree. It is therefore an equally
+    # valid trigger for the exact-digest production gate.
+    workflows: ["Live eval required", "Live eval manual override"]
     types: [completed]
     branches: [main]
 

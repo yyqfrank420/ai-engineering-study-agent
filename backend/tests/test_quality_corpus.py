@@ -172,9 +172,27 @@ def test_browser_review_includes_retrieved_evidence_for_human_review(tmp_path):
     assert "source passage" in review
 
 
-def test_pending_corpus_cannot_enable_the_blocking_judge():
+def test_unapproved_corpus_cannot_enable_the_blocking_judge(tmp_path):
+    raw = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
+    raw["approval"].update(
+        {
+            "status": "pending_human_review",
+            "reviewed_by": None,
+            "reviewed_at": None,
+            "approved_manifest_sha256": None,
+            "calibration": {
+                "judge_release": "semantic-rubric-judge-v5",
+                "agreement": None,
+                "critical_false_passes": None,
+                "evaluated_at": None,
+            },
+        }
+    )
+    path = tmp_path / "pending-cases.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
     with pytest.raises(RuntimeError, match="pending human review"):
-        load_corpus(require_approved=True)
+        load_corpus(require_approved=True, path=path)
 
 
 def test_approved_hash_is_content_addressed(tmp_path):

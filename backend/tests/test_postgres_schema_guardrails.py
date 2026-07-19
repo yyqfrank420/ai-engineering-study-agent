@@ -164,7 +164,7 @@ def test_schema_apply_script_runs_alembic_migrations():
 def test_main_deploy_applies_schema_before_backend_rollout():
     workflow = Path(".github/workflows/deploy-production.yml").read_text(encoding="utf-8")
 
-    assert 'workflows: ["Live eval required"]' in workflow
+    assert 'workflows: ["Live eval required", "Live eval manual override"]' in workflow
     assert "production-migration-db-url" in workflow
     assert "DB_SCHEMA=public" in workflow
     assert "bash scripts/apply_supabase_schema.sh" in workflow
