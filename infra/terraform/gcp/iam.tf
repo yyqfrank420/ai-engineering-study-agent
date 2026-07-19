@@ -76,7 +76,7 @@ locals {
   ])
 }
 
-resource "google_secret_manager_secret_iam_member" "ci_staging_eval_secret_accessor" {
+resource "google_secret_manager_secret_iam_member" "staging_ci_secret_accessor" {
   for_each = local.staging_ci_secret_ids
 
   project   = var.project_id
@@ -113,7 +113,7 @@ resource "google_secret_manager_secret_iam_member" "ci_production_secret_accesso
   member    = "serviceAccount:${google_service_account.github_actions_production.email}"
 }
 
-resource "google_service_account_iam_member" "ci_act_as_backend" {
+resource "google_service_account_iam_member" "production_ci_act_as_backend" {
   service_account_id = google_service_account.backend.name
   role               = "roles/iam.serviceAccountUser"
   member             = "serviceAccount:${google_service_account.github_actions_production.email}"
