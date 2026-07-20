@@ -271,7 +271,7 @@ export default function App() {
     return <div style={loadingScreenStyle}>Loading session…</div>;
   }
 
-  const showGraphPane = messages.length > 0 || !!graphData;
+  const showGraphPane = !!graphData || !!graphCandidate || (isGenerating && graphMode !== 'off');
   const dashboardActive = appRoute === 'internal-dashboard' && !!authSession;
 
   return (
