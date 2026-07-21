@@ -19,6 +19,7 @@ class GraphNode(TypedDict):
     technology: str         # specific tech choice, e.g. "Python / FastAPI", "PostgreSQL 15"
     description: str        # 1-sentence responsibility summary (graph worker)
     tier: str | None        # "public" | "private" | None (concept graphs omit this)
+    lane: NotRequired[str]  # "main" | "bottom"
     detail: str | None      # enriched book content (Node Detail Workers, Phase 3)
     layer: NotRequired[str]
     canonical_id: NotRequired[str]
@@ -35,6 +36,8 @@ class GraphEdge(TypedDict):
     technology: str         # transport + format: "HTTPS/JSON", "gRPC/Protobuf", "Kafka"
     sync: str               # "sync" | "async"
     description: str        # 1 sentence: what data flows here
+    flow: NotRequired[str]  # "runtime" | "control" | "feedback" | "deployment"
+    type: NotRequired[str]  # "loop" for an actual feedback return edge
     edge_id: NotRequired[str]
     relation: NotRequired[str]
     confidence: NotRequired[float]
@@ -51,6 +54,7 @@ class GraphGroup(TypedDict):
     id: str
     label: str         # e.g. "Orchestration Layer"
     nodeIds: list[str] # IDs of member nodes
+    kind: NotRequired[str]  # "runtime" | "data" | "operations" | "delivery" | "external"
 
 
 class GraphData(TypedDict):
@@ -112,6 +116,7 @@ class AgentState(TypedDict):
     research_status: NotRequired[str]  # "ready" | "unavailable" | "not_requested"
     # Static book-informed frame plus the one scenario-specific retrieval result.
     evidence_bundle: NotRequired[dict[str, Any]]
+    design_query: NotRequired[str]
     is_applied_design: NotRequired[bool]
     architect_plan: NotRequired[dict[str, Any]]
     challenger_review: NotRequired[dict[str, Any]]

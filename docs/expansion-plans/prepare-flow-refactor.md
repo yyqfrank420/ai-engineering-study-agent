@@ -1,6 +1,6 @@
 # Prepare Flow Refactor
 
-Last updated: 2026-04-03
+Last updated: 2026-07-21
 
 ## Goal
 
@@ -114,7 +114,8 @@ Useful optional fields:
 - `ready_at`
 - `backend_mode`
 
-No fake progress percentages. The frontend should infer progress stages from request lifecycle, not invented backend counters.
+Progress percentages must come from backend-owned completed/total startup milestones. The frontend
+must not infer advancement from elapsed time or rotate copy that implies unobserved work.
 
 ## Frontend Changes
 
@@ -163,6 +164,9 @@ If prepare fails:
 ## Implemented Shape
 
 - `GET /api/prepare` returns ready only when the knowledge base is actually loaded
+- FAISS artifact/index work runs after the app can serve readiness requests
+- preparing responses include the current milestone and completed/total units
+- the frontend renders an accessible progress bar from those server values
 - frontend keeps the draft editable
 - send remains disabled until readiness succeeds
 - readiness is cached locally for a short freshness window

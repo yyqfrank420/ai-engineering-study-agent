@@ -1,5 +1,7 @@
 import asyncio
+import json
 
+from agent.architecture_playbook import build_evidence_bundle
 from agent.nodes.graph_worker import graph_worker_node
 from agent.nodes.node_detail_worker import enrich_all_nodes
 from agent.nodes.rag_worker import rag_worker_node
@@ -49,12 +51,27 @@ async def apply_graph_worker(state: AgentState, graph_tools: list) -> AgentState
             ),
         }
 
+    if existing_graph is not None and _same_graph_artifact(existing_graph, new_graph):
+        return {
+            **state,
+            "graph_data": existing_graph,
+            "graph_changed": False,
+            "graph_notice_sent": state.get("graph_notice_sent", False),
+        }
+
     return {
         **state,
         "graph_data": new_graph,
         "graph_changed": True,
         "graph_notice_sent": state.get("graph_notice_sent", False),
     }
+
+
+def _same_graph_artifact(left: dict, right: dict) -> bool:
+    """Ignore release stamps when a failed refinement reuses the approved graph."""
+    left_payload = {key: value for key, value in left.items() if key != "version"}
+    right_payload = {key: value for key, value in right.items() if key != "version"}
+    return json.dumps(left_payload, sort_keys=True) == json.dumps(right_payload, sort_keys=True)
 
 
 async def run_search_phase(state: AgentState, rag_tools: list) -> tuple[AgentState, asyncio.Task | None]:
@@ -110,7 +127,7 @@ async def run_parallel_research_phase(state: AgentState, rag_tools: list) -> Age
 
 async def maybe_expand_with_search_tool(
     state: AgentState,
-    graph_tools: list,
+    _graph_tools: list,
     search_tool_wait_task: asyncio.Task | None,
 ) -> AgentState:
     if search_tool_wait_task is None:
@@ -126,7 +143,13 @@ async def maybe_expand_with_search_tool(
         "research_context": research_state.get("research_context", ""),
         "research_status": research_state.get("research_status", "unavailable"),
     }
-    return await apply_graph_worker(expanded_state, graph_tools)
+    # The workflow consumes this evidence before architect/challenger/graph.
+    # Keeping one canonical bundle prevents the critic from auditing a stale
+    # book-only allowlist after web evidence changes the design.
+    return {
+        **expanded_state,
+        "evidence_bundle": build_evidence_bundle(expanded_state),
+    }
 
 
 async def maybe_start_node_enrichment(state: AgentState, node_detail_tools: list) -> None:

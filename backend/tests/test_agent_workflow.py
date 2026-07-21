@@ -1,5 +1,3 @@
-import asyncio
-
 import pytest
 
 
@@ -66,8 +64,7 @@ async def test_langgraph_repairs_one_failed_review_then_publishes(monkeypatch):
 
     events = []
     reviews = []
-    parallel_roles = set()
-    both_roles_started = asyncio.Event()
+    role_order = []
 
     async def send(event):
         events.append(event)
@@ -93,17 +90,17 @@ async def test_langgraph_repairs_one_failed_review_then_publishes(monkeypatch):
         }
 
     async def fake_architect(state):
-        parallel_roles.add("architect")
-        if len(parallel_roles) == 2:
-            both_roles_started.set()
-        await asyncio.wait_for(both_roles_started.wait(), timeout=1)
-        return {"architect_plan": {"interpretation": "growth system"}}
+        role_order.append("architect")
+        return {
+            "architect_plan": {
+                "interpretation": "growth system",
+                "assumptions": ["Channel APIs support bounded writes"],
+            }
+        }
 
     async def fake_challenger(state):
-        parallel_roles.add("challenger")
-        if len(parallel_roles) == 2:
-            both_roles_started.set()
-        await asyncio.wait_for(both_roles_started.wait(), timeout=1)
+        assert state["architect_plan"]["interpretation"] == "growth system"
+        role_order.append("challenger")
         return {"challenger_review": {"risks": []}}
 
     async def fake_expand(state, _tools, _wait_task):
@@ -149,6 +146,6 @@ async def test_langgraph_repairs_one_failed_review_then_publishes(monkeypatch):
     assert result["graph_data"]["title"] == "Repaired draft"
     assert result["graph_notice_sent"] is False
     assert result["response_text"] == "reviewed answer"
-    assert parallel_roles == {"architect", "challenger"}
+    assert role_order == ["architect", "challenger"]
     assert any(event.get("phase") == "revise" and event.get("status") == "retry" for event in events)
     assert not any(event.get("type") == "graph_notice" for event in events)

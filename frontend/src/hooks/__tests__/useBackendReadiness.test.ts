@@ -153,10 +153,15 @@ describe('useBackendReadiness', () => {
     expect(result.current.backendReadiness).toBe('unknown');
   });
 
-  it('polls startup steps and rotates index copy', async () => {
+  it('renders the real startup milestone reported by the backend', async () => {
     vi.useFakeTimers();
-    const indexError = Object.assign(new Error('warming'), { step: 'index' });
-    vi.mocked(prepareBackend).mockRejectedValue(indexError);
+    vi.mocked(prepareBackend).mockResolvedValue({
+      status: 'preparing',
+      step: 'index',
+      detail: 'Loading the retrieval index into memory',
+      progress: { completed_units: 2, total_units: 3, percent: 67 },
+      faiss_loaded: false,
+    });
 
     const { result } = renderHook(() => useBackendReadiness(TEST_SESSION));
 
@@ -165,20 +170,74 @@ describe('useBackendReadiness', () => {
     });
 
     expect(result.current.backendReadiness).toBe('preparing');
-    expect(result.current.prepareMessage).toContain('cold-start');
+    expect(result.current.prepareMessage).toBe('Loading the retrieval index into memory');
+    expect(result.current.prepareProgress).toEqual({
+      completedUnits: 2,
+      totalUnits: 3,
+      percent: 67,
+    });
+  });
+
+  it('waits for each readiness poll before scheduling another', async () => {
+    vi.useFakeTimers();
+    let resolveSlowPoll!: (value: {
+      status: 'preparing';
+      step: string;
+      progress: { completed_units: number; total_units: number; percent: number };
+    }) => void;
+    const slowPoll = new Promise<{
+      status: 'preparing';
+      step: string;
+      progress: { completed_units: number; total_units: number; percent: number };
+    }>((resolve) => {
+      resolveSlowPoll = resolve;
+    });
+    vi.mocked(prepareBackend)
+      .mockResolvedValueOnce({
+        status: 'preparing',
+        step: 'artifacts',
+        progress: { completed_units: 1, total_units: 3, percent: 33 },
+      })
+      .mockReturnValueOnce(slowPoll)
+      .mockResolvedValueOnce({ status: 'ready', faiss_loaded: true });
+
+    const { result } = renderHook(() => useBackendReadiness(TEST_SESSION));
+    await act(async () => {
+      await result.current.prepareBackendNow();
+    });
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2500);
+      await vi.advanceTimersByTimeAsync(500);
     });
-    expect(result.current.backendReadiness).toBe('preparing');
-    expect(result.current.prepareMessage).not.toBeNull();
+    expect(prepareBackend).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_500);
+    });
+    expect(prepareBackend).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      resolveSlowPoll({
+        status: 'preparing',
+        step: 'index',
+        progress: { completed_units: 2, total_units: 3, percent: 67 },
+      });
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    expect(prepareBackend).toHaveBeenCalledTimes(3);
+    expect(result.current.backendReadiness).toBe('ready');
   });
 
   it('shows non-index startup steps and fails from interval polling errors', async () => {
     vi.useFakeTimers();
-    const databaseStep = Object.assign(new Error('warming'), { step: 'database' });
     vi.mocked(prepareBackend)
-      .mockRejectedValueOnce(databaseStep)
+      .mockResolvedValueOnce({
+        status: 'preparing',
+        step: 'database',
+        progress: { completed_units: 0, total_units: 3, percent: 0 },
+      })
       .mockRejectedValueOnce(new Error('Backend gone'));
 
     const { result } = renderHook(() => useBackendReadiness(TEST_SESSION));

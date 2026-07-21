@@ -66,27 +66,40 @@ export async function updateThreadGraph(session: AuthSession, threadId: string, 
 }
 
 export interface PrepareResponse {
-  status: string;
+  status: 'preparing' | 'ready';
   step?: string;
+  detail?: string;
+  progress?: {
+    completed_units: number;
+    total_units: number;
+    percent: number;
+  };
   faiss_loaded?: boolean;
 }
 
 export async function prepareBackend(): Promise<PrepareResponse> {
   const response = await fetch(`${API_BASE}/api/prepare`);
-  const data = await response.json();
+  const data = await response.json() as Record<string, unknown>;
   if (!response.ok) {
     const status = typeof data.status === 'string' ? data.status : 'preparing';
+    if (response.status === 503 && status === 'preparing') {
+      return data as unknown as PrepareResponse;
+    }
+    const detail = data.detail;
+    const detailObject = detail !== null && typeof detail === 'object'
+      ? detail as Record<string, unknown>
+      : null;
     const step =
       typeof data.step === 'string'
         ? data.step
-        : typeof data.detail === 'object' && typeof data.detail?.step === 'string'
-          ? data.detail.step
+        : typeof detailObject?.step === 'string'
+          ? detailObject.step
           : 'unknown';
     const message =
-      typeof data.detail === 'string'
-        ? data.detail
-        : typeof data.detail === 'object' && typeof data.detail?.status === 'string'
-          ? data.detail.status
+      typeof detail === 'string'
+        ? detail
+        : typeof detailObject?.status === 'string'
+          ? detailObject.status
           : 'Backend is still warming up';
     const error = new Error(message || status) as Error & { step?: string };
     if (step) {
@@ -94,7 +107,7 @@ export async function prepareBackend(): Promise<PrepareResponse> {
     }
     throw error;
   }
-  return data as PrepareResponse;
+  return data as unknown as PrepareResponse;
 }
 
 export async function captureAnalyticsEvent(

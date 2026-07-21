@@ -35,14 +35,15 @@ def generate_graph(
                     description: 1-sentence responsibility summary
                     tier: "public" | "private" (architecture only, optional for concept)
                     lane: "bottom" (optional) — only for cross-cutting observability/monitoring nodes
-        edges:      List of {source, target, label, technology, sync, description}
+        edges:      List of {source, target, label, technology, sync, description, flow?}
                     label: specific verb phrase e.g. "sends query"
                     technology: transport + format e.g. "HTTPS/JSON", "gRPC/Protobuf"
                     sync: "sync" | "async"
+                    flow: "runtime" | "control" | "feedback" | "deployment"
                     description: 1 sentence about what flows here
         sequence:   List of {step, nodes, description} for step-by-step animation.
                     Each step highlights specific node ids. Use [] if no sequence.
-        groups:     Optional list of {id, label, nodeIds} semantic groupings.
+        groups:     Optional list of {id, label, nodeIds, kind?} semantic groupings.
                     Use for architecture diagrams to cluster related nodes into named layers.
 
     Returns:

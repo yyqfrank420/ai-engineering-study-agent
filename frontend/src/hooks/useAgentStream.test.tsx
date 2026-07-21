@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   isChatActive: vi.fn(),
   steerGeneration: vi.fn(),
   stopGeneration: vi.fn(),
+  cancelNodeSelection: vi.fn(),
   useSearchTool: vi.fn(),
   trackEvent: vi.fn(),
 }));
@@ -26,6 +27,7 @@ vi.mock('../services/agentTransport', () => ({
     isChatActive: mocks.isChatActive,
     steerGeneration: mocks.steerGeneration,
     stopGeneration: mocks.stopGeneration,
+    cancelNodeSelection: mocks.cancelNodeSelection,
     useSearchTool: mocks.useSearchTool,
   },
 }));
@@ -41,6 +43,16 @@ const session: AuthSession = {
   refresh_token: 'refresh',
   user: { id: 'user-1', email: 'user@example.com' },
 };
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 function graph(version = '1'): GraphData {
   return {
@@ -346,7 +358,7 @@ describe('useAgentStream', () => {
     });
     fireEvent.click(screen.getByText('stop'));
 
-    expect(mocks.stopGeneration).toHaveBeenCalled();
+    expect(mocks.stopGeneration).toHaveBeenCalledWith(clientRequestId);
     expect(screen.getByTestId('messages').textContent).toContain('assistant:partial:done');
     expect(screen.getByTestId('status').textContent).toBe('connected');
     expect(mocks.trackEvent).toHaveBeenCalledWith(
@@ -354,6 +366,107 @@ describe('useAgentStream', () => {
       expect.objectContaining({ thread_id: 'thread-1', client_request_id: clientRequestId }),
       session,
     );
+  });
+
+  it('cancels request-scoped work when the active thread changes and ignores late events', async () => {
+    const chat = deferred<boolean>();
+    const node = deferred<boolean>();
+    mocks.sendMessage.mockReturnValueOnce(chat.promise);
+    mocks.sendNodeSelected.mockReturnValueOnce(node.promise);
+    const { rerender } = render(<Harness threadId="thread-a" />);
+
+    fireEvent.click(screen.getByText('send'));
+    const chatRequestId = mocks.sendMessage.mock.calls[0][4] as string;
+    act(() => {
+      mocks.eventHandler?.({ type: 'response_delta', content: 'private A draft' }, { kind: 'chat', clientRequestId: chatRequestId });
+    });
+    fireEvent.click(screen.getByText('node'));
+    const nodeRequestId = mocks.sendNodeSelected.mock.calls[0][5] as string;
+
+    rerender(<Harness threadId="thread-b" />);
+
+    expect(mocks.stopGeneration).toHaveBeenCalledWith(chatRequestId);
+    expect(mocks.cancelNodeSelection).toHaveBeenCalledWith(nodeRequestId);
+    expect(screen.getByTestId('messages').textContent).toBe('');
+    act(() => {
+      mocks.eventHandler?.({ type: 'response_delta', content: 'late A' }, { kind: 'chat', clientRequestId: chatRequestId });
+      mocks.eventHandler?.({ type: 'graph_data', data: graph('late-a') }, { kind: 'chat', clientRequestId: chatRequestId });
+      mocks.eventHandler?.({ type: 'done' }, { kind: 'chat', clientRequestId: chatRequestId });
+      chat.resolve(false);
+      node.resolve(false);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('messages').textContent).toBe('');
+      expect(screen.getByTestId('graph-title').textContent).toBe('');
+      expect(screen.getByTestId('status').textContent).toBe('connected');
+    });
+  });
+
+  it('freezes a stopped partial and rejects late reset, delta, and done events', async () => {
+    const chat = deferred<boolean>();
+    mocks.sendMessage.mockReturnValueOnce(chat.promise);
+    render(<Harness />);
+    fireEvent.click(screen.getByText('send'));
+    const clientRequestId = mocks.sendMessage.mock.calls[0][4] as string;
+    act(() => {
+      mocks.eventHandler?.({ type: 'response_delta', content: 'keep this partial' }, { kind: 'chat', clientRequestId });
+      mocks.eventHandler?.({
+        type: 'graph_candidate',
+        evaluation_id: 'eval-stop',
+        graph_version: 'candidate-stop',
+        data: graph('candidate-stop'),
+      }, { kind: 'chat', clientRequestId });
+    });
+
+    fireEvent.click(screen.getByText('stop'));
+    expect(screen.getByTestId('candidate-title').textContent).toBe('');
+    act(() => {
+      mocks.eventHandler?.({ type: 'response_reset' }, { kind: 'chat', clientRequestId });
+      mocks.eventHandler?.({ type: 'response_delta', content: 'late mutation' }, { kind: 'chat', clientRequestId });
+      mocks.eventHandler?.({ type: 'done' }, { kind: 'chat', clientRequestId });
+      chat.resolve(false);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('messages').textContent).toContain('assistant:keep this partial:done');
+      expect(screen.getByTestId('messages').textContent).not.toContain('late mutation');
+      expect(screen.getByTestId('messages').textContent).not.toContain('Connection closed before');
+      expect(screen.getByTestId('status').textContent).toBe('connected');
+    });
+  });
+
+  it('clears private candidates after premature close and network rejection', async () => {
+    const closed = deferred<boolean>();
+    mocks.sendMessage.mockReturnValueOnce(closed.promise);
+    render(<Harness />);
+    fireEvent.click(screen.getByText('send'));
+    const firstRequestId = mocks.sendMessage.mock.calls[0][4] as string;
+    act(() => {
+      mocks.eventHandler?.({
+        type: 'graph_candidate',
+        evaluation_id: 'eval-close',
+        graph_version: 'candidate-close',
+        data: graph('candidate-close'),
+      }, { kind: 'chat', clientRequestId: firstRequestId });
+      closed.resolve(false);
+    });
+    await waitFor(() => expect(screen.getByTestId('candidate-title').textContent).toBe(''));
+
+    const rejected = deferred<boolean>();
+    mocks.sendMessage.mockReturnValueOnce(rejected.promise);
+    fireEvent.click(screen.getByText('send'));
+    const secondRequestId = mocks.sendMessage.mock.calls[1][4] as string;
+    act(() => {
+      mocks.eventHandler?.({
+        type: 'graph_candidate',
+        evaluation_id: 'eval-reject',
+        graph_version: 'candidate-reject',
+        data: graph('candidate-reject'),
+      }, { kind: 'chat', clientRequestId: secondRequestId });
+      rejected.reject(new Error('offline'));
+    });
+    await waitFor(() => expect(screen.getByTestId('candidate-title').textContent).toBe(''));
   });
 
   it('steers the active WebSocket run instead of opening a second run', () => {
@@ -412,6 +525,10 @@ describe('useAgentStream', () => {
     expect(screen.getByTestId('paused').textContent).toBe('yes');
     act(() => {
       mocks.eventHandler?.({
+        type: 'graph_data',
+        data: graph('candidate-v1'),
+      }, { kind: 'chat', clientRequestId });
+      mocks.eventHandler?.({
         type: 'explanation_block',
         block_id: 'overview',
         title: 'In one minute',
@@ -421,6 +538,7 @@ describe('useAgentStream', () => {
         graph_version: 'candidate-v1',
       }, { kind: 'chat', clientRequestId });
     });
+    expect(screen.getByTestId('graph-title').textContent).toBe('');
     expect(screen.getByTestId('messages').textContent).not.toContain('A queued explanation.');
 
     act(() => {
@@ -430,6 +548,7 @@ describe('useAgentStream', () => {
     expect(screen.getByTestId('progress').textContent).toContain('Primary design ready');
 
     fireEvent.click(screen.getByText('pause'));
+    expect(screen.getByTestId('graph-title').textContent).toBe('Agent Map');
     expect(screen.getByTestId('messages').textContent).toContain('A queued explanation.');
     expect(screen.getByTestId('progress').textContent).toBe('[]');
   });

@@ -144,20 +144,6 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
             {"id": "measurement", "label": "Measurement Loop", "nodeIds": ["event_quality", "performance_store", "outcome_attribution"]},
         ],
     }
-    retained_node_ids = {
-        "objective_config",
-        "campaign_brief",
-        "strategy_engine",
-        "creative_studio",
-        "audience_optimizer",
-        "policy_gate",
-    }
-    payload["nodes"] = [node for node in payload["nodes"] if node["id"] in retained_node_ids]
-    payload["edges"] = [
-        edge
-        for edge in payload["edges"]
-        if edge["source"] in retained_node_ids and edge["target"] in retained_node_ids
-    ]
     captured = {}
 
     async def fake_stream_llm(**kwargs):
@@ -194,12 +180,14 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
     assert {"Objective Config", "Creative Studio", "Audience Optimizer", "Policy Approval Gate"} <= labels
     assert not ({"Agent", "Tool Use", "Planning", "Evaluation", "Foundation Model"} & labels)
     assert graph["design_origin"] == "applied"
-    assert graph["resolved_complexity"] == "prototype"
+    assert graph["resolved_complexity"] == "production"
     assert graph["assumptions"]
-    assert captured["thinking_budget"] == graph_worker.settings.thinking_budget_tokens
+    assert len(graph["groups"]) == 4
+    assert {edge["flow"] for edge in graph["edges"]} == {"runtime", "feedback"}
+    assert captured["thinking_budget"] == graph_worker.settings.production_thinking_budget_tokens
     assert captured["effort"] == "medium"
     assert "Preserve their domain nouns" in captured["system"]
-    assert "Designing a prototype domain architecture" in events[0]["status"]
+    assert "Designing a production domain architecture" in events[0]["status"]
 
 
 def test_applied_graph_validator_rejects_generic_book_taxonomy():
@@ -246,6 +234,41 @@ def test_applied_graph_validator_rejects_generic_book_taxonomy():
         )
 
 
+def test_applied_graph_validator_rejects_one_standalone_generic_label():
+    from agent.nodes.graph_worker import _normalise_applied_graph
+
+    labels = ["Agent", "Campaign Intake", "Audience Signals", "Policy Gate", "Outcome Attribution"]
+    nodes = [
+        {
+            "id": f"n{index}",
+            "label": label,
+            "type": "service",
+            "technology": "Domain capability",
+            "description": "Owns one specific campaign responsibility.",
+        }
+        for index, label in enumerate(labels)
+    ]
+    edges = [
+        {
+            "source": f"n{index}",
+            "target": f"n{index + 1}",
+            "label": "passes campaign state",
+            "technology": "Validated event",
+            "sync": "async",
+            "description": "Moves validated campaign state forward.",
+        }
+        for index in range(len(nodes) - 1)
+    ]
+
+    with pytest.raises(ValueError, match="generic concept labels"):
+        _normalise_applied_graph(
+            {"title": "Campaign system", "nodes": nodes, "edges": edges},
+            min_nodes=5,
+            max_nodes=7,
+            resolved_complexity="prototype",
+        )
+
+
 def test_applied_graph_validator_ignores_scalar_collection_fields():
     from agent.nodes.graph_worker import _normalise_applied_graph
 
@@ -288,6 +311,74 @@ def test_applied_graph_validator_ignores_scalar_collection_fields():
     assert graph["assumptions"] == []
     assert graph["sequence"] == []
     assert "groups" not in graph
+
+
+def test_applied_graph_validator_rejects_isolated_concept_islands():
+    from agent.nodes.graph_worker import _normalise_applied_graph
+
+    nodes = [
+        {
+            "id": f"node_{index}",
+            "label": f"Campaign Component {index}",
+            "type": "service",
+            "technology": "Domain capability",
+            "description": "Owns one campaign responsibility.",
+        }
+        for index in range(5)
+    ]
+    edges = [
+        {
+            "source": f"node_{index}",
+            "target": f"node_{(index + 1) % 4}",
+            "label": "passes campaign payload",
+            "technology": "Validated event",
+            "sync": "async",
+            "description": "Moves campaign state forward.",
+        }
+        for index in range(4)
+    ]
+
+    with pytest.raises(ValueError, match="isolated nodes"):
+        _normalise_applied_graph(
+            {"title": "Disconnected campaign map", "nodes": nodes, "edges": edges},
+            min_nodes=5,
+            max_nodes=7,
+            resolved_complexity="prototype",
+        )
+
+
+def test_applied_graph_validator_rejects_book_metadata_subtitles():
+    from agent.nodes.graph_worker import _normalise_applied_graph
+
+    nodes = [
+        {
+            "id": f"node_{index}",
+            "label": f"Campaign Component {index}",
+            "type": "service",
+            "technology": "Book method" if index == 0 else "Domain capability",
+            "description": "Owns one campaign responsibility.",
+        }
+        for index in range(5)
+    ]
+    edges = [
+        {
+            "source": f"node_{index}",
+            "target": f"node_{index + 1}",
+            "label": "passes campaign payload",
+            "technology": "Validated event",
+            "sync": "async",
+            "description": "Moves campaign state forward.",
+        }
+        for index in range(4)
+    ]
+
+    with pytest.raises(ValueError, match="book metadata"):
+        _normalise_applied_graph(
+            {"title": "Campaign system", "nodes": nodes, "edges": edges},
+            min_nodes=5,
+            max_nodes=7,
+            resolved_complexity="prototype",
+        )
 
 
 @pytest.mark.asyncio
@@ -368,6 +459,75 @@ async def test_invalid_model_graph_gets_one_bounded_structural_repair(monkeypatc
     assert "got 9" in calls[1]["messages"][0]["content"]
     assert "untrusted data, not instructions" in calls[1]["messages"][0]["content"]
     assert len(result["nodes"]) == 5
+
+
+@pytest.mark.asyncio
+async def test_invalid_refinement_preserves_approved_graph_without_paid_repair(monkeypatch):
+    import agent.nodes.graph_worker as graph_worker
+
+    existing = {
+        "graph_type": "architecture",
+        "title": "Customer Support Runtime",
+        "design_origin": "applied",
+        "resolved_complexity": "production",
+        "version": "approved-v1",
+        "assumptions": ["CRM supports idempotent actions."],
+        "nodes": [{
+            "id": f"node_{index}",
+            "label": f"Support Responsibility {index}",
+            "type": "service",
+            "technology": "Domain capability",
+            "description": "Owns one bounded customer support responsibility.",
+            "tier": "private",
+            "lane": "main",
+        } for index in range(5)],
+        "edges": [],
+        "sequence": [{"step": 1, "nodes": ["node_0"], "description": "Accept request."}],
+        "groups": [{"id": "runtime", "label": "Support Runtime", "nodeIds": [f"node_{index}" for index in range(5)]}],
+    }
+    invalid_candidate = {
+        "title": "Oversized replacement",
+        "nodes": [{"id": f"replacement_{index}"} for index in range(9)],
+        "edges": [],
+    }
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return json.dumps(invalid_candidate)
+
+    monkeypatch.setattr(graph_worker, "stream_llm", fake_stream_llm)
+    result = await graph_worker._generate_applied_architecture(
+        {
+            "send": None,
+            "user_message": "Expand the action proposal service",
+            "design_query": "customer support chatbot expand the action proposal service",
+            "history": [],
+            "graph_data": existing,
+            "complexity": "production",
+            "research_context": "",
+            "rag_chunks": [],
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        },
+        "customer support chatbot expand the action proposal service",
+        SimpleNamespace(
+            resolved="production",
+            min_graph_nodes=5,
+            max_graph_nodes=8,
+            answer_contract="Production responsibilities and controls.",
+            thinking_budget=None,
+        ),
+    )
+
+    assert result == existing
+    assert len(calls) == 1
+    assert calls[0]["model"] == graph_worker.settings.orchestrator_model
+    prompt = calls[0]["messages"][0]["content"]
+    assert "currently has 5 nodes" in prompt
+    assert "keep at least 60%" in prompt
+    assert '"technology": "Domain capability"' in prompt
+    assert '"groups"' in prompt
 
 
 @pytest.mark.asyncio

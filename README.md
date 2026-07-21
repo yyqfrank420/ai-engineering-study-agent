@@ -12,7 +12,7 @@ Graph-guided study companion for *AI Engineering* by Chip Huyen.
   - LangGraph state-machine orchestration
   - steerable WebSocket chat transport
   - Supabase-backed persistence
-  - FAISS-backed retrieval loaded at startup
+  - FAISS-backed retrieval loaded in a non-blocking readiness task
 - `ingestion/`
   - one-time PDF chunking / embedding / FAISS build
 - `infra/terraform/gcp/`
@@ -23,12 +23,12 @@ Graph-guided study companion for *AI Engineering* by Chip Huyen.
 `backend/agent/graph.py` defines a request-scoped LangGraph workflow:
 
 1. route the request
-2. run one scenario book retrieval and combine it with the stable AI-engineering review frame
-3. run independent Architect and Challenger roles in parallel for applied designs
+2. restore terse follow-ups to the canonical design intent, then retrieve book evidence and optional current web context
+3. enrich applied-design seeds into one explicit product brief, then challenge that same interpretation
 4. integrate their outputs into a domain-specific graph
 5. render the candidate privately in the browser and review the real screenshot plus architecture
-6. run at most one targeted repair; suppress a second failure
-7. publish the accepted graph, then reveal one-call explanation blocks progressively
+6. run at most one targeted semantic/structural repair; renderer-only failures never trigger another model call
+7. finish the one-call walkthrough privately, then reveal the accepted graph and explanation together
 
 Chat runs over `/api/chat/ws`. The first frame authenticates the connection; subsequent
 `start`, `steer`, bounded diagram-evaluation frames, and `stop` commands share the same channel. A steer cancels the draft,
@@ -58,7 +58,7 @@ Relevant docs:
 ## Shipped Features
 
 - **Graph layout persistence** (2026-04-05): Pan/zoom + node positions saved per graph, restored on session reload. Debounced 400ms frontend cache → `PUT /api/threads/{id}/graph`.
-- **Cold-start UX contract**: Explicit `Prepare` button unlocks Send after backend is ready.
+- **Cold-start UX contract**: Explicit `Prepare` button shows real server milestones and unlocks Send only after the retrieval index is ready.
 - **Three-way routing**: SIMPLE (Sonnet 5 low effort) / MEMORY (session history) / SEARCH (RAG + architecture workflow).
 - **Role-based model effort**: Sonnet 5 handles normal work at low/medium/high effort; Opus 4.8 is reserved for a failed diagram repair.
 - **D3 architecture diagram**: Interactive graph with step-by-step walkthrough and node detail enrichment.

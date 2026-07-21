@@ -14,7 +14,7 @@ from typing import Literal
 from langgraph.graph import END, START, StateGraph
 
 from agent.architecture_playbook import build_evidence_bundle
-from agent.complexity import is_applied_system_design_request
+from agent.complexity import is_applied_system_design_request, resolve_design_query
 from agent.nodes.architecture_workers import architect_node, challenger_node
 from agent.nodes.graph_critic import graph_critic_node
 from agent.nodes.orchestrator_node import orchestrator_route, orchestrator_synthesise, quick_synthesise
@@ -67,21 +67,30 @@ def build_agent_workflow(
         return await quick_synthesise(state)
 
     async def gather_context(state: AgentState) -> AgentState:
-        if state.get("research_enabled", False):
+        # Restore terse follow-ups to the canonical product intent before any
+        # retrieval. Otherwise both the book and web workers search fragments
+        # such as "expand this" instead of the system being designed.
+        design_query = resolve_design_query(
+            state.get("user_message", ""),
+            state.get("history"),
+            state.get("graph_data"),
+        )
+        prepared = {**state, "design_query": design_query}
+        is_applied = _should_run_applied_design_roles(prepared)
+        if prepared.get("research_enabled", False):
             with start_span(
                 "agent.parallel_research_phase",
                 attributes={"app.research_enabled": True},
             ):
-                researched = await run_parallel_research_phase(state, rag_tools)
+                researched = await run_parallel_research_phase(prepared, rag_tools)
             gathered = {**researched, "search_tool_wait_task": None}
         else:
             with start_span(
                 "agent.rag_phase",
                 attributes={"app.graph_mode": state.get("graph_mode", "auto")},
             ):
-                searched, wait_task = await run_search_phase(state, rag_tools)
+                searched, wait_task = await run_search_phase(prepared, rag_tools)
             gathered = {**searched, "search_tool_wait_task": wait_task}
-        is_applied = _should_run_applied_design_roles(gathered)
         bundle = build_evidence_bundle(gathered)
         await state["send"]({
             "type": "workflow_progress",
@@ -201,14 +210,19 @@ def build_agent_workflow(
         {"quick": "quick_answer", "context": "gather_context"},
     )
     workflow.add_edge("quick_answer", END)
-    # The two roles see the same evidence and run independently. LangGraph waits
-    # for both branches before the integrator/graph worker starts.
-    workflow.add_edge("gather_context", "architect")
-    workflow.add_edge("gather_context", "challenger")
-    workflow.add_edge("architect", "draft_graph")
+    # The architect turns the request and evidence into one canonical brief. The
+    # challenger then audits that exact interpretation before graph integration.
+    # This reuses the existing two calls while preventing terse prompts from
+    # becoming different products in each worker.
+    # Resolve an optional weak-book web escalation before the canonical brief
+    # is written. This avoids paying for a draft graph that would immediately
+    # be discarded and ensures the architect, challenger, and critic share the
+    # same evidence.
+    workflow.add_edge("gather_context", "expand_context")
+    workflow.add_edge("expand_context", "architect")
+    workflow.add_edge("architect", "challenger")
     workflow.add_edge("challenger", "draft_graph")
-    workflow.add_edge("draft_graph", "expand_context")
-    workflow.add_edge("expand_context", "review_graph")
+    workflow.add_edge("draft_graph", "review_graph")
     workflow.add_conditional_edges(
         "review_graph",
         _route_after_review,
@@ -233,7 +247,9 @@ def _should_run_applied_design_roles(state: AgentState) -> bool:
     """Avoid paid design roles when the user explicitly disabled diagrams."""
     return (
         state.get("graph_mode", "auto") != "off"
-        and is_applied_system_design_request(state.get("user_message", ""))
+        and is_applied_system_design_request(
+            state.get("design_query") or state.get("user_message", "")
+        )
     )
 
 

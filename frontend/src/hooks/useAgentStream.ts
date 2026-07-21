@@ -79,7 +79,6 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
   const streamingIdRef = useRef<string | null>(null);
   const activeChatStreamIdRef = useRef<string | null>(null);
   const activeNodeStreamIdRef = useRef<string | null>(null);
-  const userAbortedChatRef = useRef(false);
   const authSessionRef = useRef<AuthSession | null>(authSession);
   const graphDataRef = useRef<GraphData | null>(null);
   const selectedNodeRef = useRef<SelectedNode | null>(null);
@@ -91,6 +90,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
     content: string;
     relatedNodeIds: string[];
   }>>([]);
+  const queuedGraphDataRef = useRef<GraphData | null | undefined>(undefined);
   const activeExplanationMessageIdsRef = useRef<string[]>([]);
   const activeChatAnalyticsRef = useRef<{
     threadId: string;
@@ -107,6 +107,12 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
   const lastGraphKeyRef = useRef<string>('null');
 
   const resetThreadView = useCallback(() => {
+    const chatRequestId = activeChatStreamIdRef.current;
+    const nodeRequestId = activeNodeStreamIdRef.current;
+    activeChatStreamIdRef.current = null;
+    activeNodeStreamIdRef.current = null;
+    if (chatRequestId) agentTransport.stopGeneration(chatRequestId);
+    if (nodeRequestId) agentTransport.cancelNodeSelection(nodeRequestId);
     setMessages([]);
     setGraphData(null);
     setSelectedNode(null);
@@ -115,15 +121,13 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
     setExplanationPaused(false);
     explanationPausedRef.current = false;
     queuedExplanationBlocksRef.current = [];
+    queuedGraphDataRef.current = undefined;
     activeExplanationMessageIdsRef.current = [];
     graphDataRef.current = null;
     selectedNodeRef.current = null;
     suggestionsCacheRef.current.clear();
     lastGraphKeyRef.current = 'null';
     streamingIdRef.current = null;
-    activeChatStreamIdRef.current = null;
-    activeNodeStreamIdRef.current = null;
-    userAbortedChatRef.current = false;
     activeChatAnalyticsRef.current = null;
     activeChatTerminalRef.current = null;
     setWorkerStatus(IDLE_WORKER_STATUS);
@@ -135,6 +139,14 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
 
   useEffect(() => {
     resetThreadView();
+    return () => {
+      const chatRequestId = activeChatStreamIdRef.current;
+      const nodeRequestId = activeNodeStreamIdRef.current;
+      activeChatStreamIdRef.current = null;
+      activeNodeStreamIdRef.current = null;
+      if (chatRequestId) agentTransport.stopGeneration(chatRequestId);
+      if (nodeRequestId) agentTransport.cancelNodeSelection(nodeRequestId);
+    };
   }, [activeThreadId, resetThreadView]);
 
   useEffect(() => {
@@ -157,6 +169,36 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
     graphDataRef.current = nextGraph;
     setGraphData(nextGraph);
   }, [resetThreadView]);
+
+  const publishGraph = useCallback((nextGraph: GraphData | null) => {
+    const nextGraphKey = graphStructureKey(nextGraph);
+    const graphChanged = lastGraphKeyRef.current !== nextGraphKey;
+    lastGraphKeyRef.current = nextGraphKey;
+
+    if (graphChanged) {
+      suggestionsCacheRef.current.clear();
+      setGraphNotice(null);
+      const currentSelected = selectedNodeRef.current;
+      if (!currentSelected || !nextGraph) {
+        selectedNodeRef.current = null;
+        setSelectedNode(null);
+      } else {
+        const liveNode = nextGraph.nodes.find((node) => node.id === currentSelected.node.id);
+        const nextSelection = liveNode
+          ? { node: liveNode, suggestions: initialNodeSuggestions(liveNode.label) }
+          : null;
+        selectedNodeRef.current = nextSelection;
+        setSelectedNode(nextSelection);
+      }
+    }
+
+    const prevGraph = graphDataRef.current;
+    if (prevGraph && nextGraph && graphStructureKey(prevGraph) === graphStructureKey(nextGraph)) {
+      return;
+    }
+    graphDataRef.current = nextGraph;
+    setGraphData(nextGraph);
+  }, []);
 
   const handleEvent = useCallback((event: ServerEvent, meta: { kind: 'chat' | 'node-selected'; clientRequestId: string }) => {
     if (meta.kind === 'chat' && activeChatStreamIdRef.current !== meta.clientRequestId) {
@@ -215,6 +257,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
           activeExplanationMessageIdsRef.current = [];
         }
         queuedExplanationBlocksRef.current = [];
+        queuedGraphDataRef.current = undefined;
         setGraphCandidate(null);
         setWorkflowProgress([]);
         break;
@@ -325,33 +368,11 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
         {
           const nextGraph = normalizeGraphData(event.data);
           setGraphCandidate(null);
-          const nextGraphKey = graphStructureKey(nextGraph);
-          const graphChanged = lastGraphKeyRef.current !== nextGraphKey;
-          lastGraphKeyRef.current = nextGraphKey;
-
-          if (graphChanged) {
-            suggestionsCacheRef.current.clear();
-            setGraphNotice(null);
-            const currentSelected = selectedNodeRef.current;
-            if (!currentSelected || !nextGraph) {
-              selectedNodeRef.current = null;
-              setSelectedNode(null);
-            } else {
-              const liveNode = nextGraph.nodes.find((node) => node.id === currentSelected.node.id);
-              const nextSelection = liveNode
-                ? { node: liveNode, suggestions: initialNodeSuggestions(liveNode.label) }
-                : null;
-              selectedNodeRef.current = nextSelection;
-              setSelectedNode(nextSelection);
-            }
-          }
-
-          const prevGraph = graphDataRef.current;
-          if (prevGraph && nextGraph && graphStructureKey(prevGraph) === graphStructureKey(nextGraph)) {
+          if (explanationPausedRef.current) {
+            queuedGraphDataRef.current = nextGraph;
             break;
           }
-          graphDataRef.current = nextGraph;
-          setGraphData(nextGraph);
+          publishGraph(nextGraph);
         }
         break;
 
@@ -421,6 +442,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
           setProviderNotice(null);
           setStreamStatus('connected');
           setGraphCandidate(null);
+          queuedGraphDataRef.current = undefined;
           if (analytics) {
             activeChatTerminalRef.current = analytics.clientRequestId;
             void trackEvent(
@@ -441,7 +463,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
         }
         break;
     }
-  }, []);
+  }, [publishGraph]);
 
   useEffect(() => {
     const offEvent = agentTransport.onEvent(handleEvent);
@@ -494,10 +516,10 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
     setExplanationPaused(false);
     explanationPausedRef.current = false;
     queuedExplanationBlocksRef.current = [];
+    queuedGraphDataRef.current = undefined;
     activeExplanationMessageIdsRef.current = [];
     setStreamStatus('generating');
     setWorkerStatus(OPTIMISTIC_CHAT_STATUS);
-    userAbortedChatRef.current = false;
     const clientRequestId = makeId();
     activeChatStreamIdRef.current = clientRequestId;
     activeChatTerminalRef.current = null;
@@ -539,7 +561,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
     );
 
     agentTransport.sendMessage(authSession, activeThreadId, content, opts, clientRequestId).then(sawDone => {
-      if (!sawDone && !userAbortedChatRef.current && activeChatStreamIdRef.current === clientRequestId) {
+      if (!sawDone && activeChatStreamIdRef.current === clientRequestId) {
         if (streamingIdRef.current) {
           const id = streamingIdRef.current;
           setMessages(prev => prev.map(m =>
@@ -556,6 +578,8 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
         setWorkerStatus(IDLE_WORKER_STATUS);
         setRetrievalNotice(null);
         setProviderNotice(null);
+        setGraphCandidate(null);
+        queuedGraphDataRef.current = undefined;
         setStreamStatus('connected');
         if (activeChatTerminalRef.current !== clientRequestId) {
           activeChatTerminalRef.current = clientRequestId;
@@ -594,6 +618,8 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
       setWorkerStatus(IDLE_WORKER_STATUS);
       setRetrievalNotice(null);
       setProviderNotice(null);
+      setGraphCandidate(null);
+      queuedGraphDataRef.current = undefined;
       setStreamStatus('connected');
       if (activeChatTerminalRef.current !== clientRequestId) {
         activeChatTerminalRef.current = clientRequestId;
@@ -616,7 +642,6 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
       if (activeChatStreamIdRef.current === clientRequestId) {
         activeChatStreamIdRef.current = null;
       }
-      userAbortedChatRef.current = false;
       if (activeChatAnalyticsRef.current?.clientRequestId === clientRequestId) {
         activeChatAnalyticsRef.current = null;
       }
@@ -685,7 +710,9 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
       node.detail ?? node.description ?? '',
       clientRequestId,
     ).catch(err => {
-      console.error('[sse] node-selected error:', err);
+      if (activeNodeStreamIdRef.current === clientRequestId && !(err instanceof DOMException && err.name === 'AbortError')) {
+        console.error('[sse] node-selected error:', err);
+      }
     }).finally(() => {
       if (activeNodeStreamIdRef.current === clientRequestId) {
         activeNodeStreamIdRef.current = null;
@@ -694,14 +721,18 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
   }, [activeThreadId, authSession]);
 
   const clearSelectedNode = useCallback(() => {
+    const nodeRequestId = activeNodeStreamIdRef.current;
+    activeNodeStreamIdRef.current = null;
+    if (nodeRequestId) agentTransport.cancelNodeSelection(nodeRequestId);
     selectedNodeRef.current = null;
     setSelectedNode(null);
   }, []);
 
   const stopGeneration = useCallback(() => {
     const analytics = activeChatAnalyticsRef.current;
-    userAbortedChatRef.current = true;
-    agentTransport.stopGeneration();
+    const clientRequestId = activeChatStreamIdRef.current;
+    activeChatStreamIdRef.current = null;
+    if (clientRequestId) agentTransport.stopGeneration(clientRequestId);
     // Finalise any streaming message so it renders as complete
     if (streamingIdRef.current) {
       const id = streamingIdRef.current;
@@ -713,6 +744,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
     setWorkerStatus(IDLE_WORKER_STATUS);
     setProviderNotice(null);
     setGraphCandidate(null);
+    queuedGraphDataRef.current = undefined;
     setStreamStatus('connected');
     if (analytics) {
       activeChatTerminalRef.current = analytics.clientRequestId;
@@ -748,10 +780,15 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
         })),
       ]);
     }
+    if (!nextPaused && queuedGraphDataRef.current !== undefined) {
+      const queuedGraph = queuedGraphDataRef.current;
+      queuedGraphDataRef.current = undefined;
+      publishGraph(queuedGraph);
+    }
     if (!nextPaused && activeChatTerminalRef.current) {
       setWorkflowProgress([]);
     }
-  }, []);
+  }, [publishGraph]);
 
   return {
     messages,

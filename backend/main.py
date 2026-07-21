@@ -10,6 +10,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 from contextlib import asynccontextmanager
+import asyncio
 import logging
 import time
 import uuid
@@ -36,6 +37,81 @@ from storage.retention import prune_expired_observability_data
 
 _BODY_METHODS = frozenset({"POST", "PUT", "PATCH"})
 logger = logging.getLogger(__name__)
+
+
+def _set_startup_progress(
+    app: FastAPI,
+    *,
+    step: str,
+    detail: str,
+    completed_units: int,
+    total_units: int = 3,
+) -> None:
+    """Publish coarse, truthful startup milestones for the prepare UI."""
+    app.state.startup_step = step
+    app.state.startup_detail = detail
+    app.state.startup_completed_units = completed_units
+    app.state.startup_total_units = total_units
+
+
+async def _load_knowledge_base(app: FastAPI) -> None:
+    """Load large retrieval assets without blocking readiness requests."""
+    try:
+        _set_startup_progress(
+            app,
+            step="artifacts",
+            detail="Checking the knowledge-base files",
+            completed_units=1,
+        )
+        print("[startup] Ensuring FAISS artifacts…")
+        await asyncio.to_thread(_ensure_faiss_artifacts_in_worker)
+
+        _set_startup_progress(
+            app,
+            step="index",
+            detail="Loading the retrieval index into memory",
+            completed_units=2,
+        )
+        print("[startup] Loading FAISS index…")
+        vectorstore, parent_docs = await asyncio.to_thread(_load_faiss_in_worker)
+        app.state.vectorstore = vectorstore
+        app.state.parent_docs = parent_docs
+        _set_startup_progress(
+            app,
+            step="ready",
+            detail="Knowledge base ready",
+            completed_units=3,
+        )
+        print(f"[startup] FAISS loaded — {len(parent_docs)} parent docs")
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.exception("Knowledge-base startup failed")
+        app.state.startup_error = type(exc).__name__
+        completed_units = max(
+            0,
+            int(getattr(app.state, "startup_completed_units", 0)),
+        )
+        _set_startup_progress(
+            app,
+            step="failed",
+            detail="Knowledge-base startup failed",
+            completed_units=completed_units,
+        )
+
+
+def _ensure_faiss_artifacts_in_worker() -> None:
+    # Keep imports inside the worker: importing the embedding stack loads model
+    # metadata and must never freeze the event loop that serves /api/prepare.
+    from rag.faiss_artifact import ensure_faiss_artifacts
+
+    ensure_faiss_artifacts()
+
+
+def _load_faiss_in_worker():
+    from rag.faiss_loader import load_faiss
+
+    return load_faiss()
 
 
 async def _buffer_request_body(request: Request, max_bytes: int) -> tuple[int, bool]:
@@ -69,7 +145,12 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
         if settings.k_service:
             settings.validate_for_cloud_run()
 
-        app.state.startup_step = "database"
+        _set_startup_progress(
+            app,
+            step="database",
+            detail="Initialising durable storage",
+            completed_units=0,
+        )
         print("[startup] Initialising database…")
         init_db()
         prune_expired_observability_data(
@@ -81,23 +162,28 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
         if not hasattr(app.state, "parent_docs"):
             app.state.parent_docs = []
 
+        knowledge_base_task = None
         if load_resources:
-            from rag.faiss_artifact import ensure_faiss_artifacts
-            from rag.faiss_loader import load_faiss
-
-            app.state.startup_step = "artifacts"
-            print("[startup] Ensuring FAISS artifacts…")
-            ensure_faiss_artifacts()
-
-            app.state.startup_step = "index"
-            print("[startup] Loading FAISS index…")
-            vectorstore, parent_docs = load_faiss()
-            app.state.vectorstore = vectorstore
-            app.state.parent_docs = parent_docs
-            print(f"[startup] FAISS loaded — {len(parent_docs)} parent docs")
+            knowledge_base_task = asyncio.create_task(
+                _load_knowledge_base(app),
+                name="knowledge-base-loader",
+            )
+        elif _knowledge_base_ready_for_startup(app):
+            _set_startup_progress(
+                app,
+                step="ready",
+                detail="Knowledge base ready",
+                completed_units=3,
+            )
 
         yield
 
+        if knowledge_base_task is not None and not knowledge_base_task.done():
+            knowledge_base_task.cancel()
+            try:
+                await knowledge_base_task
+            except asyncio.CancelledError:
+                pass
         await stop_analytics_worker()
         print("[shutdown] Goodbye.")
 
@@ -314,6 +400,10 @@ def create_app(*, load_resources: bool = True) -> FastAPI:
     app.include_router(sse_router)
     app.include_router(websocket_router)
     return app
+
+
+def _knowledge_base_ready_for_startup(app: FastAPI) -> bool:
+    return app.state.vectorstore is not None and bool(app.state.parent_docs)
 
 
 app = create_app()

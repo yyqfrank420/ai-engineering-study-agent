@@ -201,7 +201,7 @@ class Settings(BaseSettings):
 
     # ── RAG ───────────────────────────────────────────────────────────────────
     rag_top_k: int = 5          # child chunks retrieved from FAISS
-    max_graph_nodes: int = 10   # cap on parallel Node Detail Workers
+    max_graph_nodes: int = 10   # readability cap; deeper detail belongs in node drill-downs
     search_tool_decision_timeout_s: float = 3.0
     # Backpressure for the temporary HTTP/SSE compatibility transport.
     max_sse_queue_events: int = 256

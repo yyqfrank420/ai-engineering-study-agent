@@ -70,6 +70,30 @@ async def test_apply_graph_worker_preserves_existing_graph_when_worker_returns_n
 
 
 @pytest.mark.asyncio
+async def test_apply_graph_worker_treats_version_only_reuse_as_unchanged(monkeypatch):
+    existing_graph = {
+        "version": "approved-v1",
+        "nodes": [{"id": "n1"}],
+        "edges": [],
+        "sequence": [],
+    }
+    state, _events = _state(graph_data=existing_graph)
+
+    async def fake_graph_worker_node(incoming_state, _tools):
+        return {
+            **incoming_state,
+            "graph_data": {**existing_graph, "version": "generated-v2"},
+        }
+
+    monkeypatch.setattr("agent.pipeline_steps.graph_worker_node", fake_graph_worker_node)
+
+    result = await apply_graph_worker(state, [])
+
+    assert result["graph_data"] is existing_graph
+    assert result["graph_changed"] is False
+
+
+@pytest.mark.asyncio
 async def test_apply_graph_worker_sends_notice_when_search_has_no_graph(monkeypatch):
     state, events = _state(graph_data=None, route="search", graph_notice_sent=False)
 
@@ -160,26 +184,20 @@ async def test_parallel_research_phase_merges_rag_and_research(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_maybe_expand_with_search_tool_runs_research_then_graph(monkeypatch):
+async def test_maybe_expand_with_search_tool_rebuilds_canonical_evidence_before_design(monkeypatch):
     state, _events = _state()
-    graph_inputs = []
 
     async def fake_research_worker_node(incoming_state):
         return {**incoming_state, "research_context": "- external", "research_status": "ready"}
 
-    async def fake_apply_graph_worker(incoming_state, graph_tools):
-        graph_inputs.append((incoming_state["research_context"], graph_tools))
-        return {**incoming_state, "graph_data": {"nodes": []}}
-
     monkeypatch.setattr("agent.pipeline_steps.research_worker_node", fake_research_worker_node)
-    monkeypatch.setattr("agent.pipeline_steps.apply_graph_worker", fake_apply_graph_worker)
 
     result = await maybe_expand_with_search_tool(state, ["graph-tool"], asyncio.create_task(asyncio.sleep(0, True)))
 
     assert result["research_context"] == "- external"
     assert result["research_status"] == "ready"
-    assert result["graph_data"] == {"nodes": []}
-    assert graph_inputs == [("- external", ["graph-tool"])]
+    assert result["evidence_bundle"]["research_context"] == "- external"
+    assert result["graph_data"] is None
 
 
 @pytest.mark.asyncio

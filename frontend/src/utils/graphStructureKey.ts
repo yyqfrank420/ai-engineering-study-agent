@@ -41,6 +41,8 @@ export function graphStructureKey(graph: GraphData | null): string {
       label: edge.label,
       technology: edge.technology,
       sync: edge.sync,
+      flow: edge.flow ?? null,
+      type: edge.type ?? null,
       description: edge.description,
     })),
     sequence: graph.sequence.map((step) => ({
@@ -51,6 +53,7 @@ export function graphStructureKey(graph: GraphData | null): string {
     groups: (graph.groups ?? []).map((group) => ({
       id: group.id,
       label: group.label,
+      kind: group.kind ?? null,
       nodeIds: group.nodeIds,
     })),
   });

@@ -10,14 +10,26 @@ export const MIN_COL_W = NODE_W + 84;
 export const VERTICAL_PAD = 32;
 export const VERTICAL_LEVEL_H = NODE_H + 12;
 export const INITIAL_FIT_PADDING = 32;
-export const GRAPH_LAYOUT_VERSION = 3;
+export const GRAPH_LAYOUT_VERSION = 6;
 
 export type GraphOrientation = 'horizontal' | 'vertical';
 
-export function selectGraphOrientation(viewportWidth: number, depthCount: number): GraphOrientation {
+export function selectGraphOrientation(
+  viewportWidth: number,
+  depthCount: number,
+  widestLevel = 1,
+): GraphOrientation {
   const horizontalWidth = Math.max(1, depthCount) * MIN_COL_W + 2 * H_PAD;
   const initialScale = (viewportWidth - 64) / horizontalWidth;
-  return depthCount >= 4 && initialScale < 0.72 ? 'vertical' : 'horizontal';
+  // The prior depth>=7 guard left six-level graphs in a ~0.38-scale horizontal
+  // strip on the evaluation viewport. Use the predicted readable scale once a
+  // graph is deep enough to have a meaningful vertical flow.
+  // A shallow graph can still be unreadable when one stage fans out to many
+  // parallel responsibilities. Vertical flow can wrap that stage into bounded
+  // rows; horizontal flow would instead expand its height and shrink every card.
+  return (depthCount >= 4 && initialScale < 0.55) || widestLevel >= 4
+    ? 'vertical'
+    : 'horizontal';
 }
 
 export function initialFitScale(

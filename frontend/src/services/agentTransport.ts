@@ -93,6 +93,8 @@ export class AgentTransport {
   private _chatClientRequestId: string | null = null;
   private _chatCommandsReady = false;
   private _pendingSteers: string[] = [];
+  private _nodeAbortController: AbortController | null = null;
+  private _nodeClientRequestId: string | null = null;
 
   /**
    * WS /api/chat/ws — runs one bidirectional, steerable agent turn.
@@ -105,7 +107,9 @@ export class AgentTransport {
     opts?: { complexity?: ComplexityLevel; graphMode?: GraphMode; researchEnabled?: boolean },
     clientRequestId = createClientRequestId(),
   ): Promise<boolean> {
-    this._chatSocket?.close(1000, 'Superseded by a new request');
+    if (this._chatSocket) {
+      this.stopGeneration(this._chatClientRequestId ?? undefined);
+    }
     this._chatClientRequestId = clientRequestId;
     this._chatCommandsReady = false;
     this._pendingSteers = [];
@@ -157,6 +161,7 @@ export class AgentTransport {
           socket.send(JSON.stringify({ type: 'auth', access_token: session.access_token }));
         };
         socket.onmessage = (message) => {
+          if (this._chatSocket !== socket) return;
           try {
             const event = JSON.parse(String(message.data)) as ServerEvent | { type: 'ready' };
             if (event.type === 'ready') {
@@ -226,19 +231,23 @@ export class AgentTransport {
   }
 
   /** Cancel server-side work over the active command channel. */
-  stopGeneration(): void {
+  stopGeneration(clientRequestId?: string): boolean {
     const socket = this._chatSocket;
-    if (!socket) return;
-    if (socket.readyState === WebSocket.OPEN && this._chatCommandsReady) {
-      socket.send(JSON.stringify({ type: 'stop', client_request_id: this._chatClientRequestId }));
-      window.setTimeout(() => socket.close(1000, 'Stopped by user'), 750);
-    } else {
-      socket.close(1000, 'Stopped by user');
-    }
+    if (!socket) return false;
+    if (clientRequestId && this._chatClientRequestId !== clientRequestId) return false;
+    const activeRequestId = this._chatClientRequestId;
+    const commandsReady = this._chatCommandsReady;
     this._chatSocket = null;
     this._chatClientRequestId = null;
     this._chatCommandsReady = false;
     this._pendingSteers = [];
+    if (socket.readyState === WebSocket.OPEN && commandsReady) {
+      socket.send(JSON.stringify({ type: 'stop', client_request_id: activeRequestId }));
+      window.setTimeout(() => socket.close(1000, 'Stopped by user'), 750);
+    } else {
+      socket.close(1000, 'Stopped by user');
+    }
+    return true;
   }
 
   /** Return a browser-rendered candidate to the waiting LangGraph quality gate. */
@@ -293,24 +302,46 @@ export class AgentTransport {
     description: string,
     clientRequestId = createClientRequestId(),
   ): Promise<boolean> {
-    const response = await fetch(`${API_BASE}/api/node-selected`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${session.access_token}`,
-      },
-      body: JSON.stringify({
-        thread_id: threadId,
-        node_id: nodeId,
-        title,
-        description,
-        client_request_id: clientRequestId,
-      }),
-    });
-    return await consumeSSEStream(response, this.eventHandlers, {
-      kind: 'node-selected',
-      clientRequestId,
-    });
+    this.cancelNodeSelection();
+    const controller = new AbortController();
+    this._nodeAbortController = controller;
+    this._nodeClientRequestId = clientRequestId;
+    try {
+      const response = await fetch(`${API_BASE}/api/node-selected`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          thread_id: threadId,
+          node_id: nodeId,
+          title,
+          description,
+          client_request_id: clientRequestId,
+        }),
+        signal: controller.signal,
+      });
+      return await consumeSSEStream(response, this.eventHandlers, {
+        kind: 'node-selected',
+        clientRequestId,
+      });
+    } finally {
+      if (this._nodeAbortController === controller) {
+        this._nodeAbortController = null;
+        this._nodeClientRequestId = null;
+      }
+    }
+  }
+
+  cancelNodeSelection(clientRequestId?: string): boolean {
+    if (!this._nodeAbortController) return false;
+    if (clientRequestId && this._nodeClientRequestId !== clientRequestId) return false;
+    const controller = this._nodeAbortController;
+    this._nodeAbortController = null;
+    this._nodeClientRequestId = null;
+    controller.abort();
+    return true;
   }
 
   async useSearchTool(session: AuthSession, threadId: string, requestId: string): Promise<{ ok: boolean; status: string }> {

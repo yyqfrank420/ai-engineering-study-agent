@@ -19,6 +19,7 @@
 
 import asyncio
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -34,6 +35,12 @@ _TITLE_MAX = 80
 _BODY_MAX = 120
 _TOPIC_MAX = 160
 
+_DESIGN_SCAFFOLD = re.compile(
+    r"\b(?:multi[- ]agent|agentic|ai[- ]powered|artificial intelligence|ai|"
+    r"architecture|system|platform|pipeline|workflow|chatbot|assistant)\b",
+    re.IGNORECASE,
+)
+
 
 async def research_worker_node(state: AgentState) -> AgentState:
     """
@@ -46,7 +53,7 @@ async def research_worker_node(state: AgentState) -> AgentState:
     send = state["send"]
     await send({"type": "worker_status", "worker": "research", "status": "Searching the web…"})
 
-    topic = _normalise_topic(state["user_message"])
+    topic = _normalise_topic(state.get("design_query") or state["user_message"])
     queries = _build_queries(topic)
 
     try:
@@ -116,12 +123,27 @@ def _source_urls(context: str) -> list[str]:
 
 
 def _build_queries(topic: str) -> list[str]:
+    """Research both the proposed technology and the function it must serve.
+
+    Terse design prompts otherwise produce three near-duplicate architecture
+    searches. Removing only generic solution scaffolding gives the architect
+    evidence about the domain's real workflow, decisions, measures, and failure
+    modes without asking another model to expand the query.
+    """
     current_year = datetime.now(timezone.utc).year
+    domain_topic = _domain_topic(topic)
     return [
-        f"{topic} architecture",
-        f"{topic} best practices",
-        f"{topic} implementation {current_year}",
+        f"{topic} reference architecture reliability security",
+        f"{domain_topic} operating model workflow decision points KPIs",
+        f"{domain_topic} best practices failure modes {current_year}",
     ]
+
+
+def _domain_topic(topic: str) -> str:
+    stripped = _DESIGN_SCAFFOLD.sub(" ", topic)
+    stripped = re.sub(r"\s+", " ", stripped).strip(" -:;,.")
+    stripped = re.sub(r"^(?:for|to)\s+", "", stripped, flags=re.IGNORECASE)
+    return stripped if len(stripped) >= 3 else topic
 
 
 def _run_ddg_searches(queries: list[str], results_per_query: int) -> list[dict]:

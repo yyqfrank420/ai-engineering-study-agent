@@ -56,7 +56,7 @@ export function ThinkingIndicator({
                 {explanationPaused ? 'Explanation reveal paused' : 'Designing your system'}
               </div>
               <div style={{ color: '#6e7681', fontSize: '0.64rem', marginTop: 2 }}>
-                The diagram appears as soon as its content and layout checks pass.
+                The new diagram and walkthrough reveal together after every quality check passes.
               </div>
             </div>
             {(isGenerating || explanationPaused) && onTogglePause && (

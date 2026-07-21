@@ -55,6 +55,7 @@ export interface GraphEdge {
   sync: 'sync' | 'async';    // solid line = sync, dashed line = async
   description: string;        // 1 sentence: what data flows over this connection
   type?: 'loop';              // loop = hidden feedback arc, revealed on hover of source node
+  flow?: 'runtime' | 'control' | 'feedback' | 'deployment';
   edge_id?: string;
   relation?: string;
   confidence?: number;
@@ -71,6 +72,7 @@ export interface GraphGroup {
   id: string;
   label: string;        // e.g. "Orchestration Layer"
   nodeIds: string[];    // IDs of member nodes
+  kind?: 'runtime' | 'data' | 'operations' | 'delivery' | 'external';
 }
 
 export interface GraphViewState {

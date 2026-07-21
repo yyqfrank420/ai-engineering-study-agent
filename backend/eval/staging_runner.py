@@ -509,6 +509,8 @@ def evaluate_expectation(step: StagingStep, run: dict, case_state: dict) -> list
         or expect.graph_node_labels_exclude
         or expect.graph_node_label_keywords_include
         or expect.graph_max_generic_label_count is not None
+        or expect.graph_maturity
+        or expect.graph_min_retained_node_ratio is not None
     ):
         if graph_data is None:
             failures.append("graph quality expectations were set but no graph_data was emitted")
@@ -556,6 +558,31 @@ def evaluate_expectation(step: StagingStep, run: dict, case_state: dict) -> list
                         "graph generic label count exceeded "
                         f"({generic_count} > {expect.graph_max_generic_label_count})"
                     )
+
+            if expect.graph_maturity:
+                failures.extend(_graph_maturity_failures(graph_data))
+
+            if expect.graph_min_retained_node_ratio is not None:
+                previous_graph = case_state.get("last_graph_data") or {}
+                previous_ids = {
+                    str(node.get("id"))
+                    for node in (previous_graph.get("nodes") or [])
+                    if node.get("id")
+                }
+                current_ids = {
+                    str(node.get("id"))
+                    for node in (graph_data.get("nodes") or [])
+                    if node.get("id")
+                }
+                if not previous_ids:
+                    failures.append("graph retention expectation had no previous graph")
+                else:
+                    retained_ratio = len(previous_ids & current_ids) / len(previous_ids)
+                    if retained_ratio < expect.graph_min_retained_node_ratio:
+                        failures.append(
+                            "graph retained too few stable component identities "
+                            f"({retained_ratio:.2f} < {expect.graph_min_retained_node_ratio:.2f})"
+                        )
 
     for worker in expect.workers_include:
         if worker not in workers:
@@ -609,6 +636,63 @@ def evaluate_expectation(step: StagingStep, run: dict, case_state: dict) -> list
         if deleted != expect.thread_deleted:
             failures.append(f"thread_deleted expected {expect.thread_deleted}, got {deleted}")
 
+    return failures
+
+
+def _graph_maturity_failures(graph: dict) -> list[str]:
+    """Check composition without prescribing exact model-authored component names."""
+    failures: list[str] = []
+    nodes = graph.get("nodes") or []
+    edges = graph.get("edges") or []
+    node_ids = [str(node.get("id")) for node in nodes if node.get("id")]
+    node_id_set = set(node_ids)
+    if len(node_ids) != len(nodes) or len(node_id_set) != len(node_ids):
+        failures.append("mature graph requires one unique id per node")
+        return failures
+
+    valid_edges = [
+        edge for edge in edges
+        if edge.get("source") in node_id_set and edge.get("target") in node_id_set
+    ]
+    if len(valid_edges) != len(edges):
+        failures.append("mature graph contains an edge with an unknown endpoint")
+    if node_ids:
+        adjacency = {node_id: set() for node_id in node_ids}
+        for edge in valid_edges:
+            source, target = str(edge["source"]), str(edge["target"])
+            adjacency[source].add(target)
+            adjacency[target].add(source)
+        visited = {node_ids[0]}
+        pending = [node_ids[0]]
+        while pending:
+            current = pending.pop()
+            for neighbour in adjacency[current] - visited:
+                visited.add(neighbour)
+                pending.append(neighbour)
+        if len(visited) != len(node_ids):
+            failures.append("mature graph must be one connected architecture")
+
+    if not any(edge.get("type") == "loop" or edge.get("flow") == "feedback" for edge in edges):
+        failures.append("mature graph requires an explicit measured feedback path")
+
+    groups = graph.get("groups") or []
+    memberships = [str(node_id) for group in groups for node_id in (group.get("nodeIds") or [])]
+    if len(groups) < 3:
+        failures.append("mature graph requires at least three named responsibility zones")
+    if set(memberships) != node_id_set or len(memberships) != len(set(memberships)):
+        failures.append("mature graph must assign every node to exactly one responsibility zone")
+
+    sequence = graph.get("sequence") or []
+    if len(sequence) < 4:
+        failures.append("mature graph requires at least four ordered runtime steps")
+    if any(
+        not step.get("nodes")
+        or any(str(node_id) not in node_id_set for node_id in step.get("nodes") or [])
+        for step in sequence
+    ):
+        failures.append("mature graph sequence contains an unknown or empty step")
+    if not graph.get("assumptions"):
+        failures.append("mature graph must keep inferred requirements visible as assumptions")
     return failures
 
 
@@ -686,14 +770,14 @@ async def run_case(
             try:
                 run = await run_step(client, base_url, auth_token, thread_id, step, case_state)
                 graph_data = extract_graph_data(run.get("events", []))
-                if graph_data is not None:
-                    case_state["last_graph_data"] = graph_data
 
                 if step.kind == "list_threads" and "baseline_thread_count" not in case_state:
                     body = run.get("json_body") or {}
                     case_state["baseline_thread_count"] = count_visible_threads(body, case_state)
 
                 failures = evaluate_expectation(step, run, case_state)
+                if graph_data is not None:
+                    case_state["last_graph_data"] = graph_data
             except Exception as exc:
                 run = {
                     "status_code": None,

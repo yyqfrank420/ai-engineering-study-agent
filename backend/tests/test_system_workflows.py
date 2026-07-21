@@ -92,6 +92,9 @@ def test_recruiter_demo_happy_path_system_workflow(temp_data_dir, monkeypatch):
 
         assert client.get("/api/prepare", headers=headers).json() == {
             "status": "ready",
+            "step": "ready",
+            "detail": "Knowledge base ready",
+            "progress": {"completed_units": 3, "total_units": 3, "percent": 100},
             "faiss_loaded": True,
         }
 

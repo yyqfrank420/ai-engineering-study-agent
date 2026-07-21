@@ -65,7 +65,7 @@ def test_deterministic_gate_does_not_guess_semantics_from_prose_vocabulary():
     assert review["missing"] == []
 
 
-def test_semantic_vocabulary_is_not_a_deterministic_publication_gate():
+def test_generic_book_vocabulary_is_rejected_before_publication():
     graph = {
         "nodes": [
             {"label": label, "description": "Generic book concept"}
@@ -87,8 +87,39 @@ def test_semantic_vocabulary_is_not_a_deterministic_publication_gate():
         "production",
     )
 
-    assert review["approved"] is True
-    assert review["missing"] == []
+    assert review["approved"] is False
+    assert any("generic book concepts" in item for item in review["missing"])
+
+
+def test_one_standalone_generic_label_is_rejected_before_publication():
+    graph = _domain_graph()
+    graph["nodes"][0] = {"label": "Agent", "description": "Owns the campaign objective"}
+
+    review = _deterministic_review(
+        "growth and performance marketing AI agent system",
+        graph,
+        "prototype",
+    )
+
+    assert review["approved"] is False
+    assert any("generic book concepts" in item for item in review["missing"])
+
+
+def test_disconnected_architecture_is_rejected_before_publication():
+    graph = _domain_graph()
+    graph["nodes"] = [
+        {**node, "id": f"node_{index}"}
+        for index, node in enumerate(graph["nodes"])
+    ]
+
+    review = _deterministic_review(
+        "Design a growth marketing optimization system",
+        graph,
+        "production",
+    )
+
+    assert review["approved"] is False
+    assert any("Connect every component" in item for item in review["missing"])
 
 
 def test_read_only_design_does_not_invent_an_external_write_boundary():
@@ -187,6 +218,7 @@ def test_render_gate_rejects_overlap_clipping_or_missing_capture():
     })
 
     assert review["approved"] is False
+    assert review["terminal"] is True
     assert any("actual candidate" in item for item in review["missing"])
     assert any("overlapping" in item for item in review["missing"])
 
@@ -206,6 +238,7 @@ def test_render_gate_accepts_a_complete_readable_browser_capture():
     })
 
     assert review["approved"] is True
+    assert review["terminal"] is False
 
 
 def test_complete_browser_geometry_downgrades_a_contradicted_clipping_claim():
@@ -356,6 +389,11 @@ async def test_semantic_critic_never_receives_the_rendered_image(monkeypatch):
         "graph_data": graph,
         "graph_changed": True,
         "user_message": "Design a production growth marketing agent system",
+        "evidence_bundle": {
+            "checklist": [{"area": "evaluation", "question": "Measure outcomes"}],
+            "book_evidence": [{"chapter": 1, "page_number": 8, "text": "Evaluate measured outcomes."}],
+            "research_context": "- [Current source](https://example.com): current evidence",
+        },
         "complexity": "production",
         "send": send,
         "await_diagram_evaluation": await_diagram,
@@ -367,4 +405,92 @@ async def test_semantic_critic_never_receives_the_rendered_image(monkeypatch):
     assert isinstance(captured["messages"][0]["content"], str)
     assert "private-render-must-not-reach-the-semantic-model" not in captured["messages"][0]["content"]
     assert "Browser layout report" not in captured["messages"][0]["content"]
+    assert "Supplied evidence allowlist" in captured["messages"][0]["content"]
+    assert "https://example.com" in captured["messages"][0]["content"]
     assert "Do not assess or mention" in _GRAPH_CRITIC_SYSTEM
+
+
+@pytest.mark.asyncio
+async def test_terse_followup_still_reviews_every_changed_applied_graph(monkeypatch):
+    calls = {"critic": 0, "render": 0}
+
+    async def fake_stream_llm(**_kwargs):
+        calls["critic"] += 1
+        return json.dumps({
+            "approved": True,
+            "score": 0.9,
+            "strengths": ["The requested approval path remains domain specific."],
+            "blocking_failures": [],
+            "advice": [],
+            "revision_instruction": "",
+        })
+
+    async def await_diagram(graph):
+        calls["render"] += 1
+        return {
+            "screenshot_base64": "private-render",
+            "report": {
+                "rendered_nodes": len(graph["nodes"]),
+                "rendered_edges": len(graph["edges"]),
+                "overlap_count": 0,
+                "clipped_nodes": 0,
+                "clipped_edges": 0,
+                "minimum_text_px": 8,
+            },
+        }
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr("agent.nodes.graph_critic.stream_llm", fake_stream_llm)
+    result = await graph_critic_node({
+        "graph_data": _domain_graph(),
+        "graph_changed": True,
+        "user_message": "expand the approval path",
+        "design_query": "growth marketing multi-agent system expand the approval path",
+        "complexity": "prototype",
+        "send": send,
+        "await_diagram_evaluation": await_diagram,
+        "user_id": "user-1",
+        "session_id": "thread-1",
+    })
+
+    assert result["graph_review"]["approved"] is True
+    assert calls == {"critic": 1, "render": 1}
+
+
+@pytest.mark.asyncio
+async def test_hard_render_failure_skips_the_paid_semantic_critic(monkeypatch):
+    async def fail_stream_llm(**_kwargs):
+        raise AssertionError("hard deterministic failures must not spend a critic call")
+
+    async def await_diagram(_graph):
+        return {
+            "screenshot_base64": "private-render",
+            "report": {
+                "rendered_nodes": 5,
+                "rendered_edges": 1,
+                "overlap_count": 1,
+                "clipped_nodes": 0,
+                "clipped_edges": 0,
+                "minimum_text_px": 8,
+            },
+        }
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr("agent.nodes.graph_critic.stream_llm", fail_stream_llm)
+    result = await graph_critic_node({
+        "graph_data": _domain_graph(),
+        "graph_changed": True,
+        "user_message": "growth marketing multi-agent system",
+        "complexity": "prototype",
+        "send": send,
+        "await_diagram_evaluation": await_diagram,
+        "user_id": "user-1",
+        "session_id": "thread-1",
+    })
+
+    assert result["graph_review"]["approved"] is False
+    assert any("overlapping" in item for item in result["graph_review"]["missing"])

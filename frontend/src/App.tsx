@@ -55,6 +55,7 @@ export default function App() {
   const {
     backendReadiness,
     prepareMessage,
+    prepareProgress,
     isBackendReady,
     prepareBackendNow,
     clearPreparedCache,
@@ -99,7 +100,10 @@ export default function App() {
 
   const [complexity,      setComplexity]      = useState<ComplexityLevel>('auto');
   const [graphMode,       setGraphMode]       = useState<GraphMode>('auto');
-  const [researchEnabled, setResearchEnabled] = useState(false);
+  // Architecture prompts should arrive at the design roles with both the book
+  // and current functional context. Users can still disable web research for
+  // a deliberately book-only or lower-latency answer.
+  const [researchEnabled, setResearchEnabled] = useState(true);
   const previousModeKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -338,7 +342,9 @@ export default function App() {
                 <Suspense fallback={<div style={panelFallbackStyle}>Loading graph…</div>}>
                   <GraphCanvas
                     graphData={graphData}
-                    animateSequence={streamStatus === 'generating'}
+                    // Reveal the complete architecture first. The sequence bar
+                    // remains available for an intentional step-by-step tour.
+                    animateSequence={false}
                     authSession={authSession}
                     activeThreadId={activeThreadId}
                     onNodeClick={handleNodeClick}
@@ -421,6 +427,7 @@ export default function App() {
                     showPrepare={showPrepare}
                     prepareDisabled={prepareDisabled}
                     prepareMessage={prepareMessage}
+                    prepareProgress={prepareProgress}
                     complexity={complexity}
                     graphMode={graphMode}
                     researchEnabled={researchEnabled}

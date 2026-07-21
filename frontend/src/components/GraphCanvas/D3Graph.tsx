@@ -140,6 +140,7 @@ type RenderLink = {
   description: string;
   stepNum: number | null;
   edgeType: 'normal' | 'loop';
+  flow: NonNullable<GraphEdge['flow']>;
 };
 
 interface GraphRenderState {
@@ -181,7 +182,9 @@ export function D3Graph({
   const onViewStateChangeRef = useRef(onViewStateChange);
   const graphDataRef = useRef(graphData);
   const initialViewStateRef = useRef(initialViewState);
+  const renderedStructureRef = useRef<string | null>(null);
   const [edgeTooltip, setEdgeTooltip] = useState<EdgeTooltip | null>(null);
+  const [viewportRevision, setViewportRevision] = useState(0);
   const structureKey = graphStructureKey(graphData);
   const detailKey = graphData
     ? graphData.nodes.map(node => `${node.id}:${node.detail || node.design_origin === 'applied' ? '1' : '0'}`).join('|')
@@ -203,6 +206,24 @@ export function D3Graph({
     onViewStateChangeRef.current = onViewStateChange;
   }, [onViewStateChange]);
 
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg || typeof ResizeObserver === 'undefined') return;
+    let width = Math.round(svg.getBoundingClientRect().width);
+    let height = Math.round(svg.getBoundingClientRect().height);
+    const observer = new ResizeObserver((entries) => {
+      const box = entries[0]?.contentRect;
+      const nextWidth = Math.round(box?.width ?? svg.getBoundingClientRect().width);
+      const nextHeight = Math.round(box?.height ?? svg.getBoundingClientRect().height);
+      if (nextWidth === width && nextHeight === height) return;
+      width = nextWidth;
+      height = nextHeight;
+      setViewportRevision(value => value + 1);
+    });
+    observer.observe(svg);
+    return () => observer.disconnect();
+  }, []);
+
   // ── Main render effect — fires when graphData changes ───────────────────────
   useEffect(() => {
     if (!svgRef.current) return;
@@ -223,6 +244,30 @@ export function D3Graph({
     // ── Arrowhead markers ─────────────────────────────────────────────────────
     const defs = svg.append('defs');
 
+    const gridPattern = defs.append('pattern')
+      .attr('id', 'architecture-grid')
+      .attr('width', 24)
+      .attr('height', 24)
+      .attr('patternUnits', 'userSpaceOnUse');
+    gridPattern.append('circle')
+      .attr('cx', 1)
+      .attr('cy', 1)
+      .attr('r', 0.8)
+      .attr('fill', 'rgba(148,163,184,0.11)');
+
+    const cardShadow = defs.append('filter')
+      .attr('id', 'architecture-card-shadow')
+      .attr('x', '-20%')
+      .attr('y', '-30%')
+      .attr('width', '140%')
+      .attr('height', '160%');
+    cardShadow.append('feDropShadow')
+      .attr('dx', 0)
+      .attr('dy', 5)
+      .attr('stdDeviation', 7)
+      .attr('flood-color', '#000814')
+      .attr('flood-opacity', 0.34);
+
     // Standard arrowhead (dark gray) — used for forward edges
     defs.append('marker')
       .attr('id', 'arrow-fwd')
@@ -240,6 +285,12 @@ export function D3Graph({
       .attr('markerWidth', 6).attr('markerHeight', 6)
       .attr('orient', 'auto')
       .append('path').attr('d', 'M0,-5L10,0L0,5').attr('fill', 'rgba(167,139,250,0.7)');
+
+    svg.append('rect')
+      .attr('width', '100%')
+      .attr('height', '100%')
+      .attr('fill', 'url(#architecture-grid)')
+      .style('pointer-events', 'none');
 
     // ── Pan + zoom container ──────────────────────────────────────────────────
     // Store the zoom behaviour so we can set the initial fit transform later.
@@ -282,11 +333,6 @@ export function D3Graph({
     // ── Assign topological columns ────────────────────────────────────────────
     const colMap  = assignColumns(nodes.map(n => n.id), renderGraphData.edges);
     const numCols = Math.max(1, ...colMap.values()) + 1;
-    const orientation = selectGraphOrientation(width, numCols);
-    const restoreViewState = renderInitialViewState?.layoutVersion === GRAPH_LAYOUT_VERSION
-      ? renderInitialViewState
-      : undefined;
-    const colWidth = Math.max(MIN_COL_W, (width - 2 * H_PAD) / numCols);
 
     // Group nodes by column, then assign fixed (x, y) positions
     const colBuckets = new Map<number, RenderNode[]>();
@@ -295,6 +341,15 @@ export function D3Graph({
       if (!colBuckets.has(c)) colBuckets.set(c, []);
       colBuckets.get(c)!.push(n);
     }
+    const widestLevel = Math.max(1, ...Array.from(colBuckets.values(), bucket => bucket.length));
+    const orientation = selectGraphOrientation(width, numCols, widestLevel);
+    const isNewStructure = renderedStructureRef.current !== structureKey;
+    const restoreViewState = isNewStructure
+      && renderInitialViewState?.layoutVersion === GRAPH_LAYOUT_VERSION
+      ? renderInitialViewState
+      : undefined;
+    renderedStructureRef.current = structureKey;
+    const colWidth = Math.max(MIN_COL_W, (width - 2 * H_PAD) / numCols);
 
     const incomingIds = new Map<string, string[]>();
     const outgoingIds = new Map<string, string[]>();
@@ -318,11 +373,24 @@ export function D3Graph({
       }
     }
 
+    const groupRank = new Map<string, number>();
+    (renderGraphData.groups ?? []).forEach((group, index) => {
+      group.nodeIds.forEach(nodeId => {
+        if (!groupRank.has(nodeId)) groupRank.set(nodeId, index);
+      });
+    });
+
     const orderById = new Map<string, number>();
     const sortedColumns = Array.from(colBuckets.keys()).sort((a, b) => a - b);
     for (const columnIndex of sortedColumns) {
       const bucket = colBuckets.get(columnIndex) ?? [];
       bucket.sort((a: RenderNode, b: RenderNode) => {
+        const groupCompare = compareNullableNumber(
+          groupRank.get(a.id) ?? null,
+          groupRank.get(b.id) ?? null,
+        );
+        if (groupCompare !== 0) return groupCompare;
+
         const aIncoming = incomingIds.get(a.id) ?? [];
         const bIncoming = incomingIds.get(b.id) ?? [];
 
@@ -366,26 +434,58 @@ export function D3Graph({
     const BOTTOM_BAND_H = 108;
     const MIN_ROW_H     = NODE_H + 64;   // slightly looser spacing without blowing out the layout
 
-    const maxMainInCol = Math.max(
+    const ungroupedRank = (renderGraphData.groups ?? []).length;
+    const mainGroupRanks = Array.from(new Set(
+      nodes
+        .filter(node => node.lane !== 'bottom')
+        .map(node => groupRank.get(node.id) ?? ungroupedRank),
+    )).sort((a, b) => a - b);
+    const maxNodesPerGroupInColumn = new Map<number, number>();
+    for (const rank of mainGroupRanks) {
+      maxNodesPerGroupInColumn.set(rank, Math.max(
+        1,
+        ...Array.from(colBuckets.values()).map(bucket => bucket.filter(
+          node => node.lane !== 'bottom' && (groupRank.get(node.id) ?? ungroupedRank) === rank,
+        ).length),
+      ));
+    }
+    const totalMainSlots = Math.max(
       1,
-      ...Array.from(colBuckets.values())
-        .map(b => b.filter((n: RenderNode) => n.lane !== 'bottom').length)
+      mainGroupRanks.reduce((total, rank) => total + (maxNodesPerGroupInColumn.get(rank) ?? 1), 0),
     );
     // effectiveMainH is the actual height used for main-band Y calculation.
     // It's at least the canvas main band, but expands to fit all nodes.
     const canvasMainH    = height - 2 * V_PAD - BOTTOM_BAND_H;
-    const effectiveMainH = Math.max(canvasMainH, maxMainInCol * MIN_ROW_H);
+    const effectiveMainH = Math.max(canvasMainH, totalMainSlots * MIN_ROW_H);
 
-    const maxNodesInLevel = Math.max(1, ...Array.from(colBuckets.values()).map(bucket => bucket.length));
-    const verticalLayoutW = Math.max(width, maxNodesInLevel * MIN_COL_W + 2 * H_PAD);
-    const verticalRowW = (verticalLayoutW - 2 * H_PAD) / maxNodesInLevel;
+    // Keep parallel fan-out readable by wrapping a wide topology level. The
+    // previous layout widened the virtual canvas for every peer, then shrank
+    // all titles below the publication threshold to fit the viewport.
+    const VERTICAL_NODE_GAP = 24;
+    const verticalNodesPerRow = Math.max(
+      1,
+      Math.floor((width - 2 * H_PAD + VERTICAL_NODE_GAP) / (NODE_W + VERTICAL_NODE_GAP)),
+    );
+    const verticalLayoutW = width;
+    const verticalLevelStart = new Map<number, number>();
+    let verticalCursor = VERTICAL_PAD;
+    for (const columnIndex of sortedColumns) {
+      verticalLevelStart.set(columnIndex, verticalCursor);
+      const bucketSize = colBuckets.get(columnIndex)?.length ?? 0;
+      verticalCursor += Math.max(1, Math.ceil(bucketSize / verticalNodesPerRow)) * VERTICAL_LEVEL_H;
+    }
 
     for (const [c, bucket] of colBuckets) {
       if (orientation === 'vertical') {
-        const rowOffset = (maxNodesInLevel - bucket.length) / 2;
         bucket.forEach((node: RenderNode, index: number) => {
-          node.x = H_PAD + (rowOffset + index + 0.5) * verticalRowW;
-          node.y = VERTICAL_PAD + (c + 0.5) * VERTICAL_LEVEL_H;
+          const wrappedRow = Math.floor(index / verticalNodesPerRow);
+          const indexInRow = index % verticalNodesPerRow;
+          const rowStart = wrappedRow * verticalNodesPerRow;
+          const nodesInRow = Math.min(verticalNodesPerRow, bucket.length - rowStart);
+          const rowWidth = nodesInRow * NODE_W + (nodesInRow - 1) * VERTICAL_NODE_GAP;
+          node.x = (width - rowWidth) / 2 + NODE_W / 2 + indexInRow * (NODE_W + VERTICAL_NODE_GAP);
+          node.y = (verticalLevelStart.get(c) ?? VERTICAL_PAD)
+            + (wrappedRow + 0.5) * VERTICAL_LEVEL_H;
         });
         continue;
       }
@@ -394,10 +494,19 @@ export function D3Graph({
       const mainNodes = bucket.filter((node: RenderNode) => node.lane !== 'bottom');
       const bottomNodes = bucket.filter((node: RenderNode) => node.lane === 'bottom');
 
-      mainNodes.forEach((node: RenderNode, index: number) => {
-        node.x = x;
-        node.y = V_PAD + (effectiveMainH / Math.max(mainNodes.length, 1)) * (index + 0.5);
-      });
+      let groupSlotStart = 0;
+      for (const rank of mainGroupRanks) {
+        const groupNodes = mainNodes.filter(
+          node => (groupRank.get(node.id) ?? ungroupedRank) === rank,
+        );
+        const groupSlotCount = maxNodesPerGroupInColumn.get(rank) ?? 1;
+        groupNodes.forEach((node: RenderNode, index: number) => {
+          node.x = x;
+          const slot = groupSlotStart + groupSlotCount * ((index + 0.5) / groupNodes.length);
+          node.y = V_PAD + (effectiveMainH / totalMainSlots) * slot;
+        });
+        groupSlotStart += groupSlotCount;
+      }
 
       bottomNodes.forEach((node: RenderNode, index: number) => {
         node.x = x;
@@ -417,7 +526,7 @@ export function D3Graph({
       ? verticalLayoutW
       : numCols * colWidth + 2 * H_PAD;
     const layoutH = orientation === 'vertical'
-      ? 2 * VERTICAL_PAD + numCols * VERTICAL_LEVEL_H
+      ? verticalCursor + VERTICAL_PAD
       : V_PAD + effectiveMainH + BOTTOM_BAND_H + V_PAD;
 
     // ── Resolve edges to node object references ───────────────────────────────
@@ -452,6 +561,7 @@ export function D3Graph({
         description: e.description ?? '',
         stepNum,
         edgeType:    (e.type ?? 'normal') as 'normal' | 'loop',
+        flow:        e.flow ?? (e.type === 'loop' ? 'feedback' : 'runtime'),
       };
     });
 
@@ -528,42 +638,55 @@ export function D3Graph({
 
     // ── Groups layer (rendered behind edges and nodes) ─────────────────────────
     const groupsLayer = g.append('g').attr('class', 'groups-layer');
+    const groupLabelsLayer = g.append('g').attr('class', 'group-labels-layer');
     const groups = (renderGraphData.groups ?? []) as GraphGroup[];
     const groupEls = groups.map((grp, idx) => {
       const gc = GROUP_PALETTE[idx % GROUP_PALETTE.length];
       const grpEl = groupsLayer.append('g').attr('class', 'group-box');
       const rect  = grpEl.append('rect')
-        .attr('rx', 10)
+        .attr('rx', 14)
         .attr('fill', gc.fill)
         .attr('stroke', gc.stroke)
-        .attr('stroke-width', 1)
-        .attr('stroke-dasharray', '5,3');
-      grpEl.append('text')
-        .text(grp.label.toUpperCase())
-        .attr('font-size', '0.5rem')
+        .attr('stroke-width', 1.2)
+        .attr('stroke-dasharray', '7,5');
+      const labelBackground = groupLabelsLayer.append('rect')
+        .attr('rx', 5)
+        .attr('fill', '#0a101b')
+        .attr('stroke', gc.stroke)
+        .attr('stroke-width', 0.8);
+      const labelText = groupLabelsLayer.append('text')
+        .text(grp.label.length > 28 ? `${grp.label.slice(0, 27)}…` : grp.label)
+        .attr('font-size', '0.58rem')
         .attr('font-weight', 700)
-        .attr('letter-spacing', '0.1em')
+        .attr('letter-spacing', '0.035em')
         .attr('fill', gc.label)
-        .attr('opacity', 0.6)
+        .attr('opacity', 0.92)
         .style('pointer-events', 'none');
-      return { grp, grpEl, rect };
+      return { grp, grpEl, rect, labelBackground, labelText };
     });
 
     // ── Edge layer ────────────────────────────────────────────────────────────
     const linkGroup = g.append('g');
 
     // Visible edge path.
-    // Loop edges (feedback arcs) start hidden and are revealed only on node hover.
+    // Feedback paths remain faintly visible in overview; detailed labels appear
+    // only on hover so dense diagrams do not become a wall of text.
     const link = linkGroup.selectAll('path.edge-vis')
       .data(links).enter().append('path')
       .attr('class', 'edge-vis')
       .attr('fill', 'none')
       .attr('stroke', (d: RenderLink) => {
-        if (d.edgeType === 'loop') return 'rgba(167,139,250,0.7)';
-        return isForward(d) ? '#1e2a3a' : 'rgba(167,139,250,0.35)';
+        if (d.flow === 'feedback') return 'rgba(167,139,250,0.7)';
+        if (d.flow === 'control') return 'rgba(148,163,184,0.52)';
+        if (d.flow === 'deployment') return 'rgba(148,163,184,0.5)';
+        return isForward(d) ? 'rgba(59,130,246,0.55)' : 'rgba(167,139,250,0.35)';
       })
-      .attr('stroke-width', 1.5)
-      .attr('stroke-dasharray', (d: RenderLink) => d.edgeType === 'loop' ? '5,4' : d.sync === 'async' ? '6,4' : 'none')
+      .attr('stroke-width', 1.7)
+      .attr('stroke-dasharray', (d: RenderLink) => {
+        if (d.flow === 'feedback') return '5,4';
+        if (d.flow === 'control' || d.flow === 'deployment') return '3,4';
+        return d.sync === 'async' ? '6,4' : 'none';
+      })
       .attr('marker-end', (d: RenderLink) => (d.edgeType === 'loop' || !isForward(d)) ? 'url(#arrow-ret)' : 'url(#arrow-fwd)')
       .attr('opacity', (d: RenderLink) => d.edgeType === 'loop' ? 0.42 : 0);
 
@@ -582,6 +705,7 @@ export function D3Graph({
           .attr('stroke', 'rgba(167,139,250,0.7)')
           .attr('stroke-width', 2);
         const labelGrpNode = (linkGroup.selectAll('g.edge-label').nodes() as Element[])[idx];
+        d3.select(labelGrpNode).attr('opacity', 1);
         d3.select(labelGrpNode).select('text').attr('fill', '#c9d1d9');
         d3.select(labelGrpNode).select('rect').attr('opacity', 1);
         const svgRect = svgRef.current!.getBoundingClientRect();
@@ -597,9 +721,16 @@ export function D3Graph({
       .on('mouseout', function(_ev: MouseEvent, d: RenderLink) {
         const idx = links.indexOf(d);
         d3.select((linkGroup.selectAll('path.edge-vis').nodes() as Element[])[idx])
-          .attr('stroke', d.edgeType === 'loop' || !isForward(d) ? 'rgba(167,139,250,0.35)' : '#1e2a3a')
-          .attr('stroke-width', 1.5);
+          .attr('stroke', d.flow === 'feedback' || !isForward(d)
+            ? 'rgba(167,139,250,0.35)'
+            : d.flow === 'control'
+              ? 'rgba(148,163,184,0.52)'
+              : d.flow === 'deployment'
+                ? 'rgba(148,163,184,0.5)'
+                : 'rgba(59,130,246,0.55)')
+          .attr('stroke-width', 1.7);
         const labelGrpNode = (linkGroup.selectAll('g.edge-label').nodes() as Element[])[idx];
+        d3.select(labelGrpNode).attr('opacity', 0);
         d3.select(labelGrpNode).select('text').attr('fill', '#7d8590');
         d3.select(labelGrpNode).select('rect').attr('opacity', 0.9);
         setEdgeTooltip(null);
@@ -608,15 +739,17 @@ export function D3Graph({
     // Edge action label (verb phrase) — sits slightly above the edge midpoint
     const edgeLabelGroup = linkGroup.selectAll('g.edge-label')
       .data(links).enter().append('g').attr('class', 'edge-label');
-    edgeLabelGroup.attr('opacity', (d: RenderLink) => d.edgeType === 'loop' ? 0.55 : 0);
+    edgeLabelGroup.attr('opacity', 0);
 
     edgeLabelGroup.append('rect')
-      .attr('rx', 3).attr('fill', '#0a0e1a').attr('opacity', 0.9);
+      .attr('rx', 5).attr('fill', '#090f19').attr('opacity', 0.96)
+      .attr('stroke', 'rgba(148,163,184,0.09)');
 
     edgeLabelGroup.append('text')
       .text((d: RenderLink) => truncateEdgeLabel(d.label))
-      .attr('font-size', '0.5rem')
-      .attr('fill', '#7d8590')
+      .attr('font-size', '0.56rem')
+      .attr('font-weight', 520)
+      .attr('fill', '#8f9baa')
       .attr('text-anchor', 'middle')
       .attr('dominant-baseline', 'middle')
       .style('pointer-events', 'none');
@@ -655,7 +788,7 @@ export function D3Graph({
       .on('mouseover', function(_ev: MouseEvent, d: RenderNode) {
         d3.select(this).select('.node-card')
           .attr('stroke-width', 2)
-          .attr('filter', 'brightness(1.3)');
+          .style('filter', 'brightness(1.14)');
         // Reveal this node's outgoing loop edges (feedback arcs)
         const loopIdxs = loopIndicesBySource.get(d.id) ?? [];
         if (loopIdxs.length > 0) {
@@ -671,8 +804,8 @@ export function D3Graph({
       })
       .on('mouseout', function(_ev: MouseEvent, d: RenderNode) {
         d3.select(this).select('.node-card')
-          .attr('stroke-width', 1.5)
-          .attr('filter', null);
+          .attr('stroke-width', 1.35)
+          .style('filter', null);
         // Hide loop edges again
         const loopIdxs = loopIndicesBySource.get(d.id) ?? [];
         if (loopIdxs.length > 0) {
@@ -682,7 +815,7 @@ export function D3Graph({
           loopIdxs.forEach(i => {
             d3.select(edgeVisNodes[i]).interrupt().transition().duration(200).attr('opacity', 0.42);
             d3.select(edgeHitNodes[i]).attr('opacity', 1).style('pointer-events', 'auto');
-            d3.select(edgeLblNodes[i]).interrupt().transition().duration(200).attr('opacity', 0.55);
+            d3.select(edgeLblNodes[i]).interrupt().transition().duration(200).attr('opacity', 0);
           });
         }
       });
@@ -696,7 +829,8 @@ export function D3Graph({
       .attr('rx', NODE_RX).attr('ry', NODE_RX)
       .attr('fill',   (d: RenderNode) => (TYPE_STYLE[d.type] ?? FALLBACK_STYLE).fill)
       .attr('stroke', (d: RenderNode) => (TYPE_STYLE[d.type] ?? FALLBACK_STYLE).stroke)
-      .attr('stroke-width', 1.5);
+      .attr('stroke-width', 1.35)
+      .attr('filter', 'url(#architecture-card-shadow)');
 
     nodeSel.filter((d: RenderNode) => d.type === 'decision')
       .append('path')
@@ -710,7 +844,8 @@ export function D3Graph({
       ].join(' '))
       .attr('fill',   (d: RenderNode) => (TYPE_STYLE[d.type] ?? FALLBACK_STYLE).fill)
       .attr('stroke', (d: RenderNode) => (TYPE_STYLE[d.type] ?? FALLBACK_STYLE).stroke)
-      .attr('stroke-width', 1.5);
+      .attr('stroke-width', 1.35)
+      .attr('filter', 'url(#architecture-card-shadow)');
 
     // Left accent stripe
     nodeSel.filter((d: RenderNode) => d.type !== 'decision')
@@ -729,7 +864,7 @@ export function D3Graph({
       .attr('opacity', (d: RenderNode) => d.detail || d.design_origin === 'applied' ? 0 : 0.7);
 
     // Row 1 — type badge (top-left)
-    nodeSel.append('text')
+    nodeSel.filter(() => renderGraphData.design_origin !== 'applied').append('text')
       .text((d: RenderNode) => d.type.toUpperCase())
       .attr('x', -NODE_W / 2 + 12).attr('y', -NODE_H / 2 + 11)
       .attr('font-size', '0.44rem').attr('font-weight', 700)
@@ -738,7 +873,7 @@ export function D3Graph({
       .style('pointer-events', 'none');
 
     // Row 1 — tier badge (top-right: PUB / PVT)
-    nodeSel.filter((d: RenderNode) => Boolean(d.tier))
+    nodeSel.filter((d: RenderNode) => Boolean(d.tier) && renderGraphData.design_origin !== 'applied')
       .append('text')
       .text((d: RenderNode) => d.tier === 'public' ? 'PUB' : 'PVT')
       .attr('x', NODE_W / 2 - 8).attr('y', -NODE_H / 2 + 11)
@@ -748,12 +883,21 @@ export function D3Graph({
       .attr('fill', (d: RenderNode) => d.tier === 'public' ? '#fbbf24' : '#6e7681')
       .style('pointer-events', 'none');
 
+    nodeSel.filter(() => renderGraphData.design_origin === 'applied')
+      .append('circle')
+      .attr('cx', -NODE_W / 2 + 12)
+      .attr('cy', -NODE_H / 2 + 12)
+      .attr('r', 2.5)
+      .attr('fill', (d: RenderNode) => (TYPE_STYLE[d.type] ?? FALLBACK_STYLE).stroke)
+      .attr('opacity', 0.9)
+      .style('pointer-events', 'none');
+
     // Row 2 — node label (centered, white, main title). Long domain labels
     // wrap instead of losing their distinguishing words to truncation.
     const nodeTitles = nodeSel.append('text')
       .attr('class', 'node-title')
       .attr('text-anchor', 'middle').attr('dominant-baseline', 'middle')
-      .attr('font-size', '0.76rem').attr('font-weight', 500)
+      .attr('font-size', '0.8rem').attr('font-weight', 620)
       .attr('fill', '#e6edf3')
       .style('pointer-events', 'none');
 
@@ -769,9 +913,9 @@ export function D3Graph({
         .text((line: string) => line);
     });
 
-    // Row 3 — technology subtitle (centered, muted)
-    // Max 28 chars — agent is constrained to ≤25 chars; this is a safety truncation only.
-    nodeSel.filter((d: RenderNode) => Boolean(d.technology))
+    // Row 3 — deployable capability for applied architectures. Canonical book
+    // concept metadata is provenance, not a user-facing system component.
+    nodeSel.filter((d: RenderNode) => Boolean(d.technology) && d.design_origin === 'applied')
       .append('text')
       .attr('class', 'node-technology')
       .text((d: RenderNode) => {
@@ -780,15 +924,15 @@ export function D3Graph({
       })
       .attr('text-anchor', 'middle').attr('dominant-baseline', 'middle')
       .attr('y', 24)
-      .attr('font-size', '0.52rem')
-      .attr('fill', '#6e7681')
+      .attr('font-size', '0.54rem')
+      .attr('fill', '#7d8795')
       .style('pointer-events', 'none');
 
     // ── Entry / Exit markers ──────────────────────────────────────────────────
     const MARKER_W = 12, MARKER_H = 8, MARKER_GAP = 6;
 
     // ENTRY — blue right-pointing triangle on left edge
-    nodeSel.filter((d: RenderNode) => sourceNodeIds.has(d.id))
+    nodeSel.filter((d: RenderNode) => sourceNodeIds.has(d.id) && renderGraphData.design_origin !== 'applied')
       .append('polygon')
       .attr('points', [
         `${-NODE_W / 2 - MARKER_GAP - MARKER_W},${-MARKER_H / 2}`,
@@ -797,7 +941,7 @@ export function D3Graph({
       ].join(' '))
       .attr('fill', '#60a5fa').attr('opacity', 0.85).style('pointer-events', 'none');
 
-    nodeSel.filter((d: RenderNode) => sourceNodeIds.has(d.id))
+    nodeSel.filter((d: RenderNode) => sourceNodeIds.has(d.id) && renderGraphData.design_origin !== 'applied')
       .append('text').text('ENTRY')
       .attr('x', -NODE_W / 2 - MARKER_GAP - MARKER_W / 2)
       .attr('y', -MARKER_H / 2 - 4)
@@ -806,7 +950,7 @@ export function D3Graph({
       .attr('fill', '#60a5fa').attr('opacity', 0.9).style('pointer-events', 'none');
 
     // EXIT — slate right-pointing triangle on right edge
-    nodeSel.filter((d: RenderNode) => sinkNodeIds.has(d.id))
+    nodeSel.filter((d: RenderNode) => sinkNodeIds.has(d.id) && renderGraphData.design_origin !== 'applied')
       .append('polygon')
       .attr('points', [
         `${NODE_W / 2 + MARKER_GAP},${-MARKER_H / 2}`,
@@ -815,7 +959,7 @@ export function D3Graph({
       ].join(' '))
       .attr('fill', '#94a3b8').attr('opacity', 0.85).style('pointer-events', 'none');
 
-    nodeSel.filter((d: RenderNode) => sinkNodeIds.has(d.id))
+    nodeSel.filter((d: RenderNode) => sinkNodeIds.has(d.id) && renderGraphData.design_origin !== 'applied')
       .append('text').text('EXIT')
       .attr('x', NODE_W / 2 + MARKER_GAP + MARKER_W / 2)
       .attr('y', -MARKER_H / 2 - 4)
@@ -832,16 +976,16 @@ export function D3Graph({
     stepBadgeGroup.attr('opacity', 0);
 
     stepBadgeGroup.filter((d: RenderLink) => d.stepNum !== null).append('circle')
-      .attr('r', 9)
-      .attr('fill', '#0d1117')
-      .attr('stroke', 'rgba(167,139,250,0.55)')
-      .attr('stroke-width', 1.2);
+      .attr('r', 10.5)
+      .attr('fill', '#101827')
+      .attr('stroke', 'rgba(167,139,250,0.78)')
+      .attr('stroke-width', 1.4);
 
     stepBadgeGroup.filter((d: RenderLink) => d.stepNum !== null).append('text')
       .text((d: RenderLink) => String(d.stepNum))
       .attr('text-anchor', 'middle')
       .attr('dominant-baseline', 'middle')
-      .attr('font-size', '0.48rem')
+      .attr('font-size', '0.54rem')
       .attr('font-weight', 700)
       .attr('fill', '#a78bfa')
       .style('pointer-events', 'none');
@@ -859,23 +1003,60 @@ export function D3Graph({
       // Position step badges at exact edge midpoint
       stepBadgeGroup.attr('transform', (d: RenderLink) => `translate(${midX(d)},${midY(d)})`);
 
-      // Refit group bounding boxes to wrap their member nodes
-      for (const { grp: groupDef, grpEl, rect } of groupEls) {
+      // Refit group boundaries to their member nodes. Some valid topologies
+      // interleave responsibility zones; overlapping rectangles imply false
+      // containment, so those diagrams fall back to per-zone eyebrow chips.
+      const groupLayouts = groupEls.map((groupEl) => {
+        const { grp: groupDef } = groupEl;
         const memberNodes = groupDef.nodeIds
           .map(id => nodeById[id])
           .filter((n): n is RenderNode => n?.x != null && n?.y != null);
-        if (memberNodes.length === 0) continue;
-
-        const PX = 24, PT = 28, PB = 18;
+        const PX = 16, PT = 8, PB = 4;
         const minX = Math.min(...memberNodes.map((n: RenderNode) => n.x)) - NODE_W / 2 - PX;
         const maxX = Math.max(...memberNodes.map((n: RenderNode) => n.x)) + NODE_W / 2 + PX;
         const minY = Math.min(...memberNodes.map((n: RenderNode) => n.y)) - NODE_H / 2 - PT;
         const maxY = Math.max(...memberNodes.map((n: RenderNode) => n.y)) + NODE_H / 2 + PB;
+        return {
+          ...groupEl,
+          memberNodes,
+          bounds: { x: minX, y: minY, width: maxX - minX, height: maxY - minY },
+        };
+      }).filter(layout => layout.memberNodes.length > 0);
 
-        rect.attr('x', minX).attr('y', minY)
-            .attr('width', maxX - minX).attr('height', maxY - minY);
-        grpEl.select('text').attr('x', minX + 10).attr('y', minY + 14);
+      const boundaryLayouts = groupLayouts.filter(layout => layout.memberNodes.length > 1);
+      const boundariesOverlap = boundaryLayouts.some((left, leftIndex) =>
+        boundaryLayouts.slice(leftIndex + 1).some(right => boxesIntersect(left.bounds, right.bounds)),
+      );
+
+      for (const {
+        grp: groupDef,
+        rect,
+        labelBackground,
+        labelText,
+        memberNodes,
+        bounds,
+      } of groupLayouts) {
+        const useBoundary = memberNodes.length > 1 && !boundariesOverlap;
+
+        rect
+          .attr('display', useBoundary ? null : 'none')
+          .attr('x', bounds.x).attr('y', bounds.y)
+          .attr('width', bounds.width).attr('height', bounds.height);
+        const labelWidth = Math.min(
+          NODE_W - 20,
+          Math.max(74, Math.min(groupDef.label.length, 28) * 5.6 + 20),
+        );
+        const labelX = useBoundary ? bounds.x + 10 : memberNodes[0].x - NODE_W / 2 + 8;
+        const labelY = useBoundary ? bounds.y + 3 : memberNodes[0].y - NODE_H / 2 + 4;
+        labelBackground
+          .attr('x', labelX)
+          .attr('y', labelY)
+          .attr('width', labelWidth)
+          .attr('height', 15);
+        labelText.attr('x', labelX + 8).attr('y', labelY + 11);
       }
+
+      groupLabelsLayer.raise();
 
       const occupiedBoxes = nodes.map((node: RenderNode) => ({
         x: node.x - NODE_W / 2 - 14,
@@ -960,7 +1141,7 @@ export function D3Graph({
     return () => {
       renderStateRef.current = null;
     };
-  }, [structureKey]);
+  }, [structureKey, viewportRevision]);
 
   useEffect(() => {
     const renderState = renderStateRef.current;
@@ -1026,7 +1207,9 @@ export function D3Graph({
         if (!showAll && d.stepNum === activeStepNumber) {
           return isForward(d) ? '#8bb5ff' : 'rgba(167,139,250,0.92)';
         }
-        return isForward(d) ? '#1e2a3a' : 'rgba(167,139,250,0.35)';
+        if (d.flow === 'control') return 'rgba(148,163,184,0.52)';
+        if (d.flow === 'deployment') return 'rgba(148,163,184,0.5)';
+        return isForward(d) ? 'rgba(59,130,246,0.55)' : 'rgba(167,139,250,0.35)';
       });
 
     linkHit.filter((d: RenderLink) => d.edgeType !== 'loop')
@@ -1044,10 +1227,10 @@ export function D3Graph({
       .transition()
       .duration(200)
       .attr('opacity', (d: RenderLink) => {
-        if (showAll) return 1;
+        if (showAll) return 0;
         if (d.stepNum === null) return 0.28;
         if (d.stepNum > activeStepNumber) return 0;
-        return d.stepNum === activeStepNumber ? 1 : 0.42;
+        return d.stepNum === activeStepNumber ? 1 : 0;
       });
 
     stepBadgeGroup
@@ -1055,11 +1238,13 @@ export function D3Graph({
       .transition()
       .duration(200)
       .attr('opacity', (d: RenderLink) => {
-        if (showAll) return d.stepNum === null ? 0 : 1;
+        if (showAll) return 0;
         if (d.stepNum === null || d.stepNum > activeStepNumber) return 0;
-        return d.stepNum === activeStepNumber ? 1 : 0.4;
+        return d.stepNum === activeStepNumber ? 1 : 0;
       });
-  }, [activeNodeIds, currentStep]);
+  // ResizeObserver rebuilds the SVG selections. Reapply the current reveal
+  // state to those new elements even when the sequence itself did not change.
+  }, [activeNodeIds, currentStep, structureKey, viewportRevision]);
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>

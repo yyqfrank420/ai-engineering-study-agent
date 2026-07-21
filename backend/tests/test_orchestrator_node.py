@@ -44,7 +44,7 @@ def test_synthesis_prompts_enforce_evidence_bounded_attribution():
         _SYNTHESIS_SYSTEM,
     )
 
-    assert _SYNTHESIS_PROMPT_VERSION == "architecture_blocks_v2"
+    assert _SYNTHESIS_PROMPT_VERSION == "architecture_blocks_v4"
     assert _QUICK_SYNTHESIS_PROMPT_VERSION == "quick_synthesis_v2"
     assert "complete citation allowlist" in _SYNTHESIS_SYSTEM
     assert "Never infer a chapter, page, author attribution, or book claim" in _SYNTHESIS_SYSTEM
@@ -326,6 +326,7 @@ async def test_orchestrator_synthesise_emits_status_and_includes_graph_context(m
             "edges": [],
             "sequence": [],
         },
+        "graph_changed": True,
     }
 
     result = await orchestrator.orchestrator_synthesise(state)
@@ -333,8 +334,10 @@ async def test_orchestrator_synthesise_emits_status_and_includes_graph_context(m
     assert events[0]["type"] == "worker_status"
     assert events[0]["worker"] == "orchestrator"
     assert "Reasoning through the low design" in events[0]["status"]
-    assert events[1]["type"] == "graph_data"
-    assert any(event.get("type") == "explanation_block" for event in events)
+    graph_index = next(index for index, event in enumerate(events) if event["type"] == "graph_data")
+    block_index = next(index for index, event in enumerate(events) if event["type"] == "explanation_block")
+    assert events[1]["type"] == "workflow_progress"
+    assert graph_index < block_index
     assert events[-1]["type"] == "workflow_progress"
     assert events[-1]["status"] == "complete"
     assert not any(event["type"] == "done" for event in events)
