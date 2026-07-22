@@ -241,6 +241,50 @@ def test_render_gate_accepts_a_complete_readable_browser_capture():
     assert review["terminal"] is False
 
 
+def test_render_gate_rejects_missing_overview_and_group_labels_or_overlapping_zones():
+    graph = {"nodes": [{"id": "a"}, {"id": "b"}], "edges": [{"source": "a", "target": "b"}]}
+    review = _deterministic_render_review(graph, {
+        "screenshot_base64": "valid-bounded-image",
+        "report": {
+            "rendered_nodes": 2,
+            "rendered_edges": 1,
+            "overlap_count": 0,
+            "clipped_nodes": 0,
+            "clipped_edges": 0,
+            "minimum_text_px": 7,
+            "overview_required_edge_labels": 1,
+            "visible_overview_required_edge_labels": 0,
+            "grouped_nodes": 2,
+            "group_labelled_nodes": 1,
+            "visible_group_boundaries": 2,
+            "group_boundary_overlap_count": 1,
+        },
+    })
+
+    assert review["approved"] is False
+    assert review["terminal"] is True
+    assert any("overview-required edge label" in item for item in review["missing"])
+    assert any("group label on every node" in item for item in review["missing"])
+    assert any("responsibility-zone boundaries" in item for item in review["missing"])
+
+
+def test_render_gate_accepts_legacy_reports_without_new_visual_metrics():
+    graph = {"nodes": [{"id": "a"}], "edges": []}
+    review = _deterministic_render_review(graph, {
+        "screenshot_base64": "legacy-image",
+        "report": {
+            "rendered_nodes": 1,
+            "rendered_edges": 0,
+            "overlap_count": 0,
+            "clipped_nodes": 0,
+            "clipped_edges": 0,
+            "minimum_text_px": 7,
+        },
+    })
+
+    assert review["approved"] is True
+
+
 def test_complete_browser_geometry_downgrades_a_contradicted_clipping_claim():
     graph = {"nodes": [{"id": "store"}], "edges": [{"source": "store", "target": "store"}]}
     model = _normalise_review({

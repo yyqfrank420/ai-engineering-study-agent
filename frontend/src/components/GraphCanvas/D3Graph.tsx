@@ -22,14 +22,17 @@ import {
   NODE_H,
   NODE_RX,
   NODE_W,
+  overviewEdgeLabelOpacity,
+  selectOverviewEdgeIndices,
   selectGraphOrientation,
   VERTICAL_LEVEL_H,
   VERTICAL_PAD,
   V_PAD,
   wrapNodeLabel,
+  wrapNodeTechnology,
 } from './graphLayout';
 
-const EDGE_LABEL_MAX_CHARS = 18;
+const EDGE_LABEL_MAX_CHARS = 24;
 
 // Color palette imported from ../../utils/graphColors (TYPE_STYLE, FALLBACK_STYLE)
 
@@ -141,6 +144,7 @@ type RenderLink = {
   stepNum: number | null;
   edgeType: 'normal' | 'loop';
   flow: NonNullable<GraphEdge['flow']>;
+  overviewRequired: boolean;
 };
 
 interface GraphRenderState {
@@ -545,7 +549,9 @@ export function D3Graph({
     // Preserve every declared edge with valid endpoints. Backward links are
     // routed around the diagram; silently dropping them makes the picture lie.
     const nodeIds = new Set(nodes.map(node => node.id));
-    const links = filterRenderableEdges(renderGraphData.edges, nodeIds).map(e => {
+    const renderableEdges = filterRenderableEdges(renderGraphData.edges, nodeIds);
+    const overviewEdgeIndices = selectOverviewEdgeIndices(renderableEdges, sequence);
+    const links = renderableEdges.map((e, edgeIndex) => {
       let stepNum: number | null = null;
       for (const step of sequence) {
         if ((step.nodes ?? []).includes(e.target)) { stepNum = step.step; break; }
@@ -562,17 +568,16 @@ export function D3Graph({
         stepNum,
         edgeType:    (e.type ?? 'normal') as 'normal' | 'loop',
         flow:        e.flow ?? (e.type === 'loop' ? 'feedback' : 'runtime'),
+        overviewRequired: overviewEdgeIndices.has(edgeIndex),
       };
     });
 
-    // Pre-build lookup: source node id → indices of its outgoing loop edges.
-    // Used by node hover to reveal/hide the right edges instantly.
-    const loopIndicesBySource = new Map<string, number[]>();
-    links.forEach((l, i) => {
-      if (l.edgeType === 'loop') {
-        const srcId = l.source.id;
-        if (!loopIndicesBySource.has(srcId)) loopIndicesBySource.set(srcId, []);
-        loopIndicesBySource.get(srcId)!.push(i);
+    // A node hover is the discoverable way to inspect every relationship at
+    // that boundary, including secondary and feedback paths.
+    const incidentIndicesByNode = new Map<string, number[]>();
+    links.forEach((link, index) => {
+      for (const nodeId of new Set([link.source.id, link.target.id])) {
+        incidentIndicesByNode.set(nodeId, [...(incidentIndicesByNode.get(nodeId) ?? []), index]);
       }
     });
 
@@ -640,6 +645,11 @@ export function D3Graph({
     const groupsLayer = g.append('g').attr('class', 'groups-layer');
     const groupLabelsLayer = g.append('g').attr('class', 'group-labels-layer');
     const groups = (renderGraphData.groups ?? []) as GraphGroup[];
+    const groupStyleByNodeId = new Map<string, { label: string; color: string }>();
+    groups.forEach((group, index) => {
+      const color = GROUP_PALETTE[index % GROUP_PALETTE.length].label;
+      group.nodeIds.forEach(nodeId => groupStyleByNodeId.set(nodeId, { label: group.label, color }));
+    });
     const groupEls = groups.map((grp, idx) => {
       const gc = GROUP_PALETTE[idx % GROUP_PALETTE.length];
       const grpEl = groupsLayer.append('g').attr('class', 'group-box');
@@ -730,7 +740,10 @@ export function D3Graph({
                 : 'rgba(59,130,246,0.55)')
           .attr('stroke-width', 1.7);
         const labelGrpNode = (linkGroup.selectAll('g.edge-label').nodes() as Element[])[idx];
-        d3.select(labelGrpNode).attr('opacity', 0);
+        d3.select(labelGrpNode).attr(
+          'opacity',
+          overviewEdgeLabelOpacity({ flow: d.flow, type: d.edgeType }, d.overviewRequired),
+        );
         d3.select(labelGrpNode).select('text').attr('fill', '#7d8590');
         d3.select(labelGrpNode).select('rect').attr('opacity', 0.9);
         setEdgeTooltip(null);
@@ -738,8 +751,16 @@ export function D3Graph({
 
     // Edge action label (verb phrase) — sits slightly above the edge midpoint
     const edgeLabelGroup = linkGroup.selectAll('g.edge-label')
-      .data(links).enter().append('g').attr('class', 'edge-label');
-    edgeLabelGroup.attr('opacity', 0);
+      .data(links).enter().append('g')
+      .attr('class', 'edge-label')
+      .attr('data-overview-required', (d: RenderLink) => (
+        d.overviewRequired
+          ? 'true'
+          : null
+      ));
+    edgeLabelGroup.attr('opacity', (d: RenderLink) => (
+      overviewEdgeLabelOpacity({ flow: d.flow, type: d.edgeType }, d.overviewRequired)
+    ));
 
     edgeLabelGroup.append('rect')
       .attr('rx', 5).attr('fill', '#090f19').attr('opacity', 0.96)
@@ -747,7 +768,7 @@ export function D3Graph({
 
     edgeLabelGroup.append('text')
       .text((d: RenderLink) => truncateEdgeLabel(d.label))
-      .attr('font-size', '0.56rem')
+      .attr('font-size', '0.59rem')
       .attr('font-weight', 520)
       .attr('fill', '#8f9baa')
       .attr('text-anchor', 'middle')
@@ -763,6 +784,7 @@ export function D3Graph({
       .attr('role', 'button')
       .attr('tabindex', 0)
       .attr('aria-label', (d: RenderNode) => `Explore ${d.label}`)
+      .attr('data-grouped', (d: RenderNode) => groupStyleByNodeId.has(d.id) ? 'true' : null)
       .attr('opacity', 0)
       .style('cursor', 'pointer')
       .call(
@@ -789,16 +811,19 @@ export function D3Graph({
         d3.select(this).select('.node-card')
           .attr('stroke-width', 2)
           .style('filter', 'brightness(1.14)');
-        // Reveal this node's outgoing loop edges (feedback arcs)
-        const loopIdxs = loopIndicesBySource.get(d.id) ?? [];
-        if (loopIdxs.length > 0) {
+        const incidentIndices = incidentIndicesByNode.get(d.id) ?? [];
+        if (incidentIndices.length > 0) {
           const edgeVisNodes  = linkGroup.selectAll('path.edge-vis').nodes() as Element[];
           const edgeHitNodes  = linkGroup.selectAll('path.edge-hit').nodes() as Element[];
           const edgeLblNodes  = linkGroup.selectAll('g.edge-label').nodes() as Element[];
-          loopIdxs.forEach(i => {
-            d3.select(edgeVisNodes[i]).interrupt().transition().duration(150).attr('opacity', 1);
+          incidentIndices.forEach(i => {
+            const edgeSelection = d3.select(edgeVisNodes[i]);
+            const labelSelection = d3.select(edgeLblNodes[i]);
+            edgeSelection.attr('data-hover-restore-opacity', edgeSelection.attr('opacity') || '1');
+            labelSelection.attr('data-hover-restore-opacity', labelSelection.attr('opacity') || '0');
+            edgeSelection.interrupt().transition().duration(150).attr('opacity', 1);
             d3.select(edgeHitNodes[i]).attr('opacity', 1).style('pointer-events', 'auto');
-            d3.select(edgeLblNodes[i]).interrupt().transition().duration(150).attr('opacity', 1);
+            labelSelection.interrupt().transition().duration(150).attr('opacity', 1);
           });
         }
       })
@@ -806,19 +831,25 @@ export function D3Graph({
         d3.select(this).select('.node-card')
           .attr('stroke-width', 1.35)
           .style('filter', null);
-        // Hide loop edges again
-        const loopIdxs = loopIndicesBySource.get(d.id) ?? [];
-        if (loopIdxs.length > 0) {
+        const incidentIndices = incidentIndicesByNode.get(d.id) ?? [];
+        if (incidentIndices.length > 0) {
           const edgeVisNodes  = linkGroup.selectAll('path.edge-vis').nodes() as Element[];
           const edgeHitNodes  = linkGroup.selectAll('path.edge-hit').nodes() as Element[];
           const edgeLblNodes  = linkGroup.selectAll('g.edge-label').nodes() as Element[];
-          loopIdxs.forEach(i => {
-            d3.select(edgeVisNodes[i]).interrupt().transition().duration(200).attr('opacity', 0.42);
+          incidentIndices.forEach(i => {
+            const edgeSelection = d3.select(edgeVisNodes[i]);
+            const labelSelection = d3.select(edgeLblNodes[i]);
+            const edgeOpacity = Number(edgeSelection.attr('data-hover-restore-opacity') || 1);
+            const labelOpacity = Number(labelSelection.attr('data-hover-restore-opacity') || 0);
+            edgeSelection.interrupt().transition().duration(200).attr('opacity', edgeOpacity);
             d3.select(edgeHitNodes[i]).attr('opacity', 1).style('pointer-events', 'auto');
-            d3.select(edgeLblNodes[i]).interrupt().transition().duration(200).attr('opacity', 0);
+            labelSelection.interrupt().transition().duration(200).attr('opacity', labelOpacity);
           });
         }
       });
+
+    nodeSel.append('title')
+      .text((d: RenderNode) => d.technology ? `${d.label} — ${d.technology}` : d.label);
 
     // Card background
     nodeSel.filter((d: RenderNode) => d.type !== 'decision')
@@ -883,13 +914,40 @@ export function D3Graph({
       .attr('fill', (d: RenderNode) => d.tier === 'public' ? '#fbbf24' : '#6e7681')
       .style('pointer-events', 'none');
 
-    nodeSel.filter(() => renderGraphData.design_origin === 'applied')
+    nodeSel.filter((d: RenderNode) => groupStyleByNodeId.has(d.id))
       .append('circle')
       .attr('cx', -NODE_W / 2 + 12)
       .attr('cy', -NODE_H / 2 + 12)
       .attr('r', 2.5)
-      .attr('fill', (d: RenderNode) => (TYPE_STYLE[d.type] ?? FALLBACK_STYLE).stroke)
+      .attr('fill', (d: RenderNode) => groupStyleByNodeId.get(d.id)?.color ?? '#94a3b8')
       .attr('opacity', 0.9)
+      .style('pointer-events', 'none');
+
+    nodeSel.filter((d: RenderNode) => groupStyleByNodeId.has(d.id))
+      .append('text')
+      .attr('class', 'node-group-label')
+      .text((d: RenderNode) => truncateGroupLabel(groupStyleByNodeId.get(d.id)?.label ?? ''))
+      .attr('x', -NODE_W / 2 + 19)
+      .attr('y', -NODE_H / 2 + 14)
+      .attr('font-size', '0.43rem')
+      .attr('font-weight', 700)
+      .attr('letter-spacing', '0.045em')
+      .attr('fill', (d: RenderNode) => groupStyleByNodeId.get(d.id)?.color ?? '#94a3b8')
+      .style('pointer-events', 'none');
+
+    nodeSel.filter((d: RenderNode) => (
+      renderGraphData.design_origin === 'applied'
+      && (sourceNodeIds.has(d.id) || sinkNodeIds.has(d.id))
+    ))
+      .append('text')
+      .text((d: RenderNode) => sourceNodeIds.has(d.id) ? 'ENTRY' : 'OUTCOME')
+      .attr('x', NODE_W / 2 - 9)
+      .attr('y', -NODE_H / 2 + 14)
+      .attr('text-anchor', 'end')
+      .attr('font-size', '0.39rem')
+      .attr('font-weight', 750)
+      .attr('letter-spacing', '0.07em')
+      .attr('fill', (d: RenderNode) => sourceNodeIds.has(d.id) ? '#60a5fa' : '#34d399')
       .style('pointer-events', 'none');
 
     // Row 2 — node label (centered, white, main title). Long domain labels
@@ -897,7 +955,7 @@ export function D3Graph({
     const nodeTitles = nodeSel.append('text')
       .attr('class', 'node-title')
       .attr('text-anchor', 'middle').attr('dominant-baseline', 'middle')
-      .attr('font-size', '0.8rem').attr('font-weight', 620)
+      .attr('font-size', '0.9rem').attr('font-weight', 640)
       .attr('fill', '#e6edf3')
       .style('pointer-events', 'none');
 
@@ -918,15 +976,21 @@ export function D3Graph({
     nodeSel.filter((d: RenderNode) => Boolean(d.technology) && d.design_origin === 'applied')
       .append('text')
       .attr('class', 'node-technology')
-      .text((d: RenderNode) => {
-        const t = d.technology || '';
-        return t.length > 28 ? t.slice(0, 27) + '…' : t;
-      })
       .attr('text-anchor', 'middle').attr('dominant-baseline', 'middle')
-      .attr('y', 24)
       .attr('font-size', '0.54rem')
       .attr('fill', '#7d8795')
-      .style('pointer-events', 'none');
+      .style('pointer-events', 'none')
+      .each(function(d: RenderNode) {
+        const lines = wrapNodeTechnology(d.technology || '');
+        const startY = lines.length === 1 ? 24 : 20;
+        d3.select(this).selectAll('tspan')
+          .data(lines)
+          .enter()
+          .append('tspan')
+          .attr('x', 0)
+          .attr('y', (_line: string, index: number) => startY + index * 10)
+          .text((line: string) => line);
+      });
 
     // ── Entry / Exit markers ──────────────────────────────────────────────────
     const MARKER_W = 12, MARKER_H = 8, MARKER_GAP = 6;
@@ -1023,10 +1087,19 @@ export function D3Graph({
         };
       }).filter(layout => layout.memberNodes.length > 0);
 
-      const boundaryLayouts = groupLayouts.filter(layout => layout.memberNodes.length > 1);
-      const boundariesOverlap = boundaryLayouts.some((left, leftIndex) =>
-        boundaryLayouts.slice(leftIndex + 1).some(right => boxesIntersect(left.bounds, right.bounds)),
-      );
+      const boundaryLayouts = groupLayouts.filter(layout => (
+        layout.memberNodes.length > 1
+        && layout.bounds.width <= NODE_W * 3.4
+        && layout.bounds.height <= NODE_H * 4.2
+      ));
+      const overlappingBoundaryIds = new Set<string>();
+      boundaryLayouts.forEach((left, leftIndex) => {
+        boundaryLayouts.slice(leftIndex + 1).forEach((right) => {
+          if (!boxesIntersect(left.bounds, right.bounds)) return;
+          overlappingBoundaryIds.add(left.grp.id);
+          overlappingBoundaryIds.add(right.grp.id);
+        });
+      });
 
       for (const {
         grp: groupDef,
@@ -1036,7 +1109,8 @@ export function D3Graph({
         memberNodes,
         bounds,
       } of groupLayouts) {
-        const useBoundary = memberNodes.length > 1 && !boundariesOverlap;
+        const useBoundary = boundaryLayouts.some(layout => layout.grp.id === groupDef.id)
+          && !overlappingBoundaryIds.has(groupDef.id);
 
         rect
           .attr('display', useBoundary ? null : 'none')
@@ -1080,15 +1154,36 @@ export function D3Graph({
 
         const labelWidth = textBox.width + 6;
         const labelHeight = textBox.height + 2;
-        const baseY = midY(d) - (d.stepNum !== null ? 20 : isForward(d) ? 12 : 20);
-        const x = midX(d);
-        let y = baseY;
-        let attempts = 0;
+        const verticalForward = orientation === 'vertical' && isForward(d);
+        const centerX = midX(d);
+        const centerY = midY(d);
+        const baseY = verticalForward
+          ? centerY
+          : centerY - (d.stepNum !== null ? 20 : isForward(d) ? 12 : 20);
+        const sideOffset = NODE_W / 2 + labelWidth / 2 + 14;
+        const preferredSide = centerX < width / 2 ? -1 : 1;
+        const candidates = verticalForward
+          ? Array.from({ length: 7 }, (_, distanceIndex) => (
+              [preferredSide, -preferredSide].map(side => ({
+                x: centerX + side * sideOffset,
+                y: baseY + (distanceIndex === 0
+                  ? 0
+                  : (distanceIndex % 2 === 1 ? -1 : 1) * Math.ceil(distanceIndex / 2) * 14),
+              }))
+            )).flat()
+          : Array.from({ length: 13 }, (_, attempt) => ({
+              x: centerX,
+              y: baseY + (attempt === 0
+                ? 0
+                : (attempt % 2 === 1 ? -1 : 1)
+                  * (14 + Math.floor((attempt - 1) / 2) * (isForward(d) ? 6 : 7))),
+            }));
+        let placement = candidates.at(-1) ?? { x: centerX, y: baseY };
 
-        while (attempts < 12) {
+        for (const candidatePosition of candidates) {
           const candidate = {
-            x: x - labelWidth / 2,
-            y: y - labelHeight / 2,
+            x: candidatePosition.x - labelWidth / 2,
+            y: candidatePosition.y - labelHeight / 2,
             width: labelWidth,
             height: labelHeight,
           };
@@ -1096,15 +1191,12 @@ export function D3Graph({
             || placedLabels.some((box) => boxesIntersect(candidate, box));
           if (!collides) {
             placedLabels.push(candidate);
+            placement = candidatePosition;
             break;
           }
-          const direction = attempts % 2 === 0 ? -1 : 1;
-          const distance = isForward(d) ? 14 + Math.floor(attempts / 2) * 6 : 18 + Math.floor(attempts / 2) * 7;
-          y = baseY + direction * distance;
-          attempts += 1;
         }
 
-        grp.attr('transform', `translate(${x},${y})`);
+        grp.attr('transform', `translate(${placement.x},${placement.y})`);
       });
     }
 
@@ -1227,7 +1319,12 @@ export function D3Graph({
       .transition()
       .duration(200)
       .attr('opacity', (d: RenderLink) => {
-        if (showAll) return 0;
+        if (showAll) {
+          return overviewEdgeLabelOpacity(
+            { flow: d.flow, type: d.edgeType },
+            d.overviewRequired,
+          );
+        }
         if (d.stepNum === null) return 0.28;
         if (d.stepNum > activeStepNumber) return 0;
         return d.stepNum === activeStepNumber ? 1 : 0;
@@ -1306,6 +1403,10 @@ function truncateEdgeLabel(label: string): string {
   return label.length > EDGE_LABEL_MAX_CHARS
     ? `${label.slice(0, EDGE_LABEL_MAX_CHARS - 1)}…`
     : label;
+}
+
+function truncateGroupLabel(label: string): string {
+  return label.length > 18 ? `${label.slice(0, 17)}…` : label;
 }
 
 function boxesIntersect(

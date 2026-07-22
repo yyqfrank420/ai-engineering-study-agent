@@ -3,6 +3,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { GraphData, GraphEdge } from '../../types';
 import { D3Graph } from './D3Graph';
+import {
+  customerSupportDenseGraph,
+  growthMarketingDenseGraph,
+} from './__fixtures__/denseArchitectures';
 
 
 const graph: GraphData = {
@@ -94,7 +98,7 @@ describe('graph node activation', () => {
     expect(onNodeClick).toHaveBeenCalledTimes(3);
     expect(onNodeClick).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'sensor_gateway' }));
     expect(screen.getByText('Signed telemetry')).toBeTruthy();
-    expect(screen.queryByText('ENTRY')).toBeNull();
+    expect(screen.getByText('ENTRY')).toBeTruthy();
     expect(screen.queryByText('EXIT')).toBeNull();
   });
 
@@ -144,12 +148,13 @@ describe('graph node activation', () => {
 
     const edgeLabel = container.querySelector('g.edge-label');
     const edgeHitArea = container.querySelector('path.edge-hit');
-    expect(edgeLabel?.getAttribute('opacity')).toBe('0');
+    expect(edgeLabel?.getAttribute('data-overview-required')).toBe('true');
+    expect(edgeLabel?.getAttribute('opacity')).toBe('0.62');
     fireEvent.mouseOver(edgeHitArea!);
     expect(edgeLabel?.getAttribute('opacity')).toBe('1');
-    expect(screen.getByText('submits bounded proposal')).toBeTruthy();
+    expect(screen.getAllByText('submits bounded proposal')).toHaveLength(2);
     fireEvent.mouseOut(edgeHitArea!);
-    expect(edgeLabel?.getAttribute('opacity')).toBe('0');
+    expect(edgeLabel?.getAttribute('opacity')).toBe('0.62');
   });
 
   it('re-renders and re-fits when its actual canvas size changes', async () => {
@@ -290,5 +295,109 @@ describe('graph node activation', () => {
       }
     }
     expect(positions.every(({ x, y }) => Number.isFinite(x) && Number.isFinite(y))).toBe(true);
+  });
+
+  it('keeps an out-of-sample marketplace control loop readable in overview', async () => {
+    const nodes = [
+      { ...graph.nodes[0], id: 'seller_event', label: 'Seller Listing Event', technology: 'Signed marketplace event envelope' },
+      { ...graph.nodes[0], id: 'risk_gate', label: 'Listing Risk Gate', technology: 'Deterministic policy and risk scoring', type: 'decision' as const },
+      { ...graph.nodes[0], id: 'human_review', label: 'Human Review Queue', technology: 'Audited exception workflow', type: 'control' as const },
+      { ...graph.nodes[0], id: 'listing_index', label: 'Trusted Listing Index', technology: 'Versioned searchable marketplace catalogue', type: 'datastore' as const },
+      { ...graph.nodes[0], id: 'buyer_match', label: 'Buyer Match Service', technology: 'Eligibility-aware candidate ranking' },
+      { ...graph.nodes[0], id: 'outcome_ledger', label: 'Outcome Ledger', technology: 'Append-only conversion and dispute events', type: 'datastore' as const },
+    ];
+    const marketplaceGraph: GraphData = {
+      ...graph,
+      title: 'Marketplace Trust Loop — Policy-gated listings and measured buyer outcomes',
+      nodes,
+      edges: [
+        { ...edge('seller_event', 'risk_gate', 'submits signed listing'), flow: 'runtime' },
+        { ...edge('risk_gate', 'listing_index', 'publishes approved listing'), flow: 'runtime' },
+        { ...edge('risk_gate', 'human_review', 'routes ambiguous listing'), flow: 'control' },
+        { ...edge('human_review', 'listing_index', 'approves reviewed listing'), flow: 'control' },
+        { ...edge('listing_index', 'buyer_match', 'streams eligible candidates'), flow: 'runtime' },
+        { ...edge('buyer_match', 'outcome_ledger', 'records measured outcome'), flow: 'runtime' },
+        {
+          ...edge('outcome_ledger', 'risk_gate', 'returns dispute feedback'),
+          flow: 'feedback',
+          type: 'loop',
+        },
+      ],
+      groups: [
+        { id: 'intake', label: 'Supply Intake', nodeIds: ['seller_event', 'risk_gate'], kind: 'runtime' },
+        { id: 'trust', label: 'Trust Operations', nodeIds: ['human_review', 'outcome_ledger'], kind: 'operations' },
+        { id: 'market', label: 'Marketplace Delivery', nodeIds: ['listing_index', 'buyer_match'], kind: 'runtime' },
+      ],
+      sequence: [
+        { step: 1, nodes: ['seller_event', 'risk_gate'], description: 'Validate the listing.' },
+        { step: 2, nodes: ['risk_gate', 'listing_index'], description: 'Publish or review.' },
+        { step: 3, nodes: ['listing_index', 'buyer_match'], description: 'Match eligible buyers.' },
+        { step: 4, nodes: ['buyer_match', 'outcome_ledger'], description: 'Measure outcomes.' },
+      ],
+    };
+    const { container } = render(
+      <div style={{ width: 760, height: 500 }}>
+        <D3Graph
+          graphData={marketplaceGraph}
+          currentStep={-1}
+          activeNodeIds={new Set<string>()}
+          onNodeClick={() => undefined}
+        />
+      </div>,
+    );
+
+    expect(container.querySelectorAll('g.node[data-grouped="true"]')).toHaveLength(nodes.length);
+    expect(container.querySelectorAll('text.node-group-label')).toHaveLength(nodes.length);
+    expect(Array.from(container.querySelectorAll('text.node-group-label'))
+      .filter(label => label.textContent?.startsWith('Marketplace Deliv'))).toHaveLength(2);
+    const listingTechnology = screen.getByRole('button', { name: 'Explore Trusted Listing Index' })
+      .querySelector('text.node-technology')?.textContent;
+    expect(listingTechnology).toContain('Versioned searchable');
+    expect(listingTechnology).toContain('marketplace catalogue');
+
+    const requiredLabels = Array.from(
+      container.querySelectorAll<SVGGElement>('g.edge-label[data-overview-required="true"]'),
+    );
+    expect(requiredLabels.length).toBeGreaterThanOrEqual(6);
+    expect(requiredLabels.every(label => Number(label.getAttribute('opacity')) > 0)).toBe(true);
+
+    const feedbackLabel = Array.from(container.querySelectorAll<SVGGElement>('g.edge-label'))
+      .find(label => label.textContent?.includes('returns dispute'));
+    expect(feedbackLabel?.getAttribute('data-overview-required')).toBeNull();
+    expect(feedbackLabel?.getAttribute('opacity')).toBe('0');
+
+    fireEvent.mouseOver(screen.getByRole('button', { name: 'Explore Outcome Ledger' }));
+    await waitFor(() => expect(feedbackLabel?.getAttribute('opacity')).toBe('1'));
+    fireEvent.mouseOut(screen.getByRole('button', { name: 'Explore Outcome Ledger' }));
+    await waitFor(() => expect(feedbackLabel?.getAttribute('opacity')).toBe('0'));
+  });
+
+  it.each([
+    ['growth marketing', growthMarketingDenseGraph],
+    ['customer support', customerSupportDenseGraph],
+  ])('preserves the dense %s regression architecture', (_name, denseGraph) => {
+    const { container } = render(
+      <div style={{ width: 760, height: 500 }}>
+        <D3Graph
+          graphData={denseGraph}
+          currentStep={-1}
+          activeNodeIds={new Set<string>()}
+          onNodeClick={() => undefined}
+        />
+      </div>,
+    );
+
+    expect(container.querySelectorAll('g.node')).toHaveLength(denseGraph.nodes.length);
+    expect(container.querySelectorAll('path.edge-vis')).toHaveLength(denseGraph.edges.length);
+    expect(container.querySelectorAll('text.node-group-label')).toHaveLength(denseGraph.nodes.length);
+    const requiredLabels = Array.from(
+      container.querySelectorAll<SVGGElement>('g.edge-label[data-overview-required="true"]'),
+    );
+    expect(requiredLabels.length).toBeGreaterThan(0);
+    expect(requiredLabels.every(label => Number(label.getAttribute('opacity')) > 0)).toBe(true);
+    const feedbackLabels = Array.from(container.querySelectorAll<SVGGElement>('g.edge-label'))
+      .filter(label => label.getAttribute('data-overview-required') === null);
+    expect(feedbackLabels.length).toBeGreaterThan(0);
+    expect(feedbackLabels.every(label => Number(label.getAttribute('opacity')) === 0)).toBe(true);
   });
 });

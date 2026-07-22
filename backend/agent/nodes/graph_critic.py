@@ -320,6 +320,21 @@ def _deterministic_render_review(
         missing.append("Fit every edge fully inside the initial viewport.")
     if float(report.get("minimum_text_px") or 0) < 6:
         missing.append("Increase the smallest rendered text to a readable size.")
+    if "overview_required_edge_labels" in report:
+        required_labels = int(report.get("overview_required_edge_labels") or 0)
+        visible_labels = int(report.get("visible_overview_required_edge_labels") or 0)
+        if visible_labels < required_labels:
+            missing.append("Show every overview-required edge label in the initial viewport.")
+    if "grouped_nodes" in report:
+        grouped_nodes = int(report.get("grouped_nodes") or 0)
+        labelled_nodes = int(report.get("group_labelled_nodes") or 0)
+        if labelled_nodes < grouped_nodes:
+            missing.append("Show a group label on every node assigned to a responsibility zone.")
+    if (
+        "group_boundary_overlap_count" in report
+        and int(report.get("group_boundary_overlap_count") or 0) > 0
+    ):
+        missing.append("Remove overlap between visible responsibility-zone boundaries.")
     score = max(0.0, 0.95 - 0.24 * len(missing))
     return {
         "approved": not missing,

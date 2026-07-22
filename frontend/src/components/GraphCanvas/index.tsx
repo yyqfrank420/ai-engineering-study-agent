@@ -165,6 +165,8 @@ export function GraphCanvas({
     );
   }
 
+  const [title, subtitle] = splitGraphTitle(graphData.title);
+
   return (
     <>
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
@@ -177,20 +179,26 @@ export function GraphCanvas({
         background: 'linear-gradient(180deg, rgba(16,22,34,0.98), rgba(10,15,26,0.98))',
         display: 'flex',
         alignItems: 'center',
-        gap: '0.65rem',
-        minHeight: 42,
+        columnGap: '0.65rem',
+        rowGap: '0.38rem',
+        flexWrap: 'wrap',
+        minHeight: 48,
       }}>
         <span style={{ color: '#a78bfa', fontSize: '0.88rem' }}>◈</span>
-        <span style={{
-          color: '#d8dee9',
-          fontWeight: 650,
+        <div title={graphData.title} style={{
+          flex: '1 1 300px',
           minWidth: 0,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
+          lineHeight: 1.25,
         }}>
-          {graphData.title}
-        </span>
+          <div style={{ color: '#d8dee9', fontWeight: 680, overflowWrap: 'anywhere' }}>
+            {title}
+          </div>
+          {subtitle && (
+            <div style={{ color: '#8490a0', fontSize: '0.62rem', marginTop: 2, overflowWrap: 'anywhere' }}>
+              {subtitle}
+            </div>
+          )}
+        </div>
         <span style={{
           color: '#8490a0',
           fontSize: '0.62rem',
@@ -198,13 +206,21 @@ export function GraphCanvas({
           borderRadius: 999,
           border: '1px solid rgba(148,163,184,0.16)',
           background: 'rgba(148,163,184,0.06)',
+          flexShrink: 0,
+          whiteSpace: 'nowrap',
         }}>
           {graphData.nodes.length} components
           {(graphData.groups?.length ?? 0) > 0 ? ` · ${graphData.groups!.length} zones` : ''}
         </span>
 
         {graphData.design_origin === 'applied' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginLeft: 'auto' }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.65rem',
+            marginLeft: 'auto',
+            flexShrink: 0,
+          }}>
             <FlowLegend color="#3b82f6" label="Runtime" />
             <FlowLegend color="#94a3b8" label="Control" dashed />
             <FlowLegend color="#a78bfa" label="Feedback" dashed />
@@ -323,4 +339,12 @@ function FlowLegend({ color, label, dashed = false }: { color: string; label: st
       {label}
     </span>
   );
+}
+
+function splitGraphTitle(value: string): [string, string | null] {
+  const separator = value.match(/\s(?:—|–)\s|:\s/);
+  if (!separator?.index) return [value, null];
+  const title = value.slice(0, separator.index).trim();
+  const subtitle = value.slice(separator.index + separator[0].length).trim();
+  return title && subtitle ? [title, subtitle] : [value, null];
 }
