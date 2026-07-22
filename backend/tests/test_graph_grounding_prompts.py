@@ -238,8 +238,11 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
     assert graph["assumptions"]
     assert len(graph["groups"]) == 4
     assert {edge["flow"] for edge in graph["edges"]} == {"runtime", "feedback"}
-    assert captured["thinking_budget"] == graph_worker.settings.production_thinking_budget_tokens
-    assert captured["effort"] == "medium"
+    # The upstream architect/challenger own the expensive reasoning. The graph
+    # worker is a structured integrator, with the medium-effort critic still
+    # acting as the independent semantic gate.
+    assert captured["thinking_budget"] is None
+    assert captured["effort"] == "low"
     assert "Preserve their domain nouns" in captured["system"]
     prompt = captured["messages"][0]["content"]
     assert "Diagram acceptance checklist" in prompt

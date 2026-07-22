@@ -17,7 +17,7 @@ from graph.runtime import select_canonical_graph
 
 logger = logging.getLogger(__name__)
 
-_APPLIED_GRAPH_PROMPT_VERSION = "applied_architecture_v7"
+_APPLIED_GRAPH_PROMPT_VERSION = "applied_architecture_v8"
 _APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v2"
 _MAX_GRAPH_PATCH_CHARS = 20_000
 
@@ -366,11 +366,15 @@ async def _generate_applied_architecture(state: AgentState, query: str, profile)
             model=design_model,
             system=_APPLIED_GRAPH_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
-            thinking_budget=profile.thinking_budget,
+            # The architect and challenger already own domain reasoning. This
+            # role integrates their bounded outputs into validated JSON, so
+            # adaptive low effort is both faster and less repetitive while the
+            # independent semantic critic remains at medium effort.
+            thinking_budget=None,
             temperature=settings.graph_temperature,
             top_p=settings.graph_top_p,
             top_k=settings.graph_top_k,
-            effort="medium",
+            effort="low",
             telemetry=build_telemetry(
                 "graph_worker_applied_design",
                 user_id=state.get("user_id"),
