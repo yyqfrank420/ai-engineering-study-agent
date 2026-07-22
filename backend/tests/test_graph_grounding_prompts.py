@@ -66,6 +66,53 @@ async def test_graph_worker_uses_canonical_artifacts_without_llm(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+async def test_explicit_runtime_flow_uses_applied_architecture_not_concept_map(monkeypatch):
+    import agent.nodes.graph_worker as graph_worker
+
+    async def fake_generate(_state, query, profile):
+        assert query == (
+            "Explain retrieval-augmented generation, ground the explanation in the "
+            "AI Engineering material, and draw the runtime flow."
+        )
+        assert profile.resolved == "production"
+        return {
+            "graph_type": "architecture",
+            "design_origin": "applied",
+            "title": "Grounded RAG Runtime",
+            "nodes": [],
+            "edges": [],
+            "sequence": [],
+        }
+
+    def fail_canonical_load():
+        raise AssertionError("explicit runtime flow must not use the concept-map selector")
+
+    monkeypatch.setattr(graph_worker, "_generate_applied_architecture", fake_generate)
+    monkeypatch.setattr(graph_worker, "load_canonical_graph_cached", fail_canonical_load)
+
+    async def send(_event):
+        return None
+
+    result = await graph_worker.graph_worker_node(
+        {
+            "send": send,
+            "user_message": (
+                "Explain retrieval-augmented generation, ground the explanation in the "
+                "AI Engineering material, and draw the runtime flow."
+            ),
+            "graph_data": None,
+            "complexity": "auto",
+            "research_context": "",
+            "rag_chunks": [],
+        },
+        tools=[],
+    )
+
+    assert result["graph_data"]["graph_type"] == "architecture"
+    assert result["graph_data"]["design_origin"] == "applied"
+
+
+@pytest.mark.asyncio
 async def test_graph_worker_abstains_without_canonical_support(monkeypatch, tmp_path):
     from tests.test_canonical_graph import SCHEMA_DIR, _write_parent_docs
     from graph.artifacts import load_canonical_graph

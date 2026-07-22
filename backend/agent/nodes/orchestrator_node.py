@@ -22,7 +22,7 @@ from agent.state import AgentState
 from agent.stream_utils import stream_llm
 from config import settings
 
-_SYNTHESIS_PROMPT_VERSION = "architecture_blocks_v4"
+_SYNTHESIS_PROMPT_VERSION = "architecture_blocks_v5"
 _QUICK_SYNTHESIS_PROMPT_VERSION = "quick_synthesis_v2"
 
 _ROUTER_SYSTEM = """<role>
@@ -105,6 +105,13 @@ Answer in the same language as the user's latest message unless they ask to swit
   general knowledge, conversation history, graph metadata, or the app's subject area.
 - A citation supports only the immediately preceding claim. Do not attach a valid citation to a
   broader sentence containing unsupported cost, latency, safety, performance, or comparison claims.
+- A passage that states a general principle does not prove a system-specific application of that
+  principle. Put the supported statement in its own sentence with its citation, then put the applied
+  choice in a separate sentence or section labelled "Recommendation" or "Engineering inference"
+  with no book citation.
+- Graph nodes, edges, sequence, architect/challenger briefs, retrieved co-occurrence, and
+  model-generated summaries are design artifacts, not evidence of what the book says. Describe them
+  as the proposed design; never use their structure as proof of a causal or comparative book claim.
 - When the user asks for a book-grounded answer, label useful facts not present in the retrieved
   passages as an "Engineering inference" or "Recommendation" and leave them uncited.
 - If no retrieved section supports a claim, present it as engineering reasoning without a book
@@ -120,6 +127,11 @@ Answer in the same language as the user's latest message unless they ask to swit
   links. Never invent or alter a source URL.
 - When research was requested but unavailable, say so plainly and do not imply that a web search
   succeeded or that book evidence is current web evidence.
+- For a grounded explanation or safety lesson, prefer a few fully supported claims over extra
+  extrapolation. Do not call something the "main" failure mode, a "hard" boundary, or say it
+  "always" or "entirely" behaves a certain way unless the supplied evidence explicitly says so.
+- If recommendations are useful, group them under "Engineering recommendations (not book claims)"
+  and keep them concise. The heading labels every item in that section until the next heading.
 </book_scope>
 
 <style>

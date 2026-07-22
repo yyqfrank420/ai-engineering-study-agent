@@ -15,6 +15,15 @@ _DESIGN_PHRASES = (
     "request flow",
 )
 
+_DESIGN_FLOW_PHRASES = (
+    "control flow",
+    "data flow",
+    "execution flow",
+    "request flow",
+    "runtime flow",
+    "system flow",
+)
+
 _DESIGN_VERBS = (
     "architect",
     "build",
@@ -22,9 +31,12 @@ _DESIGN_VERBS = (
     "describe",
     "design",
     "diagram",
+    "draw",
     "implement",
     "map",
     "show",
+    "visualise",
+    "visualize",
 )
 
 _SYSTEM_NOUNS = (
@@ -159,6 +171,12 @@ def is_applied_system_design_request(query: str) -> bool:
     # other direct design requests continue into the applied-design path.
     if _CONCEPT_QUESTION.match(text) and not design_verb_present:
         return False
+    # A concept explanation can also contain an explicit request for its
+    # implementable process diagram ("Explain RAG and draw the runtime flow").
+    # Require both a visual-design verb and a flow target so ordinary questions
+    # such as "What is control flow?" remain explanatory.
+    if design_verb_present and any(phrase in text for phrase in _DESIGN_FLOW_PHRASES):
+        return True
     if any(phrase in text for phrase in _DESIGN_PHRASES):
         return True
     if re.search(

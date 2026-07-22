@@ -80,6 +80,9 @@ class TestChatRequestValidation:
         "multi-agent customer support chatbot architecture",
         "Describe a production model serving stack",
         "self-improving AI system for performance marketing",
+        "Explain retrieval-augmented generation and draw the runtime flow",
+        "Visualize the execution flow for a tool-using agent",
+        "Show the data flow for a retrieval pipeline",
     ],
 )
 def test_applied_system_design_detection(query):
@@ -95,6 +98,8 @@ def test_applied_system_design_detection(query):
         "What is agent planning?",
         "Create a concise summary of the last answer",
         "What is a machine learning pipeline?",
+        "What is control flow?",
+        "Draw the relationship between precision and recall",
     ],
 )
 def test_concept_questions_do_not_trigger_applied_design(query):
