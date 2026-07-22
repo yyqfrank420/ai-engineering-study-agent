@@ -92,11 +92,14 @@ example `./scripts/ci browser --suite diagnostic --case citations ...`. Diagnost
 runs use the PR-sized time, application-call, and judge-call budgets and cannot
 approve or replace the full corpus review.
 
-PR limits are eight cases, 50 application calls, 16 judge calls, and 15 minutes.
-The report includes provider, model, input/output tokens, latency, fallback, and an
-estimated cost under a dated price table. Provider rate limits, transport failures,
-and timeouts are reported as infrastructure failures; they never silently pass or
-masquerade as a quality regression.
+PR evaluation limits are eight cases, 50 application calls, 16 judge calls, and 15
+minutes for the browser journey phase. The outer GitHub job allows 30 minutes so
+dependency installation, image deployment, semantic judging, artifact upload, and
+cleanup do not consume that evaluation budget. The report includes provider, model,
+input/output tokens, latency, fallback, and an estimated cost under a dated price
+table. Provider rate limits, transport failures, and timeouts are reported as
+infrastructure failures; they never silently pass or masquerade as a quality
+regression.
 
 ## Corpus approval and semantic policy
 
