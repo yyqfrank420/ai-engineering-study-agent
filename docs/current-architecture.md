@@ -39,10 +39,11 @@ This is the current runtime contract for the production-quality demo.
    and rendered off-screen at the user's real graph-pane dimensions. The browser returns a bounded,
    version-checked screenshot and layout report over idempotent WebSocket chunks.
 7. The critic judges architecture correctness plus novice clarity, logical flow, succinctness,
-   readability, and MECE-ish coverage from the actual render. A semantic or structural rejection
-   receives at most one targeted Opus repair; a second failure suppresses the diagram. Geometry-only
-   failures are terminal because layout belongs to the deterministic renderer, so they never spend
-   another model call on a topology rewrite.
+   readability, and MECE-ish coverage from the actual render. A semantic rejection receives at most
+   one typed Sonnet patch. The patch changes only named nodes, edges, or bounded graph collections;
+   unchanged topology is preserved and the complete result passes deterministic validation again.
+   A second failure suppresses the diagram. Geometry-only failures are terminal because layout
+   belongs to the deterministic renderer, so they never spend another model call on a topology rewrite.
 8. The accepted graph remains private while one Sonnet call completes its explanation cards. The
    server then emits `graph_data` followed by the buffered cards, so an unfinished walkthrough never
    reveals a new diagram. Pause can still hold card reveal in the browser without another model call.
@@ -69,8 +70,9 @@ limiter table.
 
 The normal applied-design path uses five model calls: Architect followed by Challenger,
 Sonnet integration, Sonnet architecture/render review, and one Sonnet explanation stream. A failed
-semantic/structural quality gate adds at most two calls: one Opus repair and one Sonnet re-review.
-A renderer-only failure adds none. Retrieval and the standing checklist do not add model calls.
+semantic quality gate adds at most two calls: one compact Sonnet patch and one Sonnet re-review.
+A structurally invalid first draft may use the configured higher-capability repair model once;
+renderer-only failures add no model calls. Retrieval and the standing checklist do not add model calls.
 
 During steps 4-7 the client may send `steer`. The server cancels the active workflow, emits
 `response_reset`, and restarts with the steering correction folded into the same turn. `stop`

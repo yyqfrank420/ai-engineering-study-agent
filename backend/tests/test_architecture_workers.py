@@ -1,6 +1,11 @@
 import pytest
 
-from agent.nodes.architecture_workers import _normalise_architect, _worker_context, architect_node
+from agent.nodes.architecture_workers import (
+    _normalise_architect,
+    _worker_context,
+    architect_node,
+    format_diagram_commitments,
+)
 
 
 def test_architect_output_becomes_a_bounded_canonical_design_brief():
@@ -10,6 +15,10 @@ def test_architect_output_becomes_a_bounded_canonical_design_brief():
         "inputs": ["Campaign brief", "Conversion events"],
         "outputs": ["Approved campaign changes"],
         "required_capabilities": ["Attribution quality gate", "Bounded channel executor"],
+        "diagram_requirements": [
+            "Route rejected claims back to campaign review",
+            "Let analytics-only requests bypass the channel write gate",
+        ],
         "outcome_measures": ["Incremental contribution margin"],
         "constraints": ["Constrained objective"],
         "assumptions": ["Channel APIs support idempotent writes"],
@@ -31,12 +40,59 @@ def test_architect_output_becomes_a_bounded_canonical_design_brief():
         "Attribution quality gate",
         "Bounded channel executor",
     ]
+    assert brief["diagram_requirements"] == [
+        "Route rejected claims back to campaign review",
+        "Let analytics-only requests bypass the channel write gate",
+    ]
     assert brief["assumptions"] == ["Channel APIs support idempotent writes"]
     assert brief["evidence_basis"] == [{
         "claim": "Use an approval gate for large spend changes",
         "basis": "engineering_recommendation",
         "evidence_ref": "write_boundary checklist area",
     }]
+
+
+@pytest.mark.parametrize(
+    ("brief", "expected"),
+    [
+        (
+            {
+                "required_capabilities": ["Temperature excursion triage"],
+                "decisions": [{"area": "reliability", "decision": "Persist offline alerts", "why": "Intermittent links"}],
+            },
+            ("Temperature excursion triage", "Persist offline alerts"),
+        ),
+        (
+            {
+                "required_capabilities": ["Evidence-linked care guidance"],
+                "decisions": [{"area": "safety", "decision": "Escalate uncertain advice to a clinician", "why": "Human accountability"}],
+            },
+            ("Evidence-linked care guidance", "Escalate uncertain advice to a clinician"),
+        ),
+        (
+            {
+                "required_capabilities": ["Reconcile buyer and seller events"],
+                "decisions": [{"area": "data", "decision": "Cache versioned catalogue reads", "why": "Bounded latency"}],
+            },
+            ("Reconcile buyer and seller events", "Cache versioned catalogue reads"),
+        ),
+    ],
+)
+def test_out_of_sample_briefs_derive_bounded_diagram_commitments(brief, expected):
+    normalised = _normalise_architect({
+        "interpretation": "Out-of-sample system",
+        "actors": ["Operator"],
+        "inputs": ["Validated event"],
+        "outputs": ["Observable outcome"],
+        "outcome_measures": ["Outcome quality"],
+        "assumptions": ["An authoritative source exists"],
+        "runtime_flow": ["Accept event", "Return outcome"],
+        **brief,
+    })
+
+    contract = format_diagram_commitments(normalised)
+
+    assert all(item in contract for item in expected)
 
 
 def test_challenger_context_audits_the_same_enriched_brief():

@@ -216,6 +216,13 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
             "complexity": "auto",
             "research_context": "",
             "rag_chunks": [{"parent_chunk_id": "ai-eng:p473:pc0", "text": ""}],
+            "architect_plan": {
+                "diagram_requirements": [
+                    "Cache versioned channel reads within a bounded freshness window",
+                    "Let reporting-only requests bypass the external write approval path",
+                    "Return every creative and targeting branch to measured attribution",
+                ]
+            },
         },
         tools=[],
     )
@@ -234,6 +241,11 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
     assert captured["thinking_budget"] == graph_worker.settings.production_thinking_budget_tokens
     assert captured["effort"] == "medium"
     assert "Preserve their domain nouns" in captured["system"]
+    prompt = captured["messages"][0]["content"]
+    assert "Diagram acceptance checklist" in prompt
+    assert "Cache versioned channel reads" in prompt
+    assert "conditional control has a non-applicable bypass" in prompt
+    assert "trace each runtime branch" in prompt
     assert "Designing a production domain architecture" in events[0]["status"]
 
 

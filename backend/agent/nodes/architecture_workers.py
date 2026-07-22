@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import json
 import logging
 from typing import Any
@@ -16,7 +17,7 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_ARCHITECT_PROMPT_VERSION = "architecture_roles_v6"
+_ARCHITECT_PROMPT_VERSION = "architecture_roles_v7"
 
 
 _ARCHITECT_SYSTEM = """<role>
@@ -43,6 +44,10 @@ concern only when it materially affects this scenario.
   the boundary, data contract, failure behavior, and owner remain obvious.
 - Compose the plan around a clear runtime spine, bounded parallel branches that rejoin, explicit
   decision/failure paths, separate data and delivery planes, and feedback into the next decision.
+- Identify the small set of material diagram commitments another agent must visibly reconcile.
+  Include decided mechanisms (for example caching, fallback, or approval), every runtime mode's
+  route back to an observable outcome, and a bypass around any conditional control when it does
+  not apply. Keep these domain-specific; do not turn optional hardening into a requirement.
 - Prefer reusable platform boundaries over one-off AI infrastructure, but keep risky customer
   writes in dedicated contextual confirmation flows rather than a free-form model tool loop.
 - Treat every model and prompt as a versioned deployable with regression tests and rollback.
@@ -51,7 +56,7 @@ concern only when it materially affects this scenario.
   bundle in evidence_ref. Never invent a source or imply that a snippet establishes more than it says.
 - Keep the complete JSON under 4,800 characters. Prefer precise domain nouns over prose: at most
   6 actors, 6 inputs, 4 outputs, 10 capabilities, 5 measures, 6 assumptions, 5 open questions,
-  8 evidence-basis entries, 8 decisions, and 8 runtime steps.
+  8 evidence-basis entries, 8 decisions, 8 diagram requirements, and 8 runtime steps.
 </rules>
 
 <output_contract>
@@ -62,6 +67,7 @@ Return one JSON object and nothing else:
   "inputs": ["domain event, record, or request"],
   "outputs": ["observable product outcome"],
   "required_capabilities": ["domain-owned responsibility, not a generic agent role"],
+  "diagram_requirements": ["material responsibility, mechanism, or complete route the diagram must visibly implement"],
   "outcome_measures": ["measure tied to the user's objective"],
   "constraints": ["explicit user constraint only"],
   "assumptions": ["material assumption"],
@@ -254,12 +260,28 @@ def _normalise_architect(value: dict[str, Any]) -> dict[str, Any]:
                 "evidence_ref": _text(item.get("evidence_ref"), 500),
             })
 
+    required_capabilities = _text_list(
+        value.get("required_capabilities"), count=14, limit=200
+    )
+    diagram_requirements = _text_list(
+        value.get("diagram_requirements"), count=8, limit=240
+    )
+    if not diagram_requirements:
+        # Older/provider-degraded outputs still get an explicit graph contract
+        # without another paid call. Capabilities and decisions are the brief's
+        # material commitments; runtime prose remains explanatory context.
+        diagram_requirements = _dedupe_text([
+            *required_capabilities,
+            *(item["decision"] for item in decisions),
+        ])[:8]
+
     return {
         "interpretation": _text(value.get("interpretation"), 400),
         "actors": _text_list(value.get("actors"), count=10, limit=120),
         "inputs": _text_list(value.get("inputs"), count=10, limit=160),
         "outputs": _text_list(value.get("outputs"), count=10, limit=160),
-        "required_capabilities": _text_list(value.get("required_capabilities"), count=14, limit=200),
+        "required_capabilities": required_capabilities,
+        "diagram_requirements": diagram_requirements,
         "outcome_measures": _text_list(value.get("outcome_measures"), count=8, limit=180),
         "constraints": _text_list(value.get("constraints"), count=8, limit=180),
         "assumptions": _text_list(value.get("assumptions"), count=8, limit=240),
@@ -293,6 +315,30 @@ def _normalise_challenger(value: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def format_diagram_commitments(plan: dict[str, Any]) -> str:
+    """Format the architect's bounded, domain-specific graph acceptance contract."""
+    values = plan.get("diagram_requirements")
+    requirements = values if isinstance(values, list) else []
+    cleaned = _dedupe_text(
+        _text(item, 240) for item in requirements if isinstance(item, str)
+    )[:8]
+    if not cleaned:
+        return "- No separate commitments supplied; reconcile the canonical brief itself."
+    return "\n".join(f"- {item}" for item in cleaned)
+
+
+def _dedupe_text(values: Iterable[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _text(value, 240)
+        key = text.casefold()
+        if text and key not in seen:
+            deduped.append(text)
+            seen.add(key)
+    return deduped
+
+
 def _is_complete_architect_plan(plan: dict[str, Any]) -> bool:
     """Reject a syntactically valid but empty enrichment without another call."""
     return bool(
@@ -322,6 +368,13 @@ def _fallback_architect_plan(state: AgentState) -> dict[str, Any]:
             "Execute external actions only through retry-safe controlled boundaries",
             "Measure outcomes and feed accepted evidence into the next decision",
             "Version and evaluate model and prompt releases with rollback",
+        ],
+        "diagram_requirements": [
+            "Connect validated inputs through a bounded decision to an observable outcome",
+            "Keep authoritative state outside the model runtime",
+            "Route external actions through retry-safe policy and confirmation boundaries only when writes apply",
+            "Give advisory or read-only work a direct completion route that bypasses write-only controls",
+            "Return measured outcomes to the owner of the next decision",
         ],
         "outcome_measures": ["User outcome quality, safety, latency, cost, and operator override rate"],
         "constraints": [],
