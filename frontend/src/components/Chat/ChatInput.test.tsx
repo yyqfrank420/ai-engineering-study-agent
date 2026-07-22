@@ -13,6 +13,7 @@ const defaultProps = {
   showPrepare: false,
   prepareDisabled: false,
   prepareMessage: null as string | null,
+  prepareProgress: null,
   isGenerating: false,
   complexity: 'auto' as const,
   graphMode: 'auto' as const,
@@ -175,10 +176,12 @@ describe('ChatInput', () => {
     renderInput('thread-1', {
       showPrepare: true,
       prepareMessage: 'Backend is warming up',
+      prepareProgress: { completedUnits: 2, totalUnits: 3, percent: 67 },
       onPrepare,
     });
 
     expect(screen.getByText('Backend is warming up')).toBeTruthy();
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('67');
     fireEvent.click(screen.getByRole('button', { name: 'Prepare backend' }));
 
     expect(onPrepare).toHaveBeenCalled();
@@ -212,7 +215,7 @@ describe('ChatInput', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Message options' }));
     fireEvent.click(screen.getByText('prod'));
     fireEvent.click(screen.getByText('on'));
-    fireEvent.click(screen.getByText('Augment with Web Search').parentElement!.nextSibling as Element);
+    fireEvent.click(screen.getByRole('switch', { name: 'research' }));
 
     expect(onComplexityChange).toHaveBeenCalledWith('production');
     expect(onGraphModeChange).toHaveBeenCalledWith('on');

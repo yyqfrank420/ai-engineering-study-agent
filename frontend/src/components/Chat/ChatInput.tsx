@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, Dispatch, SetStateAction } from 'react';
 import type { ComplexityLevel, GraphMode } from '../../types';
+import type { BackendPrepareProgress } from '../../hooks/useBackendReadiness';
 import { SegmentedControl } from './SegmentedControl';
 
 interface ChatInputProps {
@@ -29,6 +30,7 @@ interface ChatInputProps {
   prepareDisabled?: boolean;
   isGenerating?: boolean;   // LLM actively streaming — show Stop instead of Send
   prepareMessage?: string | null; // non-null while backend is warming up or failed
+  prepareProgress?: BackendPrepareProgress | null;
   // Mode control state — passed from App.tsx
   complexity:         ComplexityLevel;
   graphMode:          GraphMode;
@@ -123,7 +125,7 @@ interface PopoverProps {
 }
 
 const COMPLEXITY_HELP: Record<ComplexityLevel, string> = {
-  auto: 'Adapts depth; design requests use prototype reasoning.',
+  auto: 'Adapts depth; applied design requests use production reasoning.',
   low: 'Direct answer with the main trade-off.',
   prototype: 'Buildable components, interfaces, and control loop.',
   production: 'Deep review: failures, safety, operations, and rollout.',
@@ -170,7 +172,7 @@ function ModePopover({
         <div>
           <span style={miniLabelStyle}>RESEARCH</span>
           <div style={{ fontSize: '0.62rem', color: '#3d444d', marginTop: '1px' }}>
-            Augment with Web Search
+            Ground with current Web context
           </div>
         </div>
         <div
@@ -219,6 +221,7 @@ function ModePopover({
 export function ChatInput({
   onSend, onStop, onPrepare, onDraftChange, threadId, disabled, isGenerating,
   sendDisabled, showPrepare, prepareDisabled, prepareMessage,
+  prepareProgress,
   complexity, graphMode, researchEnabled,
   onComplexityChange, onGraphModeChange, onResearchChange,
   selectionSuggestion, selectionReferenceActive, onUseSelection, onDismissSelection, onClearSelectionReference,
@@ -366,7 +369,22 @@ export function ChatInput({
 
       {prepareMessage && (
         <div style={prepareNoticeStyle}>
-          {prepareMessage}
+          <div style={prepareNoticeHeaderStyle}>
+            <span>{prepareMessage}</span>
+            {prepareProgress && <span>{prepareProgress.percent}%</span>}
+          </div>
+          {prepareProgress && (
+            <div
+              role="progressbar"
+              aria-label="Backend preparation progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={prepareProgress.percent}
+              style={prepareProgressTrackStyle}
+            >
+              <div style={prepareProgressFillStyle(prepareProgress.percent)} />
+            </div>
+          )}
         </div>
       )}
 
@@ -542,6 +560,29 @@ const prepareNoticeStyle: CSSProperties = {
   fontSize: '0.72rem',
   lineHeight: 1.45,
 };
+
+const prepareNoticeHeaderStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: '0.75rem',
+};
+
+const prepareProgressTrackStyle: CSSProperties = {
+  height: '4px',
+  marginTop: '0.5rem',
+  overflow: 'hidden',
+  borderRadius: '999px',
+  background: 'rgba(96,165,250,0.14)',
+};
+
+const prepareProgressFillStyle = (percent: number): CSSProperties => ({
+  width: `${percent}%`,
+  height: '100%',
+  borderRadius: 'inherit',
+  background: 'linear-gradient(90deg, #3b82f6, #a78bfa)',
+  transition: 'width 220ms ease',
+});
 
 const popoverStyle: CSSProperties = {
   width:                '272px',

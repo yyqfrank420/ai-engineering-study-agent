@@ -139,6 +139,53 @@ describe('AgentTransport WebSocket protocol', () => {
     socket.receive({ type: 'done' });
   });
 
+  it('stops the exact request and ignores late frames from its superseded socket', async () => {
+    const transport = new AgentTransport();
+    const events: ServerEvent[] = [];
+    transport.onEvent(event => events.push(event));
+    const completed = transport.sendMessage(session, 'thread-1', 'design', undefined, 'client-stop');
+    const socket = MockWebSocket.instances[0];
+    socket.open();
+    socket.receive({ type: 'ready' });
+
+    expect(transport.stopGeneration('client-stop')).toBe(true);
+    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({
+      type: 'stop',
+      client_request_id: 'client-stop',
+    });
+    socket.receive({ type: 'response_delta', content: 'late mutation' });
+    socket.receive({ type: 'done' });
+    socket.close();
+
+    await expect(completed).resolves.toBe(false);
+    expect(events).toEqual([]);
+  });
+
+  it('does not let stale cancellation close a newer request', async () => {
+    const transport = new AgentTransport();
+    const firstCompleted = transport.sendMessage(session, 'thread-1', 'first', undefined, 'client-old');
+    const first = MockWebSocket.instances[0];
+    first.open();
+    first.receive({ type: 'ready' });
+
+    const secondCompleted = transport.sendMessage(session, 'thread-2', 'second', undefined, 'client-new');
+    const second = MockWebSocket.instances[1];
+    expect(JSON.parse(first.sent.at(-1)!)).toEqual({
+      type: 'stop',
+      client_request_id: 'client-old',
+    });
+    expect(transport.stopGeneration('client-old')).toBe(false);
+    expect(transport.isChatActive()).toBe(true);
+
+    first.close();
+    second.open();
+    second.receive({ type: 'ready' });
+    second.receive({ type: 'done' });
+
+    await expect(firstCompleted).resolves.toBe(false);
+    await expect(secondCompleted).resolves.toBe(true);
+  });
+
   it('retries one failed connection before sending the start frame', async () => {
     vi.useFakeTimers();
     const transport = new AgentTransport();

@@ -77,8 +77,8 @@ export function GraphCanvas({
       graphData.graph_type,
       graphData.title,
       graphData.nodes.map((node) => `${node.id}:${node.label}:${node.type}:${node.tier ?? ''}:${node.lane ?? ''}`).join('|'),
-      graphData.edges.map((edge) => `${edge.source}->${edge.target}:${edge.label}:${edge.sync}`).join('|'),
-      (graphData.groups ?? []).map((group) => `${group.id}:${group.nodeIds.join(',')}`).join('|'),
+      graphData.edges.map((edge) => `${edge.source}->${edge.target}:${edge.label}:${edge.sync}:${edge.flow ?? ''}`).join('|'),
+      (graphData.groups ?? []).map((group) => `${group.id}:${group.kind ?? ''}:${group.nodeIds.join(',')}`).join('|'),
       graphData.sequence.map((step) => `${step.step}:${step.nodes.join(',')}`).join('|'),
     ].join('::');
   }, [activeThreadId, graphData]);
@@ -170,19 +170,46 @@ export function GraphCanvas({
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
       {/* Graph title */}
       <div style={{
-        padding: '0.5rem 1rem',
+        padding: '0.65rem 1rem',
         fontSize: '0.75rem',
         color: '#6e7681',
         borderBottom: '1px solid #21262d',
-        background: '#0d1117',
+        background: 'linear-gradient(180deg, rgba(16,22,34,0.98), rgba(10,15,26,0.98))',
         display: 'flex',
         alignItems: 'center',
-        gap: '0.5rem',
+        gap: '0.65rem',
+        minHeight: 42,
       }}>
-        <span style={{ color: '#a78bfa' }}>◈</span>
-        <span style={{ color: '#8b949e' }}>{graphData.title}</span>
-        <span style={{ color: '#30363d' }}>·</span>
-        <span>{graphData.nodes.length}n · {graphData.edges.length}e</span>
+        <span style={{ color: '#a78bfa', fontSize: '0.88rem' }}>◈</span>
+        <span style={{
+          color: '#d8dee9',
+          fontWeight: 650,
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}>
+          {graphData.title}
+        </span>
+        <span style={{
+          color: '#8490a0',
+          fontSize: '0.62rem',
+          padding: '0.18rem 0.45rem',
+          borderRadius: 999,
+          border: '1px solid rgba(148,163,184,0.16)',
+          background: 'rgba(148,163,184,0.06)',
+        }}>
+          {graphData.nodes.length} components
+          {(graphData.groups?.length ?? 0) > 0 ? ` · ${graphData.groups!.length} zones` : ''}
+        </span>
+
+        {graphData.design_origin === 'applied' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginLeft: 'auto' }}>
+            <FlowLegend color="#3b82f6" label="Runtime" />
+            <FlowLegend color="#94a3b8" label="Control" dashed />
+            <FlowLegend color="#a78bfa" label="Feedback" dashed />
+          </div>
+        )}
 
         {/* Re-open sequence bar when dismissed */}
         {hasSequence && sequenceDismissed && (
@@ -190,7 +217,7 @@ export function GraphCanvas({
             onClick={() => setSequenceDismissal({ key: graphContentKey, dismissed: false })}
             title="Show walkthrough steps"
             style={{
-              marginLeft: 'auto',
+              marginLeft: graphData.design_origin === 'applied' ? 0 : 'auto',
               display: 'flex', alignItems: 'center', gap: '0.3rem',
               background: 'rgba(167,139,250,0.08)',
               border: '1px solid rgba(167,139,250,0.2)',
@@ -282,5 +309,18 @@ export function GraphCanvas({
     </div>
     <HiddenGraphEvaluator candidate={graphCandidate} viewport={evaluationViewport} />
     </>
+  );
+}
+
+function FlowLegend({ color, label, dashed = false }: { color: string; label: string; dashed?: boolean }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.32rem', color: '#7d8795', fontSize: '0.58rem' }}>
+      <span style={{
+        width: 18,
+        height: 0,
+        borderTop: `1.5px ${dashed ? 'dashed' : 'solid'} ${color}`,
+      }} />
+      {label}
+    </span>
   );
 }

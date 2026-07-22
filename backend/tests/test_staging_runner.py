@@ -143,12 +143,16 @@ def test_staging_suite_has_customer_support_graph_quality_gate():
     assert graph_quality_case.category == "graph_quality"
     first_expect = graph_quality_case.steps[0].expect
     followup_expect = graph_quality_case.steps[1].expect
+    assert graph_quality_case.steps[0].payload["content"] == "customer support chatbot"
+    assert graph_quality_case.steps[0].payload["complexity"] == "auto"
     assert first_expect.graph_type == "architecture"
+    assert first_expect.graph_maturity is True
     assert "billing|account" in first_expect.graph_node_label_keywords_include
     assert "return|order" in first_expect.graph_node_label_keywords_include
     assert "escalation|human" in first_expect.graph_node_label_keywords_include
     assert "Tool Use" in first_expect.graph_node_labels_exclude
     assert "billing|account" in followup_expect.graph_node_label_keywords_include
+    assert followup_expect.graph_min_retained_node_ratio == 0.6
 
 
 def test_staging_suite_gates_reported_growth_marketing_regression():
@@ -156,11 +160,19 @@ def test_staging_suite_gates_reported_growth_marketing_regression():
     expectation = applied_case.steps[0].expect
 
     assert applied_case.category == "applied_design_quality"
+    assert applied_case.steps[0].payload == {
+        "content": "growth marketing multi-agent system",
+        "complexity": "auto",
+        "graph_mode": "auto",
+        "research_enabled": True,
+    }
     assert expectation.graph_type == "architecture"
-    assert "objective" in expectation.graph_node_label_keywords_include
-    assert "creative|copy" in expectation.graph_node_label_keywords_include
+    assert "campaign|marketer" in expectation.graph_node_label_keywords_include
+    assert "creative|copy|content" in expectation.graph_node_label_keywords_include
+    assert "research" in expectation.workers_include
     assert "Agent" in expectation.graph_node_labels_exclude
     assert expectation.graph_max_generic_label_count == 2
+    assert expectation.graph_maturity is True
 
 
 def test_staging_runner_defaults_case_filter_from_environment(monkeypatch):
@@ -449,6 +461,82 @@ def test_evaluate_expectation_rejects_generic_customer_support_graph():
     assert "graph title expected to contain 'Customer Support', got 'Agent Architecture'" in failures
     assert "graph missing node label 'Billing Agent'" in failures
     assert "graph unexpectedly included node label 'Tool Use'" in failures
+
+
+def test_evaluate_expectation_checks_structural_maturity_without_exact_labels():
+    step = StagingStep(
+        kind="chat",
+        description="maturity gate",
+        expect=StepExpectation(graph_emitted=True, graph_maturity=True),
+    )
+    graph = {
+        "graph_type": "architecture",
+        "title": "Domain workflow",
+        "nodes": [{"id": node_id, "label": label} for node_id, label in (
+            ("intake", "Request Intake"),
+            ("decision", "Bounded Decision"),
+            ("execution", "Controlled Execution"),
+            ("outcome", "Outcome Store"),
+        )],
+        "edges": [
+            {"source": "intake", "target": "decision", "flow": "runtime"},
+            {"source": "decision", "target": "execution", "flow": "control"},
+            {"source": "execution", "target": "outcome", "flow": "runtime"},
+            {"source": "outcome", "target": "decision", "flow": "feedback", "type": "loop"},
+        ],
+        "groups": [
+            {"label": "Intake", "nodeIds": ["intake"]},
+            {"label": "Decision & Action", "nodeIds": ["decision", "execution"]},
+            {"label": "Measurement", "nodeIds": ["outcome"]},
+        ],
+        "sequence": [
+            {"step": 1, "nodes": ["intake"]},
+            {"step": 2, "nodes": ["decision"]},
+            {"step": 3, "nodes": ["execution"]},
+            {"step": 4, "nodes": ["outcome", "decision"]},
+        ],
+        "assumptions": ["The external system exposes a retry-safe action API."],
+    }
+    run = {
+        "status_code": 200,
+        "events": [{"type": "graph_data", "data": graph}],
+        "json_body": None,
+        "body_text": "",
+    }
+
+    assert evaluate_expectation(step, run, {}) == []
+
+    graph["assumptions"] = []
+    graph["groups"][2]["nodeIds"] = ["decision"]
+    failures = evaluate_expectation(step, run, {})
+    assert "mature graph must assign every node to exactly one responsibility zone" in failures
+    assert "mature graph must keep inferred requirements visible as assumptions" in failures
+
+
+def test_evaluate_expectation_requires_expansion_to_preserve_stable_components():
+    step = StagingStep(
+        kind="chat",
+        description="expansion retention",
+        expect=StepExpectation(graph_emitted=True, graph_min_retained_node_ratio=0.6),
+    )
+    run = {
+        "status_code": 200,
+        "events": [{
+            "type": "graph_data",
+            "data": {"nodes": [{"id": "intake"}, {"id": "replacement"}]},
+        }],
+        "json_body": None,
+        "body_text": "",
+    }
+    case_state = {
+        "last_graph_data": {
+            "nodes": [{"id": "intake"}, {"id": "decision"}, {"id": "execution"}],
+        }
+    }
+
+    failures = evaluate_expectation(step, run, case_state)
+
+    assert "graph retained too few stable component identities (0.33 < 0.60)" in failures
 
 
 def test_evaluate_expectation_reports_unexpected_sse_error_text():

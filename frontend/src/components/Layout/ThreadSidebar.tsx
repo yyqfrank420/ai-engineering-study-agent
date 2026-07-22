@@ -162,7 +162,7 @@ export function ThreadSidebar({
   }, [backendReady, fetchThreads]);
 
   const handleDelete = useCallback(async (threadId: string) => {
-    if (!authSession) return;
+    if (!authSession || isLoading) return;
     setConfirmingId(null);
     setPopupAnchor(null);
     try {
@@ -172,7 +172,7 @@ export function ThreadSidebar({
     } catch {
       // Non-fatal — thread stays in list
     }
-  }, [authSession, onDeleteThread]);
+  }, [authSession, isLoading, onDeleteThread]);
 
   const closePopup = useCallback(() => {
     setConfirmingId(null);
@@ -182,10 +182,15 @@ export function ThreadSidebar({
   const grouped = groupThreads(threads);
 
   return (
-    <div style={sidebarStyle(isOpen)}>
-      <div style={sidebarInnerStyle(isOpen)}>
+    <div
+      className={`thread-sidebar ${isOpen ? 'thread-sidebar--open' : 'thread-sidebar--closed'}`}
+      style={sidebarStyle(isOpen)}
+      aria-hidden={!isOpen}
+    >
+      <div className="thread-sidebar__inner" style={sidebarInnerStyle(isOpen)}>
         {/* New chat button — disabled at thread limit */}
         <button
+          aria-label="New chat"
           onClick={onNewChat}
           disabled={isLoading || !authSession || !backendReady || threads.length >= MAX_THREADS}
           style={newChatButtonStyle(isLoading || !authSession || !backendReady || threads.length >= MAX_THREADS)}
@@ -224,22 +229,34 @@ export function ThreadSidebar({
                       onMouseEnter={() => setHoveredId(thread.id)}
                       onMouseLeave={() => setHoveredId(null)}
                     >
-                      <span
-                        onClick={() => backendReady && !isActive && onSelectThread(thread.id)}
+                      <button
+                        type="button"
+                        disabled={isLoading || !backendReady || isActive}
+                        onClick={() => onSelectThread(thread.id)}
                         style={{
                           flex: 1,
+                          minWidth: 0,
+                          padding: 0,
+                          border: 0,
+                          background: 'transparent',
+                          color: 'inherit',
+                          font: 'inherit',
+                          textAlign: 'left',
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
                           whiteSpace: 'nowrap',
-                          cursor: !backendReady || isActive ? 'default' : 'pointer',
+                          cursor: isLoading || !backendReady || isActive ? 'default' : 'pointer',
                         }}
+                        aria-label={`Open chat ${thread.title || 'New chat'}`}
                       >
                         {thread.title || 'New chat'}
-                      </span>
+                      </button>
 
                       {/* Trash button — inline in flex row, opacity-hidden when not hovered.
                           pointerEvents always 'auto' — prevents mid-hover invisible dead zone. */}
                       <button
+                        type="button"
+                        disabled={isLoading}
                         onClick={e => {
                           e.stopPropagation();
                           if (isConfirming) {
@@ -254,6 +271,7 @@ export function ThreadSidebar({
                         onMouseEnter={() => setHoveredId(thread.id)}
                         style={trashButtonStyle(isConfirming, showControls)}
                         title="Delete chat"
+                        aria-label={`Delete chat ${thread.title || 'New chat'}`}
                       >
                         <svg width="11" height="12" viewBox="0 0 11 12" fill="currentColor">
                           <path d="M1 3h9M4 3V2h3v1M2 3l.7 7.3A.7.7 0 002.7 11h5.6a.7.7 0 00.7-.7L9.7 3" stroke="currentColor" strokeWidth="1" fill="none" strokeLinecap="round"/>

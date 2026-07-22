@@ -49,7 +49,9 @@ _PROMPT_INJECTION_PATTERNS: tuple[tuple[re.Pattern[str], float], ...] = (
 _EXPLICIT_UNTRUSTED_QUOTE = re.compile(
     r"\b(?:treat|analy[sz]e|review|explain)\b"
     r"[^'\"]{0,240}"
-    r"\b(?:quoted\s+(?:text|instruction)|untrusted\s+(?:text|notes|instruction)|prompt[- ]injection\s+example)\b"
+    r"\b(?:quoted\s+(?:text|instruction|ticket|message|request)|"
+    r"untrusted\s+(?:text|notes|instruction|data|ticket|message|request)|"
+    r"prompt[- ]injection\s+example)\b"
     r"[^'\"]{0,240}"
     r"(?P<quote>['\"]).*?(?P=quote)",
     re.I | re.S,

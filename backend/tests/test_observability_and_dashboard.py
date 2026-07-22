@@ -121,6 +121,45 @@ def test_analytics_capture_requires_auth_for_non_public_events(temp_data_dir, mo
         assert private_denied.status_code == 401
 
 
+def test_analytics_capture_accepts_local_dev_auth(temp_data_dir, monkeypatch):
+    from main import create_app
+
+    monkeypatch.setattr(settings, "dev_bypass_auth", True)
+    app = create_app(load_resources=False)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/analytics/capture",
+            headers={"Authorization": "Bearer dev-local"},
+            json={
+                "anonymous_id": "anon-local",
+                "event_type": "chat_sent",
+                "properties": {"thread_id": "thread-local"},
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_internal_dashboard_accepts_local_dev_auth_only_when_bypass_is_enabled(
+    temp_data_dir,
+    monkeypatch,
+):
+    from main import create_app
+
+    monkeypatch.setattr(settings, "dev_bypass_auth", True)
+    app = create_app(load_resources=False)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/internal/dashboard/overview",
+            headers={"Authorization": "Bearer dev-local"},
+        )
+
+    assert response.status_code == 200
+
+
 def test_analytics_capture_survives_storage_write_failure(temp_data_dir, monkeypatch):
     from main import create_app
 

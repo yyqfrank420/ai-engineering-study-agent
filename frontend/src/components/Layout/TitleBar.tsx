@@ -47,7 +47,7 @@ export function TitleBar({
   onLogout,
 }: TitleBarProps) {
   return (
-    <header style={{
+    <header className="title-bar" style={{
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'space-between',
@@ -62,7 +62,7 @@ export function TitleBar({
       position: 'relative',
       zIndex: 10,
       }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+      <div className="title-bar__identity" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0 }}>
         <button
           onClick={onToggleSidebar}
           style={sidebarToggleStyle}
@@ -72,7 +72,7 @@ export function TitleBar({
           {sidebarOpen ? '◧' : '☰'}
         </button>
         {/* Gradient title text */}
-        <span style={{
+        <span className="title-bar__product" style={{
           fontSize: '0.9375rem',
           fontWeight: 600,
           background: 'linear-gradient(90deg, #a78bfa, #60a5fa)',
@@ -83,7 +83,7 @@ export function TitleBar({
           AI Engineering
         </span>
         {/* Violet-tinted badge */}
-        <span style={{
+        <span className="title-bar__book" style={{
           fontSize: '0.7rem',
           padding: '2px 8px',
           borderRadius: '999px',
@@ -95,14 +95,14 @@ export function TitleBar({
         }}>
           Chip Huyen · O'Reilly
         </span>
-        <span style={{ fontSize: '0.75rem', color: '#8b949e' }}>
+        <span className="title-bar__thread" style={{ fontSize: '0.75rem', color: '#8b949e', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {threadTitle}
         </span>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+      <div className="title-bar__actions" style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
         {providerNotice && (
-          <span style={{
+          <span className="title-bar__provider" style={{
             fontSize: '0.7rem',
             padding: '2px 8px',
             borderRadius: '999px',
@@ -114,7 +114,7 @@ export function TitleBar({
             {providerNotice}
           </span>
         )}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <div className="title-bar__status" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           {/* Glowing status dot — pulses violet when generating */}
           <div style={{
             width: 7, height: 7,
@@ -127,18 +127,19 @@ export function TitleBar({
             {streamStatus}
           </span>
         </div>
-        <span style={{ fontSize: '0.75rem', color: '#8b949e' }}>
+        <span className="title-bar__email" style={{ fontSize: '0.75rem', color: '#8b949e', maxWidth: '14rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {userEmail}
         </span>
         {showDashboardLink && (
           <button
+            className="title-bar__dashboard"
             onClick={dashboardActive ? onOpenChat : onOpenDashboard}
             style={buttonStyle}
           >
             {dashboardActive ? 'Back to chat' : 'Dashboard'}
           </button>
         )}
-        <button onClick={onLogout} style={buttonStyle}>
+        <button className="title-bar__logout" onClick={onLogout} style={buttonStyle}>
           Sign out
         </button>
       </div>

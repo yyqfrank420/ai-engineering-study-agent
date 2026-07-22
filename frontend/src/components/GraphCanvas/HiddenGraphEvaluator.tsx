@@ -25,26 +25,27 @@ export function HiddenGraphEvaluator({ candidate, viewport }: HiddenGraphEvaluat
       try {
         const screenshot = await rasteriseSvg(svg, viewport);
         if (cancelled) return;
-        submittedRef.current = candidate.evaluationId;
-        agentTransport.submitDiagramEvaluation(
+        await submitWithRetry(
           candidate.evaluationId,
           candidate.graphVersion,
           report,
           screenshot,
+          () => cancelled,
         );
       } catch (error) {
         // A tiny valid image lets the backend receive the failure report and
         // reject the candidate deterministically instead of timing out.
         report.capture_error = error instanceof Error ? error.message : 'Browser capture failed';
         const fallback = blankScreenshot();
-        submittedRef.current = candidate.evaluationId;
-        agentTransport.submitDiagramEvaluation(
+        await submitWithRetry(
           candidate.evaluationId,
           candidate.graphVersion,
           report,
           fallback,
+          () => cancelled,
         );
       }
+      if (!cancelled) submittedRef.current = candidate.evaluationId;
     }, 520);
     return () => {
       cancelled = true;
@@ -57,6 +58,7 @@ export function HiddenGraphEvaluator({ candidate, viewport }: HiddenGraphEvaluat
     <div
       ref={rootRef}
       aria-hidden="true"
+      inert
       style={{
         position: 'fixed',
         left: '-12000px',
@@ -76,6 +78,25 @@ export function HiddenGraphEvaluator({ candidate, viewport }: HiddenGraphEvaluat
       />
     </div>
   );
+}
+
+
+async function submitWithRetry(
+  evaluationId: string,
+  graphVersion: string | null | undefined,
+  report: ReturnType<typeof measureDiagram>,
+  screenshot: string,
+  isCancelled: () => boolean,
+): Promise<void> {
+  const delays = [0, 250, 750, 1_500];
+  for (const delay of delays) {
+    if (delay > 0) await new Promise(resolve => window.setTimeout(resolve, delay));
+    if (isCancelled()) return;
+    if (agentTransport.submitDiagramEvaluation(evaluationId, graphVersion, report, screenshot)) {
+      return;
+    }
+  }
+  throw new Error('Diagram evaluation transport was unavailable');
 }
 
 

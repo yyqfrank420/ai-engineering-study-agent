@@ -41,18 +41,19 @@ async def rag_worker_node(state: AgentState, tools: list) -> AgentState:
     rag_chunks: list[dict] = []
 
     search_tool = tool_map.get("rag_search")
+    query = state.get("design_query") or state["user_message"]
     if search_tool:
-        result_json = search_tool.invoke({"query": state["user_message"], "k": settings.rag_top_k})
+        result_json = search_tool.invoke({"query": query, "k": settings.rag_top_k})
         rag_chunks = json.loads(result_json)
 
     if _may_emit_eval_evidence(state):
         await send({
             "type": "retrieval_evidence",
-            "query": str(state["user_message"])[: settings.max_message_bytes],
+            "query": str(query)[: settings.max_message_bytes],
             "chunks": _bounded_eval_evidence(rag_chunks),
         })
 
-    relevance, notice = _assess_retrieval_relevance(state["user_message"], rag_chunks)
+    relevance, notice = _assess_retrieval_relevance(query, rag_chunks)
     return {
         **state,
         "rag_chunks": rag_chunks,

@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import type { AuthSession } from '../types';
 import { trackEvent } from '../services/analytics';
 import { prepareBackend } from '../services/api';
+import type { PrepareResponse } from '../services/api';
 
 export type BackendReadiness = 'unknown' | 'preparing' | 'ready' | 'error';
 
@@ -18,56 +19,72 @@ const PREPARE_BYPASS =
   );
 const DEFAULT_READINESS: BackendReadiness = PREPARE_BYPASS ? 'ready' : 'unknown';
 
-// Messages for each startup step
+export interface BackendPrepareProgress {
+  completedUnits: number;
+  totalUnits: number;
+  percent: number;
+}
+
 const STEP_MESSAGES: Record<string, string> = {
   database: 'Initializing database…',
-  artifacts: 'Downloading knowledge base…',
-  index: 'Loading embeddings…',
+  artifacts: 'Checking knowledge-base files…',
+  index: 'Loading the retrieval index…',
 };
 
-// Rotating messages for the "index" step (the long 20-second one)
-// First message includes the cold-start warning
-const INDEX_ROTATION = [
-  'Loading embeddings… (cold-start may take ~30 seconds)',
-  'Building retrieval index…',
-  'Preparing knowledge base…',
-];
+function normaliseProgress(result: PrepareResponse): BackendPrepareProgress | null {
+  const progress = result.progress;
+  if (!progress) return null;
+  const rawTotal = Number(progress.total_units);
+  const rawCompleted = Number(progress.completed_units);
+  const rawPercent = Number(progress.percent);
+  if (![rawTotal, rawCompleted, rawPercent].every(Number.isFinite)) return null;
+  const totalUnits = Math.max(1, Math.round(rawTotal));
+  const completedUnits = Math.min(totalUnits, Math.max(0, Math.round(rawCompleted)));
+  return {
+    completedUnits,
+    totalUnits,
+    percent: Math.min(100, Math.max(0, Math.round(rawPercent))),
+  };
+}
 
 export function useBackendReadiness(authSession: AuthSession | null) {
   const [readinessState, setReadinessState] = useState<{
     userId: string | null;
     readiness: BackendReadiness;
     message: string | null;
+    progress: BackendPrepareProgress | null;
   }>({
     userId: null,
     readiness: DEFAULT_READINESS,
     message: null,
+    progress: null,
   });
   const preparingForUserRef = useRef<string | null>(null);
-  const rotationIndexRef = useRef(0);
 
   const stateBelongsToUser = !!authSession && readinessState.userId === authSession.user.id;
   const backendReadiness = stateBelongsToUser ? readinessState.readiness : DEFAULT_READINESS;
   const prepareMessage = stateBelongsToUser ? readinessState.message : null;
+  const prepareProgress = stateBelongsToUser ? readinessState.progress : null;
 
   const prepareBackendNow = useCallback(async () => {
     if (!authSession) return;
     const userId = authSession.user.id;
     if (preparingForUserRef.current === userId) return;
     preparingForUserRef.current = userId;
-    setReadinessState({ userId, readiness: 'preparing', message: 'Waking up backend…' });
+    setReadinessState({
+      userId,
+      readiness: 'preparing',
+      message: 'Starting the service…',
+      progress: { completedUnits: 0, totalUnits: 3, percent: 0 },
+    });
     void trackEvent('prepare_clicked', { backend_readiness_state: backendReadiness }, authSession);
 
-    let pollInterval: number | null = null;
-    let rotationTimer: number | null = null;
-    let currentStep = 'unknown';
+    let pollTimer: number | null = null;
 
     const cleanup = () => {
-      if (pollInterval !== null) {
-        window.clearInterval(pollInterval);
-      }
-      if (rotationTimer !== null) {
-        window.clearInterval(rotationTimer);
+      if (pollTimer !== null) {
+        window.clearTimeout(pollTimer);
+        pollTimer = null;
       }
     };
 
@@ -77,6 +94,7 @@ export function useBackendReadiness(authSession: AuthSession | null) {
         userId,
         readiness: 'error',
         message: err instanceof Error ? err.message : 'Backend unavailable — please reload.',
+        progress: null,
       });
       void trackEvent(
         'prepare_failed',
@@ -89,56 +107,24 @@ export function useBackendReadiness(authSession: AuthSession | null) {
       cleanup();
     };
 
-    // Poll /api/prepare to get current step and rotate messages if on "index" step
+    // The server owns milestone completion; the browser only renders reported progress.
     const pollPrepare = async () => {
-      try {
-        const result = await prepareBackend();
-        if (result.status === 'ready') {
-          preparingForUserRef.current = null;
-          setReadinessState({ userId, readiness: 'ready', message: null });
-          void trackEvent('prepare_succeeded', { backend_readiness_state: 'ready' }, authSession);
-          cleanup();
-          return true; // done
-        }
-      } catch (err) {
-        if (err instanceof Error) {
-          const step = (err as Error & { step?: string }).step;
-          if (!step) {
-            throw err;
-          }
-          currentStep = step;
-          const stepMsg = STEP_MESSAGES[currentStep];
-
-          if (currentStep === 'index') {
-            // For the index step, start rotating messages if not already
-            if (rotationTimer === null) {
-              rotationIndexRef.current = 0;
-              const rotateMessage = () => {
-                setReadinessState({
-                  userId,
-                  readiness: 'preparing',
-                  message: INDEX_ROTATION[rotationIndexRef.current % INDEX_ROTATION.length],
-                });
-                rotationIndexRef.current += 1;
-              };
-              rotateMessage();
-              rotationTimer = window.setInterval(rotateMessage, 2500);
-            }
-          } else {
-            // For other steps, show the step message and clear rotation
-            if (rotationTimer !== null) {
-              window.clearInterval(rotationTimer);
-              rotationTimer = null;
-            }
-            setReadinessState({
-              userId,
-              readiness: 'preparing',
-              message: stepMsg || 'Warming up backend…',
-            });
-          }
-        }
+      const result = await prepareBackend();
+      if (result.status === 'ready') {
+        preparingForUserRef.current = null;
+        setReadinessState({ userId, readiness: 'ready', message: null, progress: null });
+        void trackEvent('prepare_succeeded', { backend_readiness_state: 'ready' }, authSession);
+        cleanup();
+        return true;
       }
-      return false; // not done yet
+      const message = result.detail?.trim() || STEP_MESSAGES[result.step ?? ''] || 'Warming up backend…';
+      setReadinessState({
+        userId,
+        readiness: 'preparing',
+        message,
+        progress: normaliseProgress(result),
+      });
+      return false;
     };
 
     try {
@@ -147,18 +133,20 @@ export function useBackendReadiness(authSession: AuthSession | null) {
         return;
       }
 
-      // Poll every 500ms until ready
-      pollInterval = window.setInterval(async () => {
-        try {
-          if (await pollPrepare()) {
-            if (pollInterval !== null) {
-              window.clearInterval(pollInterval);
-            }
+      // Schedule the next check only after the previous one settles. Overlapping
+      // requests can arrive out of order and otherwise regress a ready service
+      // back to an older startup milestone.
+      const schedulePoll = () => {
+        pollTimer = window.setTimeout(async () => {
+          pollTimer = null;
+          try {
+            if (!await pollPrepare()) schedulePoll();
+          } catch (err) {
+            markPrepareFailed(err);
           }
-        } catch (err) {
-          markPrepareFailed(err);
-        }
-      }, 500);
+        }, 500);
+      };
+      schedulePoll();
     } catch (err) {
       markPrepareFailed(err);
     }
@@ -167,12 +155,18 @@ export function useBackendReadiness(authSession: AuthSession | null) {
   const clearPreparedCache = useCallback(() => {
     if (!authSession) return;
     preparingForUserRef.current = null;
-    setReadinessState({ userId: authSession.user.id, readiness: DEFAULT_READINESS, message: null });
+    setReadinessState({
+      userId: authSession.user.id,
+      readiness: DEFAULT_READINESS,
+      message: null,
+      progress: null,
+    });
   }, [authSession]);
 
   return {
     backendReadiness,
     prepareMessage,
+    prepareProgress,
     isBackendReady: backendReadiness === 'ready',
     prepareBackendNow,
     clearPreparedCache,

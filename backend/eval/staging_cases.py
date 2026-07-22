@@ -14,6 +14,8 @@ class StepExpectation:
     graph_node_labels_exclude: list[str] = field(default_factory=list)
     graph_node_label_keywords_include: list[str] = field(default_factory=list)
     graph_max_generic_label_count: int | None = None
+    graph_maturity: bool = False
+    graph_min_retained_node_ratio: float | None = None
     workers_include: list[str] = field(default_factory=list)
     workers_exclude: list[str] = field(default_factory=list)
     response_min_length: int | None = None
@@ -345,8 +347,8 @@ STAGING_CASES: list[StagingCase] = [
                 kind="chat",
                 description="Create a customer-support multi-agent architecture graph.",
                 payload={
-                    "content": "multi-agent customer support chatbot architecture pls",
-                    "complexity": "prototype",
+                    "content": "customer support chatbot",
+                    "complexity": "auto",
                     "graph_mode": "auto",
                     "research_enabled": False,
                 },
@@ -370,6 +372,7 @@ STAGING_CASES: list[StagingCase] = [
                         "Planning",
                         "Evaluation",
                     ],
+                    graph_maturity=True,
                     workers_include=["rag", "graph"],
                 ),
             ),
@@ -398,6 +401,8 @@ STAGING_CASES: list[StagingCase] = [
                         "Planning",
                         "Evaluation",
                     ],
+                    graph_maturity=True,
+                    graph_min_retained_node_ratio=0.6,
                     workers_include=["rag", "graph"],
                 ),
             ),
@@ -410,28 +415,24 @@ STAGING_CASES: list[StagingCase] = [
         steps=[
             StagingStep(
                 kind="chat",
-                description="Design the growth-marketing optimisation system from the reported regression.",
+                description="Enrich a four-word growth-marketing seed into a grounded production system.",
                 payload={
-                    "content": (
-                        "growth and performance marketing AI agent system that auto evaluates, "
-                        "writes and adjusts copy, strategies, targeting, and event definitions, "
-                        "and maximises a constrained objective function"
-                    ),
-                    "complexity": "prototype",
+                    "content": "growth marketing multi-agent system",
+                    "complexity": "auto",
                     "graph_mode": "auto",
-                    "research_enabled": False,
+                    "research_enabled": True,
                 },
                 expect=StepExpectation(
                     route="search",
                     graph_emitted=True,
                     graph_type="architecture",
                     graph_node_label_keywords_include=[
-                        "objective",
-                        "event",
-                        "creative|copy",
-                        "audience|target",
-                        "performance|outcome",
+                        "campaign|marketer",
+                        "creative|copy|content",
+                        "audience|target|segment",
+                        "feedback|attribution|experiment|outcome|performance",
                         "policy|approval|guardrail",
+                        "dispatch|channel|execution",
                     ],
                     graph_node_labels_exclude=[
                         "Agent",
@@ -443,9 +444,10 @@ STAGING_CASES: list[StagingCase] = [
                         "Tokenization",
                     ],
                     graph_max_generic_label_count=2,
-                    workers_include=["orchestrator", "rag", "graph"],
+                    graph_maturity=True,
+                    workers_include=["orchestrator", "rag", "research", "graph"],
                     response_min_length=350,
-                    response_contains=["objective", "event", "target"],
+                    response_contains=["campaign", "approval", "feedback"],
                 ),
             ),
         ],

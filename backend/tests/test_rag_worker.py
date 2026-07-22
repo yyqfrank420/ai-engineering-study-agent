@@ -44,6 +44,29 @@ async def test_rag_worker_invokes_search_tool_and_returns_chunks(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_rag_worker_searches_the_restored_design_query_for_terse_followups(monkeypatch):
+    monkeypatch.setattr(settings, "rag_top_k", 5)
+    tool = _Tool([{"text": "Growth measurement and controlled action loop."}])
+
+    async def send(_event):
+        return None
+
+    await rag_worker_node(
+        {
+            "user_message": "expand this",
+            "design_query": "growth marketing multi-agent system expand this",
+            "send": send,
+        },
+        [tool],
+    )
+
+    assert tool.calls == [{
+        "query": "growth marketing multi-agent system expand this",
+        "k": 5,
+    }]
+
+
+@pytest.mark.asyncio
 async def test_rag_worker_handles_missing_search_tool_as_weak_retrieval():
     events = []
 

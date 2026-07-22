@@ -281,6 +281,14 @@ def test_pending_corpus_pr_skips_expensive_live_work_successfully():
     assert corpus_state < dependency_setup
 
 
+def test_live_eval_job_allows_setup_around_the_bounded_browser_suite():
+    workflow = (ROOT / ".github/workflows/live-eval.yml").read_text(encoding="utf-8")
+    manifest = load_manifest()
+
+    assert "timeout-minutes: 30" in workflow
+    assert manifest["live"]["budgets"]["timeout_seconds"] == 15 * 60
+
+
 def test_browser_workflows_use_development_only_internal_auth_bootstrap():
     for name in ("live-eval.yml", "scheduled-eval.yml", "deploy-production.yml"):
         workflow = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")

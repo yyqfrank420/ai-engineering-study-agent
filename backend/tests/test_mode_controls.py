@@ -79,6 +79,10 @@ class TestChatRequestValidation:
         "growth marketing AI agent system that evaluates campaigns and adjusts targeting",
         "multi-agent customer support chatbot architecture",
         "Describe a production model serving stack",
+        "self-improving AI system for performance marketing",
+        "Explain retrieval-augmented generation and draw the runtime flow",
+        "Visualize the execution flow for a tool-using agent",
+        "Show the data flow for a retrieval pipeline",
     ],
 )
 def test_applied_system_design_detection(query):
@@ -94,6 +98,8 @@ def test_applied_system_design_detection(query):
         "What is agent planning?",
         "Create a concise summary of the last answer",
         "What is a machine learning pipeline?",
+        "What is control flow?",
+        "Draw the relationship between precision and recall",
     ],
 )
 def test_concept_questions_do_not_trigger_applied_design(query):
@@ -103,11 +109,46 @@ def test_concept_questions_do_not_trigger_applied_design(query):
 
 
 @pytest.mark.parametrize(
+    "query",
+    [
+        "customer support chatbot",
+        "fraud detection copilot",
+        "personal finance assistant",
+        "clinical intake automation",
+        "invoice reconciliation agent",
+        "growth marketing multi-agent system",
+        "Design customer support chatbot",
+    ],
+)
+def test_terse_product_seeds_trigger_applied_design_enrichment(query):
+    from agent.complexity import is_applied_system_design_request, resolve_complexity
+
+    assert is_applied_system_design_request(query)
+    assert resolve_complexity("auto", query).resolved == "production"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What is a customer support chatbot?",
+        "How does an invoice reconciliation agent work?",
+        "Explain a fraud detection copilot",
+        "AI assistant",
+        "agent",
+    ],
+)
+def test_concepts_and_domain_free_product_nouns_do_not_invent_a_system(query):
+    from agent.complexity import is_applied_system_design_request
+
+    assert not is_applied_system_design_request(query)
+
+
+@pytest.mark.parametrize(
     ("requested", "expected_range"),
     [
-        ("low", (4, 5)),
-        ("prototype", (5, 6)),
-        ("production", (5, 8)),
+        ("low", (5, 7)),
+        ("prototype", (7, 9)),
+        ("production", (9, 10)),
     ],
 )
 def test_complexity_profiles_keep_diagrams_within_the_ui_node_cap(requested, expected_range):
@@ -118,6 +159,37 @@ def test_complexity_profiles_keep_diagrams_within_the_ui_node_cap(requested, exp
 
     assert (profile.min_graph_nodes, profile.max_graph_nodes) == expected_range
     assert profile.max_graph_nodes <= settings.max_graph_nodes
+
+
+def test_self_improving_applied_system_defaults_to_production_depth():
+    from agent.complexity import resolve_complexity
+
+    profile = resolve_complexity("auto", "self-improving AI system for performance marketing")
+
+    assert profile.resolved == "production"
+    assert (profile.min_graph_nodes, profile.max_graph_nodes) == (9, 10)
+
+
+def test_terse_graph_followup_restores_the_original_design_context():
+    from agent.complexity import resolve_design_query
+
+    query = resolve_design_query(
+        "expand the approval path",
+        history=[
+            {"role": "user", "content": "growth marketing multi-agent system"},
+            {"role": "assistant", "content": "Here is the first design."},
+        ],
+        graph_data={
+            "title": "Campaign Optimisation Loop",
+            "graph_type": "architecture",
+            "nodes": [{"label": "Channel Executor"}, {"label": "Outcome Attribution"}],
+        },
+    )
+
+    assert "growth marketing multi-agent system" in query
+    assert "Campaign Optimisation Loop" in query
+    assert "Channel Executor" in query
+    assert query.endswith("expand the approval path")
 
 
 # ── research_worker._format_results ──────────────────────────────────────────
@@ -376,9 +448,39 @@ class TestResearchWorkerResilience:
 
         queries = rw._build_queries("RAG pipeline")
 
-        assert queries[0] == "RAG pipeline architecture"
-        assert queries[1] == "RAG pipeline best practices"
-        assert queries[2] == "RAG pipeline implementation 2032"
+        assert queries[0] == "RAG pipeline reference architecture reliability security"
+        assert queries[1] == "RAG operating model workflow decision points KPIs"
+        assert queries[2] == "RAG best practices failure modes 2032"
+
+    def test_build_queries_researches_the_domain_function_behind_a_terse_design_seed(self):
+        import agent.nodes.research_worker as rw
+
+        queries = rw._build_queries("growth marketing multi-agent system")
+
+        assert queries[0].startswith("growth marketing multi-agent system reference architecture")
+        assert queries[1] == "growth marketing operating model workflow decision points KPIs"
+        assert queries[2].startswith("growth marketing best practices failure modes ")
+
+    def test_worker_researches_restored_design_query_for_terse_followup(self, monkeypatch):
+        import agent.nodes.research_worker as rw
+
+        captured_queries = []
+        monkeypatch.setattr(
+            rw,
+            "_run_ddg_searches",
+            lambda queries, _limit: captured_queries.extend(queries) or [],
+        )
+        state = {
+            **self._make_state(),
+            "user_message": "expand this",
+            "design_query": "growth marketing multi-agent system expand this",
+        }
+
+        asyncio.run(rw.research_worker_node(state))
+
+        assert captured_queries[0].startswith(
+            "growth marketing multi-agent system expand this reference architecture"
+        )
 
     def test_topic_truncation_preserves_word_boundaries(self):
         from agent.nodes.research_worker import _normalise_topic

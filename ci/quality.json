@@ -32,6 +32,7 @@
             "backend/tests/test_agent_tools.py",
             "backend/tests/test_agent_workflow.py",
             "backend/tests/test_architecture_playbook.py",
+            "backend/tests/test_architecture_workers.py",
             "backend/tests/test_explanation_blocks.py",
             "backend/tests/test_graph_critic.py",
             "backend/tests/test_graph_grounding_prompts.py",

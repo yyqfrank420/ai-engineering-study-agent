@@ -1,6 +1,6 @@
 # Current Architecture
 
-Last updated: 2026-07-18
+Last updated: 2026-07-21
 
 This is the current runtime contract for the production-quality demo.
 
@@ -13,9 +13,9 @@ This is the current runtime contract for the production-quality demo.
 - `backend/`
   - FastAPI
   - request-scoped LangGraph orchestration
-  - parallel applied-design roles and a screenshot-aware critic with one bounded revision
+  - sequential applied-design enrichment and challenge roles, plus a screenshot-aware critic with one bounded semantic revision
   - Supabase-backed user/thread/message persistence
-  - FAISS-backed book retrieval loaded at startup
+  - FAISS-backed book retrieval loaded by a non-blocking readiness task
 - `ingestion/`
   - PDF chunking, embedding, and checksum-pinned FAISS artifact generation
 - `infra/terraform/gcp/`
@@ -26,20 +26,36 @@ This is the current runtime contract for the production-quality demo.
 1. The frontend authenticates with Supabase and opens `WS /api/chat/ws`.
 2. The bearer token is sent in the first frame, never in the WebSocket URL.
 3. The client sends a `start` command with thread and mode controls.
-4. LangGraph routes and performs one scenario-specific book search. The result is combined with a
-   stable review frame covering platform boundaries, model lifecycle, data/memory, evaluation,
-   safety, idempotent writes, latency/cost, reliability, and deployment.
-5. Independent Architect and Challenger roles run in parallel from that same evidence. The graph
-   worker integrates both outputs into domain responsibilities and directional flows.
+4. LangGraph routes, restores terse follow-ups to the full design intent, and searches that canonical
+   query rather than the raw fragment. Book retrieval and enabled web research run in parallel; the
+   product UI enables web grounding by default while retaining an explicit book-only control. Their
+   results are combined with the stable review frame covering platform boundaries, model lifecycle,
+   data/memory, evaluation, safety, idempotent writes, latency/cost, reliability, and deployment.
+5. The Architect enriches a terse seed into one explicit product brief: actors, authoritative inputs,
+   controlled decisions/actions, outputs, measures, assumptions, evidence provenance, and runtime.
+   The Challenger then audits that exact interpretation before the graph worker integrates it into
+   domain responsibilities and directional flows.
 6. Deterministic architecture checks run first. A surviving candidate is sent as `graph_candidate`
    and rendered off-screen at the user's real graph-pane dimensions. The browser returns a bounded,
    version-checked screenshot and layout report over idempotent WebSocket chunks.
 7. The critic judges architecture correctness plus novice clarity, logical flow, succinctness,
-   readability, and MECE-ish coverage from the actual render. A rejection receives at most one
-   targeted Opus repair; a second failure suppresses the diagram.
-8. Only an accepted graph is emitted as `graph_data`. One Sonnet call then emits complete explanation
-   cards progressively. Pause holds card reveal in the browser without restarting the paid call.
+   readability, and MECE-ish coverage from the actual render. A semantic or structural rejection
+   receives at most one targeted Opus repair; a second failure suppresses the diagram. Geometry-only
+   failures are terminal because layout belongs to the deterministic renderer, so they never spend
+   another model call on a topology rewrite.
+8. The accepted graph remains private while one Sonnet call completes its explanation cards. The
+   server then emits `graph_data` followed by the buffered cards, so an unfinished walkthrough never
+   reveals a new diagram. Pause can still hold card reveal in the browser without another model call.
 9. The transport persists the completed turn before emitting `done`.
+
+The model never writes SVG. Its typed graph JSON is an intermediate representation with named
+responsibility zones, ordered sequence steps, and runtime/control/feedback/deployment edge classes.
+The D3 renderer deterministically compiles that structure into responsive branded SVG, preserving
+interaction, accessibility, layout evaluation, and compatibility with previously stored graphs.
+
+FastAPI becomes available after database initialisation, then loads the FAISS artifacts and index in
+a background thread. `GET /api/prepare` reports the current server-owned milestone and completed/total
+units; the frontend renders that exact progress and never advances it with an elapsed-time animation.
 
 Every production frontend turn includes a UUID `client_request_id`. Completed user/assistant
 pairs are unique on that key at the database boundary, and a network retry replays the stored
@@ -51,10 +67,10 @@ capture use shared transactional storage. Rate-limit identifiers are HMAC-derive
 persistence, so Cloud Run scale-out neither resets the limits nor stores raw emails/IPs in the
 limiter table.
 
-The normal applied-design path uses five model calls: Architect and Challenger in parallel,
+The normal applied-design path uses five model calls: Architect followed by Challenger,
 Sonnet integration, Sonnet architecture/render review, and one Sonnet explanation stream. A failed
-quality gate adds at most two calls: one Opus repair and one Sonnet re-review. Retrieval and the
-standing checklist do not add model calls.
+semantic/structural quality gate adds at most two calls: one Opus repair and one Sonnet re-review.
+A renderer-only failure adds none. Retrieval and the standing checklist do not add model calls.
 
 During steps 4-7 the client may send `steer`. The server cancels the active workflow, emits
 `response_reset`, and restarts with the steering correction folded into the same turn. `stop`

@@ -89,8 +89,7 @@ async def test_run_agent_uses_search_tool_after_weak_retrieval(monkeypatch):
     async def fake_expand_with_search(state, graph_tools, search_tool_wait_task):
         assert await search_tool_wait_task is True
         await send({"type": "worker_status", "worker": "research", "status": "Searching the web…"})
-        expanded = {**state, "research_context": "- [example.com] External support"}
-        return await fake_apply_graph(expanded, graph_tools)
+        return {**state, "research_context": "- [example.com] External support"}
 
     async def fake_synth(state):
         await send({"type": "done"})
@@ -131,7 +130,7 @@ async def test_run_agent_uses_search_tool_after_weak_retrieval(monkeypatch):
         event.get("type") == "worker_status" and event.get("worker") == "research"
         for event in events
     )
-    assert graph_calls == ["", "- [example.com] External support"]
+    assert graph_calls == ["- [example.com] External support"]
     assert result["research_context"] == "- [example.com] External support"
     assert result["graph_data"]["title"] == "Researched graph"
 

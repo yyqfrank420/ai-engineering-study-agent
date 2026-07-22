@@ -25,6 +25,16 @@ def _knowledge_base_ready(request: Request) -> bool:
     return vectorstore is not None and bool(parent_docs)
 
 
+def _progress_payload(request: Request) -> dict[str, int]:
+    completed = max(0, int(getattr(request.app.state, "startup_completed_units", 0)))
+    total = max(1, int(getattr(request.app.state, "startup_total_units", 3)))
+    return {
+        "completed_units": min(completed, total),
+        "total_units": total,
+        "percent": min(100, round((completed / total) * 100)),
+    }
+
+
 @router.get("/health")
 async def health(request: Request):
     return {"status": "ok", "faiss_loaded": _knowledge_base_ready(request)}
@@ -33,16 +43,29 @@ async def health(request: Request):
 @router.get("/api/prepare")
 async def prepare(request: Request):
     if _knowledge_base_ready(request):
-        return {"status": "ready", "faiss_loaded": True}
+        return {
+            "status": "ready",
+            "step": "ready",
+            "detail": "Knowledge base ready",
+            "progress": {"completed_units": 3, "total_units": 3, "percent": 100},
+            "faiss_loaded": True,
+        }
 
-    # Return current startup step for frontend progress messaging
     current_step = getattr(request.app.state, "startup_step", "unknown")
+    startup_failed = current_step == "failed" or bool(
+        getattr(request.app.state, "startup_error", None)
+    )
     return JSONResponse(
         status_code=503,
         content={
-            "detail": "Backend is still warming up.",
-            "status": "preparing",
+            "detail": getattr(
+                request.app.state,
+                "startup_detail",
+                "Backend is still warming up.",
+            ),
+            "status": "error" if startup_failed else "preparing",
             "step": current_step,
+            "progress": _progress_payload(request),
             "faiss_loaded": False,
         },
     )
