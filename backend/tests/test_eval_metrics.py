@@ -78,7 +78,7 @@ def test_sse_error_case_checks_side_effect_absence():
     assert result["passed"] is True
 
 
-def test_schema_accepts_control_and_decision_node_types():
+def test_schema_accepts_supported_architecture_node_types():
     graph_data = {
         "nodes": [
             {
@@ -94,6 +94,13 @@ def test_schema_accepts_control_and_decision_node_types():
                 "type": "decision",
                 "technology": "Architecture decision",
                 "description": "Chooses between memory and search routes.",
+            },
+            {
+                "id": "event-stream",
+                "label": "Durable event stream",
+                "type": "queue",
+                "technology": "Partitioned message queue",
+                "description": "Buffers asynchronous work with bounded delivery semantics.",
             },
         ],
         "edges": [],

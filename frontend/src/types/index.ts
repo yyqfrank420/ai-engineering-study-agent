@@ -24,6 +24,7 @@ export type NodeType =
   | 'client'
   | 'service'
   | 'datastore'
+  | 'queue'
   | 'gateway'
   | 'network'
   | 'external'

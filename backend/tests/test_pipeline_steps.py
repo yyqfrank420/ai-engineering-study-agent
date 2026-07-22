@@ -111,6 +111,27 @@ async def test_apply_graph_worker_sends_notice_when_search_has_no_graph(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_applied_graph_failure_notice_does_not_misreport_weak_grounding(monkeypatch):
+    state, events = _state(
+        graph_data=None,
+        route="search",
+        graph_notice_sent=False,
+        is_applied_design=True,
+    )
+
+    async def fake_graph_worker_node(incoming_state, _tools):
+        return {**incoming_state, "graph_data": None}
+
+    monkeypatch.setattr("agent.pipeline_steps.graph_worker_node", fake_graph_worker_node)
+
+    result = await apply_graph_worker(state, [])
+
+    assert result["graph_notice_sent"] is True
+    assert "structural quality checks" in events[0]["message"]
+    assert "grounded detail from the book" not in events[0]["message"]
+
+
+@pytest.mark.asyncio
 async def test_run_search_phase_emits_notice_and_starts_wait_task(monkeypatch):
     monkeypatch.setattr(settings, "search_tool_decision_timeout_s", 0.25)
     wait_calls = []

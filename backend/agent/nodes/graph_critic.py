@@ -14,7 +14,7 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v7"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v8"
 
 _RENDER_ONLY_CONCERN = re.compile(
     r"\b(?:canvas|clip(?:ped|ping)?|font|geometry|layout|legib(?:le|ility)|"
@@ -225,7 +225,13 @@ def _deterministic_review(query: str, graph: dict[str, Any], resolved_complexity
     edges = graph.get("edges") or []
     nodes = graph.get("nodes") or []
     missing: list[str] = []
-    if not any(edge.get("type") == "loop" for edge in edges):
+    # ``flow=feedback`` is the semantic contract. ``type=loop`` is only an
+    # optional render hint, and the browser layout already treats either form
+    # as a feedback route. Do not spend a model repair on equivalent metadata.
+    if not any(
+        edge.get("type") == "loop" or edge.get("flow") == "feedback"
+        for edge in edges
+    ):
         missing.append("Add the measured outcome feedback edge that closes the runtime loop.")
 
     generic_labels = {

@@ -15,6 +15,7 @@ _VALID_NODE_TYPES = {
     "client",
     "service",
     "datastore",
+    "queue",
     "gateway",
     "network",
     "external",

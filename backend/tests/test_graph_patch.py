@@ -365,6 +365,125 @@ def test_patch_cannot_replace_most_of_an_approved_graph():
         )
 
 
+def test_over_budget_edges_are_rejected_before_position_can_manufacture_isolation():
+    existing = _domain_graph(9, production=True)
+    payload = copy.deepcopy(existing)
+    payload["edges"] = [
+        edge
+        for edge in payload["edges"]
+        if "fulfilment_stage_8" not in {edge["source"], edge["target"]}
+    ]
+    while len(payload["edges"]) < 18:
+        index = len(payload["edges"])
+        payload["edges"].append({
+            "source": f"fulfilment_stage_{index % 7}",
+            "target": f"fulfilment_stage_{(index + 2) % 8}",
+            "label": f"carries auxiliary recovery signal {index}",
+            "technology": "Typed recovery event",
+            "sync": "async",
+            "flow": "control",
+            "description": "Carries a bounded recovery signal without changing the main path.",
+        })
+    payload["edges"].append({
+        "source": "fulfilment_stage_7",
+        "target": "fulfilment_stage_8",
+        "label": "connects the final recovery owner",
+        "technology": "Typed recovery event",
+        "sync": "async",
+        "flow": "control",
+        "description": "Keeps the final owner connected even when listed last.",
+    })
+
+    with pytest.raises(ValueError, match="18-edge readability budget; got 19"):
+        graph_worker._normalise_applied_graph(
+            payload,
+            min_nodes=9,
+            max_nodes=9,
+            resolved_complexity="production",
+        )
+
+
+def test_at_cap_patch_updates_an_edge_in_place_instead_of_disappearing():
+    existing = _domain_graph(9, production=True)
+    while len(existing["edges"]) < 18:
+        index = len(existing["edges"])
+        existing["edges"].append({
+            "source": "fulfilment_stage_0",
+            "target": "fulfilment_stage_8",
+            "label": f"carries bounded exception signal {index}",
+            "technology": "Typed exception event",
+            "sync": "async",
+            "flow": "control",
+            "description": "Carries a bounded exception signal to its recovery owner.",
+        })
+    existing = graph_worker._normalise_applied_graph(
+        existing,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+    target = existing["edges"][0]
+
+    result = graph_worker._apply_applied_graph_patch(
+        existing,
+        {
+            "update_edges": [{
+                "match": {
+                    "source": target["source"],
+                    "target": target["target"],
+                    "label": target["label"],
+                },
+                "set": {"flow": "feedback", "type": "loop"},
+            }]
+        },
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+    assert len(result["edges"]) == 18
+    updated = next(
+        edge
+        for edge in result["edges"]
+        if edge["source"] == target["source"] and edge["target"] == target["target"]
+    )
+    assert updated["flow"] == "feedback"
+    assert updated["type"] == "loop"
+
+
+def test_semantically_empty_patch_is_rejected():
+    existing = _domain_graph(5)
+
+    with pytest.raises(ValueError, match="produced no semantic change"):
+        graph_worker._apply_applied_graph_patch(
+            existing,
+            {
+                "update_nodes": [{
+                    "id": "fulfilment_stage_2",
+                    "set": {"label": "Fulfilment Stage 2"},
+                }]
+            },
+            min_nodes=5,
+            max_nodes=7,
+            resolved_complexity="prototype",
+        )
+
+
+def test_message_queue_is_a_supported_architecture_primitive():
+    graph = _domain_graph(5)
+    graph["nodes"][2]["type"] = "queue"
+    graph["nodes"][2]["technology"] = "Durable event stream"
+
+    normalised = graph_worker._normalise_applied_graph(
+        graph,
+        min_nodes=5,
+        max_nodes=7,
+        resolved_complexity="prototype",
+    )
+
+    assert normalised["nodes"][2]["type"] == "queue"
+
+
 @pytest.mark.asyncio
 async def test_targeted_existing_graph_followup_uses_incremental_patch_lane(monkeypatch):
     existing = _domain_graph(5)

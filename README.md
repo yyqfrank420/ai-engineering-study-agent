@@ -27,7 +27,7 @@ Graph-guided study companion for *AI Engineering* by Chip Huyen.
 3. enrich applied-design seeds into one explicit product brief, then challenge that same interpretation
 4. integrate their outputs into a domain-specific graph
 5. render the candidate privately in the browser and review the real screenshot plus architecture
-6. run at most one typed semantic patch and revalidate the complete graph; renderer-only failures never trigger another model call
+6. run at most one typed semantic patch and revalidate the complete graph; edge budgets are explicit and over-budget output is rejected rather than positionally truncated, while renderer-only failures never trigger another model call
 7. finish the one-call walkthrough privately, then reveal the accepted graph and explanation together
 
 Chat runs over `/api/chat/ws`. The first frame authenticates the connection; subsequent

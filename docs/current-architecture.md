@@ -42,6 +42,8 @@ This is the current runtime contract for the production-quality demo.
    readability, and MECE-ish coverage from the actual render. A semantic rejection receives at most
    one typed Sonnet patch. The patch changes only named nodes, edges, or bounded graph collections;
    unchanged topology is preserved and the complete result passes deterministic validation again.
+   Node and edge budgets are explicit in both generation lanes; over-budget topology and semantic
+   no-op patches fail visibly instead of being silently truncated by output order.
    A second failure suppresses the diagram. Geometry-only failures are terminal because layout
    belongs to the deterministic renderer, so they never spend another model call on a topology rewrite.
 8. The accepted graph remains private while one Sonnet call completes its explanation cards. The

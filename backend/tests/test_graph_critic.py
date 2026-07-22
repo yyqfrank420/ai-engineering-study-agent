@@ -48,6 +48,53 @@ def test_deterministic_review_accepts_a_domain_control_loop():
     assert review["score"] >= 0.78
 
 
+@pytest.mark.parametrize(
+    ("query", "labels"),
+    [
+        (
+            "Design a municipal water-leak triage system",
+            ("Leak Report", "Dispatch Decision", "Repair Outcome"),
+        ),
+        (
+            "Design a telescope transient-alert pipeline",
+            ("Sky Event", "Candidate Classifier", "Observer Outcome"),
+        ),
+        (
+            "Design a music-royalty reconciliation service",
+            ("Usage Evidence", "Royalty Reconciler", "Dispute Outcome"),
+        ),
+        (
+            "Design an airport baggage recovery workflow",
+            ("Missing Bag", "Recovery Router", "Passenger Outcome"),
+        ),
+    ],
+)
+def test_feedback_flow_is_a_loop_without_renderer_specific_metadata(query, labels):
+    graph = {
+        "design_origin": "applied",
+        "nodes": [
+            {"id": "entry", "label": labels[0], "description": "Captures a verified request."},
+            {"id": "decision", "label": labels[1], "description": "Owns the bounded decision."},
+            {"id": "outcome", "label": labels[2], "description": "Records the measured outcome."},
+        ],
+        "edges": [
+            {"source": "entry", "target": "decision", "label": "sends verified input"},
+            {"source": "decision", "target": "outcome", "label": "records bounded result"},
+            {
+                "source": "outcome",
+                "target": "decision",
+                "label": "returns measured outcome",
+                "flow": "feedback",
+            },
+        ],
+    }
+
+    review = _deterministic_review(query, graph, "prototype")
+
+    assert review["approved"] is True
+    assert review["missing"] == []
+
+
 def test_deterministic_gate_does_not_guess_semantics_from_prose_vocabulary():
     graph = _domain_graph()
     graph["nodes"][-1] = {

@@ -17,8 +17,8 @@ from graph.runtime import select_canonical_graph
 
 logger = logging.getLogger(__name__)
 
-_APPLIED_GRAPH_PROMPT_VERSION = "applied_architecture_v6"
-_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v1"
+_APPLIED_GRAPH_PROMPT_VERSION = "applied_architecture_v7"
+_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v2"
 _MAX_GRAPH_PATCH_CHARS = 20_000
 
 
@@ -112,7 +112,7 @@ Return one JSON object and nothing else. No markdown fence.
     {
       "id": "stable_snake_case_id",
       "label": "1-4 domain words",
-      "type": "client|service|datastore|gateway|network|external|control|decision",
+      "type": "client|service|datastore|queue|gateway|network|external|control|decision",
       "technology": "capability or justified technology class",
       "description": "specific responsibility and boundary",
       "tier": "public|private",
@@ -199,6 +199,7 @@ _ALLOWED_NODE_TYPES = {
     "client",
     "service",
     "datastore",
+    "queue",
     "gateway",
     "network",
     "external",
@@ -323,6 +324,7 @@ async def _generate_applied_architecture(state: AgentState, query: str, profile)
         f"Design request:\n{query}\n\n"
         f"Resolved depth: {profile.resolved}\n"
         f"Node range: {profile.min_graph_nodes}-{profile.max_graph_nodes}\n"
+        f"Edge budget: at most {profile.max_graph_nodes * 2} edges\n"
         f"Depth contract: {profile.answer_contract}\n\n"
         "Book evidence (use only as design principles, not as the domain ontology):\n"
         f"{evidence}\n\n"
@@ -337,7 +339,9 @@ async def _generate_applied_architecture(state: AgentState, query: str, profile)
         "\n\nBefore returning JSON, run a private coverage preflight: map every checklist item to "
         "a node responsibility or edge, trace each runtime branch from entry through a rejoin "
         "to an outcome, and verify every conditional control has a non-applicable bypass. "
-        "If the node cap is tight, consolidate responsibilities without deleting the contract."
+        "Verify the complete edge list stays inside the stated edge budget; never rely on output "
+        "order or truncation. If a budget is tight, consolidate responsibilities without deleting "
+        "the contract."
     )
     repair_context = ""
     # A first draft gets one bounded structural repair. A refinement already
@@ -419,6 +423,10 @@ async def _generate_applied_architecture_patch(
         f"Design request (context only):\n{query[:2500]}\n\n"
         f"Existing validated graph (currently has {len(existing_graph.get('nodes') or [])} nodes):\n"
         f"{_format_existing_graph(existing_graph)}\n\n"
+        f"Existing edge count: {len(existing_graph.get('edges') or [])}; "
+        f"edge cap: {profile.max_graph_nodes * 2}. If the graph is at the cap, update an existing "
+        "edge to carry the required meaning or remove one lower-value edge before adding another; "
+        "an appended over-cap edge will be rejected.\n\n"
         "Diagram acceptance checklist:\n"
         f"{checklist[:4000]}\n\n"
         "Review to resolve:\n"
@@ -594,12 +602,22 @@ def _apply_applied_graph_patch(
             candidate[key] = copy.deepcopy(patch[key])
     _validate_patch_collection_references(candidate, final_node_ids)
 
-    return _normalise_applied_graph(
+    normalised = _normalise_applied_graph(
         candidate,
         min_nodes=min_nodes,
         max_nodes=max_nodes,
         resolved_complexity=resolved_complexity,
     )
+    if _same_graph_payload(existing_graph, normalised):
+        raise ValueError("graph patch produced no semantic change")
+    return normalised
+
+
+def _same_graph_payload(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    ignored = {"version"}
+    left_payload = {key: value for key, value in left.items() if key not in ignored}
+    right_payload = {key: value for key, value in right.items() if key not in ignored}
+    return json.dumps(left_payload, sort_keys=True) == json.dumps(right_payload, sort_keys=True)
 
 
 def _patch_list(patch: dict[str, Any], key: str, limit: int) -> list[Any]:
@@ -837,9 +855,13 @@ def _validate_connected_graph(nodes: list[dict[str, Any]], edges: list[dict[str,
 def _normalise_edges(raw_edges: Any, id_map: dict[str, str], *, max_edges: int) -> list[dict[str, Any]]:
     if not isinstance(raw_edges, list):
         raise ValueError("graph edges must be a list")
+    if len(raw_edges) > max_edges:
+        raise ValueError(
+            f"applied graph exceeds its {max_edges}-edge readability budget; got {len(raw_edges)}"
+        )
     edges = []
     seen = set()
-    for raw_edge in raw_edges[:max_edges]:
+    for raw_edge in raw_edges:
         if not isinstance(raw_edge, dict):
             continue
         source = id_map.get(str(raw_edge.get("source") or ""))
