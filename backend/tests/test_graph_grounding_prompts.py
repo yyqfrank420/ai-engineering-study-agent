@@ -524,7 +524,7 @@ async def test_invalid_model_graph_gets_one_bounded_structural_repair(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_invalid_refinement_preserves_approved_graph_without_paid_repair(monkeypatch):
+async def test_invalid_refinement_preserves_approved_graph_after_bounded_patch_retry(monkeypatch):
     import agent.nodes.graph_worker as graph_worker
 
     existing = {
@@ -583,7 +583,7 @@ async def test_invalid_refinement_preserves_approved_graph_without_paid_repair(m
     )
 
     assert result == existing
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert calls[0]["model"] == graph_worker.settings.orchestrator_model
     prompt = calls[0]["messages"][0]["content"]
     assert "currently has 5 nodes" in prompt

@@ -22,7 +22,7 @@ from agent.state import AgentState
 from agent.stream_utils import stream_llm
 from config import settings
 
-_SYNTHESIS_PROMPT_VERSION = "architecture_blocks_v5"
+_SYNTHESIS_PROMPT_VERSION = "architecture_blocks_v6"
 _QUICK_SYNTHESIS_PROMPT_VERSION = "quick_synthesis_v2"
 
 _ROUTER_SYSTEM = """<role>
@@ -130,6 +130,9 @@ Answer in the same language as the user's latest message unless they ask to swit
 - For a grounded explanation or safety lesson, prefer a few fully supported claims over extra
   extrapolation. Do not call something the "main" failure mode, a "hard" boundary, or say it
   "always" or "entirely" behaves a certain way unless the supplied evidence explicitly says so.
+- Never invent a numerical benchmark, multiplier, percentage, cost range, latency range, or other
+  quantitative comparison. Use a qualitative statement or label a number as a proposed target
+  unless the exact quantity is directly supported by the supplied evidence.
 - If recommendations are useful, group them under "Engineering recommendations (not book claims)"
   and keep them concise. The heading labels every item in that section until the next heading.
 </book_scope>

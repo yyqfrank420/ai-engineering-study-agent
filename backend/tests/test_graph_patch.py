@@ -530,10 +530,11 @@ async def test_targeted_existing_graph_followup_uses_incremental_patch_lane(monk
     assert len(calls) == 1
     assert calls[0]["telemetry"]["metadata"]["model_role"] == "incremental_patch"
     assert calls[0]["thinking_budget"] is None
+    assert "Source and target must be distinct" in calls[0]["system"]
 
 
 @pytest.mark.asyncio
-async def test_invalid_patch_preserves_approved_graph_and_uses_bounded_model_call(monkeypatch):
+async def test_invalid_patch_preserves_approved_graph_after_bounded_retry(monkeypatch):
     existing = _domain_graph(5)
     approved = copy.deepcopy(existing)
     calls = []
@@ -572,7 +573,7 @@ async def test_invalid_patch_preserves_approved_graph_and_uses_bounded_model_cal
 
     assert result == approved
     assert existing == approved
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert calls[0]["model"] == graph_worker.settings.orchestrator_model
     assert calls[0]["effort"] == "low"
     assert calls[0]["thinking_budget"] is None
@@ -580,3 +581,55 @@ async def test_invalid_patch_preserves_approved_graph_and_uses_bounded_model_cal
     assert calls[0]["telemetry"]["metadata"]["prompt_version"] == (
         graph_worker._APPLIED_GRAPH_PATCH_PROMPT_VERSION
     )
+
+
+@pytest.mark.asyncio
+async def test_invalid_self_edge_patch_gets_one_validation_informed_retry(monkeypatch):
+    existing = _domain_graph(5)
+    valid_edge = {
+        "source": "fulfilment_stage_3",
+        "target": "fulfilment_stage_1",
+        "label": "routes generation failure to recovery owner",
+        "technology": "Typed failure event",
+        "sync": "async",
+        "flow": "control",
+        "description": "A distinct recovery owner handles bounded retry without a self-edge.",
+    }
+    responses = [
+        {
+            "add_edges": [{
+                **valid_edge,
+                "source": "fulfilment_stage_3",
+                "target": "fulfilment_stage_3",
+            }]
+        },
+        {"add_edges": [valid_edge]},
+    ]
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return json.dumps(responses[len(calls) - 1])
+
+    monkeypatch.setattr(graph_worker, "stream_llm", fake_stream_llm)
+    result = await graph_worker._generate_applied_architecture_patch(
+        {
+            "send": None,
+            "user_message": "Make failure recovery explicit",
+            "graph_review": {
+                "approved": False,
+                "revision_instruction": "Separate generation failure from evaluation rejection.",
+            },
+            "complexity": "prototype",
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        },
+        "Make failure recovery explicit in this fulfilment system",
+        SimpleNamespace(resolved="prototype", min_graph_nodes=5, max_graph_nodes=7),
+        existing,
+    )
+
+    assert len(calls) == 2
+    assert len(result["edges"]) == len(existing["edges"]) + 1
+    assert "self-referencing edge is not allowed" in calls[1]["messages"][0]["content"]
+    assert calls[1]["telemetry"]["metadata"]["patch_attempt"] == 1

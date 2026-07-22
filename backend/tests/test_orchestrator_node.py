@@ -44,7 +44,7 @@ def test_synthesis_prompts_enforce_evidence_bounded_attribution():
         _SYNTHESIS_SYSTEM,
     )
 
-    assert _SYNTHESIS_PROMPT_VERSION == "architecture_blocks_v5"
+    assert _SYNTHESIS_PROMPT_VERSION == "architecture_blocks_v6"
     assert _QUICK_SYNTHESIS_PROMPT_VERSION == "quick_synthesis_v2"
     assert "complete citation allowlist" in _SYNTHESIS_SYSTEM
     assert "Never infer a chapter, page, author attribution, or book claim" in _SYNTHESIS_SYSTEM
@@ -54,6 +54,8 @@ def test_synthesis_prompts_enforce_evidence_bounded_attribution():
     assert 'Do not call something the "main" failure mode' in _SYNTHESIS_SYSTEM
     assert 'as an "Engineering inference" or "Recommendation"' in _SYNTHESIS_SYSTEM
     assert 'Never use vague citations such as "the serving chapter"' in _SYNTHESIS_SYSTEM
+    assert "Never invent a numerical benchmark" in _SYNTHESIS_SYSTEM
+    assert "directly supported by the supplied evidence" in _SYNTHESIS_SYSTEM
     assert "This fast path receives no retrieved book evidence" in _QUICK_SYNTHESIS_SYSTEM
     assert "do not produce chapter/page citations" in _QUICK_SYNTHESIS_SYSTEM
 
