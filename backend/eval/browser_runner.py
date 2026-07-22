@@ -505,6 +505,18 @@ async def run_browser(args: argparse.Namespace) -> dict[str, Any]:
                         deterministic.append(f"cleanup failed: {type(exc).__name__}: {exc}")
                 result["passed"] = not deterministic
                 results.append(result)
+                checkpoint = _browser_report(
+                    args=args,
+                    corpus=corpus,
+                    started_at=started_at,
+                    started=started,
+                    results=results,
+                    status="partial",
+                )
+                output_path.write_text(
+                    json.dumps(checkpoint, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
 
             raw_trace = artifact_dir / ".playwright-trace.raw.zip"
             await context.tracing.stop(path=raw_trace)
@@ -516,19 +528,14 @@ async def run_browser(args: argparse.Namespace) -> dict[str, Any]:
             raw_trace.unlink(missing_ok=True)
             await browser.close()
 
-    report = {
-        "format_version": 1,
-        "kind": "browser_capture",
-        "suite": args.suite,
-        "corpus_version": corpus.corpus_version,
-        "corpus_sha256": corpus_sha256(),
-        "release_identity": corpus.release_identity,
-        "target": args.target,
-        "backend_target": args.backend_target,
-        "started_at": started_at.isoformat(),
-        "duration_ms": int((time.monotonic() - started) * 1000),
-        "results": results,
-    }
+    report = _browser_report(
+        args=args,
+        corpus=corpus,
+        started_at=started_at,
+        started=started,
+        results=results,
+        status="complete",
+    )
     thread_ids = [result["thread_id"] for result in results if result.get("thread_id")]
     query = urllib.parse.urlencode(
         [("since_epoch", str(started_at.timestamp())), *(("thread_id", thread_id) for thread_id in thread_ids)]
@@ -554,6 +561,32 @@ async def run_browser(args: argparse.Namespace) -> dict[str, Any]:
     _write_junit(artifact_dir / "browser-junit.xml", results)
     _write_html(artifact_dir / "review.html", report)
     return report
+
+
+def _browser_report(
+    *,
+    args: argparse.Namespace,
+    corpus: Any,
+    started_at: datetime,
+    started: float,
+    results: list[dict[str, Any]],
+    status: str,
+) -> dict[str, Any]:
+    """Build the durable capture written after every completed journey."""
+    return {
+        "format_version": 1,
+        "kind": "browser_capture",
+        "suite": args.suite,
+        "corpus_version": corpus.corpus_version,
+        "corpus_sha256": corpus_sha256(),
+        "release_identity": corpus.release_identity,
+        "target": args.target,
+        "backend_target": args.backend_target,
+        "started_at": started_at.isoformat(),
+        "duration_ms": int((time.monotonic() - started) * 1000),
+        "status": status,
+        "results": results,
+    }
 
 
 def _redact_trace(source: Path, destination: Path, secrets: list[str]) -> None:

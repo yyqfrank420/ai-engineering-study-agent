@@ -485,6 +485,9 @@ async def test_semantic_critic_never_receives_the_rendered_image(monkeypatch):
             "book_evidence": [{"chapter": 1, "page_number": 8, "text": "Evaluate measured outcomes."}],
             "research_context": "- [Current source](https://example.com): current evidence",
         },
+        "challenger_review": {
+            "risks": [{"area": "safety", "risk": "Unapproved writes", "mitigation": "Approval gate"}],
+        },
         "complexity": "production",
         "send": send,
         "await_diagram_evaluation": await_diagram,
@@ -498,6 +501,8 @@ async def test_semantic_critic_never_receives_the_rendered_image(monkeypatch):
     assert "Browser layout report" not in captured["messages"][0]["content"]
     assert "Supplied evidence allowlist" in captured["messages"][0]["content"]
     assert "https://example.com" in captured["messages"][0]["content"]
+    assert "Independent challenger findings" in captured["messages"][0]["content"]
+    assert "Unapproved writes" in captured["messages"][0]["content"]
     assert "Do not assess or mention" in _GRAPH_CRITIC_SYSTEM
 
 

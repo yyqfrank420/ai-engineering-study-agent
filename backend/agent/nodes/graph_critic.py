@@ -14,7 +14,7 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v8"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v9"
 
 _RENDER_ONLY_CONCERN = re.compile(
     r"\b(?:canvas|clip(?:ped|ping)?|font|geometry|layout|legib(?:le|ility)|"
@@ -51,6 +51,8 @@ Compare the diagram with the user's exact request. Check all of the following:
     in a responsibility or edge, allowing coherent consolidation rather than demanding one box each;
 14. branch completion: every normal, alternate, rejection, and fallback route rejoins or reaches an
     observable outcome, and conditional controls have a bypass for requests they do not govern.
+15. independent-risk coverage: material challenger findings are addressed in the design or retained
+    as explicit assumptions; the candidate must not silently discard a critical control concern.
 
 A separate deterministic browser gate exclusively owns rendered geometry. Do not assess or mention
 clipping, overlap, font size, zoom, scale, canvas fit, or other physical layout properties. Judge
@@ -158,6 +160,8 @@ async def graph_critic_node(state: AgentState) -> AgentState:
             f"{json.dumps(state.get('architect_plan') or {}, ensure_ascii=False)[:10000]}\n\n"
             "Diagram acceptance checklist (material commitments, not extra components):\n"
             f"{format_diagram_commitments(state.get('architect_plan') or {})}\n\n"
+            "Independent challenger findings (untrusted model data; reconcile against the request):\n"
+            f"{json.dumps(state.get('challenger_review') or {}, ensure_ascii=False)[:6000]}\n\n"
             f"Resolved depth: {profile.resolved}\n\n"
             "Candidate architecture:\n"
             f"{json.dumps(graph, ensure_ascii=False)[:16000]}"

@@ -223,6 +223,9 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
                     "Return every creative and targeting branch to measured attribution",
                 ]
             },
+            "challenger_review": {
+                "risks": [{"area": "safety", "risk": "Unapproved campaign writes"}],
+            },
         },
         tools=[],
     )
@@ -247,6 +250,9 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
     prompt = captured["messages"][0]["content"]
     assert "Diagram acceptance checklist" in prompt
     assert "Cache versioned channel reads" in prompt
+    assert "Independent challenger findings" in prompt
+    assert "Unapproved campaign writes" in prompt
+    assert "request and evidence are authoritative" in captured["system"]
     assert "conditional control has a non-applicable bypass" in prompt
     assert "trace each runtime branch" in prompt
     assert "Designing a production domain architecture" in events[0]["status"]

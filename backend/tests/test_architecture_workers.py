@@ -4,6 +4,7 @@ from agent.nodes.architecture_workers import (
     _normalise_architect,
     _worker_context,
     architect_node,
+    challenger_node,
     format_diagram_commitments,
 )
 
@@ -95,7 +96,7 @@ def test_out_of_sample_briefs_derive_bounded_diagram_commitments(brief, expected
     assert all(item in contract for item in expected)
 
 
-def test_challenger_context_audits_the_same_enriched_brief():
+def test_challenger_context_ignores_a_stale_architect_brief():
     context = _worker_context(
         {
             "user_message": "expand it",
@@ -110,8 +111,8 @@ def test_challenger_context_audits_the_same_enriched_brief():
     )
 
     assert "growth marketing system expand it" in context
-    assert "Canonical enriched design brief" in context
-    assert "Channel write APIs are available" in context
+    assert "Canonical enriched design brief" not in context
+    assert "Channel write APIs are available" not in context
 
 
 @pytest.mark.asyncio
@@ -164,3 +165,24 @@ async def test_architect_empty_success_uses_the_bounded_fallback(monkeypatch):
     assert brief["outputs"]
     assert len(brief["required_capabilities"]) >= 4
     assert len(brief["runtime_flow"]) >= 4
+
+
+@pytest.mark.asyncio
+async def test_challenger_failure_keeps_an_independent_risk_review(monkeypatch):
+    async def fail_model(**_kwargs):
+        raise TimeoutError("provider timeout")
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr("agent.nodes.architecture_workers.stream_llm", fail_model)
+    result = await challenger_node({
+        "is_applied_design": True,
+        "design_query": "airport baggage recovery system",
+        "user_message": "airport baggage recovery system",
+        "complexity": "production",
+        "evidence_bundle": {},
+        "send": send,
+    })
+
+    assert result["challenger_review"]["risks"]

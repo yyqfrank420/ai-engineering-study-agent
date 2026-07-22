@@ -60,11 +60,14 @@ def test_failed_review_gets_exactly_one_bounded_revision():
 
 @pytest.mark.asyncio
 async def test_langgraph_repairs_one_failed_review_then_publishes(monkeypatch):
+    import asyncio
     import agent.graph as agent_graph
 
     events = []
     reviews = []
     role_order = []
+    architect_started = asyncio.Event()
+    challenger_started = asyncio.Event()
 
     async def send(event):
         events.append(event)
@@ -76,6 +79,8 @@ async def test_langgraph_repairs_one_failed_review_then_publishes(monkeypatch):
         return state, None
 
     async def fake_apply(state, _tools):
+        assert state["architect_plan"]["interpretation"] == "growth system"
+        assert state["challenger_review"] == {"risks": []}
         revision_count = state.get("graph_revision_count", 0)
         return {
             **state,
@@ -90,6 +95,8 @@ async def test_langgraph_repairs_one_failed_review_then_publishes(monkeypatch):
         }
 
     async def fake_architect(state):
+        architect_started.set()
+        await asyncio.wait_for(challenger_started.wait(), timeout=1)
         role_order.append("architect")
         return {
             "architect_plan": {
@@ -99,7 +106,8 @@ async def test_langgraph_repairs_one_failed_review_then_publishes(monkeypatch):
         }
 
     async def fake_challenger(state):
-        assert state["architect_plan"]["interpretation"] == "growth system"
+        challenger_started.set()
+        await asyncio.wait_for(architect_started.wait(), timeout=1)
         role_order.append("challenger")
         return {"challenger_review": {"risks": []}}
 
@@ -146,6 +154,6 @@ async def test_langgraph_repairs_one_failed_review_then_publishes(monkeypatch):
     assert result["graph_data"]["title"] == "Repaired draft"
     assert result["graph_notice_sent"] is False
     assert result["response_text"] == "reviewed answer"
-    assert role_order == ["architect", "challenger"]
+    assert set(role_order) == {"architect", "challenger"}
     assert any(event.get("phase") == "revise" and event.get("status") == "retry" for event in events)
     assert not any(event.get("type") == "graph_notice" for event in events)

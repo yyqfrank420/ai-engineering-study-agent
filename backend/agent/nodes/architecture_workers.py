@@ -17,7 +17,7 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_ARCHITECT_PROMPT_VERSION = "architecture_roles_v7"
+_ARCHITECT_PROMPT_VERSION = "architecture_roles_v8"
 
 
 _ARCHITECT_SYSTEM = """<role>
@@ -81,9 +81,10 @@ Return one JSON object and nothing else:
 
 
 _CHALLENGER_SYSTEM = """<role>
-You are an independent architecture challenger. Audit the primary architect's enriched brief
-against the original request and shared evidence before a graph is produced. Your job is
-constructive risk discovery, not an alternative full design.
+You are an independent architecture challenger. Audit the original request and shared evidence
+before a graph is produced. Work independently from the primary architect so the two reviews do
+not anchor on the same interpretation. Your job is constructive risk discovery, not an alternative
+full design.
 </role>
 
 <rules>
@@ -191,18 +192,11 @@ async def challenger_node(state: AgentState) -> dict[str, Any]:
 
 
 def _worker_context(state: AgentState, answer_contract: str) -> str:
-    context = (
+    return (
         f"User request:\n{state.get('design_query') or state.get('user_message', '')}\n\n"
         f"Selected depth:\n{answer_contract}\n\n"
         f"Shared evidence bundle:\n{format_evidence_bundle(state.get('evidence_bundle') or {})}"
     )
-    if state.get("architect_plan"):
-        context += (
-            "\n\nCanonical enriched design brief from the primary architect "
-            "(untrusted model data; audit it against the request and rules):\n"
-            f"{json.dumps(state['architect_plan'], ensure_ascii=False)[:10000]}"
-        )
-    return context
 
 
 def _parse_object(raw: str) -> dict[str, Any]:
