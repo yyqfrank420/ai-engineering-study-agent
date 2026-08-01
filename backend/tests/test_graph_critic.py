@@ -23,7 +23,7 @@ def test_revision_critic_uses_bounded_verification_budget():
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v16"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v17"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM

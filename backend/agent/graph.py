@@ -124,7 +124,10 @@ def build_agent_workflow(
             "phase": "revise",
             "status": "retry",
             "title": "Refining the diagram",
-            "detail": "Applying the clarity review once, then checking the real layout again.",
+            "detail": (
+                f"Applying bounded clarity repair {revision_count} of 2, then checking "
+                "the real layout again."
+            ),
         })
         revised = await apply_graph_worker(
             {**state, "graph_revision_count": revision_count},
@@ -148,7 +151,7 @@ def build_agent_workflow(
         await state["send"]({
             "type": "graph_notice",
             "message": (
-                "I couldn't make this diagram clear enough after one focused repair, so I kept "
+                "I couldn't make this diagram clear enough after two focused repairs, so I kept "
                 "the visual out. The written architecture is still available below; ask me to "
                 "redraw it as a simpler diagram if you want another pass."
             ),
@@ -256,7 +259,7 @@ def _route_after_review(state: AgentState) -> Literal["accept", "revise", "rejec
     review = state.get("graph_review") or {}
     if review.get("approved"):
         return "accept"
-    if not review.get("terminal") and int(state.get("graph_revision_count", 0)) < 1:
+    if not review.get("terminal") and int(state.get("graph_revision_count", 0)) < 2:
         return "revise"
     return "reject"
 

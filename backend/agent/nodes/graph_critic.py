@@ -14,7 +14,7 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v16"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v17"
 
 _FEEDBACK_LOOP_REQUEST = re.compile(
     r"\b(?:closed[- ]loop|feedback loop|self[- ]improv\w*|"
@@ -229,8 +229,9 @@ failure under this contract. Advice is only for genuinely optional hardening of 
 topology.
 Do not stop after finding the first defect. Finish all five topology proofs, trace every normal and
 alternate branch to its terminal/audit outcome, and report every independent blocking failure you
-can substantiate (up to eight) in one response. The designer receives only one bounded repair, so a
-partial review that reveals a new blocker after the repair is itself a review failure.
+can substantiate (up to eight) in one response. The designer receives at most two bounded repairs;
+report the complete failure set so the first repair can resolve as much as possible and the second
+remains a bounded verification-informed fallback, not an open-ended redesign loop.
 
 Use `blocking_failures` only for a clear omission or defect that makes the diagram unsafe,
 misleading, unusable, or fails an explicit part of the user's request at the selected depth.

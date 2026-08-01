@@ -18,7 +18,7 @@ from graph.runtime import select_canonical_graph
 logger = logging.getLogger(__name__)
 
 _APPLIED_GRAPH_PROMPT_VERSION = "applied_architecture_v17"
-_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v12"
+_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v13"
 _MAX_GRAPH_PATCH_CHARS = 20_000
 
 
@@ -246,7 +246,7 @@ approval/policy/compensation-to-executor bypass. Those controls write bound enve
 store; only its lease/outbox edge feeds executable work.
 While resolving the supplied review, re-audit the complete candidate against this entire contract.
 Use the same bounded patch to fix any other blocking path defect you can observe, especially one
-that would become visible only after the requested repair. Do not spend the sole revision on the
+that would become visible only after the requested repair. Do not spend a bounded revision on the
 first symptom while leaving another label-only guarantee, bypass, or incomplete branch behind.
 Privately map every supplied blocking failure to at least one concrete patch operation before
 returning. A structurally valid patch that leaves any supplied blocker unresolved is invalid.
