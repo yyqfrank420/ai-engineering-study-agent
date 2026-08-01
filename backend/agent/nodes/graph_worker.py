@@ -18,7 +18,7 @@ from graph.runtime import select_canonical_graph
 logger = logging.getLogger(__name__)
 
 _APPLIED_GRAPH_PROMPT_VERSION = "applied_architecture_v17"
-_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v15"
+_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v16"
 _MAX_GRAPH_PATCH_CHARS = 20_000
 
 
@@ -543,10 +543,12 @@ async def _generate_applied_architecture_patch(
         "only the minimal patch."
     )
     repair_context = ""
-    # Patches are normally small and cheap. Give one validation-informed retry
-    # before falling back to the approved graph so a single malformed operation
-    # cannot erase an otherwise repairable diagram. The two-call ceiling keeps
-    # retries bounded under the request and evaluation budgets.
+    # Patches are normally small and cheap. Give a malformed patch one
+    # validation-informed retry before falling back to the approved graph. A
+    # structurally valid but semantically incomplete candidate is deliberately
+    # returned to the workflow critic: that owning layer supplies canonical
+    # feedback between its two bounded revisions. Retrying it here as well
+    # duplicates the repair loop and can exhaust the whole-turn deadline.
     for patch_attempt in range(2):
         raw = ""
         attempt_prompt = prompt
@@ -567,7 +569,7 @@ async def _generate_applied_architecture_patch(
                 temperature=settings.graph_temperature,
                 top_p=settings.graph_top_p,
                 top_k=settings.graph_top_k,
-                effort="high" if repair_context else "medium",
+                effort="medium",
                 telemetry=build_telemetry(
                     "graph_worker_applied_patch",
                     user_id=state.get("user_id"),
@@ -595,11 +597,21 @@ async def _generate_applied_architecture_patch(
                 max_nodes=profile.max_graph_nodes,
                 resolved_complexity=profile.resolved,
             )
-            _validate_applied_architecture_patch(
-                query,
-                candidate,
-                profile.resolved,
-            )
+            try:
+                _validate_applied_architecture_patch(
+                    query,
+                    candidate,
+                    profile.resolved,
+                )
+            except ValueError as exc:
+                # This candidate is not publishable yet, but it is structurally
+                # valid and may contain useful partial repairs. Preserve it for
+                # the canonical critic so the next workflow revision operates
+                # on the improved topology with exact residual feedback.
+                logger.info(
+                    "Applied architecture patch needs workflow review: %s",
+                    exc,
+                )
             return candidate
         except Exception as exc:
             if patch_attempt == 0:

@@ -13,7 +13,7 @@ def test_applied_graph_prompts_preserve_gates_across_cached_or_replayed_work():
     )
 
     assert _APPLIED_GRAPH_PROMPT_VERSION == "applied_architecture_v17"
-    assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v15"
+    assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v16"
     assert "Stateful shortcuts, caches, replay paths, and retries" in _APPLIED_GRAPH_SYSTEM
     assert "accepted post-gate artifacts" in _APPLIED_GRAPH_SYSTEM
     assert "cache, replay, shortcut, or retry bypass" in _APPLIED_GRAPH_PATCH_SYSTEM

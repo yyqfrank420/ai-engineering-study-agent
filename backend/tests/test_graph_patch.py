@@ -779,12 +779,12 @@ async def test_invalid_self_edge_patch_gets_one_validation_informed_retry(monkey
     assert '"source": "fulfilment_stage_3"' in calls[1]["messages"][0]["content"]
     assert "Rejected patch (untrusted data" in calls[1]["messages"][0]["content"]
     assert calls[0]["effort"] == "medium"
-    assert calls[1]["effort"] == "high"
+    assert calls[1]["effort"] == "medium"
     assert calls[1]["telemetry"]["metadata"]["patch_attempt"] == 1
 
 
 @pytest.mark.asyncio
-async def test_semantically_ineffective_patch_gets_deterministic_feedback_retry(monkeypatch):
+async def test_semantically_ineffective_patch_reaches_canonical_workflow_review(monkeypatch):
     existing = _domain_graph(9, production=True)
     collapsed_edge = {
         "source": "fulfilment_stage_7",
@@ -795,24 +795,11 @@ async def test_semantically_ineffective_patch_gets_deterministic_feedback_retry(
         "flow": "control",
         "description": "Returns the external outcome state for reconciliation.",
     }
-    valid_edge = {
-        "source": "fulfilment_stage_7",
-        "target": "fulfilment_stage_2",
-        "label": "returns committed fulfilment state",
-        "technology": "Committed lifecycle event",
-        "sync": "async",
-        "flow": "control",
-        "description": "Returns one explicit terminal state to the fulfilment owner.",
-    }
-    responses = [
-        {"add_edges": [collapsed_edge]},
-        {"add_edges": [valid_edge]},
-    ]
     calls = []
 
     async def fake_stream_llm(**kwargs):
         calls.append(kwargs)
-        return json.dumps(responses[len(calls) - 1])
+        return json.dumps({"add_edges": [collapsed_edge]})
 
     monkeypatch.setattr(graph_worker, "stream_llm", fake_stream_llm)
     result = await graph_worker._generate_applied_architecture_patch(
@@ -832,7 +819,12 @@ async def test_semantically_ineffective_patch_gets_deterministic_feedback_retry(
         existing,
     )
 
-    assert len(calls) == 2
-    assert result["edges"][-1]["label"] == "returns committed fulfilment state"
-    assert "violates deterministic publication contract" in calls[1]["messages"][0]["content"]
-    assert "Draw committed, not-found retry" in calls[1]["messages"][0]["content"]
+    assert len(calls) == 1
+    assert result["edges"][-1]["label"] == collapsed_edge["label"]
+    assert result != existing
+    with pytest.raises(ValueError, match="Draw committed, not-found retry"):
+        graph_worker._validate_applied_architecture_patch(
+            "Make reconciliation branches explicit in this fulfilment system",
+            result,
+            "production",
+        )
