@@ -66,7 +66,7 @@ export function GraphCanvas({
   const [viewStateCache, setViewStateCache] = useState<Record<string, GraphViewState>>({});
   const [pendingPersistViewState, setPendingPersistViewState] = useState<GraphViewState | null>(null);
   const canvasHostRef = useRef<HTMLDivElement>(null);
-  const [evaluationViewport, setEvaluationViewport] = useState({ width: 760, height: 500 });
+  const [evaluationViewport, setEvaluationViewport] = useState<{ width: number; height: number } | null>(null);
   const graphContentKey = useMemo(() => graphStructureKey(graphData), [graphData]);
   const sequenceDismissed = sequenceDismissal?.key === graphContentKey && sequenceDismissal.dismissed;
   const graphViewKey = useMemo(() => {
@@ -86,12 +86,28 @@ export function GraphCanvas({
 
   useEffect(() => {
     if (!graphCandidate || !canvasHostRef.current) return;
-    const rect = canvasHostRef.current.getBoundingClientRect();
-    if (rect.width < 240 || rect.height < 240) return;
-    setEvaluationViewport({
-      width: Math.round(rect.width),
-      height: Math.round(rect.height),
+    const host = canvasHostRef.current;
+    const recordViewport = (rect: Pick<DOMRectReadOnly, 'width' | 'height'>) => {
+      const width = Math.round(rect.width);
+      const height = Math.round(rect.height);
+      // SplitPane reveals this host from zero width. Do not evaluate against a
+      // guessed fallback while that transition is still establishing geometry.
+      if (width <= 0 || height <= 0) return;
+      setEvaluationViewport(previous => (
+        previous?.width === width && previous.height === height
+          ? previous
+          : { width, height }
+      ));
+    };
+
+    recordViewport(host.getBoundingClientRect());
+    if (typeof ResizeObserver === 'undefined') return;
+
+    const observer = new ResizeObserver((entries) => {
+      recordViewport(entries[0]?.contentRect ?? host.getBoundingClientRect());
     });
+    observer.observe(host);
+    return () => observer.disconnect();
   }, [graphCandidate]);
 
   useEffect(() => {
@@ -160,10 +176,14 @@ export function GraphCanvas({
           </>
         ) : 'Graph will appear here'}
       </div>
-      <HiddenGraphEvaluator candidate={graphCandidate} viewport={evaluationViewport} />
+      {evaluationViewport && (
+        <HiddenGraphEvaluator candidate={graphCandidate} viewport={evaluationViewport} />
+      )}
       </>
     );
   }
+
+  const [title, subtitle] = splitGraphTitle(graphData.title);
 
   return (
     <>
@@ -177,20 +197,26 @@ export function GraphCanvas({
         background: 'linear-gradient(180deg, rgba(16,22,34,0.98), rgba(10,15,26,0.98))',
         display: 'flex',
         alignItems: 'center',
-        gap: '0.65rem',
-        minHeight: 42,
+        columnGap: '0.65rem',
+        rowGap: '0.38rem',
+        flexWrap: 'wrap',
+        minHeight: 48,
       }}>
         <span style={{ color: '#a78bfa', fontSize: '0.88rem' }}>◈</span>
-        <span style={{
-          color: '#d8dee9',
-          fontWeight: 650,
+        <div title={graphData.title} style={{
+          flex: '1 1 300px',
           minWidth: 0,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
+          lineHeight: 1.25,
         }}>
-          {graphData.title}
-        </span>
+          <div style={{ color: '#d8dee9', fontWeight: 680, overflowWrap: 'anywhere' }}>
+            {title}
+          </div>
+          {subtitle && (
+            <div style={{ color: '#8490a0', fontSize: '0.62rem', marginTop: 2, overflowWrap: 'anywhere' }}>
+              {subtitle}
+            </div>
+          )}
+        </div>
         <span style={{
           color: '#8490a0',
           fontSize: '0.62rem',
@@ -198,13 +224,21 @@ export function GraphCanvas({
           borderRadius: 999,
           border: '1px solid rgba(148,163,184,0.16)',
           background: 'rgba(148,163,184,0.06)',
+          flexShrink: 0,
+          whiteSpace: 'nowrap',
         }}>
           {graphData.nodes.length} components
           {(graphData.groups?.length ?? 0) > 0 ? ` · ${graphData.groups!.length} zones` : ''}
         </span>
 
         {graphData.design_origin === 'applied' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginLeft: 'auto' }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.65rem',
+            marginLeft: 'auto',
+            flexShrink: 0,
+          }}>
             <FlowLegend color="#3b82f6" label="Runtime" />
             <FlowLegend color="#94a3b8" label="Control" dashed />
             <FlowLegend color="#a78bfa" label="Feedback" dashed />
@@ -307,7 +341,9 @@ export function GraphCanvas({
         />
       )}
     </div>
-    <HiddenGraphEvaluator candidate={graphCandidate} viewport={evaluationViewport} />
+    {evaluationViewport && (
+      <HiddenGraphEvaluator candidate={graphCandidate} viewport={evaluationViewport} />
+    )}
     </>
   );
 }
@@ -323,4 +359,12 @@ function FlowLegend({ color, label, dashed = false }: { color: string; label: st
       {label}
     </span>
   );
+}
+
+function splitGraphTitle(value: string): [string, string | null] {
+  const separator = value.match(/\s(?:—|–)\s|:\s/);
+  if (!separator?.index) return [value, null];
+  const title = value.slice(0, separator.index).trim();
+  const subtitle = value.slice(separator.index + separator[0].length).trim();
+  return title && subtitle ? [title, subtitle] : [value, null];
 }

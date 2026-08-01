@@ -27,7 +27,7 @@ Graph-guided study companion for *AI Engineering* by Chip Huyen.
 3. enrich applied-design seeds into one explicit product brief, then challenge that same interpretation
 4. integrate their outputs into a domain-specific graph
 5. render the candidate privately in the browser and review the real screenshot plus architecture
-6. run at most one targeted semantic/structural repair; renderer-only failures never trigger another model call
+6. run at most one typed semantic patch and revalidate the complete graph; edge budgets are explicit and over-budget output is rejected rather than positionally truncated, while renderer-only failures never trigger another model call
 7. finish the one-call walkthrough privately, then reveal the accepted graph and explanation together
 
 Chat runs over `/api/chat/ws`. The first frame authenticates the connection; subsequent
@@ -60,7 +60,7 @@ Relevant docs:
 - **Graph layout persistence** (2026-04-05): Pan/zoom + node positions saved per graph, restored on session reload. Debounced 400ms frontend cache → `PUT /api/threads/{id}/graph`.
 - **Cold-start UX contract**: Explicit `Prepare` button shows real server milestones and unlocks Send only after the retrieval index is ready.
 - **Three-way routing**: SIMPLE (Sonnet 5 low effort) / MEMORY (session history) / SEARCH (RAG + architecture workflow).
-- **Role-based model effort**: Sonnet 5 handles normal work at low/medium/high effort; Opus 4.8 is reserved for a failed diagram repair.
+- **Role-based model effort**: Sonnet 5 handles normal work and compact semantic graph patches; Opus 4.8 is reserved for structurally invalid first drafts.
 - **D3 architecture diagram**: Interactive graph with step-by-step walkthrough and node detail enrichment.
 
 ## Local Development

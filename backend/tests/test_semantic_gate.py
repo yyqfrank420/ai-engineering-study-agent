@@ -10,7 +10,7 @@ from eval.judge_adapter import (
     _validate_evidence,
     judge_with_transport_retry,
 )
-from eval.live_runner import _judge_payload, _write_outputs
+from eval.live_runner import _exit_code_for_statuses, _judge_payload, _write_outputs
 from eval.quality_corpus import load_corpus
 from eval.semantic_gate import (
     DimensionJudgment,
@@ -59,6 +59,13 @@ def test_borderline_requires_manual_review_without_retry():
     first = result(("safety", "pass", True), ("relevance", "borderline", False))
 
     assert decide_semantic_gate(first).status == "manual_review"
+
+
+def test_report_only_review_never_masks_clear_or_infrastructure_failures():
+    assert _exit_code_for_statuses({"manual_review"}, "blocking") == 3
+    assert _exit_code_for_statuses({"manual_review"}, "report-only") == 0
+    assert _exit_code_for_statuses({"manual_review", "fail"}, "report-only") == 1
+    assert _exit_code_for_statuses({"manual_review", "infrastructure"}, "report-only") == 2
 
 
 def test_noncritical_pass_threshold_is_enforced():
@@ -364,3 +371,31 @@ def test_infrastructure_startup_failure_still_writes_review_artifacts(tmp_path, 
     assert (tmp_path / "live-junit.xml").exists()
     assert (tmp_path / "semantic-review.html").exists()
     assert "provider unavailable" in summary.read_text(encoding="utf-8")
+
+
+def test_report_only_manual_review_is_visible_but_not_a_junit_failure(tmp_path):
+    output = tmp_path / "live-results.json"
+    _write_outputs(
+        output,
+        {
+            "format_version": 1,
+            "kind": "live_gate",
+            "status": "manual_review",
+            "blocking_status": "pass",
+            "manual_review_policy": "report-only",
+            "evaluations": [
+                {
+                    "id": "unseen-case",
+                    "decision": "manual_review",
+                    "reason": "judge returned a borderline dimension",
+                    "judgments": [],
+                }
+            ],
+        },
+    )
+
+    junit = (tmp_path / "live-junit.xml").read_text(encoding="utf-8")
+    assert 'failures="0"' in junit
+    assert 'skipped="1"' in junit
+    assert "<skipped" in junit
+    assert "borderline dimension" in junit

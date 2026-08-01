@@ -3,10 +3,13 @@ import type { GraphEdge } from '../../types';
 import {
   filterRenderableEdges,
   initialFitScale,
+  overviewEdgeLabelOpacity,
+  selectOverviewEdgeIndices,
   selectGraphOrientation,
   VERTICAL_LEVEL_H,
   VERTICAL_PAD,
   wrapNodeLabel,
+  wrapNodeTechnology,
 } from './graphLayout';
 
 
@@ -40,5 +43,45 @@ describe('graph layout policy', () => {
       'AI Severity &',
       'Narrative Assistant',
     ]);
+  });
+
+  it('preserves deployable technology detail across two compact lines', () => {
+    expect(wrapNodeTechnology('Hybrid vector and metadata retrieval with ACL filtering')).toEqual([
+      'Hybrid vector and metadata',
+      'retrieval with ACL filtering',
+    ]);
+  });
+
+  it('shows semantic spine labels without turning feedback into overview noise', () => {
+    expect(overviewEdgeLabelOpacity({ flow: 'runtime' }, true)).toBeGreaterThan(0.7);
+    expect(overviewEdgeLabelOpacity({ flow: 'control' }, true)).toBeGreaterThan(0.5);
+    expect(overviewEdgeLabelOpacity({ flow: 'control' }, false)).toBe(0);
+    expect(overviewEdgeLabelOpacity({ flow: 'runtime' }, false)).toBe(0);
+    expect(overviewEdgeLabelOpacity({ flow: 'deployment' }, true)).toBe(0);
+    expect(overviewEdgeLabelOpacity({ flow: 'feedback', type: 'loop' }, true)).toBe(0);
+  });
+
+  it('bounds dense out-of-sample overview labels using structure rather than domain words', () => {
+    const edges = Array.from({ length: 12 }, (_, index) => ({
+      source: `stage_${index}`,
+      target: `stage_${index + 1}`,
+      label: `moves payload ${index}`,
+      technology: 'Typed event',
+      sync: 'async' as const,
+      description: 'Carries a versioned payload.',
+      flow: index % 4 === 3 ? 'control' as const : 'runtime' as const,
+    }));
+    const sequence = Array.from({ length: 13 }, (_, index) => ({
+      step: index + 1,
+      nodes: [`stage_${index}`],
+      description: `Stage ${index + 1}`,
+    }));
+
+    const selected = selectOverviewEdgeIndices(edges, sequence);
+
+    expect(selected.size).toBe(8);
+    expect([...selected].every(index => index >= 0 && index < edges.length)).toBe(true);
+    expect([...selected].some(index => edges[index].flow === 'control')).toBe(true);
+    expect([...selected].some(index => edges[index].flow === 'runtime')).toBe(true);
   });
 });

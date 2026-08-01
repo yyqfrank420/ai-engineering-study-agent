@@ -8,7 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Literal
 
 from eval.judge_adapter import (
     JUDGE_PROMPT_RELEASE,
@@ -31,6 +31,7 @@ APPLICATION_PRICES = {
     "gpt-5.4": (2.50, 15.00),
     "gpt-5.4-mini": (0.75, 4.50),
 }
+ManualReviewPolicy = Literal["blocking", "report-only"]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -40,6 +41,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", help="Browser capture JSON from eval.browser_runner")
     parser.add_argument("--output", default="artifacts/live-eval/live-results.json")
     parser.add_argument("--require-approved-corpus", action="store_true")
+    parser.add_argument(
+        "--manual-review-policy",
+        choices=("blocking", "report-only"),
+        default="blocking",
+        help=(
+            "Whether an otherwise healthy manual-review result blocks the command. "
+            "Report-only is restricted to an approved corpus and never masks clear "
+            "quality or infrastructure failures."
+        ),
+    )
     parser.add_argument(
         "--case",
         action="append",
@@ -221,7 +232,26 @@ def _application_cost(telemetry: list[dict[str, Any]]) -> float:
     return round(total, 6)
 
 
+def _exit_code_for_statuses(
+    statuses: set[str],
+    manual_review_policy: ManualReviewPolicy,
+) -> int:
+    """Map semantic outcomes to process health without conflating review with failure."""
+    if "fail" in statuses:
+        return 1
+    if "infrastructure" in statuses:
+        return 2
+    if "manual_review" in statuses and manual_review_policy == "blocking":
+        return 3
+    return 0
+
+
 async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
+    manual_review_policy: ManualReviewPolicy = args.manual_review_policy
+    if manual_review_policy == "report-only" and not args.require_approved_corpus:
+        raise RuntimeError(
+            "report-only manual review requires --require-approved-corpus"
+        )
     manifest = _manifest()
     limits = manifest["live"]["budgets"]
     corpus = load_corpus(require_approved=args.require_approved_corpus)
@@ -313,7 +343,8 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         )
 
     statuses = {item["decision"] for item in evaluations}
-    exit_code = 1 if "fail" in statuses else 2 if "infrastructure" in statuses else 3 if "manual_review" in statuses else 0
+    semantic_exit_code = _exit_code_for_statuses(statuses, "blocking")
+    exit_code = _exit_code_for_statuses(statuses, manual_review_policy)
     source_application_cost = _application_cost(app_telemetry)
     report = {
         "format_version": 1,
@@ -326,7 +357,17 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "corpus_approval": corpus.approval.status,
         "release_identity": corpus.release_identity,
         "created_at": datetime.now(UTC).isoformat(),
-        "status": "pass" if exit_code == 0 else "fail" if exit_code == 1 else "infrastructure" if exit_code == 2 else "manual_review",
+        "status": (
+            "pass"
+            if semantic_exit_code == 0
+            else "fail"
+            if semantic_exit_code == 1
+            else "infrastructure"
+            if semantic_exit_code == 2
+            else "manual_review"
+        ),
+        "manual_review_policy": manual_review_policy,
+        "blocking_status": "pass" if exit_code == 0 else "fail",
         "budget": {
             "application_calls": budget.application_calls,
             "application_limit": budget.application_limit,
@@ -356,15 +397,34 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
 def _write_outputs(path: Path, report: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    failures = sum(item["decision"] != "pass" for item in report["evaluations"])
+    report_only_review = report.get("manual_review_policy") == "report-only"
+
+    def junit_outcome(item: dict[str, Any]) -> str:
+        if item["decision"] == "pass":
+            return ""
+        message = html.escape(item["reason"], quote=True)
+        if item["decision"] == "manual_review" and report_only_review:
+            return f'<skipped message="{message}" />'
+        return f'<failure message="{message}" />'
+
+    failures = sum(
+        item["decision"] != "pass"
+        and not (item["decision"] == "manual_review" and report_only_review)
+        for item in report["evaluations"]
+    )
+    skipped = sum(
+        item["decision"] == "manual_review" and report_only_review
+        for item in report["evaluations"]
+    )
     cases = "".join(
         f'<testcase classname="live.semantic" name="{html.escape(item["id"])}">'
-        + ("" if item["decision"] == "pass" else f'<failure message="{html.escape(item["reason"], quote=True)}" />')
+        + junit_outcome(item)
         + "</testcase>"
         for item in report["evaluations"]
     )
     (path.parent / "live-junit.xml").write_text(
-        f'<testsuite name="live semantic gate" tests="{len(report["evaluations"])}" failures="{failures}">{cases}</testsuite>\n',
+        f'<testsuite name="live semantic gate" tests="{len(report["evaluations"])}" '
+        f'failures="{failures}" skipped="{skipped}">{cases}</testsuite>\n',
         encoding="utf-8",
     )
     _write_semantic_review(path.parent / "semantic-review.html", report)
@@ -374,7 +434,10 @@ def _write_outputs(path: Path, report: dict[str, Any]) -> None:
             "## Live evaluation",
             "",
             f"Status: **{report.get('status', 'infrastructure')}**",
+            f"CI outcome: **{report.get('blocking_status', 'fail')}**",
         ]
+        if report.get("manual_review_policy"):
+            lines.append(f"Manual-review policy: `{report['manual_review_policy']}`")
         if report.get("corpus_version"):
             lines.append(
                 f"Corpus: `{report['corpus_version']}` ({report.get('corpus_approval', 'unknown')})"
@@ -445,6 +508,8 @@ async def main() -> None:
             "target": args.target,
             "created_at": datetime.now(UTC).isoformat(),
             "status": "infrastructure",
+            "manual_review_policy": args.manual_review_policy,
+            "blocking_status": "fail",
             "evaluations": [],
             "reason": "15-minute evaluation budget exhausted",
         }
@@ -457,11 +522,18 @@ async def main() -> None:
             "target": args.target,
             "created_at": datetime.now(UTC).isoformat(),
             "status": "infrastructure",
+            "manual_review_policy": args.manual_review_policy,
+            "blocking_status": "fail",
             "evaluations": [],
             "reason": f"live evaluation could not start: {type(exc).__name__}: {exc}",
         }
         exit_code = 2
     _write_outputs(output, report)
+    if report.get("status") == "manual_review" and exit_code == 0:
+        print(
+            "::warning title=Semantic evaluation requires review::"
+            "Borderline or disagreeing judgments were retained as report-only evidence."
+        )
     raise SystemExit(exit_code)
 
 

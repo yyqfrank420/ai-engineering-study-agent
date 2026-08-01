@@ -246,8 +246,8 @@ def resolve_complexity(requested: str, query: str) -> ComplexityProfile:
             # Node count is a bounded readability budget, not a quality score.
             # Production responsibilities may be consolidated differently by
             # domain; the browser render gate decides whether the result fits.
-            min_graph_nodes=9,
-            max_graph_nodes=10,
+            min_graph_nodes=min(11, settings.max_graph_nodes),
+            max_graph_nodes=min(13, settings.max_graph_nodes),
             answer_contract=(
                 "Production depth: give an implementable design, including component boundaries, "
                 "data contracts, the decision/feedback loop, safety controls, approval where "

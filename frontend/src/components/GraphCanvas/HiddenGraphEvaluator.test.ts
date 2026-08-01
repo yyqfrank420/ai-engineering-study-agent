@@ -57,4 +57,68 @@ describe('measureDiagram', () => {
 
     expect(report.clipped_edges).toBe(1);
   });
+
+  it('reports overview labels, per-node group labels, and visible boundary overlap', () => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.getBoundingClientRect = () => rect(0, 0, 720, 800);
+
+    const visibleEdgeLabel = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    visibleEdgeLabel.classList.add('edge-label');
+    visibleEdgeLabel.dataset.overviewRequired = 'true';
+    visibleEdgeLabel.getBoundingClientRect = () => rect(200, 200, 100, 20);
+    const hiddenEdgeLabel = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    hiddenEdgeLabel.classList.add('edge-label');
+    hiddenEdgeLabel.dataset.overviewRequired = 'true';
+    hiddenEdgeLabel.style.display = 'none';
+    hiddenEdgeLabel.getBoundingClientRect = () => rect(200, 240, 100, 20);
+
+    const labelledNode = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    labelledNode.classList.add('node');
+    labelledNode.dataset.grouped = 'true';
+    labelledNode.getBoundingClientRect = () => rect(100, 100, 180, 56);
+    const groupLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    groupLabel.classList.add('node-group-label');
+    groupLabel.getBoundingClientRect = () => rect(112, 106, 80, 12);
+    labelledNode.append(groupLabel);
+    const unlabelledNode = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    unlabelledNode.classList.add('node');
+    unlabelledNode.dataset.grouped = 'true';
+    unlabelledNode.getBoundingClientRect = () => rect(400, 100, 180, 56);
+
+    const firstGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    firstGroup.classList.add('group-box');
+    const firstBoundary = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    firstBoundary.getBoundingClientRect = () => rect(40, 40, 260, 300);
+    firstGroup.append(firstBoundary);
+    const secondGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    secondGroup.classList.add('group-box');
+    const secondBoundary = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    secondBoundary.getBoundingClientRect = () => rect(280, 40, 260, 300);
+    secondGroup.append(secondBoundary);
+    const hiddenGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    hiddenGroup.classList.add('group-box');
+    hiddenGroup.style.visibility = 'hidden';
+    const hiddenBoundary = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    hiddenBoundary.getBoundingClientRect = () => rect(100, 100, 300, 300);
+    hiddenGroup.append(hiddenBoundary);
+
+    svg.append(
+      visibleEdgeLabel,
+      hiddenEdgeLabel,
+      labelledNode,
+      unlabelledNode,
+      firstGroup,
+      secondGroup,
+      hiddenGroup,
+    );
+
+    const report = measureDiagram(svg, 0);
+
+    expect(report.overview_required_edge_labels).toBe(2);
+    expect(report.visible_overview_required_edge_labels).toBe(1);
+    expect(report.grouped_nodes).toBe(2);
+    expect(report.group_labelled_nodes).toBe(1);
+    expect(report.visible_group_boundaries).toBe(2);
+    expect(report.group_boundary_overlap_count).toBe(1);
+  });
 });

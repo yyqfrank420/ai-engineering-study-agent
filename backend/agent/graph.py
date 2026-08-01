@@ -210,18 +210,14 @@ def build_agent_workflow(
         {"quick": "quick_answer", "context": "gather_context"},
     )
     workflow.add_edge("quick_answer", END)
-    # The architect turns the request and evidence into one canonical brief. The
-    # challenger then audits that exact interpretation before graph integration.
-    # This reuses the existing two calls while preventing terse prompts from
-    # becoming different products in each worker.
     # Resolve an optional weak-book web escalation before the canonical brief
-    # is written. This avoids paying for a draft graph that would immediately
-    # be discarded and ensures the architect, challenger, and critic share the
-    # same evidence.
+    # is written. The architect and challenger then inspect the same evidence
+    # independently and in parallel; graph integration waits for both. This
+    # preserves the adversarial review while removing avoidable serial latency.
     workflow.add_edge("gather_context", "expand_context")
     workflow.add_edge("expand_context", "architect")
-    workflow.add_edge("architect", "challenger")
-    workflow.add_edge("challenger", "draft_graph")
+    workflow.add_edge("expand_context", "challenger")
+    workflow.add_edge(["architect", "challenger"], "draft_graph")
     workflow.add_edge("draft_graph", "review_graph")
     workflow.add_conditional_edges(
         "review_graph",

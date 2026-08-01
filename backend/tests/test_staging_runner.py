@@ -248,6 +248,14 @@ def test_pr_live_eval_is_globally_serial_and_uses_the_reviewed_browser_suite():
     assert "environment: staging-eval" in workflow
 
 
+def test_scheduled_eval_reports_manual_review_without_masking_hard_failures():
+    workflow = Path(".github/workflows/scheduled-eval.yml").read_text(encoding="utf-8")
+
+    assert "--require-approved-corpus" in workflow
+    assert "--manual-review-policy report-only" in workflow
+    assert 'if [ "$SEMANTIC_OUTCOME" != success ]; then' in workflow
+
+
 def test_dashboard_smoke_checks_every_frontend_endpoint_sequentially(monkeypatch):
     expected_responses = {
         "/api/internal/dashboard/overview": {"kpis": {}, "providers": {}},

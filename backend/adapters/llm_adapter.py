@@ -1,8 +1,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # File: backend/adapters/llm_adapter.py
 # Purpose: Thin wrapper around Anthropic and OpenAI SDKs for streaming LLM calls.
-#          Implements automatic retry (up to llm_max_retries) on any Anthropic
-#          failure, then falls back to OpenAI GPT equivalents if configured.
+#          Retries transient Anthropic failures, then falls back to OpenAI GPT
+#          equivalents if configured. Non-retryable 4xx failures fall back once.
 #          Yields a ("provider_switch", "openai") tuple before the first OpenAI
 #          token so calling nodes can forward a browser notification.
 # Language: Python
@@ -59,6 +59,14 @@ if settings.graph_repair_model not in _FALLBACK_MODELS:
 _anthropic_stream_semaphore: asyncio.Semaphore | None = None
 _anthropic_stream_limit: int | None = None
 
+_NON_RETRYABLE_ANTHROPIC_ERRORS = {
+    "AuthenticationError",
+    "BadRequestError",
+    "NotFoundError",
+    "PermissionDeniedError",
+    "UnprocessableEntityError",
+}
+
 
 def build_telemetry(
     operation: str,
@@ -87,6 +95,12 @@ def _get_anthropic_stream_semaphore() -> asyncio.Semaphore | None:
         _anthropic_stream_semaphore = asyncio.Semaphore(limit)
         _anthropic_stream_limit = limit
     return _anthropic_stream_semaphore
+
+
+def _is_non_retryable_anthropic_error(exc: Exception) -> bool:
+    if type(exc).__name__ in _NON_RETRYABLE_ANTHROPIC_ERRORS:
+        return True
+    return getattr(exc, "status_code", None) in {400, 401, 403, 404, 422}
 
 
 def stream_response_compat(streamer, **kwargs):
@@ -202,9 +216,9 @@ async def stream_response(
     Retry behaviour:
     - Tries Anthropic up to settings.llm_max_retries times with
       settings.llm_retry_delay_s seconds between attempts.
-    - Only retries if the failure occurred before any tokens were yielded
-      (connection / auth errors). Mid-stream drops are re-raised immediately
-      since partial output can't be safely replayed.
+    - Only retries transient failures that occur before any tokens are yielded.
+      Non-retryable request/auth/model 4xx errors fall back immediately.
+      Mid-stream drops are re-raised since partial output can't be safely replayed.
     - On full exhaustion, falls back to OpenAI if configured.
     - Yields ("provider_switch", "openai") before the first OpenAI token
       so callers can surface a "falling back to GPT" UI notice.
@@ -366,6 +380,8 @@ async def stream_response(
                 settings.llm_max_retries,
                 type(exc).__name__,
             )
+            if _is_non_retryable_anthropic_error(exc):
+                break
             if attempt < settings.llm_max_retries:
                 await asyncio.sleep(settings.llm_retry_delay_s)
 

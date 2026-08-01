@@ -44,6 +44,28 @@ def test_diagnostic_browser_suite_accepts_only_bounded_corpus_case_selection():
         _suite_case_ids("full", ["citations"])
 
 
+def test_browser_capture_checkpoint_preserves_completed_results(monkeypatch):
+    from argparse import Namespace
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from eval.browser_runner import _browser_report
+
+    monkeypatch.setattr("eval.browser_runner.corpus_sha256", lambda: "corpus-sha")
+    report = _browser_report(
+        args=Namespace(suite="pr", target="http://frontend", backend_target="https://backend"),
+        corpus=SimpleNamespace(corpus_version="v1", release_identity="release-v1"),
+        started_at=datetime(2026, 7, 22, tzinfo=UTC),
+        started=0.0,
+        results=[{"id": "completed-case", "passed": False}],
+        status="partial",
+    )
+
+    assert report["status"] == "partial"
+    assert report["results"] == [{"id": "completed-case", "passed": False}]
+    assert report["corpus_sha256"] == "corpus-sha"
+
+
 def test_current_research_cases_require_verifiable_web_sources():
     corpus = load_corpus()
     research_cases = [case for case in corpus.cases if "web" in case.risk_tags]

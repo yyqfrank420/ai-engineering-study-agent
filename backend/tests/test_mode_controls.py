@@ -148,7 +148,7 @@ def test_concepts_and_domain_free_product_nouns_do_not_invent_a_system(query):
     [
         ("low", (5, 7)),
         ("prototype", (7, 9)),
-        ("production", (9, 10)),
+        ("production", (11, 13)),
     ],
 )
 def test_complexity_profiles_keep_diagrams_within_the_ui_node_cap(requested, expected_range):
@@ -161,13 +161,24 @@ def test_complexity_profiles_keep_diagrams_within_the_ui_node_cap(requested, exp
     assert profile.max_graph_nodes <= settings.max_graph_nodes
 
 
+def test_production_profile_remains_valid_when_node_cap_is_lower(monkeypatch):
+    from agent.complexity import resolve_complexity
+    from config import settings
+
+    monkeypatch.setattr(settings, "max_graph_nodes", 10)
+
+    profile = resolve_complexity("production", "Design a production AI system")
+
+    assert (profile.min_graph_nodes, profile.max_graph_nodes) == (10, 10)
+
+
 def test_self_improving_applied_system_defaults_to_production_depth():
     from agent.complexity import resolve_complexity
 
     profile = resolve_complexity("auto", "self-improving AI system for performance marketing")
 
     assert profile.resolved == "production"
-    assert (profile.min_graph_nodes, profile.max_graph_nodes) == (9, 10)
+    assert (profile.min_graph_nodes, profile.max_graph_nodes) == (11, 13)
 
 
 def test_terse_graph_followup_restores_the_original_design_context():

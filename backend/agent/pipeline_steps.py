@@ -35,12 +35,19 @@ async def apply_graph_worker(state: AgentState, graph_tools: list) -> AgentState
             and state.get("route") == "search"
             and not state.get("graph_notice_sent")
         ):
-            await state["send"]({
-                "type": "graph_notice",
-                "message": (
+            message = (
+                "The draft architecture did not meet the structural quality checks, so I kept "
+                "the visual out rather than publishing a misleading graph. The written design "
+                "is still available below."
+                if state.get("is_applied_design")
+                else (
                     "I found enough related material to explain this, but not enough grounded detail "
                     "from the book to draw a trustworthy graph for this exact question."
-                ),
+                )
+            )
+            await state["send"]({
+                "type": "graph_notice",
+                "message": message,
             })
         return {
             **state,
