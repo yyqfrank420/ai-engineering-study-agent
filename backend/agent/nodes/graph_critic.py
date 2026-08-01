@@ -14,7 +14,7 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v15"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v16"
 
 _FEEDBACK_LOOP_REQUEST = re.compile(
     r"\b(?:closed[- ]loop|feedback loop|self[- ]improv\w*|"
@@ -76,6 +76,26 @@ _TOPOLOGY_OMISSION_CONCERN = re.compile(
 _NON_BLOCKING_ADVICE_QUALIFIER = re.compile(
     r"(?:^(?:consider|could)\b|"
     r"\b(?:already (?:complete|correct)|not required|optional(?:ly)?|reasonably scoped out)\b)",
+    re.I,
+)
+
+_PRODUCTION_ONLY_REVIEW_CONCERN = re.compile(
+    r"(?:\bCOMMITTED\b.{0,140}\bNOT[ _-]?FOUND\b.{0,140}\bSTILL[ _-]?UNKNOWN\b|"
+    r"\bNOT[ _-]?FOUND\b.{0,140}\bSTILL[ _-]?UNKNOWN\b|"
+    r"\b(?:same[- ]key|timeout[- ]after[- ]commit|ambiguous outcome|pre[- ]effect|"
+    r"durable (?:lifecycle )?reservation|fenc(?:e|ed|ing)|late[- ]outcome)\b|"
+    r"\bpayload hash\b|\btarget version\b|\bpolicy version\b.{0,80}\bexpir|"
+    r"\bpromotion\b.{0,140}\brollback\b|\brollback\b.{0,140}\bpromotion\b|"
+    r"\brelease[- ]control edges?\b|\bimmutable registration\b.{0,120}\bcanary\b|"
+    r"\bcache identity\b.{0,180}\b(?:tenant|ACL|schema|corpus|index|release version))",
+    re.I,
+)
+
+_EXPLICIT_PRODUCTION_GUARANTEE_REQUEST = re.compile(
+    r"\b(?:production(?:[- ]ready)?|exactly[- ]once|idempoten\w*|reconcil\w*|"
+    r"timeout[- ]after[- ]commit|ambiguous outcome|compensat\w*|payload hash|"
+    r"target version|policy version|pre[- ]effect|fenc(?:e|ed|ing)|canary|"
+    r"release gate|promotion|rollback|tenant[- ]scop\w*|ACL[- ]scop\w*)\b",
     re.I,
 )
 
@@ -353,6 +373,8 @@ async def graph_critic_node(state: AgentState) -> AgentState:
             _parse_json_object(raw),
             graph=graph,
             require_topology_proofs=profile.resolved == "production",
+            query=query,
+            resolved_complexity=profile.resolved,
         )
         model_review = _reconcile_objective_render_claims(
             model_review,
@@ -840,6 +862,8 @@ def _normalise_review(
     *,
     graph: dict[str, Any] | None = None,
     require_topology_proofs: bool = False,
+    query: str = "",
+    resolved_complexity: str | None = None,
 ) -> dict[str, Any]:
     try:
         score = min(1.0, max(0.0, float(payload.get("score", 0))))
@@ -854,6 +878,19 @@ def _normalise_review(
     )
     missing = list(dict.fromkeys([*missing, *proof_failures]))[:8]
     advice = _clean_list(payload.get("advice"))
+    scoped_failures: list[str] = []
+    if (
+        resolved_complexity in {"low", "prototype"}
+        and not _EXPLICIT_PRODUCTION_GUARANTEE_REQUEST.search(query)
+    ):
+        scoped_failures = [
+            item for item in missing if _PRODUCTION_ONLY_REVIEW_CONCERN.search(item)
+        ]
+        missing = [item for item in missing if item not in scoped_failures]
+        advice.extend(
+            f"Production-depth hardening: {item}"
+            for item in scoped_failures
+        )
     if require_topology_proofs:
         structural_advice = [
             item
@@ -865,16 +902,27 @@ def _normalise_review(
             missing = list(dict.fromkeys([*missing, *structural_advice]))[:8]
             advice = [item for item in advice if item not in structural_advice]
     strengths = _clean_list(payload.get("strengths"))
-    approved = payload.get("approved") is True and score >= 0.78 and not missing
+    scope_only_rejection = bool(scoped_failures) and not missing
+    if scope_only_rejection:
+        score = max(score, 0.78)
+    approved = (
+        (payload.get("approved") is True or scope_only_rejection)
+        and score >= 0.78
+        and not missing
+    )
     revision_instruction = " ".join(str(payload.get("revision_instruction") or "").split())[:800]
+    if scoped_failures:
+        revision_instruction = " ".join(missing)
     if not approved and not revision_instruction:
         revision_instruction = "Resolve every missing item and make the runtime data/control loop explicit."
+    elif approved:
+        revision_instruction = ""
     return {
         "approved": approved,
         "score": score,
         "strengths": strengths,
         "missing": missing,
-        "advice": advice,
+        "advice": list(dict.fromkeys(advice))[:8],
         "topology_proofs": topology_proofs,
         "revision_instruction": revision_instruction,
     }

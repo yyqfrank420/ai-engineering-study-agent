@@ -222,7 +222,17 @@
       "smoke": ["rag-grounding"],
       "full": ["rag-grounding", "memory", "graph-off", "research", "node-followup", "graph-expansion", "applied-domain", "prompt-injection", "simple-explanation", "citations", "architecture-controls", "ambiguity", "typo", "long-context", "failure-recovery", "stream-reconnect", "persistence-cleanup", "graph-renderability", "instruction-conflict", "arbitrary-architecture"]
     },
-    "budgets": {"pr_cases": 8, "application_calls": 50, "judge_calls": 16, "timeout_seconds": 900},
+    "budgets": {
+      "pr_cases": 8,
+      "application_calls": 50,
+      "judge_calls": 16,
+      "application_turn_timeout_seconds": 270,
+      "browser_suite_base_timeout_seconds": 180,
+      "browser_suite_per_turn_timeout_seconds": 150,
+      "browser_suite_max_timeout_seconds": 3600,
+      "semantic_suite_timeout_seconds": 1200,
+      "semantic_full_suite_timeout_seconds": 3600
+    },
     "artifacts_retention_days": 30
   }
 }

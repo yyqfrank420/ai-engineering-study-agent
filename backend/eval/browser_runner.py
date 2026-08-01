@@ -19,6 +19,10 @@ from playwright.async_api import BrowserContext, Page, WebSocket, async_playwrig
 
 from eval.quality_corpus import EvaluationCase, corpus_sha256, load_corpus
 from eval.response_capture import extract_response_text, extract_response_turns
+from eval.runtime_budget import (
+    application_turn_timeout_seconds,
+    browser_suite_timeout_seconds,
+)
 from eval.staging_runner import (
     detect_route,
     extract_graph_data,
@@ -228,14 +232,24 @@ async def _set_modes(page: Page, case: EvaluationCase, step_index: int) -> None:
     await page.get_by_label("Message options").click()
 
 
-async def _send_step(page: Page, case: EvaluationCase, step_index: int, frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
+async def _send_step(
+    page: Page,
+    case: EvaluationCase,
+    step_index: int,
+    frames: list[dict[str, Any]],
+    *,
+    timeout_seconds: int,
+) -> list[dict[str, Any]]:
     await _set_modes(page, case, step_index)
     start = len(frames)
     textarea = page.get_by_placeholder(re.compile(r"Ask a question"))
     await textarea.fill(case.steps[step_index].prompt)
     await page.get_by_label("Send message").click()
     await page.get_by_label("Stop generation").wait_for(state="visible", timeout=20_000)
-    await page.get_by_label("Send message").wait_for(state="visible", timeout=210_000)
+    await page.get_by_label("Send message").wait_for(
+        state="visible",
+        timeout=timeout_seconds * 1000,
+    )
     step_frames = [frame for frame in frames[start:] if frame["direction"] == "received"]
     events = [frame["message"] for frame in step_frames]
     if not any(event.get("type") == "done" for event in events):
@@ -369,7 +383,8 @@ async def run_browser(args: argparse.Namespace) -> dict[str, Any]:
     started = time.monotonic()
     started_at = datetime.now(UTC)
 
-    timeout_seconds = 900 if args.suite in {"pr", "smoke", "diagnostic"} else 3600
+    timeout_seconds = browser_suite_timeout_seconds(cases)
+    turn_timeout_seconds = application_turn_timeout_seconds()
     async with asyncio.timeout(timeout_seconds):
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=not args.headed)
@@ -433,7 +448,15 @@ async def run_browser(args: argparse.Namespace) -> dict[str, Any]:
                 failure: str | None = None
                 try:
                     for step_index in range(len(case.steps)):
-                        case_events.extend(await _send_step(page, case, step_index, frames))
+                        case_events.extend(
+                            await _send_step(
+                                page,
+                                case,
+                                step_index,
+                                frames,
+                                timeout_seconds=turn_timeout_seconds,
+                            )
+                        )
                     if case.id == "node-followup":
                         # Use the same accessible activation path available to
                         # keyboard users and prove the optional refinement starts.

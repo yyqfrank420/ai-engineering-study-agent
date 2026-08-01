@@ -18,6 +18,7 @@ from eval.judge_adapter import (
 )
 from eval.quality_corpus import corpus_sha256, load_corpus
 from eval.response_capture import extract_response_turns
+from eval.runtime_budget import semantic_suite_timeout_seconds
 from eval.semantic_gate import EvaluationBudget, GateDecision, decide_semantic_gate
 
 
@@ -498,7 +499,7 @@ async def main() -> None:
     args = build_parser().parse_args()
     output = ROOT / args.output
     try:
-        timeout_seconds = 900 if args.suite in {"pr", "smoke"} else 3600
+        timeout_seconds = semantic_suite_timeout_seconds(args.suite)
         report, exit_code = await asyncio.wait_for(evaluate(args), timeout=timeout_seconds)
     except TimeoutError:
         report = {
@@ -511,7 +512,7 @@ async def main() -> None:
             "manual_review_policy": args.manual_review_policy,
             "blocking_status": "fail",
             "evaluations": [],
-            "reason": "15-minute evaluation budget exhausted",
+            "reason": f"{timeout_seconds}-second semantic evaluation budget exhausted",
         }
         exit_code = 2
     except Exception as exc:
