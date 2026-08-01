@@ -285,8 +285,15 @@ def test_live_eval_job_allows_setup_around_the_bounded_browser_suite():
     workflow = (ROOT / ".github/workflows/live-eval.yml").read_text(encoding="utf-8")
     manifest = load_manifest()
 
-    assert "timeout-minutes: 30" in workflow
-    assert manifest["live"]["budgets"]["timeout_seconds"] == 15 * 60
+    assert "timeout-minutes: 60" in workflow
+    budgets = manifest["live"]["budgets"]
+    assert budgets["application_turn_timeout_seconds"] > Settings(_env_file=None).agent_timeout_s
+    assert budgets["browser_suite_max_timeout_seconds"] <= 60 * 60
+    assert budgets["semantic_suite_timeout_seconds"] == 20 * 60
+    assert budgets["semantic_full_suite_timeout_seconds"] == 60 * 60
+
+    scheduled = (ROOT / ".github/workflows/scheduled-eval.yml").read_text(encoding="utf-8")
+    assert "timeout-minutes: 130" in scheduled
 
 
 def test_browser_workflows_use_development_only_internal_auth_bootstrap():

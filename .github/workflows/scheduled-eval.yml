@@ -31,7 +31,9 @@ jobs:
   evaluate:
     name: Rotating real-model corpus
     runs-on: ubuntu-latest
-    timeout-minutes: 70
+    # A weekly full run can independently consume the bounded 60-minute browser
+    # and semantic budgets, plus isolated staging setup and cleanup.
+    timeout-minutes: 130
     environment: staging-eval
     concurrency:
       group: staging-live-eval-global

@@ -718,9 +718,10 @@ async def test_invalid_patch_preserves_approved_graph_after_bounded_retry(monkey
     assert existing == approved
     assert len(calls) == 2
     assert calls[0]["model"] == graph_worker.settings.orchestrator_model
-    assert calls[0]["effort"] == "low"
+    assert calls[0]["effort"] == "medium"
     assert calls[0]["thinking_budget"] is None
     assert "Never return a replacement graph" in calls[0]["system"]
+    assert "map every supplied blocking failure" in calls[0]["system"]
     assert calls[0]["telemetry"]["metadata"]["prompt_version"] == (
         graph_worker._APPLIED_GRAPH_PATCH_PROMPT_VERSION
     )

@@ -23,7 +23,7 @@ def test_revision_critic_uses_bounded_verification_budget():
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v15"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v16"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -950,6 +950,85 @@ def test_explicit_model_blocking_failure_still_rejects_the_diagram():
 
     assert review["approved"] is False
     assert review["missing"] == ["The requested rollback path is absent."]
+
+
+def test_prototype_review_downgrades_only_production_reconciliation_detail():
+    review = _normalise_review(
+        {
+            "approved": False,
+            "score": 0.7,
+            "blocking_failures": [
+                "Replace the narrated outcome edge with explicit COMMITTED, NOT_FOUND, and STILL_UNKNOWN branches."
+            ],
+            "revision_instruction": "Draw all three reconciliation branches.",
+        },
+        query="Draw an AI agent architecture with tools and memory.",
+        resolved_complexity="prototype",
+    )
+
+    assert review["approved"] is True
+    assert review["missing"] == []
+    assert review["revision_instruction"] == ""
+    assert review["advice"] == [
+        "Production-depth hardening: Replace the narrated outcome edge with explicit COMMITTED, NOT_FOUND, and STILL_UNKNOWN branches."
+    ]
+
+
+def test_explicit_reconciliation_request_remains_blocking_at_prototype_depth():
+    failure = "Show COMMITTED, NOT_FOUND, and STILL_UNKNOWN reconciliation branches."
+    review = _normalise_review(
+        {
+            "approved": False,
+            "score": 0.7,
+            "blocking_failures": [failure],
+        },
+        query="Prototype the flow, including reconciliation after ambiguous outcomes.",
+        resolved_complexity="prototype",
+    )
+
+    assert review["approved"] is False
+    assert review["missing"] == [failure]
+
+
+def test_depth_scoping_preserves_independent_prototype_blockers():
+    review = _normalise_review(
+        {
+            "approved": False,
+            "score": 0.65,
+            "blocking_failures": [
+                "Show COMMITTED, NOT_FOUND, and STILL_UNKNOWN reconciliation branches.",
+                "The memory store has no directed read path back to the agent.",
+            ],
+            "revision_instruction": "Repair both paths.",
+        },
+        query="Draw an AI agent architecture with tools and memory.",
+        resolved_complexity="prototype",
+    )
+
+    assert review["approved"] is False
+    assert review["missing"] == [
+        "The memory store has no directed read path back to the agent."
+    ]
+    assert review["revision_instruction"] == (
+        "The memory store has no directed read path back to the agent."
+    )
+    assert len(review["advice"]) == 1
+
+
+def test_production_reconciliation_failure_is_never_depth_scoped_away():
+    failure = "Show COMMITTED, NOT_FOUND, and STILL_UNKNOWN reconciliation branches."
+    review = _normalise_review(
+        {
+            "approved": False,
+            "score": 0.7,
+            "blocking_failures": [failure],
+        },
+        query="Draw the architecture.",
+        resolved_complexity="production",
+    )
+
+    assert review["approved"] is False
+    assert review["missing"] == [failure]
 
 
 def test_render_gate_rejects_overlap_clipping_or_missing_capture():

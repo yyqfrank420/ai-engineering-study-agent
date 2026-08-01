@@ -14,6 +14,7 @@ from websockets.asyncio.client import connect
 
 from eval.diagram_renderer import render_staging_diagram
 from eval.response_capture import extract_response_text
+from eval.runtime_budget import application_turn_timeout_seconds
 
 try:
     from rich import box
@@ -317,7 +318,7 @@ async def perform_websocket_chat(
     )
     events: list[dict] = []
 
-    async with asyncio.timeout(210):
+    async with asyncio.timeout(application_turn_timeout_seconds()):
         async with connect(
             websocket_url,
             open_timeout=20,

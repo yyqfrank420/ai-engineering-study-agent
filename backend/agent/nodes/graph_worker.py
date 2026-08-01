@@ -18,7 +18,7 @@ from graph.runtime import select_canonical_graph
 logger = logging.getLogger(__name__)
 
 _APPLIED_GRAPH_PROMPT_VERSION = "applied_architecture_v17"
-_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v11"
+_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v12"
 _MAX_GRAPH_PATCH_CHARS = 20_000
 
 
@@ -248,6 +248,8 @@ While resolving the supplied review, re-audit the complete candidate against thi
 Use the same bounded patch to fix any other blocking path defect you can observe, especially one
 that would become visible only after the requested repair. Do not spend the sole revision on the
 first symptom while leaving another label-only guarantee, bypass, or incomplete branch behind.
+Privately map every supplied blocking failure to at least one concrete patch operation before
+returning. A structurally valid patch that leaves any supplied blocker unresolved is invalid.
 </trust_and_bounds>
 
 <output_contract>
@@ -563,7 +565,7 @@ async def _generate_applied_architecture_patch(
                 temperature=settings.graph_temperature,
                 top_p=settings.graph_top_p,
                 top_k=settings.graph_top_k,
-                effort="low",
+                effort="medium",
                 telemetry=build_telemetry(
                     "graph_worker_applied_patch",
                     user_id=state.get("user_id"),

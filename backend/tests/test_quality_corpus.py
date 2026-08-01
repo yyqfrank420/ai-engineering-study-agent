@@ -3,6 +3,7 @@ import json
 import pytest
 
 from eval.quality_corpus import CORPUS_PATH, corpus_sha256, load_corpus
+from eval.runtime_budget import browser_suite_timeout_seconds, semantic_suite_timeout_seconds
 
 
 def test_corpus_has_exactly_twenty_versioned_cases_and_six_anchored_rubrics():
@@ -27,6 +28,23 @@ def test_empty_and_oversized_inputs_are_not_live_model_cases():
     prompts = [step.prompt for case in corpus.cases for step in case.steps]
     assert all(prompt.strip() for prompt in prompts)
     assert all(len(prompt.encode("utf-8")) <= 12_000 for prompt in prompts)
+
+
+def test_browser_budget_scales_with_turns_and_retains_a_hard_ceiling():
+    corpus = load_corpus()
+    one_turn = [corpus.by_id["rag-grounding"]]
+    manifest = json.loads(
+        (CORPUS_PATH.parents[4] / "ci" / "quality.json").read_text(encoding="utf-8")
+    )
+    pr_cases = [
+        corpus.by_id[case_id]
+        for case_id in manifest["live"]["suites"]["pr"]
+    ]
+
+    assert browser_suite_timeout_seconds(pr_cases) > browser_suite_timeout_seconds(one_turn)
+    assert browser_suite_timeout_seconds(corpus.cases * 10) == 3600
+    assert semantic_suite_timeout_seconds("pr") == 1200
+    assert semantic_suite_timeout_seconds("full") == 3600
 
 
 def test_diagnostic_browser_suite_accepts_only_bounded_corpus_case_selection():
