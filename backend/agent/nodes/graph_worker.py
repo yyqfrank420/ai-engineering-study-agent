@@ -18,7 +18,7 @@ from graph.runtime import select_canonical_graph
 logger = logging.getLogger(__name__)
 
 _APPLIED_GRAPH_PROMPT_VERSION = "applied_architecture_v17"
-_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v13"
+_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v15"
 _MAX_GRAPH_PATCH_CHARS = 20_000
 
 
@@ -250,6 +250,8 @@ that would become visible only after the requested repair. Do not spend a bounde
 first symptom while leaving another label-only guarantee, bypass, or incomplete branch behind.
 Privately map every supplied blocking failure to at least one concrete patch operation before
 returning. A structurally valid patch that leaves any supplied blocker unresolved is invalid.
+The complete patched graph must pass the deterministic publication contract; validation feedback
+will identify any residual collapsed branch, approval route, bypass, or release transition.
 </trust_and_bounds>
 
 <output_contract>
@@ -565,7 +567,7 @@ async def _generate_applied_architecture_patch(
                 temperature=settings.graph_temperature,
                 top_p=settings.graph_top_p,
                 top_k=settings.graph_top_k,
-                effort="medium",
+                effort="high" if repair_context else "medium",
                 telemetry=build_telemetry(
                     "graph_worker_applied_patch",
                     user_id=state.get("user_id"),
@@ -586,13 +588,19 @@ async def _generate_applied_architecture_patch(
             if len(raw) > _MAX_GRAPH_PATCH_CHARS:
                 raise ValueError("graph patch exceeds the bounded output contract")
             patch = _parse_json_object(raw)
-            return _apply_applied_graph_patch(
+            candidate = _apply_applied_graph_patch(
                 existing_graph,
                 patch,
                 min_nodes=effective_min_nodes,
                 max_nodes=profile.max_graph_nodes,
                 resolved_complexity=profile.resolved,
             )
+            _validate_applied_architecture_patch(
+                query,
+                candidate,
+                profile.resolved,
+            )
+            return candidate
         except Exception as exc:
             if patch_attempt == 0:
                 invalid_patch = raw[:6000] if raw else "(model call did not return a patch)"
@@ -611,6 +619,23 @@ async def _generate_applied_architecture_patch(
             return copy.deepcopy(existing_graph)
 
     raise RuntimeError("applied architecture patch repair loop ended unexpectedly")
+
+
+def _validate_applied_architecture_patch(
+    query: str,
+    candidate: GraphData,
+    resolved_complexity: str,
+) -> None:
+    # Import lazily so the graph worker remains independently importable while
+    # reusing the critic's single canonical publication contract.
+    from agent.nodes.graph_critic import _deterministic_review
+
+    review = _deterministic_review(query, candidate, resolved_complexity)
+    if review.get("approved"):
+        return
+    missing = [str(item) for item in (review.get("missing") or [])[:8]]
+    detail = " ".join(missing) or "the deterministic publication contract rejected the patch"
+    raise ValueError(f"patched graph still violates deterministic publication contract: {detail}")
 
 
 def _apply_applied_graph_patch(
