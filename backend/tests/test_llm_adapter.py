@@ -247,6 +247,43 @@ async def test_stream_response_retries_before_tokens_then_succeeds(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_stream_response_does_not_retry_non_retryable_anthropic_4xx(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    monkeypatch.setattr(settings, "llm_max_retries", 3)
+    monkeypatch.setattr(llm, "_FALLBACK_MODELS", {"anthropic-model": "openai-model"})
+    monkeypatch.setattr(llm, "_get_openai_client", lambda: object())
+    _patch_llm_telemetry(monkeypatch)
+    attempts = 0
+
+    class BadRequestError(Exception):
+        status_code = 400
+
+    async def failing_anthropic(_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if False:
+            yield
+        raise BadRequestError("invalid model configuration")
+
+    async def fake_openai_stream(*_args):
+        yield ("text", "fallback")
+        yield ("done", "")
+
+    monkeypatch.setattr(llm, "_anthropic_stream_once", failing_anthropic)
+    monkeypatch.setattr(llm, "_openai_stream", fake_openai_stream)
+
+    events = await _collect(llm.stream_response("anthropic-model", "system", []))
+
+    assert attempts == 1
+    assert events == [
+        ("provider_switch", "openai"),
+        ("text", "fallback"),
+        ("done", ""),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_stream_response_continues_when_telemetry_write_fails(monkeypatch):
     import adapters.llm_adapter as llm
 

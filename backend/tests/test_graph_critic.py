@@ -3,14 +3,689 @@ import json
 import pytest
 
 from agent.nodes.graph_critic import (
+    _GRAPH_CRITIC_PROMPT_VERSION,
     _GRAPH_CRITIC_SYSTEM,
+    _critic_thinking_budget,
     _deterministic_render_review,
     _deterministic_review,
     _merge_reviews,
     _normalise_review,
+    _normalise_topology_proofs,
     _reconcile_objective_render_claims,
     graph_critic_node,
 )
+
+
+def test_revision_critic_uses_bounded_verification_budget():
+    assert _critic_thinking_budget(9000, 0) == 2000
+    assert _critic_thinking_budget(9000, 1) == 1200
+    assert _critic_thinking_budget(None, 1) is None
+
+
+def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v15"
+    assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
+    assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
+    assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
+    assert "rejoins the gate" in _GRAPH_CRITIC_SYSTEM
+    assert "inspect directed paths, not vocabulary" in _GRAPH_CRITIC_SYSTEM
+    assert "Carrying a retry key is not durable" in _GRAPH_CRITIC_SYSTEM
+    assert "Rejection stops before execution and is not compensation" in _GRAPH_CRITIC_SYSTEM
+    assert "Sanitization does" in _GRAPH_CRITIC_SYSTEM
+    assert "not make retrieved text trusted" in _GRAPH_CRITIC_SYSTEM
+    assert "items 17-27 are blocking" in _GRAPH_CRITIC_SYSTEM
+    assert "Return exactly one topology proof" in _GRAPH_CRITIC_SYSTEM
+    assert "Do not stop after finding the first defect" in _GRAPH_CRITIC_SYSTEM
+    assert "event-stream systems define bounded" in _GRAPH_CRITIC_SYSTEM
+    assert "backpressure and overload behavior" in _GRAPH_CRITIC_SYSTEM
+    assert "partition/order or event-time semantics" in _GRAPH_CRITIC_SYSTEM
+    assert "replay/checkpoint" in _GRAPH_CRITIC_SYSTEM
+    assert "compatible schema evolution" in _GRAPH_CRITIC_SYSTEM
+
+
+def test_required_topology_proofs_reject_missing_or_invented_edges():
+    graph = {"edges": [{"source": "proposal", "target": "gate", "label": "submit proposal"}]}
+    value = [
+        {
+            "guarantee": guarantee,
+            "status": "not_applicable",
+            "edge_evidence": [],
+            "reason": "This flow class is absent.",
+        }
+        for guarantee in (
+            "authorization_and_compensation",
+            "retrieval_and_reuse_trust",
+            "audit_and_provenance",
+            "learning_and_release",
+        )
+    ]
+    value.append({
+        "guarantee": "state_effect_reconciliation",
+        "status": "pass",
+        "edge_evidence": [{"source": "gate", "target": "writer", "label": "release action"}],
+        "reason": "The action is supposedly reserved before execution.",
+    })
+
+    proofs, failures = _normalise_topology_proofs(value, graph=graph, required=True)
+
+    assert len(proofs) == 5
+    assert any("edge absent from the graph" in failure for failure in failures)
+
+
+def test_required_topology_proofs_accept_exact_citations_from_semantic_reviewer():
+    graph = {"edges": [{"source": "proposal", "target": "gate", "label": "submit proposal"}]}
+    value = [
+        {
+            "guarantee": guarantee,
+            "status": "pass" if guarantee == "authorization_and_compensation" else "not_applicable",
+            "edge_evidence": (
+                [{"source": "proposal", "target": "gate", "label": "submit proposal"}]
+                if guarantee == "authorization_and_compensation"
+                else []
+            ),
+            "reason": "The cited path is present." if guarantee == "authorization_and_compensation" else "This flow class is absent.",
+        }
+        for guarantee in sorted({
+            "state_effect_reconciliation",
+            "authorization_and_compensation",
+            "retrieval_and_reuse_trust",
+            "audit_and_provenance",
+            "learning_and_release",
+        })
+    ]
+
+    _, failures = _normalise_topology_proofs(value, graph=graph, required=True)
+
+    assert failures == []
+
+
+@pytest.mark.parametrize(
+    ("guarantee", "label"),
+    [
+        ("state_effect_reconciliation", "Action Executor"),
+        ("authorization_and_compensation", "Supervisor Approval"),
+        ("retrieval_and_reuse_trust", "Scoped Answer Cache"),
+        ("audit_and_provenance", "Lifecycle Audit Ledger"),
+        ("learning_and_release", "Canary Release Gate"),
+    ],
+)
+def test_topology_proof_cannot_claim_not_applicable_for_visible_flow(guarantee, label):
+    graph = {
+        "nodes": [{"id": "visible", "label": label}],
+        "edges": [{"source": "visible", "target": "outcome", "label": "returns result"}],
+    }
+    value = [
+        {
+            "guarantee": item,
+            "status": "not_applicable",
+            "edge_evidence": [],
+            "reason": "This flow class is absent.",
+        }
+        for item in (
+            "state_effect_reconciliation",
+            "authorization_and_compensation",
+            "retrieval_and_reuse_trust",
+            "audit_and_provenance",
+            "learning_and_release",
+        )
+    ]
+
+    _, failures = _normalise_topology_proofs(value, graph=graph, required=True)
+
+    assert any(guarantee.replace("_", " ") in failure for failure in failures)
+
+
+def test_production_review_promotes_structural_advice_to_blocking_failure():
+    review = _normalise_review(
+        {
+            "approved": True,
+            "score": 0.9,
+            "blocking_failures": [],
+            "advice": [
+                "Add an explicit rollback edge instead of leaving the transition in prose.",
+                "Consider retaining metrics for seven more days.",
+                "Could show an explicit ingestion edge, though it is reasonably scoped out.",
+                "Consider adding an explicit optional audit edge for a secondary view.",
+            ],
+            "topology_proofs": [
+                {
+                    "guarantee": guarantee,
+                    "status": "not_applicable",
+                    "edge_evidence": [],
+                    "reason": "This flow class is absent.",
+                }
+                for guarantee in (
+                    "state_effect_reconciliation",
+                    "authorization_and_compensation",
+                    "retrieval_and_reuse_trust",
+                    "audit_and_provenance",
+                    "learning_and_release",
+                )
+            ],
+        },
+        graph={"edges": []},
+        require_topology_proofs=True,
+    )
+
+    assert review["approved"] is False
+    assert review["missing"] == [
+        "Add an explicit rollback edge instead of leaving the transition in prose."
+    ]
+    assert review["advice"] == [
+        "Consider retaining metrics for seven more days.",
+        "Could show an explicit ingestion edge, though it is reasonably scoped out.",
+        "Consider adding an explicit optional audit edge for a secondary view.",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("nodes", "edges", "expected"),
+    [
+        (
+            [
+                {"id": "request", "label": "Permit Request"},
+                {"id": "approval", "label": "Officer Approval", "type": "decision", "description": "Approves or rejects the exact permit."},
+                {"id": "writer", "label": "Permit Writer"},
+            ],
+            [
+                {"source": "request", "target": "approval", "label": "submit proposal"},
+                {"source": "approval", "target": "writer", "label": "approve permit"},
+                {"source": "writer", "target": "request", "label": "return measured outcome", "flow": "feedback"},
+            ],
+            "approval decision",
+        ),
+        (
+            [
+                {"id": "gate", "label": "Evidence Gate"},
+                {"id": "fallback", "label": "Fallback"},
+                {"id": "delivery", "label": "Response Delivery"},
+                {"id": "cache", "label": "Answer Cache"},
+            ],
+            [
+                {"source": "gate", "target": "fallback", "label": "no-evidence fallback"},
+                {"source": "fallback", "target": "delivery", "label": "deliver fallback"},
+                {"source": "delivery", "target": "cache", "label": "write accepted answer"},
+                {"source": "cache", "target": "gate", "label": "return measured outcome", "flow": "feedback"},
+            ],
+            "Separate accepted-artifact cache writes",
+        ),
+        (
+            [
+                {"id": "writer", "label": "Command Writer"},
+                {"id": "reconciler", "label": "Outcome Reconciler"},
+                {"id": "ledger", "label": "Lifecycle Ledger"},
+            ],
+            [
+                {"source": "writer", "target": "reconciler", "label": "timeout"},
+                {"source": "reconciler", "target": "ledger", "label": "write COMMITTED/NOT_FOUND/STILL_UNKNOWN"},
+                {"source": "ledger", "target": "writer", "label": "return measured outcome", "flow": "feedback"},
+            ],
+            "distinct reconciliation branches",
+        ),
+        (
+            [
+                {"id": "policy", "label": "Risk Policy"},
+                {"id": "executor", "label": "Action Executor"},
+                {"id": "outcome", "label": "Action Outcome"},
+            ],
+            [
+                {"source": "policy", "target": "executor", "label": "auto-approve low-risk action"},
+                {"source": "executor", "target": "outcome", "label": "execute action"},
+                {"source": "outcome", "target": "policy", "label": "return measured outcome", "flow": "feedback"},
+            ],
+            "automatic-action authorization envelope",
+        ),
+        (
+            [
+                {"id": "registry", "label": "Model Registry"},
+                {"id": "runtime", "label": "Decision Runtime"},
+                {"id": "outcome", "label": "Canary Outcome"},
+            ],
+            [
+                {"source": "registry", "target": "runtime", "label": "deploy canary"},
+                {"source": "runtime", "target": "outcome", "label": "measure canary"},
+                {"source": "outcome", "target": "registry", "label": "return measured outcome", "flow": "feedback"},
+            ],
+            "canary promotion to full production",
+        ),
+        (
+            [
+                {"id": "approval", "label": "Supervisor Approval", "type": "decision"},
+                {"id": "ledger", "label": "Action Ledger"},
+                {"id": "sender", "label": "Action Sender"},
+                {"id": "target", "label": "External Target"},
+            ],
+            [
+                {"source": "approval", "target": "sender", "label": "forward approved action", "description": "Carries payload, target, policy version, expiry, and idempotency key."},
+                {"source": "approval", "target": "ledger", "label": "reject to audited state"},
+                {"source": "ledger", "target": "sender", "label": "provide reserved lease"},
+                {"source": "sender", "target": "target", "label": "execute external action"},
+                {"source": "target", "target": "approval", "label": "return measured outcome", "flow": "feedback"},
+            ],
+            "into durable reservation state",
+        ),
+    ],
+)
+def test_production_gate_rejects_label_only_control_topology(nodes, edges, expected):
+    review = _deterministic_review(
+        "Design an unrelated production workflow",
+        {"nodes": nodes, "edges": edges},
+        "production",
+    )
+
+    assert review["approved"] is False
+    assert any(expected in item for item in review["missing"])
+
+
+def test_production_gate_accepts_cache_write_owned_by_acceptance_gate():
+    graph = {
+        "nodes": [
+            {"id": "generator", "label": "Answer Generator"},
+            {"id": "validator", "label": "Grounding Validator"},
+            {"id": "fallback", "label": "No-Evidence Fallback"},
+            {"id": "delivery", "label": "Response Delivery"},
+            {"id": "cache", "label": "Answer Cache"},
+        ],
+        "edges": [
+            {"source": "generator", "target": "validator", "label": "submit candidate"},
+            {"source": "validator", "target": "cache", "label": "write accepted answer"},
+            {"source": "validator", "target": "fallback", "label": "reject ungrounded answer"},
+            {"source": "fallback", "target": "delivery", "label": "deliver abstention"},
+            {"source": "cache", "target": "delivery", "label": "serve scoped answer"},
+            {"source": "delivery", "target": "generator", "label": "return measured outcome", "flow": "feedback"},
+        ],
+    }
+
+    review = _deterministic_review("Design a production RAG workflow", graph, "production")
+
+    assert review["approved"] is True
+    assert not any("cache writes" in item for item in review["missing"])
+
+
+def test_production_gate_does_not_treat_approval_audit_store_as_a_decision():
+    graph = {
+        "nodes": [
+            {"id": "entry", "label": "Permit Request", "type": "client"},
+            # Even if the model classifies an audit projection as a control,
+            # its ownership noun must keep it from becoming an approval gate.
+            {"id": "ledger", "label": "Approval Audit Ledger", "type": "control"},
+            {"id": "outcome", "label": "Permit Outcome", "type": "service"},
+        ],
+        "edges": [
+            {"source": "entry", "target": "ledger", "label": "records reviewed permit"},
+            {"source": "ledger", "target": "outcome", "label": "publishes audit projection"},
+            {"source": "outcome", "target": "entry", "label": "returns measured outcome", "flow": "feedback"},
+        ],
+    }
+
+    review = _deterministic_review("Design an audited permit workflow", graph, "production")
+
+    assert not any("rejection/cancellation" in item for item in review["missing"])
+
+
+@pytest.mark.parametrize(
+    ("owner_type", "owner_label", "owner_description"),
+    [
+        ("decision", "Clinician Sign-off", "Authorizes or denies the exact prescription."),
+        ("control", "Campaign Approver", "Owns the human action decision."),
+    ],
+)
+def test_approval_owner_requires_distinct_approval_and_rejection_routes(
+    owner_type,
+    owner_label,
+    owner_description,
+):
+    graph = {
+        "nodes": [
+            {"id": "entry", "label": "Action Proposal", "type": "service"},
+            {
+                "id": "owner",
+                "label": owner_label,
+                "type": owner_type,
+                "description": owner_description,
+            },
+            {"id": "lifecycle", "label": "Action Lifecycle", "type": "datastore"},
+            {"id": "outcome", "label": "Action Outcome", "type": "service"},
+        ],
+        "edges": [
+            {"source": "entry", "target": "owner", "label": "submit exact action"},
+            {
+                "source": "owner",
+                "target": "lifecycle",
+                "label": "approve or reject exact action",
+            },
+            {"source": "lifecycle", "target": "outcome", "label": "record decision"},
+            {
+                "source": "outcome",
+                "target": "entry",
+                "label": "return measured outcome",
+                "flow": "feedback",
+            },
+        ],
+    }
+
+    review = _deterministic_review("Design a controlled external action", graph, "production")
+
+    assert review["approved"] is False
+    assert any("approval decision" in item for item in review["missing"])
+
+
+def test_approval_owner_accepts_separate_approval_and_rejection_routes():
+    graph = {
+        "nodes": [
+            {"id": "entry", "label": "Action Proposal", "type": "service"},
+            {"id": "owner", "label": "Clinical Sign-off", "type": "control"},
+            {"id": "lifecycle", "label": "Action Lifecycle", "type": "datastore"},
+            {"id": "terminal", "label": "Audited Rejection", "type": "service"},
+        ],
+        "edges": [
+            {"source": "entry", "target": "owner", "label": "submit exact action"},
+            {"source": "owner", "target": "lifecycle", "label": "approve exact action"},
+            {"source": "owner", "target": "terminal", "label": "reject exact action"},
+            {
+                "source": "lifecycle",
+                "target": "entry",
+                "label": "return measured outcome",
+                "flow": "feedback",
+            },
+            {"source": "terminal", "target": "entry", "label": "return rejection outcome"},
+        ],
+    }
+
+    review = _deterministic_review("Design a controlled external action", graph, "production")
+
+    assert review["approved"] is True
+
+
+def test_approval_owner_may_persist_both_outcomes_in_complete_durable_envelope():
+    graph = {
+        "nodes": [
+            {"id": "entry", "label": "Action Proposal", "type": "service"},
+            {"id": "owner", "label": "Clinical Sign-off", "type": "control"},
+            {"id": "lifecycle", "label": "Action Lifecycle", "type": "datastore"},
+            {"id": "terminal", "label": "Decision Outcome", "type": "service"},
+        ],
+        "edges": [
+            {"source": "entry", "target": "owner", "label": "submit exact action"},
+            {
+                "source": "owner",
+                "target": "lifecycle",
+                "label": "record approve or reject decision",
+                "technology": "Signed payload and target envelope",
+                "description": (
+                    "Persists policy version, expiry, and idempotency key before any lease."
+                ),
+            },
+            {"source": "lifecycle", "target": "terminal", "label": "publish decision outcome"},
+        ],
+    }
+
+    review = _deterministic_review("Design a controlled clinical action", graph, "production")
+
+    assert review["approved"] is True
+    assert not any("approval decision" in item for item in review["missing"])
+    assert not any("approval edge" in item for item in review["missing"])
+
+
+def test_release_controller_may_own_promotion_and_rollback_for_registry_canary():
+    graph = {
+        "nodes": [
+            {"id": "registry", "label": "Model Registry", "type": "datastore"},
+            {"id": "controller", "label": "Rollout Controller", "type": "control"},
+            {"id": "runtime", "label": "Decision Runtime", "type": "service"},
+            {"id": "outcome", "label": "Canary Outcome", "type": "service"},
+        ],
+        "edges": [
+            {"source": "registry", "target": "controller", "label": "supplies immutable release"},
+            {"source": "controller", "target": "runtime", "label": "deploy canary"},
+            {"source": "controller", "target": "runtime", "label": "promote full production"},
+            {"source": "controller", "target": "registry", "label": "rollback to prior release"},
+            {"source": "runtime", "target": "outcome", "label": "measure canary"},
+            {"source": "outcome", "target": "controller", "label": "returns measured outcome", "flow": "feedback"},
+        ],
+    }
+
+    review = _deterministic_review("Design a controlled model release", graph, "production")
+
+    assert review["approved"] is True
+    assert not any("canary" in item.lower() for item in review["missing"])
+
+
+def test_canary_deploy_and_promotion_prose_do_not_fake_full_promotion_edge():
+    graph = {
+        "nodes": [
+            {"id": "eval", "label": "Offline Evaluation", "type": "control"},
+            {"id": "registry", "label": "Model Registry", "type": "datastore"},
+            {"id": "runtime", "label": "Decision Runtime", "type": "service"},
+            {"id": "outcome", "label": "Canary Outcome", "type": "service"},
+        ],
+        "edges": [
+            {"source": "eval", "target": "registry", "label": "offline eval before promotion"},
+            {"source": "registry", "target": "runtime", "label": "promote canary version"},
+            {"source": "runtime", "target": "outcome", "label": "measure canary"},
+            {"source": "outcome", "target": "registry", "label": "pull promoted version"},
+            {"source": "outcome", "target": "eval", "label": "return measured outcome", "flow": "feedback"},
+        ],
+    }
+
+    review = _deterministic_review("Design a controlled model release", graph, "production")
+
+    assert review["approved"] is False
+    assert any("promotion to full production" in item for item in review["missing"])
+
+
+def test_reservation_store_description_does_not_make_it_an_executor():
+    graph = {
+        "nodes": [
+            {"id": "policy", "label": "Risk Policy", "type": "decision"},
+            {
+                "id": "reservation",
+                "label": "Operation Reservation",
+                "type": "datastore",
+                "description": "Owns durable execution lifecycle state and leases.",
+            },
+            {"id": "executor", "label": "Channel Executor", "type": "gateway"},
+            {"id": "outcome", "label": "Campaign Outcome", "type": "service"},
+        ],
+        "edges": [
+            {
+                "source": "policy",
+                "target": "reservation",
+                "label": "forward auto-authorized payload",
+                "technology": "Signed target envelope",
+                "description": "Binds policy version, expiry, and idempotency key.",
+            },
+            {"source": "reservation", "target": "executor", "label": "lease reserved operation"},
+            {"source": "executor", "target": "outcome", "label": "execute campaign change"},
+            {"source": "outcome", "target": "policy", "label": "return measured outcome", "flow": "feedback"},
+        ],
+    }
+
+    review = _deterministic_review("Design an automatic campaign workflow", graph, "production")
+
+    assert review["approved"] is True
+    assert not any("durable reservation state" in item for item in review["missing"])
+
+
+def test_compensation_cannot_bypass_reservation_into_executor():
+    graph = {
+        "nodes": [
+            {"id": "reservation", "label": "Operation Reservation", "type": "datastore"},
+            {"id": "executor", "label": "Channel Executor", "type": "gateway"},
+            {"id": "target", "label": "Ad Platform", "type": "external"},
+            {"id": "reconciler", "label": "Outcome Reconciler", "type": "service"},
+        ],
+        "edges": [
+            {"source": "reservation", "target": "executor", "label": "lease reserved operation"},
+            {"source": "executor", "target": "target", "label": "execute campaign change"},
+            {"source": "target", "target": "reconciler", "label": "return authoritative status"},
+            {
+                "source": "reconciler",
+                "target": "executor",
+                "label": "trigger revert via same approval path",
+            },
+            {
+                "source": "reconciler",
+                "target": "reservation",
+                "label": "return measured outcome",
+                "flow": "feedback",
+            },
+        ],
+    }
+
+    review = _deterministic_review("Design a compensated campaign workflow", graph, "production")
+
+    assert review["approved"] is False
+    assert any(
+        "reconciler -> executor" in item and "compensating actions" in item
+        for item in review["missing"]
+    )
+
+
+@pytest.mark.parametrize(
+    "bypass_label",
+    [
+        "NOT_FOUND retry with the same idempotency key",
+        "forward approved campaign mutation",
+        "submit compensating campaign mutation",
+    ],
+)
+def test_external_mutation_adapter_cannot_bypass_reservation(bypass_label):
+    graph = {
+        "nodes": [
+            {"id": "reservation", "label": "Action Reservation", "type": "datastore"},
+            {"id": "adapter", "label": "Ad Platform Adapter", "type": "gateway"},
+            {"id": "target", "label": "Ad Platform", "type": "external"},
+            {"id": "reconciler", "label": "Outcome Reconciler", "type": "service"},
+        ],
+        "edges": [
+            {"source": "reservation", "target": "adapter", "label": "lease reserved action"},
+            {
+                "source": "adapter",
+                "target": "target",
+                "label": "publishes campaign mutation",
+            },
+            {"source": "target", "target": "reconciler", "label": "return authoritative status"},
+            {"source": "reconciler", "target": "adapter", "label": bypass_label},
+            {
+                "source": "reconciler",
+                "target": "reservation",
+                "label": "return measured outcome",
+                "flow": "feedback",
+            },
+        ],
+    }
+
+    review = _deterministic_review("Design a production campaign writer", graph, "production")
+
+    assert review["approved"] is False
+    assert any(
+        "reconciler -> adapter" in item and "durable reservation" in item
+        for item in review["missing"]
+    )
+
+
+def test_read_only_external_adapter_is_not_treated_as_effect_executor():
+    graph = {
+        "nodes": [
+            {"id": "reservation", "label": "Query Lifecycle", "type": "datastore"},
+            {"id": "adapter", "label": "Ad Platform Adapter", "type": "gateway"},
+            {"id": "target", "label": "Ad Platform", "type": "external"},
+            {"id": "reconciler", "label": "Query Reconciler", "type": "service"},
+        ],
+        "edges": [
+            {"source": "reservation", "target": "adapter", "label": "lease reserved query"},
+            {"source": "adapter", "target": "target", "label": "query campaign status"},
+            {"source": "target", "target": "reconciler", "label": "return campaign status"},
+            {"source": "reconciler", "target": "adapter", "label": "NOT_FOUND retry read"},
+            {
+                "source": "reconciler",
+                "target": "reservation",
+                "label": "return measured outcome",
+                "flow": "feedback",
+            },
+        ],
+    }
+
+    review = _deterministic_review("Design a read-only campaign status lookup", graph, "production")
+
+    assert review["approved"] is True
+    assert not any("durable reservation" in item for item in review["missing"])
+
+
+def test_critic_reports_all_repairable_control_defects_together():
+    graph = {
+        "nodes": [
+            {"id": "entry", "label": "Proposal", "type": "service"},
+            {"id": "approval", "label": "Clinical Sign-off", "type": "control"},
+            {"id": "ledger", "label": "Lifecycle Ledger", "type": "datastore"},
+            {"id": "adapter", "label": "Fulfilment Adapter", "type": "gateway"},
+            {"id": "target", "label": "External Fulfilment", "type": "external"},
+            {"id": "reconciler", "label": "Outcome Reconciler", "type": "control"},
+            {"id": "registry", "label": "Release Registry", "type": "datastore"},
+        ],
+        "edges": [
+            {"source": "entry", "target": "approval", "label": "submit proposal"},
+            {"source": "approval", "target": "ledger", "label": "approve or reject action"},
+            {"source": "ledger", "target": "adapter", "label": "lease reserved operation"},
+            {"source": "adapter", "target": "target", "label": "apply fulfilment mutation"},
+            {"source": "target", "target": "reconciler", "label": "return status"},
+            {"source": "reconciler", "target": "adapter", "label": "NOT_FOUND retry"},
+            {
+                "source": "reconciler",
+                "target": "ledger",
+                "label": "reconcile status",
+                "description": "Returns COMMITTED, NOT_FOUND, or STILL_UNKNOWN together.",
+            },
+            {
+                "source": "registry",
+                "target": "adapter",
+                "label": "deploy release",
+                "technology": "Canary/promoted deployment",
+            },
+        ],
+    }
+
+    review = _deterministic_review("Design an optimized fulfilment system", graph, "production")
+
+    assert review["approved"] is False
+    assert any("approval decision" in item for item in review["missing"])
+    assert any("durable reservation" in item for item in review["missing"])
+    assert any("distinct reconciliation branches" in item for item in review["missing"])
+    assert any("canary deployment" in item for item in review["missing"])
+
+
+def test_distinct_reconciliation_branch_may_contrast_other_outcomes_and_share_audit():
+    graph = {
+        "nodes": [
+            {"id": "ledger", "label": "Lifecycle Ledger", "type": "datastore"},
+            {"id": "adapter", "label": "Fulfilment Adapter", "type": "gateway"},
+            {"id": "target", "label": "External Fulfilment", "type": "external"},
+            {"id": "reconciler", "label": "Outcome Reconciler", "type": "control"},
+            {"id": "audit", "label": "Audit Log", "type": "datastore"},
+        ],
+        "edges": [
+            {"source": "ledger", "target": "adapter", "label": "lease reserved operation"},
+            {"source": "adapter", "target": "target", "label": "apply fulfilment mutation"},
+            {"source": "target", "target": "reconciler", "label": "return status"},
+            {
+                "source": "reconciler",
+                "target": "ledger",
+                "label": "NOT_FOUND retry reservation",
+                "description": "Retries only NOT_FOUND; STILL_UNKNOWN escalates on its own branch.",
+            },
+            {
+                "source": "reconciler",
+                "target": "audit",
+                "label": "log reconciliation outcomes",
+                "description": "Audits COMMITTED, NOT_FOUND, and STILL_UNKNOWN branch results.",
+            },
+        ],
+    }
+
+    review = _deterministic_review("Design a fulfilment integration", graph, "production")
+
+    assert not any("distinct reconciliation branches" in item for item in review["missing"])
 
 
 def _domain_graph():
@@ -172,19 +847,21 @@ def test_disconnected_architecture_is_rejected_before_publication():
 def test_read_only_design_does_not_invent_an_external_write_boundary():
     graph = {
         "nodes": [
-            {"label": "Research Request", "description": "Captures the research question"},
-            {"label": "Evidence Retriever", "description": "Retrieves cited source passages"},
-            {"label": "Answer Composer", "description": "Builds a grounded answer"},
-            {"label": "Quality Feedback", "description": "Observes answer quality and user outcomes"},
+            {"id": "request", "label": "Research Request", "description": "Captures the research question"},
+            {"id": "retriever", "label": "Evidence Retriever", "description": "Retrieves cited source passages"},
+            {"id": "composer", "label": "Answer Composer", "description": "Builds a grounded answer"},
         ],
         "edges": [
             {
-                "source": "feedback",
+                "source": "request",
+                "target": "retriever",
+                "label": "submits ACL-scoped query",
+            },
+            {
+                "source": "retriever",
                 "target": "composer",
-                "label": "returns quality outcomes",
-                "description": "Closes the measured research quality loop",
-                "type": "loop",
-            }
+                "label": "returns cited passages",
+            },
         ],
     }
 
@@ -196,6 +873,30 @@ def test_read_only_design_does_not_invent_an_external_write_boundary():
 
     assert review["approved"] is True
     assert not any("approval" in item for item in review["missing"])
+    assert not any("feedback" in item for item in review["missing"])
+
+
+def test_explicit_optimisation_request_requires_a_measured_feedback_edge():
+    graph = {
+        "nodes": [
+            {"id": "input", "label": "Observed Outcome"},
+            {"id": "decision", "label": "Allocation Decision"},
+            {"id": "result", "label": "Allocation Result"},
+        ],
+        "edges": [
+            {"source": "input", "target": "decision", "label": "supplies measured evidence"},
+            {"source": "decision", "target": "result", "label": "returns bounded allocation"},
+        ],
+    }
+
+    review = _deterministic_review(
+        "Design a system that continuously optimizes allocations from measured outcomes",
+        graph,
+        "prototype",
+    )
+
+    assert review["approved"] is False
+    assert any("feedback edge" in item for item in review["missing"])
 
 
 def test_model_cannot_override_a_failed_local_quality_gate():
@@ -454,6 +1155,21 @@ async def test_semantic_critic_never_receives_the_rendered_image(monkeypatch):
             "strengths": ["Domain responsibilities are explicit."],
             "blocking_failures": [],
             "advice": [],
+            "topology_proofs": [
+                {
+                    "guarantee": guarantee,
+                    "status": "not_applicable",
+                    "edge_evidence": [],
+                    "reason": "This isolated transport test does not exercise the flow class.",
+                }
+                for guarantee in (
+                    "state_effect_reconciliation",
+                    "authorization_and_compensation",
+                    "retrieval_and_reuse_trust",
+                    "audit_and_provenance",
+                    "learning_and_release",
+                )
+            ],
             "revision_instruction": "",
         })
 
@@ -488,7 +1204,7 @@ async def test_semantic_critic_never_receives_the_rendered_image(monkeypatch):
         "challenger_review": {
             "risks": [{"area": "safety", "risk": "Unapproved writes", "mitigation": "Approval gate"}],
         },
-        "complexity": "production",
+        "complexity": "prototype",
         "send": send,
         "await_diagram_evaluation": await_diagram,
         "user_id": "user-1",
@@ -590,3 +1306,44 @@ async def test_hard_render_failure_skips_the_paid_semantic_critic(monkeypatch):
 
     assert result["graph_review"]["approved"] is False
     assert any("overlapping" in item for item in result["graph_review"]["missing"])
+
+
+@pytest.mark.asyncio
+async def test_semantic_critic_outage_fails_closed(monkeypatch):
+    async def fail_stream_llm(**_kwargs):
+        raise TimeoutError("provider unavailable")
+
+    async def await_diagram(graph):
+        return {
+            "screenshot_base64": "private-render",
+            "report": {
+                "rendered_nodes": len(graph["nodes"]),
+                "rendered_edges": len(graph["edges"]),
+                "overlap_count": 0,
+                "clipped_nodes": 0,
+                "clipped_edges": 0,
+                "minimum_text_px": 8,
+            },
+        }
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr("agent.nodes.graph_critic.stream_llm", fail_stream_llm)
+    result = await graph_critic_node({
+        "graph_data": _domain_graph(),
+        "graph_changed": True,
+        "user_message": "growth marketing multi-agent system",
+        "complexity": "prototype",
+        "send": send,
+        "await_diagram_evaluation": await_diagram,
+        "user_id": "user-1",
+        "session_id": "thread-1",
+    })
+
+    assert result["graph_review"]["approved"] is False
+    assert result["graph_review"]["terminal"] is True
+    assert any(
+        "semantic architecture review did not complete" in item
+        for item in result["graph_review"]["missing"]
+    )

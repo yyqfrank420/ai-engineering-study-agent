@@ -52,11 +52,15 @@ const GROUP_PALETTE = [
 // Result: a Map<nodeId, columnIndex> where col 0 = leftmost entry node.
 function assignColumns(
   nodeIds: string[],
-  edges: Array<{ source: string; target: string }>,
+  edges: GraphEdge[],
 ): Map<string, number> {
+  // Declared feedback is a return path, not part of the primary runtime DAG.
+  // Remove it before generic cycle breaking so layout is stable when a model
+  // returns the same graph in a different array order.
+  const layoutEdges = edges.filter(edge => edge.flow !== 'feedback' && edge.type !== 'loop');
   const adj = new Map<string, string[]>();
   for (const id of nodeIds) adj.set(id, []);
-  for (const e of edges) adj.get(e.source)?.push(e.target);
+  for (const e of layoutEdges) adj.get(e.source)?.push(e.target);
 
   // DFS: mark back edges (those that close a cycle)
   const color = new Map<string, number>(nodeIds.map(id => [id, 0]));
@@ -90,7 +94,7 @@ function assignColumns(
   const dagAdj   = new Map<string, string[]>();
   const dagInDeg = new Map<string, number>();
   for (const id of nodeIds) { dagAdj.set(id, []); dagInDeg.set(id, 0); }
-  for (const e of edges) {
+  for (const e of layoutEdges) {
     if (!backEdgeSet.has(`${e.source}→${e.target}`)) {
       dagAdj.get(e.source)!.push(e.target);
       dagInDeg.set(e.target, (dagInDeg.get(e.target) ?? 0) + 1);
@@ -145,6 +149,8 @@ type RenderLink = {
   edgeType: 'normal' | 'loop';
   flow: NonNullable<GraphEdge['flow']>;
   overviewRequired: boolean;
+  parallelIndex: number;
+  parallelCount: number;
 };
 
 interface GraphRenderState {
@@ -551,6 +557,12 @@ export function D3Graph({
     const nodeIds = new Set(nodes.map(node => node.id));
     const renderableEdges = filterRenderableEdges(renderGraphData.edges, nodeIds);
     const overviewEdgeIndices = selectOverviewEdgeIndices(renderableEdges, sequence);
+    const parallelCounts = new Map<string, number>();
+    for (const edge of renderableEdges) {
+      const key = `${edge.source}\u0000${edge.target}`;
+      parallelCounts.set(key, (parallelCounts.get(key) ?? 0) + 1);
+    }
+    const parallelOffsets = new Map<string, number>();
     const links = renderableEdges.map((e, edgeIndex) => {
       let stepNum: number | null = null;
       for (const step of sequence) {
@@ -558,6 +570,9 @@ export function D3Graph({
       }
       const src = nodeById[e.source]!;
       const tgt = nodeById[e.target]!;
+      const parallelKey = `${e.source}\u0000${e.target}`;
+      const parallelIndex = parallelOffsets.get(parallelKey) ?? 0;
+      parallelOffsets.set(parallelKey, parallelIndex + 1);
       return {
         source:      src,
         target:      tgt,
@@ -569,6 +584,8 @@ export function D3Graph({
         edgeType:    (e.type ?? 'normal') as 'normal' | 'loop',
         flow:        e.flow ?? (e.type === 'loop' ? 'feedback' : 'runtime'),
         overviewRequired: overviewEdgeIndices.has(edgeIndex),
+        parallelIndex,
+        parallelCount: parallelCounts.get(parallelKey) ?? 1,
       };
     });
 
@@ -613,13 +630,22 @@ export function D3Graph({
     // SVG path string for an edge
     const pathD = (d: RenderLink): string => {
       const x1 = hx1(d), y1 = hy1(d), x2 = hx2(d), y2 = hy2(d);
+      const laneOffset = (d.parallelIndex - (d.parallelCount - 1) / 2) * 14;
       if (isForward(d)) {
-        return `M${x1},${y1} L${x2},${y2}`;
+        if (d.parallelCount === 1) return `M${x1},${y1} L${x2},${y2}`;
+        if (orientation === 'vertical') {
+          const midY = (y1 + y2) / 2;
+          return `M${x1},${y1} C${x1 + laneOffset},${midY} ${x2 + laneOffset},${midY} ${x2},${y2}`;
+        }
+        const midX = (x1 + x2) / 2;
+        return `M${x1},${y1} C${midX},${y1 + laneOffset} ${midX},${y2 + laneOffset} ${x2},${y2}`;
       }
       if (orientation === 'vertical') {
-        return `M${x1},${y1} C${RETURN_ARC_OFFSET},${y1} ${RETURN_ARC_OFFSET},${y2} ${x2},${y2}`;
+        const returnX = RETURN_ARC_OFFSET + laneOffset;
+        return `M${x1},${y1} C${returnX},${y1} ${returnX},${y2} ${x2},${y2}`;
       }
-      return `M${x1},${y1} C${x1},${RETURN_ARC_OFFSET} ${x2},${RETURN_ARC_OFFSET} ${x2},${y2}`;
+      const returnY = RETURN_ARC_OFFSET + laneOffset;
+      return `M${x1},${y1} C${x1},${returnY} ${x2},${returnY} ${x2},${y2}`;
     };
 
     // Midpoint of edge path (used to place labels and step badges)
@@ -636,8 +662,13 @@ export function D3Graph({
     };
 
     // ── Entry / exit detection ────────────────────────────────────────────────
-    const hasIncoming = new Set(renderGraphData.edges.map(e => e.target));
-    const hasOutgoing = new Set(renderGraphData.edges.map(e => e.source));
+    // Feedback and deployment routes must not erase the product entry/outcome
+    // markers on an otherwise closed operational loop.
+    const runtimeEdges = renderGraphData.edges.filter(
+      edge => (edge.flow ?? (edge.type === 'loop' ? 'feedback' : 'runtime')) === 'runtime',
+    );
+    const hasIncoming = new Set(runtimeEdges.map(e => e.target));
+    const hasOutgoing = new Set(runtimeEdges.map(e => e.source));
     const sourceNodeIds = new Set(renderGraphData.nodes.filter(n => !hasIncoming.has(n.id)).map(n => n.id));
     const sinkNodeIds   = new Set(renderGraphData.nodes.filter(n => !hasOutgoing.has(n.id)).map(n => n.id));
 
@@ -955,7 +986,7 @@ export function D3Graph({
     const nodeTitles = nodeSel.append('text')
       .attr('class', 'node-title')
       .attr('text-anchor', 'middle').attr('dominant-baseline', 'middle')
-      .attr('font-size', '0.9rem').attr('font-weight', 640)
+      .attr('font-size', '0.96rem').attr('font-weight', 640)
       .attr('fill', '#e6edf3')
       .style('pointer-events', 'none');
 

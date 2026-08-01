@@ -36,7 +36,8 @@ class Settings(BaseSettings):
     # max_tokens must leave room for both hidden reasoning and the final answer.
     thinking_budget_tokens: int = 6000
     production_thinking_budget_tokens: int = 9000
-    graph_critic_thinking_budget_tokens: int = 3000
+    graph_critic_thinking_budget_tokens: int = 2000
+    graph_revision_critic_thinking_budget_tokens: int = 1200
 
     # ── OpenAI fallback ───────────────────────────────────────────────────────
     # Used when Anthropic fails after llm_max_retries attempts.
@@ -55,7 +56,7 @@ class Settings(BaseSettings):
     # Cap per LLM call — prevents runaway generation eating tokens
     llm_max_tokens: int = 12000
     # Hard timeout on the whole agent run (seconds); yields a timeout error event
-    agent_timeout_s: int = 180
+    agent_timeout_s: int = 210
     # A browser renders candidate graphs off-screen and returns a bounded image
     # plus layout metrics before an applied diagram may be published.
     diagram_evaluation_timeout_s: float = 15.0
@@ -201,7 +202,7 @@ class Settings(BaseSettings):
 
     # ── RAG ───────────────────────────────────────────────────────────────────
     rag_top_k: int = 5          # child chunks retrieved from FAISS
-    max_graph_nodes: int = 10   # readability cap; deeper detail belongs in node drill-downs
+    max_graph_nodes: int = 13   # bounded production map; deeper detail belongs in node drill-downs
     search_tool_decision_timeout_s: float = 3.0
     # Backpressure for the temporary HTTP/SSE compatibility transport.
     max_sse_queue_events: int = 256
@@ -300,6 +301,9 @@ class Settings(BaseSettings):
             "THINKING_BUDGET_TOKENS": self.thinking_budget_tokens,
             "PRODUCTION_THINKING_BUDGET_TOKENS": self.production_thinking_budget_tokens,
             "GRAPH_CRITIC_THINKING_BUDGET_TOKENS": self.graph_critic_thinking_budget_tokens,
+            "GRAPH_REVISION_CRITIC_THINKING_BUDGET_TOKENS": (
+                self.graph_revision_critic_thinking_budget_tokens
+            ),
             "DIAGRAM_EVALUATION_TIMEOUT_S": self.diagram_evaluation_timeout_s,
             "MAX_DIAGRAM_SCREENSHOT_BYTES": self.max_diagram_screenshot_bytes,
             "MAX_REQUEST_BODY_BYTES": self.max_request_body_bytes,

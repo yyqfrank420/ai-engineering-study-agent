@@ -265,6 +265,8 @@ def _dispatch_eval(kind: str, args: argparse.Namespace) -> None:
         argv.extend(["--input", args.input])
     if getattr(args, "require_approved_corpus", False):
         argv.append("--require-approved-corpus")
+    if getattr(args, "manual_review_policy", "blocking") != "blocking":
+        argv.extend(["--manual-review-policy", args.manual_review_policy])
     if getattr(args, "capture_replay", False):
         argv.append("--capture-replay")
     for case_id in getattr(args, "case", []):
@@ -336,6 +338,11 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "live":
             evaluation.add_argument("--input")
             evaluation.add_argument("--require-approved-corpus", action="store_true")
+            evaluation.add_argument(
+                "--manual-review-policy",
+                choices=("blocking", "report-only"),
+                default="blocking",
+            )
             evaluation.add_argument("--capture-replay", action="store_true")
     override = subparsers.add_parser("override")
     override.add_argument("--run-id", required=True)

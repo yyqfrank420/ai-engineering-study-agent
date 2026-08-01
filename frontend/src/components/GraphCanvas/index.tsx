@@ -66,7 +66,7 @@ export function GraphCanvas({
   const [viewStateCache, setViewStateCache] = useState<Record<string, GraphViewState>>({});
   const [pendingPersistViewState, setPendingPersistViewState] = useState<GraphViewState | null>(null);
   const canvasHostRef = useRef<HTMLDivElement>(null);
-  const [evaluationViewport, setEvaluationViewport] = useState({ width: 760, height: 500 });
+  const [evaluationViewport, setEvaluationViewport] = useState<{ width: number; height: number } | null>(null);
   const graphContentKey = useMemo(() => graphStructureKey(graphData), [graphData]);
   const sequenceDismissed = sequenceDismissal?.key === graphContentKey && sequenceDismissal.dismissed;
   const graphViewKey = useMemo(() => {
@@ -86,12 +86,28 @@ export function GraphCanvas({
 
   useEffect(() => {
     if (!graphCandidate || !canvasHostRef.current) return;
-    const rect = canvasHostRef.current.getBoundingClientRect();
-    if (rect.width < 240 || rect.height < 240) return;
-    setEvaluationViewport({
-      width: Math.round(rect.width),
-      height: Math.round(rect.height),
+    const host = canvasHostRef.current;
+    const recordViewport = (rect: Pick<DOMRectReadOnly, 'width' | 'height'>) => {
+      const width = Math.round(rect.width);
+      const height = Math.round(rect.height);
+      // SplitPane reveals this host from zero width. Do not evaluate against a
+      // guessed fallback while that transition is still establishing geometry.
+      if (width <= 0 || height <= 0) return;
+      setEvaluationViewport(previous => (
+        previous?.width === width && previous.height === height
+          ? previous
+          : { width, height }
+      ));
+    };
+
+    recordViewport(host.getBoundingClientRect());
+    if (typeof ResizeObserver === 'undefined') return;
+
+    const observer = new ResizeObserver((entries) => {
+      recordViewport(entries[0]?.contentRect ?? host.getBoundingClientRect());
     });
+    observer.observe(host);
+    return () => observer.disconnect();
   }, [graphCandidate]);
 
   useEffect(() => {
@@ -160,7 +176,9 @@ export function GraphCanvas({
           </>
         ) : 'Graph will appear here'}
       </div>
-      <HiddenGraphEvaluator candidate={graphCandidate} viewport={evaluationViewport} />
+      {evaluationViewport && (
+        <HiddenGraphEvaluator candidate={graphCandidate} viewport={evaluationViewport} />
+      )}
       </>
     );
   }
@@ -323,7 +341,9 @@ export function GraphCanvas({
         />
       )}
     </div>
-    <HiddenGraphEvaluator candidate={graphCandidate} viewport={evaluationViewport} />
+    {evaluationViewport && (
+      <HiddenGraphEvaluator candidate={graphCandidate} viewport={evaluationViewport} />
+    )}
     </>
   );
 }

@@ -145,8 +145,12 @@ time into `approval.calibration` before calculating the approval hash.
 Until those steps are complete, `--require-approved-corpus` fails closed. Once
 approved, deterministic failures block immediately. A clear semantic failure gets
 one independent second judgment; two clear failures block. A borderline grade or
-judge disagreement requires manual review. No critical dimension may fail, and at
-least 85% of non-critical dimensions must pass.
+judge disagreement requires manual review. PR and release gates keep that review
+blocking. Scheduled nightly/full monitoring uses the explicit `report-only` policy:
+the report, JUnit skip, HTML evidence, and GitHub warning remain visible, but review
+is not mislabeled as broken CI. Confirmed semantic failures and infrastructure
+failures still exit non-zero under either policy. No critical dimension may fail,
+and at least 85% of non-critical dimensions must pass.
 
 An override is an audited `workflow_dispatch` requiring original run ID, full
 commit SHA, authenticated reviewer, and reason. Dispatch it from the tested

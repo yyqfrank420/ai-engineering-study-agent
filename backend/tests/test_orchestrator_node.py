@@ -44,7 +44,7 @@ def test_synthesis_prompts_enforce_evidence_bounded_attribution():
         _SYNTHESIS_SYSTEM,
     )
 
-    assert _SYNTHESIS_PROMPT_VERSION == "architecture_blocks_v7"
+    assert _SYNTHESIS_PROMPT_VERSION == "architecture_blocks_v8"
     assert _QUICK_SYNTHESIS_PROMPT_VERSION == "quick_synthesis_v2"
     assert "complete citation allowlist" in _SYNTHESIS_SYSTEM
     assert "Never infer a chapter, page, author attribution, or book claim" in _SYNTHESIS_SYSTEM
@@ -58,6 +58,11 @@ def test_synthesis_prompts_enforce_evidence_bounded_attribution():
     assert "directly supported by the supplied evidence" in _SYNTHESIS_SYSTEM
     assert "complete web evidence allowlist" in _SYNTHESIS_SYSTEM
     assert "does not support claims absent from its supplied snippet" in _SYNTHESIS_SYSTEM
+    assert "does not establish that one adaptation" in _SYNTHESIS_SYSTEM
+    assert "technique is cheaper, faster, or better than another" in _SYNTHESIS_SYSTEM
+    assert "Cache population, logging, feedback capture, index publication" in _SYNTHESIS_SYSTEM
+    assert "externally visible business mutations from internal operational state changes" in _SYNTHESIS_SYSTEM
+    assert '"no downstream business writes"' in _SYNTHESIS_SYSTEM
     assert "This fast path receives no retrieved book evidence" in _QUICK_SYNTHESIS_SYSTEM
     assert "do not produce chapter/page citations" in _QUICK_SYNTHESIS_SYSTEM
 
@@ -256,7 +261,24 @@ def test_format_graph_context_summarises_nodes_edges_and_sequence():
             },
         ],
         "edges": [
-            {"source": "Retriever", "target": "LLM", "label": "passes context"},
+            {
+                "source": "Retriever",
+                "target": "LLM",
+                "label": "passes context",
+                "technology": "ranked chunks",
+                "description": "Supplies evidence without mutating business state",
+                "flow": "runtime",
+                "sync": "sync",
+            },
+            {
+                "source": "Approval Gate",
+                "target": "Payment Executor",
+                "label": "execute confirmed refund",
+                "technology": "idempotent payment API",
+                "description": "Performs the externally visible mutation after named approval",
+                "flow": "control",
+                "sync": "async",
+            },
         ],
         "sequence": [
             {"step": 1, "nodes": ["Retriever"], "description": "Search the book"},
@@ -267,8 +289,11 @@ def test_format_graph_context_summarises_nodes_edges_and_sequence():
     summary = _format_graph_context(graph)
 
     assert "Title: RAG pipeline" in summary
-    assert "- Retriever: FAISS | Finds relevant passages" in summary
+    assert "- retriever (Retriever): FAISS | Finds relevant passages" in summary
     assert "- Retriever -> LLM: passes context" in summary
+    assert "runtime | sync | ranked chunks | Supplies evidence without mutating business state" in summary
+    assert "control | async | idempotent payment API" in summary
+    assert "externally visible mutation after named approval" in summary
     assert "- step 1: Retriever — Search the book" in summary
 
 
@@ -289,10 +314,37 @@ def test_graph_context_formatting_handles_empty_nodes_groups_and_lanes():
     )
 
     assert "Title: Untitled graph" in summary
-    assert "- Planner: bottom lane | control tier" in summary
+    assert "- ? (Planner): bottom lane | control tier" in summary
     assert "- Planner -> Tool: connects to" in summary
     assert "- Runtime: Planner, Tool" in summary
     assert "- step 1" in summary
+
+
+def test_graph_context_includes_every_bounded_edge_and_node_id():
+    from agent.nodes.orchestrator_node import _format_graph_context
+
+    graph = {
+        "title": "Maximum bounded graph",
+        "nodes": [
+            {"id": f"node_{index}", "label": f"Responsibility {index}"}
+            for index in range(13)
+        ],
+        "edges": [
+            {
+                "source": f"node_{index % 13}",
+                "target": f"node_{(index + 1) % 13}",
+                "label": f"moves artifact {index}",
+            }
+            for index in range(26)
+        ],
+    }
+
+    summary = _format_graph_context(graph)
+
+    assert "node_0 (Responsibility 0)" in summary
+    assert "node_12 (Responsibility 12)" in summary
+    assert "moves artifact 24" in summary
+    assert "moves artifact 25" in summary
 
 
 @pytest.mark.asyncio

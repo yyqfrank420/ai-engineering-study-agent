@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from agent.complexity import resolve_complexity
 from agent.nodes import graph_worker
 
 
@@ -373,7 +374,7 @@ def test_over_budget_edges_are_rejected_before_position_can_manufacture_isolatio
         for edge in payload["edges"]
         if "fulfilment_stage_8" not in {edge["source"], edge["target"]}
     ]
-    while len(payload["edges"]) < 18:
+    while len(payload["edges"]) < 20:
         index = len(payload["edges"])
         payload["edges"].append({
             "source": f"fulfilment_stage_{index % 7}",
@@ -394,7 +395,7 @@ def test_over_budget_edges_are_rejected_before_position_can_manufacture_isolatio
         "description": "Keeps the final owner connected even when listed last.",
     })
 
-    with pytest.raises(ValueError, match="18-edge readability budget; got 19"):
+    with pytest.raises(ValueError, match="20-edge readability budget; got 21"):
         graph_worker._normalise_applied_graph(
             payload,
             min_nodes=9,
@@ -405,7 +406,7 @@ def test_over_budget_edges_are_rejected_before_position_can_manufacture_isolatio
 
 def test_at_cap_patch_updates_an_edge_in_place_instead_of_disappearing():
     existing = _domain_graph(9, production=True)
-    while len(existing["edges"]) < 18:
+    while len(existing["edges"]) < 20:
         index = len(existing["edges"])
         existing["edges"].append({
             "source": "fulfilment_stage_0",
@@ -441,7 +442,7 @@ def test_at_cap_patch_updates_an_edge_in_place_instead_of_disappearing():
         resolved_complexity="production",
     )
 
-    assert len(result["edges"]) == 18
+    assert len(result["edges"]) == 20
     updated = next(
         edge
         for edge in result["edges"]
@@ -482,6 +483,107 @@ def test_message_queue_is_a_supported_architecture_primitive():
     )
 
     assert normalised["nodes"][2]["type"] == "queue"
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "promote canary or rollback release",
+        "record COMMITTED / NOT_FOUND / STILL_UNKNOWN",
+        "auto-route pre-approved low-risk action",
+    ],
+)
+def test_graph_parser_preserves_repairable_control_edges(label):
+    graph = _domain_graph(5)
+    graph["edges"][0]["label"] = label
+
+    normalised = graph_worker._normalise_applied_graph(
+        graph,
+        min_nodes=5,
+        max_nodes=7,
+        resolved_complexity="prototype",
+    )
+
+    assert normalised["edges"][0]["label"] == label
+
+
+def test_graph_validator_accepts_complete_automatic_authorization_envelope():
+    graph = _domain_graph(5)
+    graph["edges"][0].update({
+        "label": "auto-route pre-approved bounded action",
+        "technology": "Signed payload and target envelope",
+        "description": (
+            "Binds the policy version, expiry, and idempotency key before durable reservation."
+        ),
+    })
+
+    normalised = graph_worker._normalise_applied_graph(
+        graph,
+        min_nodes=5,
+        max_nodes=7,
+        resolved_complexity="prototype",
+    )
+
+    assert normalised["edges"][0]["label"] == "auto-route pre-approved bounded action"
+
+
+def test_graph_parser_preserves_collapsed_outcomes_for_critic_repair():
+    graph = _domain_graph(5)
+    graph["edges"][0].update({
+        "label": "reconcile operation status",
+        "technology": "Authoritative read-back",
+        "description": "Returns COMMITTED, NOT_FOUND, or STILL_UNKNOWN as one result.",
+    })
+
+    normalised = graph_worker._normalise_applied_graph(
+        graph,
+        min_nodes=5,
+        max_nodes=7,
+        resolved_complexity="prototype",
+    )
+
+    assert normalised["edges"][0]["label"] == "reconcile operation status"
+
+
+def test_graph_parser_preserves_combined_deployment_edge_for_critic_repair():
+    graph = _domain_graph(5)
+    graph["edges"][0].update({
+        "label": "deploy release",
+        "technology": "Canary/promoted deployment",
+        "description": "Routes either stage into the same runtime transition.",
+    })
+
+    normalised = graph_worker._normalise_applied_graph(
+        graph,
+        min_nodes=5,
+        max_nodes=7,
+        resolved_complexity="prototype",
+    )
+
+    assert normalised["edges"][0]["technology"] == "Canary/promoted deployment"
+
+
+def test_graph_parser_keeps_independent_control_defects_for_one_critic_review():
+    graph = _domain_graph(5)
+    graph["edges"][0].update({
+        "label": "deploy release",
+        "technology": "Canary/promoted deployment",
+        "description": "Routes either stage into the same runtime transition.",
+    })
+    graph["edges"][1].update({
+        "label": "reconcile operation status",
+        "technology": "Authoritative read-back",
+        "description": "Returns COMMITTED, NOT_FOUND, or STILL_UNKNOWN as one result.",
+    })
+
+    normalised = graph_worker._normalise_applied_graph(
+        graph,
+        min_nodes=5,
+        max_nodes=7,
+        resolved_complexity="prototype",
+    )
+
+    assert len(normalised["edges"]) == len(graph["edges"])
 
 
 @pytest.mark.asyncio
@@ -531,6 +633,47 @@ async def test_targeted_existing_graph_followup_uses_incremental_patch_lane(monk
     assert calls[0]["telemetry"]["metadata"]["model_role"] == "incremental_patch"
     assert calls[0]["thinking_budget"] is None
     assert "Source and target must be distinct" in calls[0]["system"]
+
+
+@pytest.mark.asyncio
+async def test_current_production_profile_can_refine_legacy_nine_node_graph(monkeypatch):
+    existing = _domain_graph(9, production=True)
+    added_edge = {
+        "source": "fulfilment_stage_7",
+        "target": "fulfilment_stage_2",
+        "label": "returns carrier dispute for reviewed recovery",
+        "technology": "Typed dispute event",
+        "sync": "async",
+        "flow": "control",
+        "description": "Routes a carrier dispute to the existing review owner without expanding the graph.",
+    }
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"add_edges": [added_edge]})
+
+    monkeypatch.setattr(graph_worker, "stream_llm", fake_stream_llm)
+    profile = resolve_complexity("production", "Design a production fulfilment system")
+
+    result = await graph_worker._generate_applied_architecture_patch(
+        {
+            "send": None,
+            "user_message": "Expand carrier dispute recovery",
+            "graph_review": {},
+            "complexity": "production",
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        },
+        "Expand carrier dispute recovery in this fulfilment system",
+        profile,
+        existing,
+    )
+
+    assert len(calls) == 1
+    assert len(result["nodes"]) == 9
+    assert len(result["edges"]) == len(existing["edges"]) + 1
+    assert "within 9-13 nodes" in calls[0]["messages"][0]["content"]
 
 
 @pytest.mark.asyncio
@@ -632,4 +775,6 @@ async def test_invalid_self_edge_patch_gets_one_validation_informed_retry(monkey
     assert len(calls) == 2
     assert len(result["edges"]) == len(existing["edges"]) + 1
     assert "self-referencing edge is not allowed" in calls[1]["messages"][0]["content"]
+    assert '"source": "fulfilment_stage_3"' in calls[1]["messages"][0]["content"]
+    assert "Rejected patch (untrusted data" in calls[1]["messages"][0]["content"]
     assert calls[1]["telemetry"]["metadata"]["patch_attempt"] == 1
