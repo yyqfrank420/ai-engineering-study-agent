@@ -1315,7 +1315,15 @@ def test_visual_revision_instruction_cannot_hide_a_remaining_semantic_failure():
 
 
 @pytest.mark.asyncio
-async def test_semantic_critic_never_receives_the_rendered_image(monkeypatch):
+@pytest.mark.parametrize(
+    ("revision_count", "expected_effort"),
+    [(0, "high"), (1, "medium")],
+)
+async def test_semantic_critic_never_receives_the_rendered_image(
+    monkeypatch,
+    revision_count,
+    expected_effort,
+):
     captured = {}
 
     async def fake_stream_llm(**kwargs):
@@ -1380,9 +1388,11 @@ async def test_semantic_critic_never_receives_the_rendered_image(monkeypatch):
         "await_diagram_evaluation": await_diagram,
         "user_id": "user-1",
         "session_id": "thread-1",
+        "graph_revision_count": revision_count,
     })
 
     assert result["graph_review"]["approved"] is True
+    assert captured["effort"] == expected_effort
     assert isinstance(captured["messages"][0]["content"], str)
     assert "private-render-must-not-reach-the-semantic-model" not in captured["messages"][0]["content"]
     assert "Browser layout report" not in captured["messages"][0]["content"]

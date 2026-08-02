@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     # ── LLM ───────────────────────────────────────────────────────────────────
     anthropic_api_key: str = ""
 
-    # Opus 5 at high effort is the single runtime model across application roles.
+    # Opus 5 is the single runtime model; each role selects its measured effort.
     orchestrator_model: str = "claude-opus-5"
     worker_model: str = "claude-opus-5"
     # Retained as an independently configurable repair role.

@@ -464,23 +464,23 @@ async def _generate_applied_architecture(state: AgentState, query: str, profile)
                 "domain responsibilities, then return one complete replacement JSON object.\n\n"
                 f"Validation error: {repair_context}"
             )
-        # Preserve maximum reasoning for the first complete design. If the
-        # deterministic validator rejects its structure, the second call has a
-        # narrow, validation-informed correction to make and can use medium
-        # effort without weakening the independent semantic critic.
+        # The independent architect and challenger already own the open-ended
+        # reasoning. Keep this constrained JSON integration at medium effort:
+        # high effort routinely exhausts the output cap before satisfying the
+        # deterministic graph contract, forcing a second provider call.
         design_model = settings.orchestrator_model
         raw = await stream_llm(
             model=design_model,
             system=_APPLIED_GRAPH_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
-            # The architect and challenger already own domain reasoning. This
-            # role integrates their bounded outputs into a densely constrained
-            # JSON contract at the shared high-effort quality level.
+            # This role integrates bounded inputs into a densely constrained
+            # JSON contract; the independent semantic critic remains the
+            # quality gate.
             thinking_budget=None,
             temperature=settings.graph_temperature,
             top_p=settings.graph_top_p,
             top_k=settings.graph_top_k,
-            effort="high" if structural_attempt == 0 else "medium",
+            effort="medium",
             telemetry=build_telemetry(
                 "graph_worker_applied_design",
                 user_id=state.get("user_id"),

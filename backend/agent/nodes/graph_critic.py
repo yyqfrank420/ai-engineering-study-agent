@@ -283,6 +283,7 @@ async def graph_critic_node(state: AgentState) -> AgentState:
         return {**state, "graph_review": {"approved": True, "score": 1.0}}
 
     profile = resolve_complexity(state.get("complexity", "auto"), query)
+    revision_count = int(state.get("graph_revision_count", 0))
     await state["send"]({
         "type": "worker_status",
         "worker": "critic",
@@ -353,19 +354,22 @@ async def graph_critic_node(state: AgentState) -> AgentState:
             messages=[{"role": "user", "content": review_text}],
             thinking_budget=_critic_thinking_budget(
                 profile.thinking_budget,
-                int(state.get("graph_revision_count", 0)),
+                revision_count,
             ),
             temperature=settings.graph_temperature,
             top_p=settings.graph_top_p,
             top_k=settings.graph_top_k,
-            effort="high",
+            # Preserve the strongest independent review on the first draft.
+            # Later passes verify a bounded patch against the same rubric, so
+            # medium effort avoids repeating the full high-effort latency.
+            effort="high" if revision_count == 0 else "medium",
             telemetry=build_telemetry(
                 "graph_critic",
                 user_id=state.get("user_id"),
                 thread_id=state.get("session_id"),
                 metadata={
                     "complexity_resolved": profile.resolved,
-                    "revision_count": state.get("graph_revision_count", 0),
+                    "revision_count": revision_count,
                     "request_id": state.get("request_id"),
                     "client_request_id": state.get("client_request_id"),
                     "prompt_version": _GRAPH_CRITIC_PROMPT_VERSION,

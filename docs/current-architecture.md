@@ -40,7 +40,7 @@ This is the current runtime contract for the production-quality demo.
    version-checked screenshot and layout report over idempotent WebSocket chunks.
 7. The critic judges architecture correctness plus novice clarity, logical flow, succinctness,
    readability, and MECE-ish coverage from the actual render. A semantic rejection receives at most
-   one typed Opus 5 high-effort patch. The patch changes only named nodes, edges, or bounded graph collections;
+   one typed Opus 5 medium-effort patch. The patch changes only named nodes, edges, or bounded graph collections;
    unchanged topology is preserved and the complete result passes deterministic validation again.
    Node and edge budgets are explicit in both generation lanes; over-budget topology and semantic
    no-op patches fail visibly instead of being silently truncated by output order.
@@ -70,10 +70,11 @@ capture use shared transactional storage. Rate-limit identifiers are HMAC-derive
 persistence, so Cloud Run scale-out neither resets the limits nor stores raw emails/IPs in the
 limiter table.
 
-The normal applied-design path uses five Opus 5 high-effort model calls: Architect followed by
-Challenger, integration, architecture/render review, and one explanation stream. A failed semantic
-quality gate adds at most two calls: one compact Opus 5 patch and one Opus 5 re-review.
-A structurally invalid first draft may use the independently configured repair role once;
+The normal applied-design path uses Opus 5 with role-specific effort: high for Architect and
+Challenger, medium for constrained graph integration, high for the first independent
+architecture/render review, and high for the explanation stream. A failed semantic quality gate
+adds at most two medium-effort calls: one compact patch and one bounded re-review. A structurally
+invalid first draft may use the independently configured medium-effort repair role once;
 renderer-only failures add no model calls. Retrieval and the standing checklist do not add model calls.
 
 During steps 4-7 the client may send `steer`. The server cancels the active workflow, emits
