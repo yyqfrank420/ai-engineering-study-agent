@@ -95,6 +95,21 @@ resource "google_service_account_iam_member" "ci_act_as_staging" {
   member             = "serviceAccount:${google_service_account.github_actions_staging.email}"
 }
 
+# Reviewed evaluation evidence is content-addressed. Staging CI may create and
+# read bundles but cannot delete them; promotion uses generation preconditions
+# and digest checks to prevent replacement through the workflow.
+resource "google_storage_bucket_iam_member" "staging_ci_eval_evidence_creator" {
+  bucket = google_storage_bucket.eval_evidence.name
+  role   = "roles/storage.objectCreator"
+  member = "serviceAccount:${google_service_account.github_actions_staging.email}"
+}
+
+resource "google_storage_bucket_iam_member" "staging_ci_eval_evidence_viewer" {
+  bucket = google_storage_bucket.eval_evidence.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.github_actions_staging.email}"
+}
+
 # Production reads approved images but cannot push or retag them.
 resource "google_project_iam_member" "production_ci_artifact_registry_reader" {
   project = var.project_id

@@ -19,11 +19,11 @@ test is omitted or a stale path remains. Frontend and ingestion commands use
 glob-covering test runners, so newly tracked tests are automatically included.
 
 The stable branch checks are `CI required` and `Live eval required`. Both workflows
-listen to `pull_request`, trusted pushes, and `merge_group`. While the seed corpus
-is pending human review, the live check succeeds with an explicit bootstrap result
-before installing browsers, authenticating to GCP, building images, mutating
-staging, or calling a model. Production rollout is likewise disabled until corpus
-approval. Run
+listen to `pull_request`, trusted pushes, and `merge_group`. The 20-case corpus is
+approved and content-addressed, so trusted AI-impacting changes run the protected
+live gate and production promotion requires that exact approved tree. A future
+pending corpus still takes the fail-safe bootstrap path before installing browsers,
+authenticating to GCP, building images, mutating staging, or calling a model. Run
 `scripts/configure_main_branch_protection.sh owner/repo` to inspect the current and
 proposed branch protection without writing. Add `--apply` only after reviewing the
 payload.
@@ -74,16 +74,28 @@ The PR suite contains eight journeys: grounded RAG, memory, graph-off, research,
 node follow-up, graph expansion, an applied domain, and prompt injection. Empty and
 oversized input stay in deterministic API tests and spend no model calls.
 
-Playwright uses the real frontend and production WebSocket protocol. It records
-received events, final answers, graph JSON, rendered-node counts, screenshots,
-persistence, cleanup, latency, fallback, dashboard readiness, and per-thread model
-telemetry. For the allowlisted internal identity on the isolated `staging` schema
-only, the retrieval workers also emit bounded book passages, external search
-snippets, and provenance so citations can be verified; production users never
-receive these evidence events. Its
-trace is rewritten before upload so bearer credentials and the internal password
-are redacted. JSON, JUnit, HTML, screenshots, and traces are retained for 30 days
-and are not committed as answer truth.
+Playwright uses the real frontend and production WebSocket protocol. The eight PR
+cases run with total concurrency two and a separate one-case graph lane, so two
+graph-producing journeys cannot compete for both application streams. Every case
+attempt receives its own authenticated browser context and thread. Turns within a
+multi-turn case remain sequential on that context, and result ordering remains the
+canonical corpus ordering even when cases finish out of order.
+
+Each attempt records received events, final answers, graph JSON, rendered-node
+counts, screenshots, redacted traces, persistence, cleanup, fallback, and typed
+blocking failures classified as `quality` or `infrastructure`. A case receives
+exactly one additional attempt only when every blocking failure from the first
+attempt is infrastructure-related. Quality and mixed failures are never retried.
+Both attempts remain in the capture with their thread IDs, timings, screenshots,
+traces, failures, and cleanup evidence; a successful retry does not erase the first
+attempt or its model usage.
+
+For the allowlisted internal identity on the isolated `staging` schema only, the
+retrieval workers also emit bounded book passages, external search snippets, and
+provenance so citations can be verified; production users never receive these
+evidence events. Traces are rewritten before upload so bearer credentials and the
+internal password are redacted. JSON, JUnit, HTML, screenshots, and traces are
+retained for 30 days and are not committed as answer truth.
 
 To diagnose a small set without replaying the whole corpus, manually dispatch
 `Scheduled evaluation` with suite `diagnostic` and one to eight space-separated
@@ -92,65 +104,109 @@ example `./scripts/ci browser --suite diagnostic --case citations ...`. Diagnost
 runs use the PR-sized time, application-call, and judge-call budgets and cannot
 approve or replace the full corpus review.
 
-PR evaluation limits are eight cases, 50 application calls, 16 judge calls, and 15
-minutes for the browser journey phase. The outer GitHub job allows 30 minutes so
-dependency installation, image deployment, semantic judging, artifact upload, and
-cleanup do not consume that evaluation budget. The report includes provider, model,
-input/output tokens, latency, fallback, and an estimated cost under a dated price
-table. Provider rate limits, transport failures, and timeouts are reported as
-infrastructure failures; they never silently pass or masquerade as a quality
-regression.
+PR evaluation limits are eight cases, 50 application provider attempts, and 16
+judge provider attempts. The timeout chain is deliberately nested: the backend
+agent stops at 360 seconds, the Playwright turn waits at most 390 seconds so it can
+capture the typed terminal event, and Cloud Run accepts a request for at most 420
+seconds. The browser-suite timeout scales with the number of turns and the serial
+graph lane, with a 60-minute hard ceiling. Semantic judging is capped at 20 minutes
+for PR/smoke/diagnostic suites and 60 minutes for full suites. The outer GitHub jobs
+allow 60 minutes for the PR gate and 130 minutes for scheduled evaluation, including
+installation, deployment, judging, artifact upload, and cleanup; the former 15/30
+minute limits no longer apply.
+
+Each turn records total, first-event, and first-token latency plus client and server
+request IDs. Those IDs join browser evidence to per-operation model telemetry,
+including provider/model, generation duration, provider semaphore queue wait,
+fallback, and every provider attempt. Reports publish deterministic nearest-rank
+p50/p95 summaries for case end-to-end, turn end-to-end, first event, and first token;
+final infrastructure-failed cases are excluded from those baselines. Latency remains
+report-only with no manifest thresholds while five clean runs are collected.
+Reviewed baselines can then add blocking thresholds without changing the 360-second
+correctness deadline. Stage durations may overlap and are reported independently
+rather than added into a false critical path.
+
+Application cost accounting is likewise retry-aware: all threads from all browser
+attempts are attributed back to their case, then split by model operation and
+provider attempt. Input/output tokens, queue wait, and estimated USD use a dated
+price table; fallback and failed charged attempts are included. Judge usage is
+reported separately and per case. An unknown model price is an infrastructure
+failure, never zero cost. Cost limits are currently report-only and unset while at
+least five clean runs establish per-case and suite baselines; only reviewed limits
+should be promoted to blocking. Provider rate limits, transport failures, and
+timeouts remain infrastructure failures and never masquerade as quality regressions.
 
 ## Corpus approval and semantic policy
 
-`backend/eval/corpus/v1/cases.json` is a 20-case, versioned seed corpus. It contains
+`backend/eval/corpus/v1/cases.json` is a 20-case, versioned approved corpus. It contains
 conversation steps, UI modes, categories, risk tags, deterministic expectations,
 rubric references with pass/borderline/fail anchors, criticality, provenance, and
 per-case approval metadata. Generated answers remain artifacts; only prompts,
 rubrics, invariants, and intentionally reviewed exemplars belong in source control.
 
-The corpus currently says `pending_human_review`. This is deliberate. To activate
-the blocking semantic judge:
+The current `2026-07-19.v2` corpus and every case say `approved`; the manifest stores
+its reviewer, review runs, reviewed grades, canonical SHA-256, and a calibrated
+`semantic-rubric-judge-v5` result of 91.5663% agreement with zero critical false
+passes. The calibration identity pins reviewed main run `29689189704`, commit
+`fc3dbf97910b59005c2e25d825852f47d5d790c7`, browser-evidence SHA-256
+`f6075c9091a4594848cf34dc82c535308467585c75a73bc333578e654518700f`, and judge
+model `gpt-5.4-mini-2026-03-17`.
 
-1. Merge the pending-corpus quality system while branch protection still requires
-   only `CI required`, create and protect the `staging-eval` Environment, then
-   manually dispatch `Scheduled evaluation` with suite `full` on `main`. While the
-   corpus is pending, this trusted main-only path builds the exact checked-out tree
-   under a temporary `corpus-bootstrap-*` tag, deploys it to staging with no traffic,
-   and removes the temporary tag after the run. Once the corpus is approved, the
-   workflow fails closed unless the main tree already has an approved digest and
-   never uses the bootstrap build path.
-2. Download the 30-day evaluation artifact, then open `review.html` and
-   `semantic-review.html`.
-3. Review or correct every proposed dimension label and exemplar.
-4. Calibrate the judge to at least 85% agreement with no more than one critical
-   false pass, then record the release, agreement, false-pass count, and UTC time
-   in `approval.calibration`.
-5. Mark all 20 cases approved, record reviewer and UTC time, then record the
-   canonical corpus SHA-256 produced by `eval.quality_corpus.corpus_sha256()`.
-6. Run the focused corpus and semantic-gate tests, merge the approval change, and
-   only then require `Live eval required` in branch protection.
+`corpus_sha256()` hashes behavior only: corpus-level and per-case approval metadata
+are excluded while prompts, rubrics, UI modes, and deterministic expectations remain
+covered. Recording calibration provenance therefore cannot change the corpus
+identity or create a digest/storage-prefix cycle. A separate approval-manifest hash
+covers all approval labels, reviewers, calibration baselines, and evidence identity
+except its own digest field. `--require-approved-corpus` validates that full
+manifest, so either behavior or provenance tampering fails closed. A future corpus
+revision must return changed cases to human review, run the full protected capture,
+record every case's artifact run and reviewed grades, recalibrate, and publish a new
+approved hash before it can block or promote.
 
-Record each case's artifact run ID and `reviewed_grades`, then compute the
-calibration rather than entering it by inspection:
+Compute calibration from saved evidence rather than entering it by inspection:
 
 ```bash
 PYTHONPATH=backend python -m eval.calibration \
-  --input artifacts/live-eval/live-results.json
+  --input artifacts/live-eval/live-results.json \
+  --evidence artifacts/live-eval/browser-results.json \
+  --context artifacts/live-eval/replay-context.json
 ```
 
-Copy the passing report's release, agreement, critical-false-pass count, and UTC
-time into `approval.calibration` before calculating the approval hash.
+With the approved corpus, deterministic failures block immediately. A clear
+semantic failure gets one independent second judgment; two clear failures block. A
+borderline grade or judge disagreement requires manual review. PR and release gates
+keep that review blocking. Scheduled nightly/full monitoring uses the explicit
+`report-only` policy: the report, JUnit skip, HTML evidence, and GitHub warning
+remain visible, but review is not mislabeled as broken CI. Confirmed semantic
+failures and infrastructure failures still exit non-zero under either policy. No
+critical dimension may fail, and at least 85% of non-critical dimensions must pass.
 
-Until those steps are complete, `--require-approved-corpus` fails closed. Once
-approved, deterministic failures block immediately. A clear semantic failure gets
-one independent second judgment; two clear failures block. A borderline grade or
-judge disagreement requires manual review. PR and release gates keep that review
-blocking. Scheduled nightly/full monitoring uses the explicit `report-only` policy:
-the report, JUnit skip, HTML evidence, and GitHub warning remain visible, but review
-is not mislabeled as broken CI. Confirmed semantic failures and infrastructure
-failures still exit non-zero under either policy. No critical dimension may fail,
-and at least 85% of non-critical dimensions must pass.
+## Immutable judge-calibration evidence
+
+Judge calibration replays the exact browser evidence that humans reviewed; it never
+generates fresh application answers. The manual `Promote calibration evidence`
+workflow reads the pinned identity from the approved corpus rather than accepting a
+different run at dispatch. It authenticates that exact successful `main`
+`Scheduled evaluation`, source commit and run context, source corpus behavior,
+ordered passing 20-case browser capture, and browser digest. It then stores both the
+content-addressed browser JSON and its promotion manifest under
+`reviewed/<corpus-sha>/` in the private GCS evaluation-evidence bucket. Uniform
+bucket access, public-access prevention, versioning, a one-year retention policy,
+and a two-year lifecycle protect the evidence from casual replacement or deletion.
+
+The weekly `Judge calibration` workflow resolves the reviewed evidence digest,
+source run, and source commit from the corpus calibration identity, downloads and
+rehashes that exact GCS object, and runs `--capture-replay`. Only judge calls are
+charged. Before replay it requires both GCS objects, rehashes the browser capture,
+and verifies that the promotion manifest matches the pinned corpus digest, evidence
+digest, source run, source commit, and judge model. Missing objects or identity
+mismatches fail visibly; there is no pending/no-op success path. After authenticating
+the untouched legacy capture, it writes a replay copy with the current behavior-only
+corpus digest; the approved evidence hash still covers the untouched original. It
+then compares the active judge prompt/model with the fixed human grades and fails below 85%
+agreement, above one critical false pass, on an identity mismatch, or after an
+agreement drop greater than five percentage points from the approved calibration.
+Reports are kept in 90-day GitHub artifacts and copied to GCS calibration history.
 
 An override is an audited `workflow_dispatch` requiring original run ID, full
 commit SHA, authenticated reviewer, and reason. Dispatch it from the tested

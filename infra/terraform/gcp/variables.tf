@@ -83,7 +83,7 @@ variable "container_concurrency" {
 variable "request_timeout_seconds" {
   description = "Cloud Run request timeout in seconds."
   type        = number
-  default     = 300
+  default     = 420
 }
 
 variable "allow_unauthenticated" {

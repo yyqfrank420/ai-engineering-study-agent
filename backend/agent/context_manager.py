@@ -21,6 +21,7 @@
 
 import asyncio
 import logging
+from typing import Any
 
 from adapters.llm_adapter import build_telemetry, stream_response, stream_response_compat
 from agent.prompt_security import protect_system_prompt
@@ -32,7 +33,11 @@ logger = logging.getLogger(__name__)
 _CONDENSE_TIMEOUT_S = 5.0
 
 
-async def _call_summary(old_text: str) -> str:
+async def _call_summary(
+    old_text: str,
+    *,
+    telemetry: dict[str, Any] | None = None,
+) -> str:
     """
     Ask the configured worker model for a concise high-effort summary of `old_text`.
 
@@ -60,7 +65,7 @@ async def _call_summary(old_text: str) -> str:
         top_p=settings.condense_top_p,
         top_k=settings.condense_top_k,
         effort="high",
-        telemetry=build_telemetry("context_condense"),
+        telemetry=telemetry or build_telemetry("context_condense"),
     ):
         if event_type == "text":
             tokens.append(content)
@@ -71,6 +76,7 @@ async def maybe_condense_history(
     history: list[dict],
     threshold_chars: int | None = None,
     keep_recent: int | None = None,
+    telemetry: dict[str, Any] | None = None,
 ) -> list[dict]:
     """
     Conditionally condense a conversation history.
@@ -118,7 +124,7 @@ async def maybe_condense_history(
 
     try:
         summary = await asyncio.wait_for(
-            _call_summary(old_text),
+            _call_summary(old_text, telemetry=telemetry),
             timeout=_CONDENSE_TIMEOUT_S,
         )
         condensed: list[dict] = [

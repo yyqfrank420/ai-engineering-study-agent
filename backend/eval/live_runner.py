@@ -10,6 +10,12 @@ from pathlib import Path
 import re
 from typing import Any, Literal
 
+from eval.cost_gate import (
+    CostPolicy,
+    account_application_cost,
+    account_judge_cost,
+    evaluate_cost_policy,
+)
 from eval.judge_adapter import (
     JUDGE_PROMPT_RELEASE,
     SemanticJudge,
@@ -25,15 +31,15 @@ from eval.semantic_gate import EvaluationBudget, GateDecision, decide_semantic_g
 ROOT = Path(__file__).resolve().parents[2]
 QUALITY_MANIFEST = ROOT / "ci" / "quality.json"
 PROVIDER_FAILURE = re.compile(r"(?:rate.?limit|429|provider.*unavailable|timed?\s*out|connection.*failed)", re.I)
-APPLICATION_PRICES = {
-    # Price release 2026-07-18. Keep prior models for historical artifact accounting.
-    "claude-sonnet-5": (2.00, 10.00),
-    "claude-opus-5": (5.00, 25.00),
-    "claude-opus-4-8": (5.00, 25.00),
-    "gpt-5.4": (2.50, 15.00),
-    "gpt-5.4-mini": (0.75, 4.50),
-}
 ManualReviewPolicy = Literal["blocking", "report-only"]
+
+
+def _assert_approved_judge_identity(corpus: Any, judge: Any) -> None:
+    identity = corpus.approval.calibration
+    if identity.judge_release != JUDGE_PROMPT_RELEASE:
+        raise RuntimeError("active judge prompt release is not approved for this corpus")
+    if identity.judge_model != judge.model:
+        raise RuntimeError("active judge model is not approved for this corpus")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -223,18 +229,6 @@ def _classify_deterministic(failures: list[str]) -> str:
     return "infrastructure" if any(PROVIDER_FAILURE.search(failure) for failure in failures) else "quality"
 
 
-def _application_cost(telemetry: list[dict[str, Any]]) -> float:
-    total = 0.0
-    for call in telemetry:
-        model = str(call.get("model") or "")
-        price = next((value for prefix, value in APPLICATION_PRICES.items() if model.startswith(prefix)), None)
-        if price is None:
-            continue
-        total += int(call.get("input_tokens") or 0) * price[0] / 1_000_000
-        total += int(call.get("output_tokens") or 0) * price[1] / 1_000_000
-    return round(total, 6)
-
-
 def _exit_code_for_statuses(
     statuses: set[str],
     manual_review_policy: ManualReviewPolicy,
@@ -288,7 +282,22 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     budget.record_application_calls(
         sum(max(1, int(call.get("provider_attempts") or 1)) for call in app_telemetry)
     )
+    application_cost = account_application_cost(capture["results"], app_telemetry)
+    cost_policy_config = manifest["live"].get("cost_policy") or {}
+    if not isinstance(cost_policy_config, dict):
+        raise RuntimeError("live cost policy must be an object")
+    cost_policy = evaluate_cost_policy(
+        application_cost,
+        CostPolicy(
+            mode=cost_policy_config.get("mode", "report-only"),
+            suite_limit_usd=cost_policy_config.get("suite_limit_usd"),
+            case_limit_usd=cost_policy_config.get("case_limit_usd"),
+            baseline_min_runs=int(cost_policy_config.get("baseline_min_runs", 5)),
+        ),
+    )
     judge = SemanticJudge()
+    if args.require_approved_corpus:
+        _assert_approved_judge_identity(corpus, judge)
     evaluations: list[dict[str, Any]] = []
 
     for browser_result in capture["results"]:
@@ -346,9 +355,16 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         )
 
     statuses = {item["decision"] for item in evaluations}
+    if cost_policy["status"] == "infrastructure":
+        statuses.add("infrastructure")
+    elif cost_policy["blocking_status"] == "fail":
+        statuses.add("fail")
+    # Quality failures retain their higher-priority exit even when accounting is
+    # also unavailable, so telemetry health never hides a product regression.
     semantic_exit_code = _exit_code_for_statuses(statuses, "blocking")
     exit_code = _exit_code_for_statuses(statuses, manual_review_policy)
-    source_application_cost = _application_cost(app_telemetry)
+    judge_cost = account_judge_cost(evaluations)
+    source_application_cost = application_cost["total"]["estimated_usd"]
     report = {
         "format_version": 1,
         "kind": "live_gate",
@@ -371,6 +387,7 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         ),
         "manual_review_policy": manual_review_policy,
         "blocking_status": "pass" if exit_code == 0 else "fail",
+        "reason": cost_policy["reason"],
         "budget": {
             "application_calls": budget.application_calls,
             "application_limit": budget.application_limit,
@@ -378,19 +395,19 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "judge_limit": budget.judge_limit,
         },
         "application_telemetry": app_telemetry,
+        "cost_accounting": {
+            "policy": cost_policy,
+            "application": application_cost,
+            "judge": judge_cost,
+        },
         "estimated_cost": {
             "currency": "USD",
-            "price_release": "2026-07-18",
-            "application_usd": 0 if args.capture_replay else source_application_cost,
-            "source_application_usd": source_application_cost,
-            "judge_usd": round(
-                sum(
-                    judgment["estimated_cost_usd"]
-                    for evaluation in evaluations
-                    for judgment in evaluation["judgments"]
-                ),
-                6,
+            "price_release": application_cost["price_release"],
+            "application_usd": (
+                0 if args.capture_replay else source_application_cost
             ),
+            "source_application_usd": source_application_cost,
+            "judge_usd": judge_cost["total"]["estimated_usd"],
         },
         "evaluations": evaluations,
     }
@@ -419,15 +436,44 @@ def _write_outputs(path: Path, report: dict[str, Any]) -> None:
         item["decision"] == "manual_review" and report_only_review
         for item in report["evaluations"]
     )
+    cost_accounting = report.get("cost_accounting") or {}
+    cost_policy = cost_accounting.get("policy") or {}
+    cost_test = ""
+    if cost_policy:
+        cost_status = str(cost_policy.get("status") or "infrastructure")
+        cost_reason = str(cost_policy.get("reason") or cost_status)
+        cost_is_failure = (
+            cost_status == "infrastructure"
+            or cost_policy.get("blocking_status") == "fail"
+        )
+        cost_is_skipped = cost_status == "over_budget" and not cost_is_failure
+        if cost_is_failure:
+            cost_outcome = (
+                f'<failure message="{html.escape(cost_reason, quote=True)}" />'
+            )
+            failures += 1
+        elif cost_is_skipped:
+            cost_outcome = (
+                f'<skipped message="{html.escape(cost_reason, quote=True)}" />'
+            )
+            skipped += 1
+        else:
+            cost_outcome = ""
+        cost_test = (
+            '<testcase classname="live.accounting" name="application-cost-policy">'
+            + cost_outcome
+            + "</testcase>"
+        )
     cases = "".join(
         f'<testcase classname="live.semantic" name="{html.escape(item["id"])}">'
         + junit_outcome(item)
         + "</testcase>"
         for item in report["evaluations"]
     )
+    test_count = len(report["evaluations"]) + bool(cost_test)
     (path.parent / "live-junit.xml").write_text(
-        f'<testsuite name="live semantic gate" tests="{len(report["evaluations"])}" '
-        f'failures="{failures}" skipped="{skipped}">{cases}</testsuite>\n',
+        f'<testsuite name="live semantic gate" tests="{test_count}" '
+        f'failures="{failures}" skipped="{skipped}">{cases}{cost_test}</testsuite>\n',
         encoding="utf-8",
     )
     _write_semantic_review(path.parent / "semantic-review.html", report)
@@ -449,6 +495,23 @@ def _write_outputs(path: Path, report: dict[str, Any]) -> None:
             lines.append(
                 f"Calls: {report['budget']['application_calls']} application / "
                 f"{report['budget']['judge_calls']} judge"
+            )
+        if cost_policy:
+            lines.append(
+                "Cost policy: "
+                f"`{cost_policy.get('status', 'infrastructure')}` "
+                f"({cost_policy.get('mode', 'unknown')})"
+            )
+            application_total = (cost_accounting.get("application") or {}).get(
+                "total", {}
+            ).get("estimated_usd")
+            lines.append(
+                "Application cost: "
+                + (
+                    f"`${float(application_total):.6f}`"
+                    if application_total is not None
+                    else "`unknown`"
+                )
             )
         if report.get("reason"):
             lines.append(f"Reason: {report['reason']}")

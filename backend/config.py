@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     # Cap per LLM call — prevents runaway generation eating tokens
     llm_max_tokens: int = 12000
     # Hard timeout on the whole agent run (seconds); yields a timeout error event
-    agent_timeout_s: int = 240
+    agent_timeout_s: int = 360
     # A browser renders candidate graphs off-screen and returns a bounded image
     # plus layout metrics before an applied diagram may be published.
     diagram_evaluation_timeout_s: float = 15.0

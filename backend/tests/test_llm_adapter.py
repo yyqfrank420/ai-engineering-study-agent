@@ -1,6 +1,7 @@
 import pytest
 import sys
 import hashlib
+from types import SimpleNamespace
 
 from config import Settings, settings
 
@@ -261,6 +262,49 @@ async def test_stream_response_retries_before_tokens_then_succeeds(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_stream_response_accounts_usage_for_every_anthropic_attempt(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    monkeypatch.setattr(settings, "llm_max_retries", 2)
+    monkeypatch.setattr(settings, "llm_retry_delay_s", 0)
+    telemetry_records, _ = _patch_llm_telemetry(monkeypatch)
+    attempts = 0
+
+    async def fake_anthropic_stream_once(kwargs):
+        nonlocal attempts
+        attempts += 1
+        kwargs["_queue_wait_observer"](attempts * 10)
+        yield SimpleNamespace(
+            type="message_start",
+            message=SimpleNamespace(usage=SimpleNamespace(input_tokens=100 * attempts)),
+        )
+        if attempts == 1:
+            raise RuntimeError("retry after accepted request")
+        yield SimpleNamespace(
+            type="message_delta",
+            usage=SimpleNamespace(output_tokens=25),
+        )
+        yield _Event("content_block_delta", _Delta("text_delta", text="ok"))
+
+    monkeypatch.setattr(llm, "_anthropic_stream_once", fake_anthropic_stream_once)
+
+    assert await _collect(llm.stream_response("claude-opus-5", "system", [])) == [
+        ("text", "ok"),
+        ("done", ""),
+    ]
+    metadata = telemetry_records[0]["metadata"]
+    assert metadata["input_tokens"] == 300
+    assert metadata["output_tokens"] == 25
+    assert metadata["queue_wait_ms"] == 30
+    assert [attempt["status"] for attempt in metadata["attempts"]] == [
+        "error_incomplete_usage",
+        "success",
+    ]
+    assert metadata["attempts"][0]["accepted"] is True
+    assert metadata["attempts"][0]["usage_complete"] is False
+
+
+@pytest.mark.asyncio
 async def test_stream_response_does_not_retry_non_retryable_anthropic_4xx(monkeypatch):
     import adapters.llm_adapter as llm
 
@@ -371,6 +415,46 @@ async def test_stream_response_falls_back_to_openai_after_anthropic_exhaustion(m
     assert openai_calls == [("openai-model", "system", [{"role": "user", "content": "hi"}], None, 0.4, 0.9)]
     assert telemetry_records[-1]["provider"] == "openai"
     assert telemetry_records[-1]["used_fallback"] is True
+
+
+@pytest.mark.asyncio
+async def test_stream_response_accounts_fallback_usage_separately(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    monkeypatch.setattr(settings, "llm_max_retries", 1)
+    monkeypatch.setattr(llm, "_FALLBACK_MODELS", {"claude-opus-5": "gpt-5.4"})
+    monkeypatch.setattr(llm, "_get_openai_client", lambda: object())
+    telemetry_records, _ = _patch_llm_telemetry(monkeypatch)
+
+    async def failing_anthropic(kwargs):
+        kwargs["_queue_wait_observer"](7)
+        yield SimpleNamespace(
+            type="message_start",
+            message=SimpleNamespace(usage=SimpleNamespace(input_tokens=120)),
+        )
+        raise RuntimeError("anthropic down after accepting request")
+
+    async def fake_openai_stream(*_args):
+        yield (
+            "usage",
+            '{"input_tokens": 80, "output_tokens": 20}',
+        )
+        yield ("text", "fallback")
+        yield ("done", "")
+
+    monkeypatch.setattr(llm, "_anthropic_stream_once", failing_anthropic)
+    monkeypatch.setattr(llm, "_openai_stream", fake_openai_stream)
+
+    await _collect(llm.stream_response("claude-opus-5", "system", []))
+
+    metadata = telemetry_records[0]["metadata"]
+    assert metadata["input_tokens"] == 200
+    assert metadata["output_tokens"] == 20
+    assert metadata["provider_attempts"] == 2
+    assert metadata["attempts"][0]["model"] == "claude-opus-5"
+    assert metadata["attempts"][0]["input_tokens"] == 120
+    assert metadata["attempts"][1]["model"] == "gpt-5.4"
+    assert metadata["attempts"][1]["input_tokens"] == 80
 
 
 @pytest.mark.asyncio

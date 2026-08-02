@@ -6,9 +6,13 @@
     "status": "approved",
     "reviewed_by": "yyqfrank420",
     "reviewed_at": "2026-07-19T16:14:03Z",
-    "approved_manifest_sha256": "6970fb0ca46425baebf78f189917b215c7a472f3a70bdf9eb67b609391c656bb",
+    "approved_manifest_sha256": "6da118ecabea711cff6c30c53156d41939cdc567a7b4d38624c8331dfed11465",
     "calibration": {
       "judge_release": "semantic-rubric-judge-v5",
+      "judge_model": "gpt-5.4-mini-2026-03-17",
+      "evidence_run_id": "29689189704",
+      "evidence_commit_sha": "fc3dbf97910b59005c2e25d825852f47d5d790c7",
+      "evidence_sha256": "f6075c9091a4594848cf34dc82c535308467585c75a73bc333578e654518700f",
       "agreement": 0.915663,
       "critical_false_passes": 0,
       "evaluated_at": "2026-07-19T16:18:25Z"

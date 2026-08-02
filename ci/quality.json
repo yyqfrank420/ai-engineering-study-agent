@@ -81,6 +81,7 @@
           "argv": [
             "python", "-m", "pytest", "--tb=short", "-q",
             "backend/tests/test_canonical_graph.py",
+            "backend/tests/test_eval_cost_gate.py",
             "backend/tests/test_eval_metrics.py",
             "backend/tests/test_graph_artifacts_schema.py",
             "backend/tests/test_staging_diagram_renderer.py",
@@ -226,12 +227,21 @@
       "pr_cases": 8,
       "application_calls": 50,
       "judge_calls": 16,
-      "application_turn_timeout_seconds": 270,
+      "browser_case_concurrency": 2,
+      "browser_graph_case_concurrency": 1,
+      "browser_infrastructure_retry_count": 1,
+      "application_turn_timeout_seconds": 390,
       "browser_suite_base_timeout_seconds": 180,
       "browser_suite_per_turn_timeout_seconds": 150,
       "browser_suite_max_timeout_seconds": 3600,
       "semantic_suite_timeout_seconds": 1200,
       "semantic_full_suite_timeout_seconds": 3600
+    },
+    "cost_policy": {
+      "mode": "report-only",
+      "suite_limit_usd": null,
+      "case_limit_usd": null,
+      "baseline_min_runs": 5
     },
     "artifacts_retention_days": 30
   }

@@ -409,7 +409,18 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
     """
     send = state["send"]
     history = state.get("history") or []
-    history = await maybe_condense_history(history)
+    history = await maybe_condense_history(
+        history,
+        telemetry=build_telemetry(
+            "context_condense",
+            user_id=state.get("user_id"),
+            thread_id=state.get("session_id"),
+            metadata={
+                "request_id": state.get("request_id"),
+                "client_request_id": state.get("client_request_id"),
+            },
+        ),
+    )
 
     current_graph = state.get("graph_data") or {}
     design_query = state.get("design_query") or state.get("user_message", "")

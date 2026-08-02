@@ -17,6 +17,10 @@ class JudgeCalibration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     judge_release: str
+    judge_model: str | None = Field(default=None, min_length=1)
+    evidence_run_id: str | None = Field(default=None, pattern=r"^[0-9]+$")
+    evidence_commit_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
+    evidence_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     agreement: float | None = Field(default=None, ge=0, le=1)
     critical_false_passes: int | None = Field(default=None, ge=0)
     evaluated_at: str | None
@@ -149,6 +153,15 @@ class EvaluationCorpus(BaseModel):
                 raise ValueError("approved corpus permits at most one critical false pass")
             if not calibration.evaluated_at:
                 raise ValueError("approved corpus calibration must record its evaluation time")
+            if not all((
+                calibration.judge_model,
+                calibration.evidence_run_id,
+                calibration.evidence_commit_sha,
+                calibration.evidence_sha256,
+            )):
+                raise ValueError(
+                    "approved corpus calibration must identify its judge and immutable browser evidence"
+                )
         return self
 
     @property
@@ -158,8 +171,18 @@ class EvaluationCorpus(BaseModel):
 
 def corpus_sha256(path: Path = CORPUS_PATH) -> str:
     parsed = json.loads(path.read_text(encoding="utf-8"))
-    # The approval records the digest and therefore cannot itself participate
-    # in that digest. All behavior-bearing case/rubric content remains covered.
+    # Approval and calibration records are provenance about a fixed corpus, not
+    # browser behavior. Keeping them out of this digest avoids a cycle where
+    # recording the reviewed evidence changes the identity of that evidence.
+    parsed.pop("approval", None)
+    for case in parsed.get("cases", []):
+        case.pop("approval", None)
+    canonical = json.dumps(parsed, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def approval_manifest_sha256(path: Path = CORPUS_PATH) -> str:
+    parsed = json.loads(path.read_text(encoding="utf-8"))
     parsed["approval"]["approved_manifest_sha256"] = None
     canonical = json.dumps(parsed, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
@@ -168,7 +191,7 @@ def corpus_sha256(path: Path = CORPUS_PATH) -> str:
 def load_corpus(*, require_approved: bool = False, path: Path = CORPUS_PATH) -> EvaluationCorpus:
     corpus = EvaluationCorpus.model_validate_json(path.read_text(encoding="utf-8"))
     if require_approved:
-        digest = corpus_sha256(path)
+        digest = approval_manifest_sha256(path)
         if corpus.approval.status != "approved":
             raise RuntimeError(
                 "The semantic corpus is pending human review. Review all 20 cases and record the approved manifest hash before enabling the blocking judge."

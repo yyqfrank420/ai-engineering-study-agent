@@ -28,6 +28,11 @@ output "artifact_registry_repository" {
   description = "Artifact Registry repository resource ID."
 }
 
+output "eval_evidence_bucket" {
+  value       = google_storage_bucket.eval_evidence.name
+  description = "Immutable reviewed browser evidence used for judge calibration."
+}
+
 output "ci_service_account_email" {
   value       = google_service_account.ci.email
   description = "Deprecated unprivileged GitHub Actions service account retained for transition rollback."

@@ -249,14 +249,16 @@ async def test_condense_summarises_old_turns_when_over_threshold():
     ]
 
     mock_summary = "Summary of old turns."
+    summary_call = AsyncMock(return_value=mock_summary)
     with patch(
         "agent.context_manager._call_summary",
-        new=AsyncMock(return_value=mock_summary),
+        new=summary_call,
     ):
         result = await maybe_condense_history(
             history,
             threshold_chars=100,   # threshold easily exceeded
             keep_recent=2,
+            telemetry={"operation": "context_condense", "thread_id": "thread-1"},
         )
 
     # Should be: [summary_msg, recent_turn_3, recent_turn_4]
@@ -264,6 +266,7 @@ async def test_condense_summarises_old_turns_when_over_threshold():
     assert "Summary of old turns." in result[0]["content"]
     assert result[1] == history[2]
     assert result[2] == history[3]
+    assert summary_call.await_args.kwargs["telemetry"]["thread_id"] == "thread-1"
 
 
 @pytest.mark.asyncio

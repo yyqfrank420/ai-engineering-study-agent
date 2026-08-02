@@ -124,7 +124,7 @@ jobs:
         env:
           CANDIDATE_TAG: prod-${{ github.run_id }}
         run: |
-          gcloud run deploy "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE@$IMAGE_DIGEST" --no-traffic --tag "$CANDIDATE_TAG" --quiet
+          gcloud run deploy "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE@$IMAGE_DIGEST" --no-traffic --tag "$CANDIDATE_TAG" --timeout 420s --quiet
           candidate_url="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json | python -c 'import json,os,sys; data=json.load(sys.stdin); tag=os.environ["CANDIDATE_TAG"]; print(next((x.get("url", "") for x in data.get("status", {}).get("traffic", []) if x.get("tag") == tag), ""))')"
           [ -n "$candidate_url" ] || exit 1
           echo "CANDIDATE_URL=$candidate_url" >> "$GITHUB_ENV"
