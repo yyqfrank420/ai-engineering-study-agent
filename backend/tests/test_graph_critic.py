@@ -323,6 +323,39 @@ def test_production_gate_does_not_treat_approval_audit_store_as_a_decision():
     assert not any("rejection/cancellation" in item for item in review["missing"])
 
 
+def test_production_gate_does_not_treat_approved_registry_as_a_decision():
+    graph = {
+        "nodes": [
+            {"id": "entry", "label": "Definition Proposal", "type": "service"},
+            {
+                "id": "registry",
+                "label": "Event Definition Registry",
+                "type": "control",
+                "description": "Stores approved versioned definitions for canary release.",
+            },
+            {"id": "outcome", "label": "Definition Outcome", "type": "service"},
+        ],
+        "edges": [
+            {"source": "entry", "target": "registry", "label": "register approved version"},
+            {"source": "registry", "target": "outcome", "label": "publish immutable version"},
+            {
+                "source": "outcome",
+                "target": "entry",
+                "label": "return measured outcome",
+                "flow": "feedback",
+            },
+        ],
+    }
+
+    review = _deterministic_review(
+        "Design controlled event-definition releases",
+        graph,
+        "production",
+    )
+
+    assert not any("approval decision registry" in item for item in review["missing"])
+
+
 @pytest.mark.parametrize(
     ("owner_type", "owner_label", "owner_description"),
     [

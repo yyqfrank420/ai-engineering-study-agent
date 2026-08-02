@@ -108,7 +108,7 @@ _APPROVAL_OWNER = re.compile(
     re.I,
 )
 _APPROVAL_AUDIT_OWNER = re.compile(
-    r"\b(?:audit|history|ledger|log|projection|record|store)\b",
+    r"\b(?:audit|history|ledger|log|projection|record|registry|store)\b",
     re.I,
 )
 _APPROVAL_ROUTE = re.compile(

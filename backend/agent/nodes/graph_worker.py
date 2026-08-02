@@ -18,7 +18,7 @@ from graph.runtime import select_canonical_graph
 logger = logging.getLogger(__name__)
 
 _APPLIED_GRAPH_PROMPT_VERSION = "applied_architecture_v17"
-_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v19"
+_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v20"
 _MAX_GRAPH_PATCH_CHARS = 20_000
 
 
@@ -261,6 +261,9 @@ separate directed edge.
 The approval-only route must explicitly say accept, approve, authorize, permit, release, or sign-off.
 The rejection-only route must explicitly say block, cancel, decline, deny, reject, refuse, or stop.
 Human review, a manual lane, escalation, or hold alone does not name either decision outcome.
+When splitting promotion from rollback, remove or update the combined edge and add two directed
+edges. Audit each edge's label, technology, and description: the promotion edge must not mention
+rollback, and the rollback edge must not mention promotion. Do not leave the old combined edge.
 The complete patched graph must pass the deterministic publication contract; validation feedback
 will identify any residual collapsed branch, approval route, bypass, or release transition.
 </trust_and_bounds>
@@ -678,6 +681,10 @@ def _apply_applied_graph_patch(
     max_nodes: int,
     resolved_complexity: str,
 ) -> GraphData:
+    # Models commonly preserve an optional patch key with JSON null to mean
+    # "unchanged". Treat only top-level nulls as omissions; nested operation
+    # fields remain strict because they can alter the selected graph object.
+    patch = {key: value for key, value in patch.items() if value is not None}
     unknown_keys = set(patch) - _GRAPH_PATCH_KEYS
     if unknown_keys:
         raise ValueError(f"unknown graph patch fields: {', '.join(sorted(unknown_keys))}")
@@ -826,6 +833,10 @@ def _patch_reference(value: Any, field: str) -> str:
 
 
 def _edge_selector(selector: Any) -> tuple[str, str, str]:
+    # ``update_edges`` uses a match wrapper, and models sometimes preserve the
+    # same unambiguous shape when copying a selector into ``remove_edges``.
+    if isinstance(selector, dict) and set(selector) == {"match"}:
+        selector = selector["match"]
     required_fields = {"source", "target", "label"}
     if (
         not isinstance(selector, dict)
