@@ -552,10 +552,12 @@ async def _generate_applied_architecture_patch(
         "only the minimal patch."
     )
     repair_context = ""
-    # Patches are bounded edits to an already reasoned-about graph, so medium
-    # effort keeps workflow revisions within the turn deadline. Give a
-    # malformed patch one validation-informed retry before falling back to the
-    # approved graph. A
+    revision_count = int(state.get("graph_revision_count", 0))
+    # A workflow semantic revision applies exact critic feedback, so its first
+    # typed attempt uses low effort to stay within the turn deadline. Ordinary
+    # user-requested graph refinements remain medium effort. A malformed patch
+    # gets one medium-effort, validation-informed retry before falling back to
+    # the approved graph. A
     # structurally valid but semantically incomplete candidate is deliberately
     # returned to the workflow critic: that owning layer supplies canonical
     # feedback between its two bounded revisions. Retrying it here as well
@@ -580,7 +582,11 @@ async def _generate_applied_architecture_patch(
                 temperature=settings.graph_temperature,
                 top_p=settings.graph_top_p,
                 top_k=settings.graph_top_k,
-                effort="medium",
+                effort=(
+                    "low"
+                    if revision_count > 0 and patch_attempt == 0
+                    else "medium"
+                ),
                 telemetry=build_telemetry(
                     "graph_worker_applied_patch",
                     user_id=state.get("user_id"),
@@ -588,7 +594,7 @@ async def _generate_applied_architecture_patch(
                     metadata={
                         "complexity_requested": state.get("complexity", "auto"),
                         "complexity_resolved": profile.resolved,
-                        "revision_count": state.get("graph_revision_count", 0),
+                        "revision_count": revision_count,
                         "model_role": "incremental_patch",
                         "patch_attempt": patch_attempt,
                         "prompt_version": _APPLIED_GRAPH_PATCH_PROMPT_VERSION,
