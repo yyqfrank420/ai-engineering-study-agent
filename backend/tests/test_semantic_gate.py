@@ -226,6 +226,7 @@ def test_judge_payload_removes_duplicate_graph_events_and_internal_graph_metadat
     })
 
     assert payload["graph"]["title"] == "Candidate"
+    assert payload["graph"]["artifact_role"] == "browser-rendered diagram"
     assert "evidence_chunk_ids" not in payload["graph"]["nodes"][0]
     assert payload["events"] == [
         {"type": "worker_status", "worker": "graph", "status": "ready"}

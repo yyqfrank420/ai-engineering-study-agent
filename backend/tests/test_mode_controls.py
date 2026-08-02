@@ -127,6 +127,28 @@ def test_terse_product_seeds_trigger_applied_design_enrichment(query):
     assert resolve_complexity("auto", query).resolved == "production"
 
 
+def test_explanatory_runtime_flow_defaults_to_prototype_depth():
+    from agent.complexity import resolve_complexity
+
+    profile = resolve_complexity(
+        "auto",
+        "Explain retrieval-augmented generation and draw the runtime flow.",
+    )
+
+    assert profile.resolved == "prototype"
+
+
+def test_explicit_production_runtime_flow_keeps_production_depth():
+    from agent.complexity import resolve_complexity
+
+    profile = resolve_complexity(
+        "auto",
+        "Explain production retrieval-augmented generation and draw the runtime flow.",
+    )
+
+    assert profile.resolved == "production"
+
+
 @pytest.mark.parametrize(
     "query",
     [

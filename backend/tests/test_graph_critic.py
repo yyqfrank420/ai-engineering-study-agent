@@ -23,7 +23,7 @@ def test_revision_critic_uses_bounded_verification_budget():
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v17"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v18"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -983,6 +983,42 @@ def test_explicit_reconciliation_request_remains_blocking_at_prototype_depth():
             "blocking_failures": [failure],
         },
         query="Prototype the flow, including reconciliation after ambiguous outcomes.",
+        resolved_complexity="prototype",
+    )
+
+    assert review["approved"] is False
+    assert review["missing"] == [failure]
+
+
+def test_prototype_review_downgrades_production_approval_envelope_detail():
+    failure = (
+        "Give every approval decision distinct approval and rejection routes, or persist "
+        "both outcomes in one complete exact-action envelope at durable lifecycle state."
+    )
+    review = _normalise_review(
+        {
+            "approved": False,
+            "score": 0.72,
+            "blocking_failures": [failure],
+        },
+        query="Explain RAG and draw the runtime flow.",
+        resolved_complexity="prototype",
+    )
+
+    assert review["approved"] is True
+    assert review["missing"] == []
+    assert review["advice"] == [f"Production-depth hardening: {failure}"]
+
+
+def test_explicit_approval_boundary_request_remains_blocking_at_prototype_depth():
+    failure = "Give every approval decision distinct approval and rejection routes."
+    review = _normalise_review(
+        {
+            "approved": False,
+            "score": 0.72,
+            "blocking_failures": [failure],
+        },
+        query="Prototype the workflow and show its human approval boundaries.",
         resolved_complexity="prototype",
     )
 

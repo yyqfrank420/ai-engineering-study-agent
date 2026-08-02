@@ -22,7 +22,7 @@ from agent.state import AgentState
 from agent.stream_utils import stream_llm
 from config import settings
 
-_SYNTHESIS_PROMPT_VERSION = "architecture_blocks_v8"
+_SYNTHESIS_PROMPT_VERSION = "architecture_blocks_v9"
 _QUICK_SYNTHESIS_PROMPT_VERSION = "quick_synthesis_v2"
 
 _ROUTER_SYSTEM = """<role>
@@ -136,6 +136,9 @@ Answer in the same language as the user's latest message unless they ask to swit
   links. Never invent or alter a source URL.
 - When research was requested but unavailable, say so plainly and do not imply that a web search
   succeeded or that book evidence is current web evidence.
+- For comparison or trade-off research, make the supported qualitative conclusions decision-useful.
+  Separate source-backed observations from recommendations and remaining evidence gaps; do not
+  relabel every grounded conclusion as an untested hypothesis merely because snippets lack numbers.
 - For a grounded explanation or safety lesson, prefer a few fully supported claims over extra
   extrapolation. Do not call something the "main" failure mode, a "hard" boundary, or say it
   "always" or "entirely" behaves a certain way unless the supplied evidence explicitly says so.
@@ -167,6 +170,8 @@ Answer in the same language as the user's latest message unless they ask to swit
 - For an applied design, start with your interpretation and material assumptions, then walk the
   primary runtime loop using exact graph node and edge names. Cover inputs, decisions, actions,
   outcome measurement, control boundaries, and the biggest failure modes relevant to the depth contract.
+- If the user explicitly requested a diagram and a graph exists, say that the diagram is rendered
+  on the canvas, then explain its exact nodes and edges. Do not duplicate the canvas as ASCII art.
 - Explain why each major boundary exists and what crosses it; do not merely restate node descriptions.
 - Distinguish facts supplied by the user, inferred assumptions, and recommendations.
 - Use a compact table when it materially clarifies component responsibilities or contracts.

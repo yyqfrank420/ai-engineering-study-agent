@@ -14,7 +14,7 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v17"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v18"
 
 _FEEDBACK_LOOP_REQUEST = re.compile(
     r"\b(?:closed[- ]loop|feedback loop|self[- ]improv\w*|"
@@ -87,6 +87,8 @@ _PRODUCTION_ONLY_REVIEW_CONCERN = re.compile(
     r"\bpayload hash\b|\btarget version\b|\bpolicy version\b.{0,80}\bexpir|"
     r"\bpromotion\b.{0,140}\brollback\b|\brollback\b.{0,140}\bpromotion\b|"
     r"\brelease[- ]control edges?\b|\bimmutable registration\b.{0,120}\bcanary\b|"
+    r"\bapproval decisions?\b.{0,180}\b(?:approv\w*|accept\w*)\b.{0,100}"
+    r"\b(?:reject\w*|den\w*)\b|\bexact[- ]action envelope\b|"
     r"\bcache identity\b.{0,180}\b(?:tenant|ACL|schema|corpus|index|release version))",
     re.I,
 )
@@ -95,7 +97,8 @@ _EXPLICIT_PRODUCTION_GUARANTEE_REQUEST = re.compile(
     r"\b(?:production(?:[- ]ready)?|exactly[- ]once|idempoten\w*|reconcil\w*|"
     r"timeout[- ]after[- ]commit|ambiguous outcome|compensat\w*|payload hash|"
     r"target version|policy version|pre[- ]effect|fenc(?:e|ed|ing)|canary|"
-    r"release gate|promotion|rollback|tenant[- ]scop\w*|ACL[- ]scop\w*)\b",
+    r"release gate|promotion|rollback|approval boundar\w*|human approval|"
+    r"authori[sz]\w*|tenant[- ]scop\w*|ACL[- ]scop\w*)\b",
     re.I,
 )
 

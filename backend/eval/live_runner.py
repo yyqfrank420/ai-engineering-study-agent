@@ -103,6 +103,7 @@ def _judge_payload(result: dict[str, Any]) -> dict[str, Any]:
             )
             if graph.get(key) is not None
         }
+        compact_graph["artifact_role"] = "browser-rendered diagram"
         compact_graph["nodes"] = [
             {
                 key: node[key]

@@ -18,7 +18,7 @@ from graph.runtime import select_canonical_graph
 logger = logging.getLogger(__name__)
 
 _APPLIED_GRAPH_PROMPT_VERSION = "applied_architecture_v17"
-_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v16"
+_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v17"
 _MAX_GRAPH_PATCH_CHARS = 20_000
 
 
@@ -543,8 +543,10 @@ async def _generate_applied_architecture_patch(
         "only the minimal patch."
     )
     repair_context = ""
-    # Patches are normally small and cheap. Give a malformed patch one
-    # validation-informed retry before falling back to the approved graph. A
+    # Patches are normally small and must fit inside the remaining whole-turn
+    # budget, so start at low adaptive effort. Give a malformed patch one
+    # validation-informed medium-effort retry before falling back to the
+    # approved graph. A
     # structurally valid but semantically incomplete candidate is deliberately
     # returned to the workflow critic: that owning layer supplies canonical
     # feedback between its two bounded revisions. Retrying it here as well
@@ -569,7 +571,7 @@ async def _generate_applied_architecture_patch(
                 temperature=settings.graph_temperature,
                 top_p=settings.graph_top_p,
                 top_k=settings.graph_top_k,
-                effort="medium",
+                effort="medium" if repair_context else "low",
                 telemetry=build_telemetry(
                     "graph_worker_applied_patch",
                     user_id=state.get("user_id"),
