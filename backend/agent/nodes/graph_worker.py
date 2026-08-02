@@ -18,7 +18,7 @@ from graph.runtime import select_canonical_graph
 logger = logging.getLogger(__name__)
 
 _APPLIED_GRAPH_PROMPT_VERSION = "applied_architecture_v17"
-_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v18"
+_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v19"
 _MAX_GRAPH_PATCH_CHARS = 20_000
 
 
@@ -258,6 +258,9 @@ rejection-only), or draw one combined approve/reject edge to durable lifecycle s
 edge text includes payload, target, policy version, expiry, and idempotency key. For release repair,
 no edge text may combine promotion with rollback, and canary-to-full-production promotion must be a
 separate directed edge.
+The approval-only route must explicitly say accept, approve, authorize, permit, release, or sign-off.
+The rejection-only route must explicitly say block, cancel, decline, deny, reject, refuse, or stop.
+Human review, a manual lane, escalation, or hold alone does not name either decision outcome.
 The complete patched graph must pass the deterministic publication contract; validation feedback
 will identify any residual collapsed branch, approval route, bypass, or release transition.
 </trust_and_bounds>
@@ -823,8 +826,15 @@ def _patch_reference(value: Any, field: str) -> str:
 
 
 def _edge_selector(selector: Any) -> tuple[str, str, str]:
-    if not isinstance(selector, dict) or set(selector) != {"source", "target", "label"}:
-        raise ValueError("edge selector must contain exactly source, target, and label")
+    required_fields = {"source", "target", "label"}
+    if (
+        not isinstance(selector, dict)
+        or not required_fields <= set(selector)
+        or set(selector) - _PATCH_EDGE_FIELDS
+    ):
+        raise ValueError(
+            "edge selector must contain source, target, and label with only known edge fields"
+        )
     return (
         _patch_reference(selector["source"], "edge selector source"),
         _patch_reference(selector["target"], "edge selector target"),

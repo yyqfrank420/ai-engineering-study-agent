@@ -293,6 +293,30 @@ def test_patch_updates_nodes_and_edges_and_removes_only_selected_edge():
     )
 
 
+def test_patch_selector_accepts_copied_known_edge_metadata():
+    existing = _domain_graph(5)
+    removed_edge = existing["edges"][-1]
+
+    result = graph_worker._apply_applied_graph_patch(
+        existing,
+        {"remove_edges": [{
+            key: removed_edge.get(key)
+            for key in graph_worker._PATCH_EDGE_FIELDS
+        }]},
+        min_nodes=5,
+        max_nodes=7,
+        resolved_complexity="prototype",
+    )
+
+    assert len(result["edges"]) == len(existing["edges"]) - 1
+    assert not any(
+        edge["source"] == removed_edge["source"]
+        and edge["target"] == removed_edge["target"]
+        and edge["label"] == removed_edge["label"]
+        for edge in result["edges"]
+    )
+
+
 @pytest.mark.parametrize(
     ("patch", "error"),
     [
@@ -724,6 +748,8 @@ async def test_invalid_patch_preserves_approved_graph_after_bounded_retry(monkey
     assert calls[0]["thinking_budget"] is None
     assert "Never return a replacement graph" in calls[0]["system"]
     assert "map every supplied blocking failure" in calls[0]["system"]
+    assert "The approval-only route must explicitly say" in calls[0]["system"]
+    assert "Human review, a manual lane, escalation, or hold alone" in calls[0]["system"]
     assert calls[0]["telemetry"]["metadata"]["prompt_version"] == (
         graph_worker._APPLIED_GRAPH_PATCH_PROMPT_VERSION
     )
