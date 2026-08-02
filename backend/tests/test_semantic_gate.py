@@ -326,6 +326,7 @@ async def test_judge_transport_retry_counts_every_provider_attempt(monkeypatch):
 
 def test_calibration_report_uses_every_reviewed_case_and_dimension():
     corpus = load_corpus().model_copy(deep=True)
+    corpus.approval.calibration.judge_model = "gpt-5.4-mini-2026-03-17"
     corpus.approval.calibration.evidence_sha256 = "a" * 64
     corpus.approval.calibration.evidence_run_id = "123"
     corpus.approval.calibration.evidence_commit_sha = "b" * 40

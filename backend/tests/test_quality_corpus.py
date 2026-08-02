@@ -750,7 +750,38 @@ def test_approved_hash_is_content_addressed(tmp_path):
 
 def test_approval_changes_do_not_change_behavior_identity_but_invalidate_approval(tmp_path):
     raw = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
+    raw["approval"].update(
+        {
+            "status": "approved",
+            "reviewed_by": "reviewer",
+            "reviewed_at": "2026-08-02T12:00:00Z",
+            "calibration": {
+                "judge_release": "semantic-rubric-judge-v5",
+                "judge_model": "claude-opus-5",
+                "evidence_run_id": "123456789",
+                "evidence_commit_sha": "a" * 40,
+                "evidence_sha256": "b" * 64,
+                "agreement": 0.9,
+                "critical_false_passes": 0,
+                "evaluated_at": "2026-08-02T12:00:00Z",
+            },
+        }
+    )
+    for case in raw["cases"]:
+        case["approval"].update(
+            {
+                "status": "approved",
+                "reviewer": "reviewer",
+                "reviewed_at": "2026-08-02T12:00:00Z",
+                "review_run_id": "github-run-123",
+                "reviewed_grades": {
+                    dimension: "pass" for dimension in case["rubric_dimensions"]
+                },
+            }
+        )
     path = tmp_path / "cases.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    raw["approval"]["approved_manifest_sha256"] = approval_manifest_sha256(path)
     path.write_text(json.dumps(raw), encoding="utf-8")
     behavior_sha = corpus_sha256(path)
 
