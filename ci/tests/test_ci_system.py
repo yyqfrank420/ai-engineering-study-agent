@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from config import Settings
-from eval.browser_runner import _run_browser_attempt, run_browser
+from eval.browser_runner import _execute_browser, _run_browser_attempt
 from scripts.ci_runner import (
     classify_paths,
     load_manifest,
@@ -24,11 +24,14 @@ def test_manifest_tracks_every_backend_test():
 
 
 def test_browser_navigation_does_not_wait_for_long_lived_connections_to_close():
-    source = inspect.getsource(run_browser) + inspect.getsource(_run_browser_attempt)
+    source = inspect.getsource(_execute_browser) + inspect.getsource(
+        _run_browser_attempt
+    )
 
     assert 'wait_until="networkidle"' not in source
     assert source.count('wait_until="domcontentloaded"') == 2
     assert source.count("_wait_for_composer_ready(page)") == 2
+    assert "tracing.start(screenshots=False" in source
 
 
 def test_manifest_validation_fails_when_a_tracked_test_is_omitted():
@@ -372,7 +375,7 @@ def test_live_eval_job_allows_setup_around_the_bounded_browser_suite():
     workflow = (ROOT / ".github/workflows/live-eval.yml").read_text(encoding="utf-8")
     manifest = load_manifest()
 
-    assert "timeout-minutes: 60" in workflow
+    assert "timeout-minutes: 90" in workflow
     budgets = manifest["live"]["budgets"]
     settings = Settings(_env_file=None)
     assert settings.agent_timeout_s == 360
@@ -395,6 +398,13 @@ def test_live_eval_job_allows_setup_around_the_bounded_browser_suite():
         encoding="utf-8"
     )
     assert "timeout-minutes: 130" in scheduled
+    assert "- id: browser\n        name: Start frontend and capture journeys" in scheduled
+    assert "if: always() && hashFiles('artifacts/live-eval/browser-results.json') != ''" in scheduled
+    assert "BROWSER_OUTCOME: ${{ steps.browser.outcome }}" in scheduled
+    assert (
+        'if [ "$BROWSER_OUTCOME" != success ] || [ "$SEMANTIC_OUTCOME" != success ]; then'
+        in scheduled
+    )
 
     terraform_variables = (ROOT / "infra/terraform/gcp/variables.tf").read_text(
         encoding="utf-8"

@@ -31,6 +31,7 @@ from api.chat_guards import (
     byte_len,
     check_prompt_injection,
     check_rate_limit,
+    internal_test_stream_scope,
     knowledge_base_ready,
     truncate_utf8,
 )
@@ -206,6 +207,7 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
         "chat",
         limit=settings.max_active_chat_streams_per_user,
         ttl_s=settings.agent_timeout_s + 30,
+        scope_id=internal_test_stream_scope(user, thread_id),
     )
     if stream_id is None:
         record_chat_rejected("active_stream_limit")

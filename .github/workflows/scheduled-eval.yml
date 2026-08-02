@@ -167,7 +167,9 @@ jobs:
           done
           echo "Scheduled staging candidate did not become ready." >&2
           exit 1
-      - name: Start frontend and capture journeys
+      - id: browser
+        name: Start frontend and capture journeys
+        continue-on-error: true
         run: |
           VITE_EVAL_AUTH_BOOTSTRAP=true VITE_API_PROXY_TARGET="$CANDIDATE_URL" npm --prefix frontend run dev -- --host localhost --port 5173 --strictPort > artifacts/live-eval/vite.log 2>&1 &
           echo "VITE_PID=$!" >> "$GITHUB_ENV"
@@ -188,6 +190,7 @@ jobs:
           EVAL_BACKEND_URL="$CANDIDATE_URL" ./scripts/ci browser --suite "$EVAL_SUITE" --target http://localhost:5173 --output artifacts/live-eval/browser-results.json "${case_args[@]}"
       - id: semantic
         name: Generate semantic proposals or apply the approved gate
+        if: always() && hashFiles('artifacts/live-eval/browser-results.json') != ''
         continue-on-error: true
         env:
           OPENAI_API_KEY: ${{ secrets.EVAL_JUDGE_API_KEY }}
@@ -227,13 +230,14 @@ jobs:
         if: always()
         env:
           CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
+          BROWSER_OUTCOME: ${{ steps.browser.outcome }}
           SEMANTIC_OUTCOME: ${{ steps.semantic.outcome }}
         run: |
           if [ "$CORPUS_STATUS" != approved ]; then
             echo "Corpus is pending human review; this run produced non-blocking proposals."
             exit 0
           fi
-          if [ "$SEMANTIC_OUTCOME" != success ]; then
+          if [ "$BROWSER_OUTCOME" != success ] || [ "$SEMANTIC_OUTCOME" != success ]; then
             echo "Approved scheduled evaluation did not pass." >&2
             exit 1
           fi

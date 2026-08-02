@@ -69,11 +69,12 @@ class FailureDetail(TypedDict):
 
 
 class BrowserInfrastructureError(RuntimeError):
-    """A transient browser/auth/provider failure that permits one bounded retry."""
+    """A typed browser/auth/provider failure with an explicit retry policy."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, retryable: bool = True) -> None:
         super().__init__(message)
         self.code = code
+        self.retryable = retryable
 
 
 class BrowserQualityError(RuntimeError):
@@ -333,8 +334,9 @@ async def _send_step(
     except PlaywrightTimeoutError as exc:
         raise BrowserInfrastructureError(
             "application_turn_timeout",
-            f"case {case.id} turn {step_index + 1} exceeded "
+            f"application turn timed out: case {case.id} turn {step_index + 1} exceeded "
             f"the {timeout_seconds}s application deadline",
+            retryable=False,
         ) from exc
     except PlaywrightError as exc:
         message = f"{type(exc).__name__}: {exc}"
@@ -356,6 +358,13 @@ async def _send_step(
             for event in events
             if event.get("type") == "error"
         )
+        if errors and re.search(r"\bresponse timed out\b", errors, re.I):
+            raise BrowserInfrastructureError(
+                "application_response_timeout",
+                f"case {case.id} turn {step_index + 1} exceeded the backend response SLA: "
+                f"{errors}",
+                retryable=False,
+            )
         if errors and _PROVIDER_OR_TRANSPORT_FAILURE.search(errors):
             raise BrowserInfrastructureError(
                 "provider_or_transport_failed",
@@ -452,6 +461,32 @@ async def _send_case_steps(
                         ),
                         "request_id": request_id,
                     }
+                )
+        if not case.deterministic.error_expected:
+            unexpected_errors = [
+                str(event.get("content") or event.get("message") or "unknown error")
+                for event in step_events
+                if event.get("type") == "error"
+            ]
+            if unexpected_errors:
+                message = "; ".join(unexpected_errors)
+                if re.search(r"\bresponse timed out\b", message, re.I):
+                    raise BrowserInfrastructureError(
+                        "application_response_timeout",
+                        f"case {case.id} turn {step_index + 1} exceeded the "
+                        f"backend response SLA: {message}",
+                        retryable=False,
+                    )
+                if _PROVIDER_OR_TRANSPORT_FAILURE.search(message):
+                    raise BrowserInfrastructureError(
+                        "provider_or_transport_failed",
+                        f"case {case.id} turn {step_index + 1} returned an "
+                        f"unexpected backend error: {message}",
+                    )
+                raise BrowserQualityError(
+                    "unexpected_backend_error",
+                    f"case {case.id} turn {step_index + 1} returned an "
+                    f"unexpected backend error: {message}",
                 )
 
 
@@ -709,7 +744,7 @@ def _exception_failure_detail(exc: Exception) -> FailureDetail:
             "infrastructure",
             exc.code,
             str(exc),
-            retryable=True,
+            retryable=exc.retryable,
         )
     if isinstance(exc, BrowserQualityError):
         return _failure_detail("quality", exc.code, str(exc))
@@ -772,6 +807,7 @@ async def _run_cases_bounded(
     semaphore = asyncio.Semaphore(max_concurrency)
     graph_semaphore = asyncio.Semaphore(graph_max_concurrency)
     ordered: list[dict[str, Any] | None] = [None] * len(cases)
+    recorded_indices: set[int] = set()
 
     async def run_indexed(
         index: int, case: EvaluationCase
@@ -793,15 +829,117 @@ async def _run_cases_bounded(
         for completed in asyncio.as_completed(tasks):
             index, result = await completed
             ordered[index] = result
+            recorded_indices.add(index)
             if on_result is not None:
                 await on_result([item for item in ordered if item is not None])
     finally:
         for task in tasks:
             if not task.done():
                 task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+        recovered_result = False
+        for outcome in outcomes:
+            if (
+                isinstance(outcome, tuple)
+                and len(outcome) == 2
+                and isinstance(outcome[0], int)
+                and isinstance(outcome[1], dict)
+                and outcome[0] not in recorded_indices
+            ):
+                ordered[outcome[0]] = outcome[1]
+                recovered_result = True
+        if on_result is not None and recovered_result:
+            # Cancellation must not discard an attempt that completed its own
+            # cleanup while the outer suite deadline was unwinding.
+            await asyncio.shield(
+                on_result([item for item in ordered if item is not None])
+            )
 
     return [item for item in ordered if item is not None]
+
+
+def _merge_attempt_results(
+    previous: dict[str, Any], latest: dict[str, Any]
+) -> dict[str, Any]:
+    """Keep the latest outcome while retaining evidence from every case attempt."""
+    previous_attempts = previous.get("attempts") or [previous]
+    latest_attempts = latest.get("attempts") or [latest]
+    attempts = [*previous_attempts, *latest_attempts]
+    result = dict(latest)
+    result["attempts"] = attempts
+    result["attempt_count"] = len(attempts)
+    result["retried"] = len(attempts) > 1
+    result["thread_ids"] = list(
+        dict.fromkeys(
+            str(attempt["thread_id"])
+            for attempt in attempts
+            if attempt.get("thread_id")
+        )
+    )
+    return result
+
+
+async def _run_cases_with_deferred_retries(
+    cases: list[EvaluationCase],
+    *,
+    max_concurrency: int,
+    graph_max_concurrency: int,
+    retry_count: int,
+    run_attempt: Callable[[EvaluationCase, int], Awaitable[dict[str, Any]]],
+    on_result: Callable[[list[dict[str, Any]]], Awaitable[None]] | None = None,
+) -> list[dict[str, Any]]:
+    """Prioritise first-pass corpus coverage before spending lanes on retries."""
+    if retry_count < 0:
+        raise ValueError("browser infrastructure retry count cannot be negative")
+    case_order = {case.id: index for index, case in enumerate(cases)}
+    current: dict[str, dict[str, Any]] = {}
+
+    async def emit_checkpoint() -> None:
+        if on_result is not None:
+            await on_result(
+                sorted(current.values(), key=lambda result: case_order[result["id"]])
+            )
+
+    async def run_batch(
+        batch_cases: list[EvaluationCase], attempt_number: int
+    ) -> list[dict[str, Any]]:
+        base_results = dict(current)
+
+        async def run_case(case: EvaluationCase) -> dict[str, Any]:
+            return await _run_case_with_retries(
+                case,
+                retry_count=0,
+                run_attempt=lambda attempted_case, _ignored: run_attempt(
+                    attempted_case, attempt_number
+                ),
+            )
+
+        async def update_batch(completed: list[dict[str, Any]]) -> None:
+            for result in completed:
+                previous = base_results.get(result["id"])
+                current[result["id"]] = (
+                    _merge_attempt_results(previous, result) if previous else result
+                )
+            await emit_checkpoint()
+
+        return await _run_cases_bounded(
+            batch_cases,
+            max_concurrency=min(max_concurrency, len(batch_cases)),
+            graph_max_concurrency=min(
+                graph_max_concurrency, max_concurrency, len(batch_cases)
+            ),
+            run_case=run_case,
+            on_result=update_batch,
+        )
+
+    await run_batch(cases, 1)
+    for attempt_number in range(2, retry_count + 2):
+        retry_cases = [case for case in cases if _should_retry(current[case.id])]
+        if not retry_cases:
+            break
+        await run_batch(retry_cases, attempt_number)
+
+    return sorted(current.values(), key=lambda result: case_order[result["id"]])
 
 
 async def _run_case_with_retries(
@@ -880,7 +1018,10 @@ async def _run_browser_attempt(
     frames: list[dict[str, Any]] = []
     try:
         context = await browser.new_context(viewport={"width": 1440, "height": 960})
-        await context.tracing.start(screenshots=True, snapshots=True, sources=True)
+        # The explicit full-page PNG is the visual review artifact. Continuous
+        # trace screenshots during multi-minute model waits make captures huge
+        # without adding useful timing evidence.
+        await context.tracing.start(screenshots=False, snapshots=True, sources=True)
         await context.add_init_script(
             "if (!localStorage.getItem("
             + json.dumps(EVAL_AUTH_STORAGE_KEY)
@@ -907,6 +1048,7 @@ async def _run_browser_attempt(
     case_events: list[dict[str, Any]] = []
     turn_timings: list[dict[str, Any]] = []
     failure_details: list[FailureDetail] = []
+    execution_state = "completed"
     try:
         try:
             try:
@@ -950,6 +1092,15 @@ async def _run_browser_attempt(
                 case_events,
                 timeout_seconds=turn_timeout_seconds,
                 turn_timings=turn_timings,
+            )
+        except asyncio.CancelledError:
+            execution_state = "cancelled"
+            failure_details.append(
+                _failure_detail(
+                    "infrastructure",
+                    "browser_case_cancelled",
+                    f"browser suite timed out and cancelled case {case.id}",
+                )
             )
         except Exception as exc:
             failure_details.append(_exception_failure_detail(exc))
@@ -1071,6 +1222,7 @@ async def _run_browser_attempt(
             "category": case.category,
             "risk_tags": case.risk_tags,
             "attempt": attempt_number,
+            "execution_state": execution_state,
             "deterministic_failures": deterministic,
             "failure_details": failure_details,
             "answer": extract_response_text(case_events),
@@ -1138,7 +1290,7 @@ async def _run_browser_attempt(
                     result["passed"] = False
 
 
-async def run_browser(args: argparse.Namespace) -> dict[str, Any]:
+async def _execute_browser(args: argparse.Namespace) -> dict[str, Any]:
     corpus = load_corpus()
     case_ids = _suite_case_ids(args.suite, args.case)
     cases = [corpus.by_id[case_id] for case_id in case_ids]
@@ -1151,12 +1303,23 @@ async def run_browser(args: argparse.Namespace) -> dict[str, Any]:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     screenshot_dir.mkdir(parents=True, exist_ok=True)
     trace_dir.mkdir(parents=True, exist_ok=True)
-    session = await _internal_session(
-        args.backend_target, args.email, args.internal_password
-    )
     results: list[dict[str, Any]] = []
     started = time.monotonic()
     started_at = datetime.now(UTC)
+    _write_json_atomic(
+        output_path,
+        _browser_report(
+            args=args,
+            corpus=corpus,
+            started_at=started_at,
+            started=started,
+            results=results,
+            status="running",
+        ),
+    )
+    session = await _internal_session(
+        args.backend_target, args.email, args.internal_password
+    )
 
     timeout_seconds = browser_suite_timeout_seconds(cases)
     turn_timeout_seconds = application_turn_timeout_seconds()
@@ -1225,31 +1388,26 @@ async def run_browser(args: argparse.Namespace) -> dict[str, Any]:
                     await context.tracing.stop()
                     await context.close()
 
-                async def run_case(case: EvaluationCase) -> dict[str, Any]:
-                    async def run_attempt(
-                        attempted_case: EvaluationCase,
-                        attempt_number: int,
-                    ) -> dict[str, Any]:
-                        return await _run_browser_attempt(
-                            browser,
-                            args,
-                            attempted_case,
-                            artifact_dir=artifact_dir,
-                            screenshot_dir=screenshot_dir,
-                            trace_dir=trace_dir,
-                            turn_timeout_seconds=turn_timeout_seconds,
-                            attempt_number=attempt_number,
-                        )
-
-                    return await _run_case_with_retries(
-                        case,
-                        retry_count=infrastructure_retry_count,
-                        run_attempt=run_attempt,
+                async def run_attempt(
+                    attempted_case: EvaluationCase,
+                    attempt_number: int,
+                ) -> dict[str, Any]:
+                    return await _run_browser_attempt(
+                        browser,
+                        args,
+                        attempted_case,
+                        artifact_dir=artifact_dir,
+                        screenshot_dir=screenshot_dir,
+                        trace_dir=trace_dir,
+                        turn_timeout_seconds=turn_timeout_seconds,
+                        attempt_number=attempt_number,
                     )
 
                 async def write_checkpoint(
                     completed_results: list[dict[str, Any]],
                 ) -> None:
+                    nonlocal results
+                    results = list(completed_results)
                     checkpoint = _browser_report(
                         args=args,
                         corpus=corpus,
@@ -1258,20 +1416,18 @@ async def run_browser(args: argparse.Namespace) -> dict[str, Any]:
                         results=completed_results,
                         status="partial",
                     )
-                    output_path.write_text(
-                        json.dumps(checkpoint, indent=2, ensure_ascii=False) + "\n",
-                        encoding="utf-8",
-                    )
+                    _write_json_atomic(output_path, checkpoint)
 
-                results = await _run_cases_bounded(
+                results = await _run_cases_with_deferred_retries(
                     cases,
                     max_concurrency=min(case_concurrency, len(cases)),
-                    run_case=run_case,
                     graph_max_concurrency=min(
                         graph_case_concurrency,
                         case_concurrency,
                         len(cases),
                     ),
+                    retry_count=infrastructure_retry_count,
+                    run_attempt=run_attempt,
                     on_result=write_checkpoint,
                 )
             finally:
@@ -1324,12 +1480,204 @@ async def run_browser(args: argparse.Namespace) -> dict[str, Any]:
         "passed": dashboard_passed,
         "required_keys": ["kpis", "providers"],
     }
-    output_path.write_text(
-        json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
+    _write_json_atomic(output_path, report)
     _write_junit(artifact_dir / "browser-junit.xml", results)
     _write_html(artifact_dir / "review.html", report)
     return report
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    """Replace a checkpoint atomically so cancellation cannot leave invalid JSON."""
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _unfinished_case_result(
+    case: EvaluationCase, detail: FailureDetail, *, execution_state: str
+) -> dict[str, Any]:
+    """Emit a schema-complete result for work pre-empted by the suite deadline."""
+    return {
+        "id": case.id,
+        "category": case.category,
+        "risk_tags": case.risk_tags,
+        "attempt": 0,
+        "execution_state": execution_state,
+        "deterministic_failures": [detail["message"]],
+        "failure_details": [detail],
+        "answer": "",
+        "turns": [],
+        "events": [],
+        "graph": None,
+        "rendered_nodes": 0,
+        "thread_id": None,
+        "thread_ids": [],
+        "screenshot": None,
+        "trace": None,
+        "latency_ms": None,
+        "fallback_used": False,
+        "passed": False,
+        "attempts": [],
+        "attempt_count": 0,
+        "retried": False,
+    }
+
+
+async def _finalize_timed_out_browser(args: argparse.Namespace) -> dict[str, Any]:
+    """Turn the last durable checkpoint into enforceable timeout evidence."""
+    corpus = load_corpus()
+    case_ids = _suite_case_ids(args.suite, args.case)
+    cases = [corpus.by_id[case_id] for case_id in case_ids]
+    output_path = ROOT / args.output
+    artifact_dir = output_path.parent
+    timeout_seconds = browser_suite_timeout_seconds(cases)
+    checkpoint: dict[str, Any] = {}
+    if output_path.exists():
+        try:
+            candidate = json.loads(output_path.read_text(encoding="utf-8"))
+            if isinstance(candidate, dict) and candidate.get("kind") == "browser_capture":
+                checkpoint = candidate
+        except (OSError, json.JSONDecodeError):
+            checkpoint = {}
+
+    started_at_text = checkpoint.get("started_at")
+    try:
+        started_at = datetime.fromisoformat(str(started_at_text))
+    except (TypeError, ValueError):
+        started_at = datetime.now(UTC)
+    existing = {
+        str(result.get("id")): result
+        for result in checkpoint.get("results") or []
+        if isinstance(result, dict) and result.get("id")
+    }
+    suite_detail = _failure_detail(
+        "infrastructure",
+        "browser_suite_timeout",
+        f"browser suite timed out after its {timeout_seconds}s deadline",
+    )
+    results = []
+    for case in cases:
+        result = existing.get(case.id)
+        if result is None:
+            result = _unfinished_case_result(
+                case, suite_detail, execution_state="not_started"
+            )
+        else:
+            result = dict(result)
+            result.setdefault("execution_state", "completed")
+        results.append(result)
+
+    report = _browser_report(
+        args=args,
+        corpus=corpus,
+        started_at=started_at,
+        started=time.monotonic(),
+        results=results,
+        status="timed_out",
+    )
+    if checkpoint.get("duration_ms") is not None:
+        report["duration_ms"] = max(
+            int(checkpoint["duration_ms"]), timeout_seconds * 1000
+        )
+    report["failure"] = suite_detail
+    report["case_states"] = [
+        {"id": result["id"], "state": result.get("execution_state", "completed")}
+        for result in results
+    ]
+
+    finalization_failures: list[FailureDetail] = []
+    report["application_telemetry"] = []
+    report["dashboard_smoke"] = {
+        "passed": False,
+        "required_keys": ["kpis", "providers"],
+    }
+    try:
+        session = await _internal_session(
+            args.backend_target, args.email, args.internal_password
+        )
+    except Exception as exc:
+        finalization_failures.append(
+            _failure_detail(
+                "infrastructure",
+                "timeout_finalization_auth_failed",
+                f"timeout finalization auth failed: {type(exc).__name__}: {exc}",
+            )
+        )
+    else:
+        thread_ids = list(
+            dict.fromkeys(
+                str(thread_id)
+                for result in results
+                for thread_id in result.get("thread_ids")
+                or [result.get("thread_id")]
+                if thread_id
+            )
+        )
+        if thread_ids:
+            query = urllib.parse.urlencode(
+                [
+                    ("since_epoch", str(started_at.timestamp())),
+                    *(("thread_id", thread_id) for thread_id in thread_ids),
+                ]
+            )
+            try:
+                telemetry = await asyncio.to_thread(
+                    _blocking_json_request,
+                    "GET",
+                    args.backend_target.rstrip("/")
+                    + "/api/internal/dashboard/eval-telemetry?"
+                    + query,
+                    None,
+                    session["access_token"],
+                )
+                report["application_telemetry"] = telemetry.get("calls") or []
+            except Exception as exc:
+                finalization_failures.append(
+                    _failure_detail(
+                        "infrastructure",
+                        "timeout_telemetry_collection_failed",
+                        "timeout telemetry collection failed: "
+                        f"{type(exc).__name__}: {exc}",
+                    )
+                )
+        try:
+            dashboard = await asyncio.to_thread(
+                _blocking_json_request,
+                "GET",
+                args.backend_target.rstrip("/")
+                + "/api/internal/dashboard/overview",
+                None,
+                session["access_token"],
+            )
+            report["dashboard_smoke"]["passed"] = isinstance(
+                dashboard.get("kpis"), dict
+            ) and isinstance(dashboard.get("providers"), dict)
+        except Exception as exc:
+            finalization_failures.append(
+                _failure_detail(
+                    "infrastructure",
+                    "timeout_dashboard_collection_failed",
+                    f"timeout dashboard collection failed: {type(exc).__name__}: {exc}",
+                )
+            )
+    report["finalization_failures"] = finalization_failures
+    _write_json_atomic(output_path, report)
+    _write_junit(artifact_dir / "browser-junit.xml", results)
+    _write_html(artifact_dir / "review.html", report)
+    return report
+
+
+async def run_browser(args: argparse.Namespace) -> dict[str, Any]:
+    try:
+        return await _execute_browser(args)
+    except TimeoutError:
+        return await _finalize_timed_out_browser(args)
 
 
 def _browser_report(
@@ -1354,6 +1702,13 @@ def _browser_report(
         "started_at": started_at.isoformat(),
         "duration_ms": int((time.monotonic() - started) * 1000),
         "status": status,
+        "case_states": [
+            {
+                "id": result["id"],
+                "state": result.get("execution_state", "completed"),
+            }
+            for result in results
+        ],
         "latency": _latency_summary(results),
         "results": results,
     }
@@ -1548,6 +1903,8 @@ def _write_html(path: Path, report: dict[str, Any]) -> None:
 async def main() -> None:
     args = build_parser().parse_args()
     report = await run_browser(args)
+    if report.get("status") != "complete":
+        raise SystemExit(2)
     if (
         not all(result["passed"] for result in report["results"])
         or not report["dashboard_smoke"]["passed"]

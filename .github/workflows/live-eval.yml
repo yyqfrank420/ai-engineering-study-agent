@@ -79,7 +79,7 @@ jobs:
     if: needs.classify.outputs.ai-impact == 'true' && needs.classify.outputs.trusted == 'true' && needs.classify.outputs.corpus-status == 'approved'
     # Browser time scales with reviewed corpus turns and is independently capped.
     # This outer timeout also covers setup, deployment, judging, and cleanup.
-    timeout-minutes: 60
+    timeout-minutes: 90
     environment: staging-eval
     concurrency:
       group: staging-live-eval-global

@@ -133,6 +133,55 @@ async def test_browser_cases_run_with_bounded_concurrency_and_keep_corpus_order(
         "memory",
     ]
     assert checkpoint_ids[-1] == ["rag-grounding", "research", "memory"]
+    assert checkpoint_ids.count(["rag-grounding", "research", "memory"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_cases_defer_retry_until_every_first_attempt_completes():
+    from eval.browser_runner import _run_cases_with_deferred_retries
+
+    corpus = load_corpus()
+    cases = [corpus.by_id["research"], corpus.by_id["node-followup"]]
+    calls: list[tuple[str, int]] = []
+
+    async def run_attempt(case, attempt_number):
+        calls.append((case.id, attempt_number))
+        retryable_failure = case.id == "research" and attempt_number == 1
+        detail = {
+            "kind": "infrastructure",
+            "code": "browser_transport_failed",
+            "message": "temporary transport failure",
+            "blocking": True,
+            "retryable": True,
+        }
+        return {
+            "id": case.id,
+            "attempt": attempt_number,
+            "thread_id": f"{case.id}-{attempt_number}",
+            "passed": not retryable_failure,
+            "failure_details": [detail] if retryable_failure else [],
+            "deterministic_failures": (
+                [detail["message"]] if retryable_failure else []
+            ),
+        }
+
+    results = await _run_cases_with_deferred_retries(
+        cases,
+        max_concurrency=2,
+        graph_max_concurrency=1,
+        retry_count=1,
+        run_attempt=run_attempt,
+    )
+
+    assert calls == [
+        ("research", 1),
+        ("node-followup", 1),
+        ("research", 2),
+    ]
+    assert results[0]["attempt_count"] == 2
+    assert results[0]["thread_ids"] == ["research-1", "research-2"]
+    assert results[1]["attempt_count"] == 1
+    assert results[1]["retried"] is False
 
 
 @pytest.mark.asyncio
@@ -162,6 +211,68 @@ async def test_multi_turn_browser_case_sends_each_step_sequentially(monkeypatch)
     assert step_order == [0, 1]
     assert maximum_active == 1
     assert [event["step"] for event in events] == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_multi_turn_case_stops_after_unexpected_timeout_error(monkeypatch):
+    from eval.browser_runner import BrowserInfrastructureError, _send_case_steps
+
+    case = load_corpus().by_id["graph-expansion"]
+    step_order: list[int] = []
+
+    async def fake_send_step(page, sent_case, step_index, frames, *, timeout_seconds):
+        del page, sent_case, frames, timeout_seconds
+        step_order.append(step_index)
+        return [
+            {"type": "error", "content": "Response timed out. Please try again."},
+            {"type": "done"},
+        ]
+
+    monkeypatch.setattr("eval.browser_runner._send_step", fake_send_step)
+    events: list[dict] = []
+    timings: list[dict] = []
+    with pytest.raises(BrowserInfrastructureError) as raised:
+        await _send_case_steps(
+            None,
+            case,
+            [],
+            events,
+            timeout_seconds=390,
+            turn_timings=timings,
+        )
+
+    assert raised.value.code == "application_response_timeout"
+    assert raised.value.retryable is False
+    assert step_order == [0]
+    assert [event["type"] for event in events] == ["error", "done"]
+    assert len(timings) == 1
+
+
+@pytest.mark.asyncio
+async def test_expected_error_case_can_continue_to_a_later_turn(monkeypatch):
+    from eval.browser_runner import _send_case_steps
+
+    original = load_corpus().by_id["graph-expansion"]
+    case = original.model_copy(
+        update={
+            "deterministic": original.deterministic.model_copy(
+                update={"error_expected": True}
+            )
+        }
+    )
+    step_order: list[int] = []
+
+    async def fake_send_step(page, sent_case, step_index, frames, *, timeout_seconds):
+        del page, sent_case, frames, timeout_seconds
+        step_order.append(step_index)
+        if step_index == 0:
+            return [{"type": "error", "content": "expected"}, {"type": "done"}]
+        return [{"type": "done"}]
+
+    monkeypatch.setattr("eval.browser_runner._send_step", fake_send_step)
+    await _send_case_steps(None, case, [], [], timeout_seconds=390)
+
+    assert step_order == [0, 1]
 
 
 @pytest.mark.asyncio
@@ -349,6 +460,25 @@ async def test_browser_case_does_not_retry_quality_or_mixed_failures(failure_det
     assert result["retried"] is False
 
 
+def test_application_deadline_infrastructure_is_explicitly_non_retryable():
+    from eval.browser_runner import (
+        BrowserInfrastructureError,
+        _exception_failure_detail,
+    )
+
+    detail = _exception_failure_detail(
+        BrowserInfrastructureError(
+            "application_turn_timeout",
+            "application exceeded its deadline",
+            retryable=False,
+        )
+    )
+
+    assert detail["kind"] == "infrastructure"
+    assert detail["code"] == "application_turn_timeout"
+    assert detail["retryable"] is False
+
+
 @pytest.mark.asyncio
 async def test_browser_case_does_not_retry_a_missing_done_event():
     from eval.browser_runner import BrowserQualityError, _run_case_with_retries
@@ -473,6 +603,95 @@ def test_browser_capture_checkpoint_preserves_completed_results(monkeypatch):
     assert report["status"] == "partial"
     assert report["results"] == [{"id": "completed-case", "passed": False}]
     assert report["corpus_sha256"] == "corpus-sha"
+
+
+@pytest.mark.asyncio
+async def test_browser_timeout_finalization_keeps_partial_results_and_telemetry(
+    tmp_path, monkeypatch
+):
+    from argparse import Namespace
+    from datetime import UTC, datetime
+
+    from eval.browser_runner import _finalize_timed_out_browser, _write_json_atomic
+
+    output = tmp_path / "browser-results.json"
+    checkpoint = {
+        "format_version": 1,
+        "kind": "browser_capture",
+        "suite": "diagnostic",
+        "corpus_version": "v1",
+        "corpus_sha256": corpus_sha256(),
+        "release_identity": "release",
+        "target": "http://frontend",
+        "backend_target": "https://backend",
+        "started_at": datetime(2026, 8, 2, tzinfo=UTC).isoformat(),
+        "duration_ms": 11_000,
+        "status": "partial",
+        "results": [
+            {
+                "id": "rag-grounding",
+                "execution_state": "completed",
+                "deterministic_failures": [],
+                "failure_details": [],
+                "answer": "grounded answer",
+                "turns": [],
+                "events": [],
+                "thread_id": "thread-1",
+                "thread_ids": ["thread-1"],
+                "screenshot": None,
+                "latency_ms": 1_000,
+                "passed": True,
+            }
+        ],
+    }
+    _write_json_atomic(output, checkpoint)
+    args = Namespace(
+        suite="diagnostic",
+        case=["rag-grounding", "memory"],
+        output=str(output),
+        target="http://frontend",
+        backend_target="https://backend",
+        email="eval@example.com",
+        internal_password="secret",
+    )
+
+    async def fake_internal_session(*_args):
+        return {"access_token": "token"}
+
+    def fake_request(_method, url, _payload, _token):
+        if "eval-telemetry" in url:
+            assert "thread_id=thread-1" in url
+            return {"calls": [{"thread_id": "thread-1", "model": "claude-opus-5"}]}
+        if url.endswith("/overview"):
+            return {"kpis": {}, "providers": {}}
+        raise AssertionError(url)
+
+    monkeypatch.setattr("eval.browser_runner._internal_session", fake_internal_session)
+    monkeypatch.setattr("eval.browser_runner._blocking_json_request", fake_request)
+    monkeypatch.setattr(
+        "eval.browser_runner.browser_suite_timeout_seconds", lambda _cases: 12
+    )
+
+    report = await _finalize_timed_out_browser(args)
+
+    assert report["status"] == "timed_out"
+    assert report["failure"]["code"] == "browser_suite_timeout"
+    assert [result["id"] for result in report["results"]] == [
+        "rag-grounding",
+        "memory",
+    ]
+    assert report["results"][0]["passed"] is True
+    assert report["results"][1]["execution_state"] == "not_started"
+    assert report["results"][1]["failure_details"][0]["code"] == (
+        "browser_suite_timeout"
+    )
+    assert report["application_telemetry"][0]["thread_id"] == "thread-1"
+    assert report["dashboard_smoke"]["passed"] is True
+    assert report["finalization_failures"] == []
+    assert json.loads(output.read_text(encoding="utf-8"))["status"] == "timed_out"
+    assert 'tests="2" failures="1"' in (
+        tmp_path / "browser-junit.xml"
+    ).read_text(encoding="utf-8")
 
 
 def test_current_research_cases_require_verifiable_web_sources():

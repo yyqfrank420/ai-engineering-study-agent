@@ -253,7 +253,12 @@ def test_scheduled_eval_reports_manual_review_without_masking_hard_failures():
 
     assert "--require-approved-corpus" in workflow
     assert "--manual-review-policy report-only" in workflow
-    assert 'if [ "$SEMANTIC_OUTCOME" != success ]; then' in workflow
+    assert "BROWSER_OUTCOME: ${{ steps.browser.outcome }}" in workflow
+    assert "SEMANTIC_OUTCOME: ${{ steps.semantic.outcome }}" in workflow
+    assert (
+        'if [ "$BROWSER_OUTCOME" != success ] || '
+        '[ "$SEMANTIC_OUTCOME" != success ]; then'
+    ) in workflow
 
 
 def test_dashboard_smoke_checks_every_frontend_endpoint_sequentially(monkeypatch):
