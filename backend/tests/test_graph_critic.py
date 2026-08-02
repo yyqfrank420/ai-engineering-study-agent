@@ -1317,7 +1317,7 @@ def test_visual_revision_instruction_cannot_hide_a_remaining_semantic_failure():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("revision_count", "expected_effort"),
-    [(0, "high"), (1, "medium")],
+    [(0, "medium"), (1, "low")],
 )
 async def test_semantic_critic_never_receives_the_rendered_image(
     monkeypatch,

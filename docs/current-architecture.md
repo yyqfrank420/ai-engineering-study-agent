@@ -71,10 +71,10 @@ persistence, so Cloud Run scale-out neither resets the limits nor stores raw ema
 limiter table.
 
 The normal applied-design path uses Opus 5 with role-specific effort: high for Architect and
-Challenger, medium for constrained graph integration, high for the first independent
+Challenger, low for constrained graph integration, medium for the first independent
 architecture/render review, and high for the explanation stream. A failed semantic quality gate
-adds at most two medium-effort calls: one compact patch and one bounded re-review. A structurally
-invalid first draft may use the independently configured medium-effort repair role once;
+adds a medium-effort compact patch and one low-effort bounded re-review. A structurally invalid
+first draft may use the independently configured medium-effort repair role once;
 renderer-only failures add no model calls. Retrieval and the standing checklist do not add model calls.
 
 During steps 4-7 the client may send `steer`. The server cancels the active workflow, emits

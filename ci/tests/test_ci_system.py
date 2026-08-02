@@ -255,7 +255,7 @@ def test_feature_pull_requests_do_not_duplicate_required_workflows_on_push():
         assert "codex/**" not in triggers
 
 
-def test_pending_corpus_has_a_trusted_full_suite_bootstrap_path():
+def test_scheduled_eval_preserves_approval_and_diagnostic_build_boundaries():
     workflow = (ROOT / ".github/workflows/scheduled-eval.yml").read_text(
         encoding="utf-8"
     )
@@ -263,8 +263,18 @@ def test_pending_corpus_has_a_trusted_full_suite_bootstrap_path():
     assert "workflow_dispatch:" in workflow
     assert "environment: staging-eval" in workflow
     assert "corpus-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" in workflow
+    assert "diagnostic-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" in workflow
     assert 'if [ "$CORPUS_STATUS" = approved ]; then' in workflow
-    assert "Approved corpus requires an existing exact-tree image approval." in workflow
+    assert (
+        "Approved corpus requires an existing exact-tree image approval outside a "
+        "manually dispatched diagnostic run."
+        in workflow
+    )
+    assert (
+        'if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || '
+        '[ "$EVAL_SUITE" != diagnostic ]; then'
+        in workflow
+    )
     assert (
         "A pending corpus can be bootstrapped only by a manually dispatched full or diagnostic run."
         in workflow
@@ -277,6 +287,11 @@ def test_pending_corpus_has_a_trusted_full_suite_bootstrap_path():
     assert (
         'gcloud artifacts docker tags delete "$IMAGE:$BOOTSTRAP_IMAGE_TAG"' in workflow
     )
+    assert (
+        'gcloud artifacts docker tags delete "$IMAGE:$DIAGNOSTIC_IMAGE_TAG"'
+        in workflow
+    )
+    assert "docker tags add" not in workflow
     assert 'EVAL_EMAIL="$email" python scripts/staging_database.py reset' in workflow
     assert "artifacts/live-eval/run-context.json" in workflow
     assert "name: Wait for candidate readiness" in workflow
@@ -288,7 +303,7 @@ def test_pending_corpus_has_a_trusted_full_suite_bootstrap_path():
     )
     dependency_setup = workflow.index("uses: actions/setup-python@v5")
     candidate_resolution = workflow.index(
-        "name: Resolve approved digest or build the one-time corpus candidate"
+        "name: Resolve approved digest or build an ephemeral evaluation candidate"
     )
     candidate_readiness = workflow.index("name: Wait for candidate readiness")
     browser_capture = workflow.index("name: Start frontend and capture journeys")
@@ -299,9 +314,12 @@ def test_pending_corpus_has_a_trusted_full_suite_bootstrap_path():
         < candidate_readiness
         < browser_capture
     )
-    assert workflow.index('echo "BOOTSTRAP_IMAGE_TAG=$bootstrap_tag"') < workflow.index(
-        "docker buildx build"
-    )
+    diagnostic_env = workflow.index('echo "DIAGNOSTIC_IMAGE_TAG=$diagnostic_tag"')
+    diagnostic_build = workflow.index("docker buildx build", diagnostic_env)
+    bootstrap_env = workflow.index('echo "BOOTSTRAP_IMAGE_TAG=$bootstrap_tag"')
+    bootstrap_build = workflow.index("docker buildx build", bootstrap_env)
+    assert diagnostic_env < diagnostic_build
+    assert bootstrap_env < bootstrap_build
     assert workflow.index('echo "REVISION_TAG=$tag"') < workflow.index(
         "gcloud run deploy"
     )

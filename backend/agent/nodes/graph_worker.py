@@ -465,9 +465,10 @@ async def _generate_applied_architecture(state: AgentState, query: str, profile)
                 f"Validation error: {repair_context}"
             )
         # The independent architect and challenger already own the open-ended
-        # reasoning. Keep this constrained JSON integration at medium effort:
-        # high effort routinely exhausts the output cap before satisfying the
-        # deterministic graph contract, forcing a second provider call.
+        # reasoning. Keep the initial constrained JSON integration at low
+        # effort: higher effort can exhaust the output cap before satisfying
+        # the deterministic graph contract. A validation-informed structural
+        # repair remains medium because it must preserve and correct a draft.
         design_model = settings.orchestrator_model
         raw = await stream_llm(
             model=design_model,
@@ -480,7 +481,7 @@ async def _generate_applied_architecture(state: AgentState, query: str, profile)
             temperature=settings.graph_temperature,
             top_p=settings.graph_top_p,
             top_k=settings.graph_top_k,
-            effort="medium",
+            effort="low" if revision_count == 0 and structural_attempt == 0 else "medium",
             telemetry=build_telemetry(
                 "graph_worker_applied_design",
                 user_id=state.get("user_id"),

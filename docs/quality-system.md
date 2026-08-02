@@ -107,7 +107,11 @@ To diagnose a small set without replaying the whole corpus, manually dispatch
 case IDs. The same targeted mode is available locally by repeating `--case`, for
 example `./scripts/ci browser --suite diagnostic --case citations ...`. Diagnostic
 runs use the PR-sized time, application-call, and judge-call budgets and cannot
-approve or replace the full corpus review.
+approve or replace the full corpus review. When the approved corpus has no
+`approved-tree-<tree>` image for the workflow-dispatch ref, this diagnostic path
+builds and deploys an ephemeral image for that exact checked-out tree, then removes
+its temporary tag. It never publishes an approval tag. Scheduled, nightly, and full
+runs still require an existing exact-tree approval when the corpus is approved.
 
 PR evaluation limits are eight cases, 50 application provider attempts, and 16
 judge provider attempts. The timeout chain is deliberately nested: the backend

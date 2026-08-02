@@ -359,10 +359,10 @@ async def graph_critic_node(state: AgentState) -> AgentState:
             temperature=settings.graph_temperature,
             top_p=settings.graph_top_p,
             top_k=settings.graph_top_k,
-            # Preserve the strongest independent review on the first draft.
-            # Later passes verify a bounded patch against the same rubric, so
-            # medium effort avoids repeating the full high-effort latency.
-            effort="high" if revision_count == 0 else "medium",
+            # The first pass remains a complete independent review. A later
+            # pass only verifies a bounded patch against the same exact rubric
+            # and deterministic gates, so it can use the lowest effort tier.
+            effort="medium" if revision_count == 0 else "low",
             telemetry=build_telemetry(
                 "graph_critic",
                 user_id=state.get("user_id"),

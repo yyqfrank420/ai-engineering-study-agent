@@ -122,14 +122,31 @@ jobs:
           echo "EVAL_INTERNAL_PASSWORD=$password" >> "$GITHUB_ENV"
           echo "EVAL_EMAIL=$email" >> "$GITHUB_ENV"
           DB_SCHEMA=staging SUPABASE_DB_URL="$db_url" EVAL_EMAIL="$email" python scripts/staging_database.py reset
-      - name: Resolve approved digest or build the one-time corpus candidate
+      - name: Resolve approved digest or build an ephemeral evaluation candidate
         env:
           CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
         run: |
           tree_sha="$(git rev-parse 'HEAD^{tree}')"
           if [ "$CORPUS_STATUS" = approved ]; then
-            digest="$(gcloud artifacts docker images describe "$IMAGE:approved-tree-$tree_sha" --format='value(image_summary.digest)')"
-            [ -n "$digest" ] || { echo "Approved corpus requires an existing exact-tree image approval." >&2; exit 1; }
+            digest="$(gcloud artifacts docker images describe "$IMAGE:approved-tree-$tree_sha" --format='value(image_summary.digest)' 2>/dev/null || true)"
+            if [ -z "$digest" ]; then
+              if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || [ "$EVAL_SUITE" != diagnostic ]; then
+                echo "Approved corpus requires an existing exact-tree image approval outside a manually dispatched diagnostic run." >&2
+                exit 1
+              fi
+              commit_sha="$(git rev-parse HEAD)"
+              diagnostic_tag="diagnostic-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              echo "DIAGNOSTIC_IMAGE_TAG=$diagnostic_tag" >> "$GITHUB_ENV"
+              docker buildx build \
+                --file backend/Dockerfile \
+                --cache-from "type=registry,ref=$IMAGE:buildcache" \
+                --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
+                --label "org.opencontainers.image.revision=$commit_sha" \
+                --tag "$IMAGE:$diagnostic_tag" \
+                --push .
+              digest="$(gcloud artifacts docker images describe "$IMAGE:$diagnostic_tag" --format='value(image_summary.digest)')"
+              [ -n "$digest" ] || { echo "Diagnostic build did not produce an immutable digest." >&2; exit 1; }
+            fi
           else
             if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || { [ "$EVAL_SUITE" != full ] && [ "$EVAL_SUITE" != diagnostic ]; }; then
               echo "A pending corpus can be bootstrapped only by a manually dispatched full or diagnostic run." >&2
@@ -211,6 +228,7 @@ jobs:
         run: |
           [ -z "${VITE_PID:-}" ] || kill "$VITE_PID" || true
           [ -z "${REVISION_TAG:-}" ] || gcloud run services update-traffic "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --remove-tags "$REVISION_TAG" --quiet || true
+          [ -z "${DIAGNOSTIC_IMAGE_TAG:-}" ] || gcloud artifacts docker tags delete "$IMAGE:$DIAGNOSTIC_IMAGE_TAG" --quiet || true
           [ -z "${BOOTSTRAP_IMAGE_TAG:-}" ] || gcloud artifacts docker tags delete "$IMAGE:$BOOTSTRAP_IMAGE_TAG" --quiet || true
       - uses: actions/upload-artifact@v4
         if: always()
