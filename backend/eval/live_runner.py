@@ -26,8 +26,9 @@ ROOT = Path(__file__).resolve().parents[2]
 QUALITY_MANIFEST = ROOT / "ci" / "quality.json"
 PROVIDER_FAILURE = re.compile(r"(?:rate.?limit|429|provider.*unavailable|timed?\s*out|connection.*failed)", re.I)
 APPLICATION_PRICES = {
-    # Price release 2026-07-18. Sonnet 5 uses its introductory price through 2026-08-31.
+    # Price release 2026-07-18. Keep prior models for historical artifact accounting.
     "claude-sonnet-5": (2.00, 10.00),
+    "claude-opus-5": (5.00, 25.00),
     "claude-opus-4-8": (5.00, 25.00),
     "gpt-5.4": (2.50, 15.00),
     "gpt-5.4-mini": (0.75, 4.50),

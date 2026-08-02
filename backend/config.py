@@ -25,12 +25,11 @@ class Settings(BaseSettings):
     # ── LLM ───────────────────────────────────────────────────────────────────
     anthropic_api_key: str = ""
 
-    # Sonnet 5 is the single runtime model. Role-specific ``effort`` settings,
-    # rather than a weaker worker model, control latency and spend per node.
-    orchestrator_model: str = "claude-sonnet-5"
-    worker_model: str = "claude-sonnet-5"
-    # Used only after the combined architecture/render gate requests a repair.
-    graph_repair_model: str = "claude-opus-4-8"
+    # Opus 5 at high effort is the single runtime model across application roles.
+    orchestrator_model: str = "claude-opus-5"
+    worker_model: str = "claude-opus-5"
+    # Retained as an independently configurable repair role.
+    graph_repair_model: str = "claude-opus-5"
     # Extended thinking budget per agent call (tokens)
     # Extended reasoning budgets used by prototype and production design paths.
     # max_tokens must leave room for both hidden reasoning and the final answer.

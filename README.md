@@ -59,8 +59,8 @@ Relevant docs:
 
 - **Graph layout persistence** (2026-04-05): Pan/zoom + node positions saved per graph, restored on session reload. Debounced 400ms frontend cache → `PUT /api/threads/{id}/graph`.
 - **Cold-start UX contract**: Explicit `Prepare` button shows real server milestones and unlocks Send only after the retrieval index is ready.
-- **Three-way routing**: SIMPLE (Sonnet 5 low effort) / MEMORY (session history) / SEARCH (RAG + architecture workflow).
-- **Role-based model effort**: Sonnet 5 handles normal work and compact semantic graph patches; Opus 4.8 is reserved for structurally invalid first drafts.
+- **Three-way routing**: SIMPLE (Opus 5 high effort) / MEMORY (session history) / SEARCH (RAG + architecture workflow).
+- **Unified model quality**: Opus 5 at high effort handles every application model role, including compact graph repairs.
 - **D3 architecture diagram**: Interactive graph with step-by-step walkthrough and node detail enrichment.
 
 ## Local Development

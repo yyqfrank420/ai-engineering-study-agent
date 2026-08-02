@@ -18,7 +18,7 @@ from graph.runtime import select_canonical_graph
 logger = logging.getLogger(__name__)
 
 _APPLIED_GRAPH_PROMPT_VERSION = "applied_architecture_v17"
-_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v17"
+_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v18"
 _MAX_GRAPH_PATCH_CHARS = 20_000
 
 
@@ -250,6 +250,14 @@ that would become visible only after the requested repair. Do not spend a bounde
 first symptom while leaving another label-only guarantee, bypass, or incomplete branch behind.
 Privately map every supplied blocking failure to at least one concrete patch operation before
 returning. A structurally valid patch that leaves any supplied blocker unresolved is invalid.
+Treat every entry in review.missing as an independent conjunction, including repeated failures of
+the same class at different node or edge selectors. Repair every named selector in this one patch;
+never stop after fixing the first approval owner or collapsed release edge.
+For each named approval decision, either draw two outbound edges (one approval-only and one
+rejection-only), or draw one combined approve/reject edge to durable lifecycle state whose complete
+edge text includes payload, target, policy version, expiry, and idempotency key. For release repair,
+no edge text may combine promotion with rollback, and canary-to-full-production promotion must be a
+separate directed edge.
 The complete patched graph must pass the deterministic publication contract; validation feedback
 will identify any residual collapsed branch, approval route, bypass, or release transition.
 </trust_and_bounds>
@@ -456,10 +464,8 @@ async def _generate_applied_architecture(state: AgentState, query: str, profile)
                 "domain responsibilities, then return one complete replacement JSON object.\n\n"
                 f"Validation error: {repair_context}"
             )
-        # Contract-informed JSON repair does not need the premium repair model;
-        # the independent critic remains the semantic quality gate. Recent
-        # live runs showed that low-effort integration routinely required the
-        # bounded repair, so medium effort on both attempts is cheaper overall.
+        # The independent critic remains the semantic quality gate. The shared
+        # runtime policy uses Opus 5 at high effort for both bounded attempts.
         design_model = settings.orchestrator_model
         raw = await stream_llm(
             model=design_model,
@@ -467,12 +473,12 @@ async def _generate_applied_architecture(state: AgentState, query: str, profile)
             messages=[{"role": "user", "content": prompt}],
             # The architect and challenger already own domain reasoning. This
             # role integrates their bounded outputs into a densely constrained
-            # JSON contract; medium effort reduces duplicate structural calls.
+            # JSON contract at the shared high-effort quality level.
             thinking_budget=None,
             temperature=settings.graph_temperature,
             top_p=settings.graph_top_p,
             top_k=settings.graph_top_k,
-            effort="medium",
+            effort="high",
             telemetry=build_telemetry(
                 "graph_worker_applied_design",
                 user_id=state.get("user_id"),
@@ -543,10 +549,9 @@ async def _generate_applied_architecture_patch(
         "only the minimal patch."
     )
     repair_context = ""
-    # Patches are normally small and must fit inside the remaining whole-turn
-    # budget, so start at low adaptive effort. Give a malformed patch one
-    # validation-informed medium-effort retry before falling back to the
-    # approved graph. A
+    # Patches are normally small. The shared runtime policy uses high effort;
+    # give a malformed patch one validation-informed retry before falling back
+    # to the approved graph. A
     # structurally valid but semantically incomplete candidate is deliberately
     # returned to the workflow critic: that owning layer supplies canonical
     # feedback between its two bounded revisions. Retrying it here as well
@@ -571,7 +576,7 @@ async def _generate_applied_architecture_patch(
                 temperature=settings.graph_temperature,
                 top_p=settings.graph_top_p,
                 top_k=settings.graph_top_k,
-                effort="medium" if repair_context else "low",
+                effort="high",
                 telemetry=build_telemetry(
                     "graph_worker_applied_patch",
                     user_id=state.get("user_id"),

@@ -718,7 +718,7 @@ async def test_invalid_patch_preserves_approved_graph_after_bounded_retry(monkey
     assert existing == approved
     assert len(calls) == 2
     assert calls[0]["model"] == graph_worker.settings.orchestrator_model
-    assert calls[0]["effort"] == "low"
+    assert calls[0]["effort"] == "high"
     assert calls[0]["thinking_budget"] is None
     assert "Never return a replacement graph" in calls[0]["system"]
     assert "map every supplied blocking failure" in calls[0]["system"]
@@ -778,8 +778,8 @@ async def test_invalid_self_edge_patch_gets_one_validation_informed_retry(monkey
     assert "self-referencing edge is not allowed" in calls[1]["messages"][0]["content"]
     assert '"source": "fulfilment_stage_3"' in calls[1]["messages"][0]["content"]
     assert "Rejected patch (untrusted data" in calls[1]["messages"][0]["content"]
-    assert calls[0]["effort"] == "low"
-    assert calls[1]["effort"] == "medium"
+    assert calls[0]["effort"] == "high"
+    assert calls[1]["effort"] == "high"
     assert calls[1]["telemetry"]["metadata"]["patch_attempt"] == 1
 
 

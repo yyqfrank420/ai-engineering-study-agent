@@ -3,7 +3,7 @@
 # Purpose: Auto-condense long conversation histories before sending to the LLM.
 #          When the total character count of a thread's history exceeds
 #          settings.context_condense_threshold_chars, older turns are
-#          summarised at low effort and replaced with a single summary message.
+#          summarised at the shared high effort and replaced with one message.
 #          The most recent `settings.context_condense_keep_recent` turns are
 #          always kept verbatim so the LLM has full context for the current
 #          exchange.
@@ -34,7 +34,7 @@ _CONDENSE_TIMEOUT_S = 5.0
 
 async def _call_summary(old_text: str) -> str:
     """
-    Ask the configured worker model for a low-effort summary of `old_text`.
+    Ask the configured worker model for a concise high-effort summary of `old_text`.
 
     Collects the full streamed response into a single string.
     Raises on any error so the caller can fall back gracefully.
@@ -59,7 +59,7 @@ async def _call_summary(old_text: str) -> str:
         temperature=settings.condense_temperature,
         top_p=settings.condense_top_p,
         top_k=settings.condense_top_k,
-        effort="low",
+        effort="high",
         telemetry=build_telemetry("context_condense"),
     ):
         if event_type == "text":
@@ -77,7 +77,7 @@ async def maybe_condense_history(
 
     Decision tree:
         total_chars ≤ threshold  →  return history unchanged
-        total_chars > threshold  →  summarise old turns at low effort (5s timeout)
+        total_chars > threshold  →  summarise old turns at high effort (5s timeout)
                                      success: return [summary_msg] + recent turns
                                      failure: log warning, return original history
 

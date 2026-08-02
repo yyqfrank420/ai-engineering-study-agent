@@ -359,7 +359,7 @@ def _is_memory_followup(user_message: str, history: list[dict]) -> bool:
 async def quick_synthesise(state: AgentState) -> AgentState:
     """
     Fast path for simple factual questions.
-    Uses Sonnet 5 at low effort with a short direct prompt — no RAG, no graph.
+    Uses Opus 5 at high effort with a short direct prompt — no RAG, no graph.
     """
     send = state["send"]
     await send({"type": "worker_status", "worker": "orchestrator", "status": "Looking it up…"})
@@ -381,7 +381,7 @@ async def quick_synthesise(state: AgentState) -> AgentState:
         temperature=settings.quick_synthesis_temperature,
         top_p=settings.quick_synthesis_top_p,
         top_k=settings.quick_synthesis_top_k,
-        effort="low",
+        effort="high",
         telemetry=build_telemetry(
             "quick_synthesise",
             user_id=state.get("user_id"),
@@ -530,7 +530,7 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
             model=settings.orchestrator_model,
             system=_SYNTHESIS_SYSTEM,
             messages=messages,
-            effort="low",
+            effort="high",
             temperature=settings.synthesis_temperature,
             top_p=settings.synthesis_top_p,
             top_k=settings.synthesis_top_k,

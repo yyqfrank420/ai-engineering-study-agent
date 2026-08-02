@@ -23,7 +23,7 @@ def test_revision_critic_uses_bounded_verification_budget():
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v18"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v19"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -368,6 +368,45 @@ def test_approval_owner_requires_distinct_approval_and_rejection_routes(
 
     assert review["approved"] is False
     assert any("approval decision" in item for item in review["missing"])
+
+
+def test_review_reports_every_incomplete_approval_owner_with_its_node_id():
+    graph = {
+        "nodes": [
+            {"id": "proposal", "label": "Campaign Proposal", "type": "service"},
+            {"id": "policy_gate", "label": "Policy Approval", "type": "control"},
+            {"id": "human_gate", "label": "Human Approval", "type": "decision"},
+            {"id": "outcome", "label": "Campaign Outcome", "type": "service"},
+        ],
+        "edges": [
+            {"source": "proposal", "target": "policy_gate", "label": "submit action"},
+            {
+                "source": "policy_gate",
+                "target": "human_gate",
+                "label": "approve or reject policy decision",
+            },
+            {
+                "source": "human_gate",
+                "target": "outcome",
+                "label": "approve or reject campaign decision",
+            },
+            {
+                "source": "outcome",
+                "target": "proposal",
+                "label": "return measured outcome",
+                "flow": "feedback",
+            },
+        ],
+    }
+
+    review = _deterministic_review("Design a controlled campaign system", graph, "production")
+
+    approval_failures = [
+        item for item in review["missing"] if "approval decision" in item
+    ]
+    assert len(approval_failures) == 2
+    assert any("policy_gate" in item for item in approval_failures)
+    assert any("human_gate" in item for item in approval_failures)
 
 
 def test_approval_owner_accepts_separate_approval_and_rejection_routes():
@@ -972,6 +1011,23 @@ def test_prototype_review_downgrades_only_production_reconciliation_detail():
     assert review["advice"] == [
         "Production-depth hardening: Replace the narrated outcome edge with explicit COMMITTED, NOT_FOUND, and STILL_UNKNOWN branches."
     ]
+
+
+def test_selected_prototype_depth_scopes_generic_production_wording():
+    failure = "Split COMMITTED, NOT_FOUND, and STILL_UNKNOWN into distinct branches."
+    review = _normalise_review(
+        {
+            "approved": False,
+            "score": 0.7,
+            "blocking_failures": [failure],
+        },
+        query="Design a production model-serving stack.",
+        resolved_complexity="prototype",
+    )
+
+    assert review["approved"] is True
+    assert review["missing"] == []
+    assert review["advice"] == [f"Production-depth hardening: {failure}"]
 
 
 def test_explicit_reconciliation_request_remains_blocking_at_prototype_depth():

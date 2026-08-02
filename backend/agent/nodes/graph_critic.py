@@ -14,7 +14,7 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v18"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v19"
 
 _FEEDBACK_LOOP_REQUEST = re.compile(
     r"\b(?:closed[- ]loop|feedback loop|self[- ]improv\w*|"
@@ -94,7 +94,7 @@ _PRODUCTION_ONLY_REVIEW_CONCERN = re.compile(
 )
 
 _EXPLICIT_PRODUCTION_GUARANTEE_REQUEST = re.compile(
-    r"\b(?:production(?:[- ]ready)?|exactly[- ]once|idempoten\w*|reconcil\w*|"
+    r"\b(?:production[- ]ready|exactly[- ]once|idempoten\w*|reconcil\w*|"
     r"timeout[- ]after[- ]commit|ambiguous outcome|compensat\w*|payload hash|"
     r"target version|policy version|pre[- ]effect|fenc(?:e|ed|ing)|canary|"
     r"release gate|promotion|rollback|approval boundar\w*|human approval|"
@@ -358,7 +358,7 @@ async def graph_critic_node(state: AgentState) -> AgentState:
             temperature=settings.graph_temperature,
             top_p=settings.graph_top_p,
             top_k=settings.graph_top_k,
-            effort="low",
+            effort="high",
             telemetry=build_telemetry(
                 "graph_critic",
                 user_id=state.get("user_id"),
@@ -515,11 +515,11 @@ def _deterministic_review(query: str, graph: dict[str, Any], resolved_complexity
                 ]
                 if (not approval_edges or not rejection_edges) and not combined_durable_decisions:
                     missing.append(
-                        "Give every approval decision distinct approval and rejection routes, or "
+                        f"Give approval decision {node_id} ({node.get('label')}) distinct approval "
+                        "and rejection routes, or "
                         "persist both outcomes in one complete exact-action envelope at durable "
                         "lifecycle state."
                     )
-                    break
                 execution_edges = [
                     edge
                     for edge in approval_edges
@@ -535,10 +535,10 @@ def _deterministic_review(query: str, graph: dict[str, Any], resolved_complexity
                         if not all(term in _edge_text(edge).lower() for term in required_terms)
                     ]
                     missing.append(
-                        "Bind every approved-action envelope to payload, target, policy version, "
+                        f"At approval decision {node_id} ({node.get('label')}), bind every "
+                        "approved-action envelope to payload, target, policy version, "
                         "expiry, and idempotency key on: " + "; ".join(incomplete[:3])
                     )
-                    break
 
         cache_ids = {
             node_id
@@ -630,7 +630,10 @@ def _deterministic_review(query: str, graph: dict[str, Any], resolved_complexity
                     f"reconciliation branches instead of {_edge_selector_text(edge)}."
                 )
             if "promot" in edge_text and "rollback" in edge_text:
-                missing.append("Draw promotion and rollback as distinct release-control edges.")
+                missing.append(
+                    "Draw promotion and rollback as distinct release-control edges instead of "
+                    f"{_edge_selector_text(edge)}."
+                )
             contract = _edge_text(edge).lower()
             if (
                 re.search(r"\bdeploy\w*\b", contract)

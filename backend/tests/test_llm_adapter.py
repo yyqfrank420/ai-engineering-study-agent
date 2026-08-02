@@ -2,7 +2,7 @@ import pytest
 import sys
 import hashlib
 
-from config import settings
+from config import Settings, settings
 
 
 @pytest.fixture(autouse=True)
@@ -134,7 +134,7 @@ async def test_stream_response_success_records_thinking_text_and_done(monkeypatc
     telemetry_records, metric_records = _patch_llm_telemetry(monkeypatch)
 
     async def fake_anthropic_stream_once(kwargs):
-        assert kwargs["output_config"] == {"effort": "medium"}
+        assert kwargs["output_config"] == {"effort": "high"}
         assert "temperature" not in kwargs
         yield _Event("content_block_delta", _Delta("thinking_delta", thinking="plan"))
         yield _Event("content_block_delta", _Delta("text_delta", text="answer"))
@@ -162,6 +162,20 @@ async def test_stream_response_success_records_thinking_text_and_done(monkeypatc
     assert telemetry_records[0]["metadata"]["output_tokens"] == 0
     assert telemetry_records[0]["metadata"]["provider_attempts"] == 1
     assert metric_records[0]["status"] == "success"
+
+
+def test_opus_5_is_an_adaptive_effort_model():
+    from adapters.llm_adapter import _uses_adaptive_effort
+
+    assert _uses_adaptive_effort("claude-opus-5") is True
+
+
+def test_application_model_roles_default_to_opus_5():
+    configured = Settings(_env_file=None)
+
+    assert configured.orchestrator_model == "claude-opus-5"
+    assert configured.worker_model == "claude-opus-5"
+    assert configured.graph_repair_model == "claude-opus-5"
 
 
 @pytest.mark.asyncio

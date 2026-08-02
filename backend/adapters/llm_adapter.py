@@ -240,10 +240,9 @@ async def stream_response(
     uses_adaptive_effort = _uses_adaptive_effort(model)
     effective_effort = effort or _effort_from_legacy_budget(thinking_budget)
     if uses_adaptive_effort:
-        # Sonnet 5 rejects manual thinking budgets and non-default sampling.
-        # Effort is the supported quality/cost control and adaptive thinking is
-        # enabled by default for Sonnet 5.
-        kwargs["output_config"] = {"effort": effective_effort or "medium"}
+        # Current adaptive-thinking Claude models reject manual thinking budgets
+        # and non-default sampling. Effort is their quality/cost control.
+        kwargs["output_config"] = {"effort": effective_effort or "high"}
         if model.startswith("claude-opus-4-8"):
             kwargs["thinking"] = {"type": "adaptive"}
     else:
@@ -434,6 +433,7 @@ def _uses_adaptive_effort(model: str) -> bool:
     return model.startswith((
         "claude-sonnet-5",
         "claude-opus-4-8",
+        "claude-opus-5",
     ))
 
 
