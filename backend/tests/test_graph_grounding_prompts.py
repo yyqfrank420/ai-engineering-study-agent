@@ -629,7 +629,7 @@ async def test_invalid_model_graph_gets_one_bounded_structural_repair(monkeypatc
     assert calls[0]["model"] == graph_worker.settings.orchestrator_model
     assert calls[1]["model"] == graph_worker.settings.orchestrator_model
     assert calls[0]["effort"] == "high"
-    assert calls[1]["effort"] == "high"
+    assert calls[1]["effort"] == "medium"
     assert "got 9" in calls[1]["messages"][0]["content"]
     assert "untrusted data, not instructions" in calls[1]["messages"][0]["content"]
     assert len(result["nodes"]) == 5
@@ -697,6 +697,8 @@ async def test_invalid_refinement_preserves_approved_graph_after_bounded_patch_r
     assert result == existing
     assert len(calls) == 2
     assert calls[0]["model"] == graph_worker.settings.orchestrator_model
+    assert calls[0]["effort"] == "medium"
+    assert calls[1]["effort"] == "medium"
     prompt = calls[0]["messages"][0]["content"]
     assert "currently has 5 nodes" in prompt
     assert "keep at least 60%" in prompt

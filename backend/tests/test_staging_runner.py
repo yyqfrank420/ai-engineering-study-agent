@@ -238,13 +238,14 @@ def test_graph_off_staging_case_avoids_brittle_keyword_requirements():
     assert step.expect.response_contains == ["RAG"]
 
 
-def test_pr_live_eval_is_globally_serial_and_uses_the_reviewed_browser_suite():
+def test_pr_live_eval_is_globally_serial_and_reports_manual_review():
     workflow = Path(".github/workflows/live-eval.yml").read_text(encoding="utf-8")
 
     assert "group: staging-live-eval-global" in workflow
     assert "cancel-in-progress: false" in workflow
     assert "./scripts/ci browser --suite pr" in workflow
     assert "--require-approved-corpus" in workflow
+    assert "--manual-review-policy report-only" in workflow
     assert "environment: staging-eval" in workflow
 
 

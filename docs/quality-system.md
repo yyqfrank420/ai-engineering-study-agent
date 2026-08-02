@@ -75,11 +75,16 @@ node follow-up, graph expansion, an applied domain, and prompt injection. Empty 
 oversized input stay in deterministic API tests and spend no model calls.
 
 Playwright uses the real frontend and production WebSocket protocol. The eight PR
-cases run with total concurrency two and a separate one-case graph lane, so two
-graph-producing journeys cannot compete for both application streams. Every case
+cases run with total concurrency four and a separate two-case graph lane, so two
+independent graph-producing journeys can run together. Every case
 attempt receives its own authenticated browser context and thread. Turns within a
 multi-turn case remain sequential on that context, and result ordering remains the
 canonical corpus ordering even when cases finish out of order.
+
+The Anthropic semaphore allows four streams per application process/Cloud Run
+instance; it is not a global account cap. Two graph lanes may consume all four
+streams while lightweight cases wait. That is the intentional speed-over-cost
+tradeoff for this evaluation profile.
 
 Each attempt records received events, final answers, graph JSON, rendered-node
 counts, screenshots, redacted traces, persistence, cleanup, fallback, and typed
@@ -108,10 +113,10 @@ PR evaluation limits are eight cases, 50 application provider attempts, and 16
 judge provider attempts. The timeout chain is deliberately nested: the backend
 agent stops at 360 seconds, the Playwright turn waits at most 390 seconds so it can
 capture the typed terminal event, and Cloud Run accepts a request for at most 420
-seconds. The browser-suite timeout scales with the number of turns and the serial
+seconds. The browser-suite timeout scales with the number of turns and the two-wide
 graph lane, with a 60-minute hard ceiling. Semantic judging is capped at 20 minutes
 for PR/smoke/diagnostic suites and 60 minutes for full suites. The outer GitHub jobs
-allow 60 minutes for the PR gate and 130 minutes for scheduled evaluation, including
+allow 90 minutes for the PR gate and 130 minutes for scheduled evaluation, including
 installation, deployment, judging, artifact upload, and cleanup; the former 15/30
 minute limits no longer apply.
 
@@ -174,11 +179,11 @@ PYTHONPATH=backend python -m eval.calibration \
 
 With the approved corpus, deterministic failures block immediately. A clear
 semantic failure gets one independent second judgment; two clear failures block. A
-borderline grade or judge disagreement requires manual review. PR and release gates
-keep that review blocking. Scheduled nightly/full monitoring uses the explicit
-`report-only` policy: the report, JUnit skip, HTML evidence, and GitHub warning
-remain visible, but review is not mislabeled as broken CI. Confirmed semantic
-failures and infrastructure failures still exit non-zero under either policy. No
+borderline grade or judge disagreement requires manual review. PR and scheduled
+monitoring use the explicit `report-only` policy for an approved corpus: the report,
+JUnit skip, HTML evidence, and GitHub warning remain visible, but review is not
+mislabeled as broken CI. Deterministic, confirmed semantic, and infrastructure
+failures still exit non-zero under either policy. No
 critical dimension may fail, and at least 85% of non-critical dimensions must pass.
 
 ## Immutable judge-calibration evidence

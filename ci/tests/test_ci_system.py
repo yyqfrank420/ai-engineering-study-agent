@@ -214,10 +214,16 @@ def test_gcp_federation_separates_staging_and_production_credentials():
 
 def test_staging_allows_control_traffic_without_parallel_schema_mutation():
     cloud_run = (ROOT / "infra/terraform/gcp/cloud_run.tf").read_text(encoding="utf-8")
+    variables = (ROOT / "infra/terraform/gcp/variables.tf").read_text(
+        encoding="utf-8"
+    )
     staging = cloud_run.split(
         'resource "google_cloud_run_v2_service" "backend_staging"', 1
     )[1]
     staging_template = staging.split("containers {", 1)[0]
+    container_concurrency = variables.split(
+        'variable "container_concurrency"', 1
+    )[1].split("}", 1)[0]
 
     assert (
         "max_instance_request_concurrency = var.container_concurrency"
@@ -225,6 +231,7 @@ def test_staging_allows_control_traffic_without_parallel_schema_mutation():
     )
     assert "min_instance_count = 0" in staging_template
     assert "max_instance_count = 1" in staging_template
+    assert "default     = 4" in container_concurrency
 
 
 def test_required_check_names_are_stable():
@@ -379,10 +386,12 @@ def test_live_eval_job_allows_setup_around_the_bounded_browser_suite():
     budgets = manifest["live"]["budgets"]
     settings = Settings(_env_file=None)
     assert settings.agent_timeout_s == 360
+    assert settings.anthropic_max_concurrent_streams == 4
     assert budgets["application_turn_timeout_seconds"] == settings.agent_timeout_s + 30
     assert (
         budgets["browser_case_concurrency"] == settings.anthropic_max_concurrent_streams
     )
+    assert budgets["browser_graph_case_concurrency"] == 2
     assert budgets["browser_suite_max_timeout_seconds"] <= 60 * 60
     assert budgets["semantic_suite_timeout_seconds"] == 20 * 60
     assert budgets["semantic_full_suite_timeout_seconds"] == 60 * 60
@@ -418,6 +427,18 @@ def test_live_eval_job_allows_setup_around_the_bounded_browser_suite():
         for name in ("live-eval.yml", "scheduled-eval.yml", "deploy-production.yml")
     )
     assert deploy_workflows.count("--timeout 420s") == 3
+    assert (
+        deploy_workflows.count(
+            "--update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4"
+        )
+        == 3
+    )
+    terraform_locals = (ROOT / "infra/terraform/gcp/locals.tf").read_text(
+        encoding="utf-8"
+    )
+    assert 'ANTHROPIC_MAX_CONCURRENT_STREAMS = "4"' in terraform_locals
+    env_example = (ROOT / "backend/.env.example").read_text(encoding="utf-8")
+    assert "ANTHROPIC_MAX_CONCURRENT_STREAMS=4" in env_example
 
 
 def test_browser_workflows_use_development_only_internal_auth_bootstrap():

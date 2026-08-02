@@ -49,9 +49,8 @@ class Settings(BaseSettings):
     # Initial provider attempt plus one bounded retry before fallback/failure.
     llm_max_retries: int = 2
     llm_retry_delay_s: float = 1.0
-    # Anthropic enforces a low concurrent streaming connection cap on smaller plans.
-    # Queue locally instead of letting bursty evals/users turn into 429 errors.
-    anthropic_max_concurrent_streams: int = 2
+    # Bound concurrent Anthropic streams within each application process.
+    anthropic_max_concurrent_streams: int = 4
     # Cap per LLM call — prevents runaway generation eating tokens
     llm_max_tokens: int = 12000
     # Hard timeout on the whole agent run (seconds); yields a timeout error event

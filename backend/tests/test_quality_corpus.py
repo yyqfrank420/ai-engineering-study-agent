@@ -67,13 +67,15 @@ def test_browser_budget_scales_with_turns_and_retains_a_hard_ceiling():
     pr_graph_turns = sum(
         len(case.steps) for case in pr_cases if case.deterministic.graph_emitted is True
     )
+    graph_lane_count = manifest["live"]["budgets"]["browser_graph_case_concurrency"]
+    graph_lane_batches = (pr_graph_turns + graph_lane_count - 1) // graph_lane_count
     assert browser_suite_timeout_seconds(pr_cases) >= (
         manifest["live"]["budgets"]["browser_suite_base_timeout_seconds"]
-        + pr_graph_turns * application_turn_timeout_seconds()
+        + graph_lane_batches * application_turn_timeout_seconds()
     )
     assert browser_suite_timeout_seconds(corpus.cases * 10) == 3600
-    assert browser_case_concurrency() == 2
-    assert browser_graph_case_concurrency() == 1
+    assert browser_case_concurrency() == 4
+    assert browser_graph_case_concurrency() == 2
     assert browser_infrastructure_retry_count() == 1
     assert application_turn_timeout_seconds() == 390
     assert semantic_suite_timeout_seconds("pr") == 1200
@@ -85,14 +87,13 @@ async def test_browser_cases_run_with_bounded_concurrency_and_keep_corpus_order(
     from eval.browser_runner import _run_cases_bounded
 
     corpus = load_corpus()
-    cases = [
-        corpus.by_id[case_id] for case_id in ("rag-grounding", "research", "memory")
-    ]
+    case_ids = ("rag-grounding", "research", "memory", "graph-off")
+    cases = [corpus.by_id[case_id] for case_id in case_ids]
     active = 0
     maximum_active = 0
     graph_active = 0
     maximum_graph_active = 0
-    two_cases_started = asyncio.Event()
+    four_cases_started = asyncio.Event()
     checkpoint_ids: list[list[str]] = []
 
     async def run_case(case):
@@ -103,11 +104,16 @@ async def test_browser_cases_run_with_bounded_concurrency_and_keep_corpus_order(
         if is_graph:
             graph_active += 1
             maximum_graph_active = max(maximum_graph_active, graph_active)
-        if active == 2:
-            two_cases_started.set()
-        await asyncio.wait_for(two_cases_started.wait(), timeout=1)
+        if active == 4:
+            four_cases_started.set()
+        await asyncio.wait_for(four_cases_started.wait(), timeout=1)
         await asyncio.sleep(
-            {"rag-grounding": 0.03, "research": 0.01, "memory": 0.0}[case.id]
+            {
+                "rag-grounding": 0.03,
+                "research": 0.01,
+                "memory": 0.02,
+                "graph-off": 0.0,
+            }[case.id]
         )
         if is_graph:
             graph_active -= 1
@@ -119,21 +125,17 @@ async def test_browser_cases_run_with_bounded_concurrency_and_keep_corpus_order(
 
     results = await _run_cases_bounded(
         cases,
-        max_concurrency=2,
-        graph_max_concurrency=1,
+        max_concurrency=4,
+        graph_max_concurrency=2,
         run_case=run_case,
         on_result=checkpoint,
     )
 
-    assert maximum_active == 2
-    assert maximum_graph_active == 1
-    assert [result["id"] for result in results] == [
-        "rag-grounding",
-        "research",
-        "memory",
-    ]
-    assert checkpoint_ids[-1] == ["rag-grounding", "research", "memory"]
-    assert checkpoint_ids.count(["rag-grounding", "research", "memory"]) == 1
+    assert maximum_active == 4
+    assert maximum_graph_active == 2
+    assert [result["id"] for result in results] == list(case_ids)
+    assert checkpoint_ids[-1] == list(case_ids)
+    assert checkpoint_ids.count(list(case_ids)) == 1
 
 
 @pytest.mark.asyncio

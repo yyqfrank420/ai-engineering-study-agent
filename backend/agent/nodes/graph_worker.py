@@ -464,8 +464,10 @@ async def _generate_applied_architecture(state: AgentState, query: str, profile)
                 "domain responsibilities, then return one complete replacement JSON object.\n\n"
                 f"Validation error: {repair_context}"
             )
-        # The independent critic remains the semantic quality gate. The shared
-        # runtime policy uses Opus 5 at high effort for both bounded attempts.
+        # Preserve maximum reasoning for the first complete design. If the
+        # deterministic validator rejects its structure, the second call has a
+        # narrow, validation-informed correction to make and can use medium
+        # effort without weakening the independent semantic critic.
         design_model = settings.orchestrator_model
         raw = await stream_llm(
             model=design_model,
@@ -478,7 +480,7 @@ async def _generate_applied_architecture(state: AgentState, query: str, profile)
             temperature=settings.graph_temperature,
             top_p=settings.graph_top_p,
             top_k=settings.graph_top_k,
-            effort="high",
+            effort="high" if structural_attempt == 0 else "medium",
             telemetry=build_telemetry(
                 "graph_worker_applied_design",
                 user_id=state.get("user_id"),
@@ -549,9 +551,10 @@ async def _generate_applied_architecture_patch(
         "only the minimal patch."
     )
     repair_context = ""
-    # Patches are normally small. The shared runtime policy uses high effort;
-    # give a malformed patch one validation-informed retry before falling back
-    # to the approved graph. A
+    # Patches are bounded edits to an already reasoned-about graph, so medium
+    # effort keeps workflow revisions within the turn deadline. Give a
+    # malformed patch one validation-informed retry before falling back to the
+    # approved graph. A
     # structurally valid but semantically incomplete candidate is deliberately
     # returned to the workflow critic: that owning layer supplies canonical
     # feedback between its two bounded revisions. Retrying it here as well
@@ -576,7 +579,7 @@ async def _generate_applied_architecture_patch(
                 temperature=settings.graph_temperature,
                 top_p=settings.graph_top_p,
                 top_k=settings.graph_top_k,
-                effort="high",
+                effort="medium",
                 telemetry=build_telemetry(
                     "graph_worker_applied_patch",
                     user_id=state.get("user_id"),

@@ -177,6 +177,7 @@ def test_application_model_roles_default_to_opus_5():
     assert configured.orchestrator_model == "claude-opus-5"
     assert configured.worker_model == "claude-opus-5"
     assert configured.graph_repair_model == "claude-opus-5"
+    assert configured.anthropic_max_concurrent_streams == 4
 
 
 @pytest.mark.asyncio
