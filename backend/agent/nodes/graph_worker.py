@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 _APPLIED_GRAPH_PROMPT_VERSION = "applied_architecture_v17"
 _APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v20"
 _MAX_GRAPH_PATCH_CHARS = 20_000
+_MISSING_RELEASE_ROLLBACK = "Draw release rollback as its own directed edge."
 
 
 _APPLIED_GRAPH_SYSTEM = """<role>
@@ -627,6 +628,15 @@ async def _generate_applied_architecture_patch(
                     profile.resolved,
                 )
             except ValueError as exc:
+                completed = _complete_missing_release_rollback(
+                    query,
+                    candidate,
+                    min_nodes=effective_min_nodes,
+                    max_nodes=profile.max_graph_nodes,
+                    resolved_complexity=profile.resolved,
+                )
+                if completed is not None:
+                    return completed
                 # This candidate is not publishable yet, but it is structurally
                 # valid and may contain useful partial repairs. Preserve it for
                 # the canonical critic so the next workflow revision operates
@@ -671,6 +681,109 @@ def _validate_applied_architecture_patch(
     missing = [str(item) for item in (review.get("missing") or [])[:8]]
     detail = " ".join(missing) or "the deterministic publication contract rejected the patch"
     raise ValueError(f"patched graph still violates deterministic publication contract: {detail}")
+
+
+def _complete_missing_release_rollback(
+    query: str,
+    candidate: GraphData,
+    *,
+    min_nodes: int,
+    max_nodes: int,
+    resolved_complexity: str,
+) -> GraphData | None:
+    """Complete the one mechanical release edge that needs no model judgment."""
+    from agent.nodes.graph_critic import _deterministic_review
+
+    review = _deterministic_review(query, candidate, resolved_complexity)
+    if review.get("missing") != [_MISSING_RELEASE_ROLLBACK]:
+        return None
+    edges = candidate.get("edges") or []
+    if len(edges) >= _edge_budget(max_nodes):
+        return None
+    promotion_edges = [
+        edge
+        for edge in edges
+        if edge.get("flow") == "deployment"
+        and (
+            "full production" in str(edge.get("label") or "").lower()
+            or "canary-approved" in str(edge.get("label") or "").lower()
+            or re.search(r"\bpromotes?\b", str(edge.get("label") or ""), re.I)
+        )
+    ]
+    if len(promotion_edges) != 1:
+        return None
+    promotion_edge = promotion_edges[0]
+    source = str(promotion_edge.get("source") or "")
+    promotion_target = str(promotion_edge.get("target") or "")
+    node_by_id = {
+        str(node.get("id") or ""): node
+        for node in (candidate.get("nodes") or [])
+        if node.get("id")
+    }
+    source_node = node_by_id.get(source) or {}
+    if str(source_node.get("type") or "") not in {"control", "decision", "datastore"}:
+        return None
+    canary_edges = [
+        edge
+        for edge in edges
+        if edge.get("flow") == "deployment"
+        and edge.get("source") == source
+        and "canary" in str(edge.get("label") or "").lower()
+    ]
+    if not canary_edges:
+        return None
+    if "registry" in str(source_node.get("label") or "").lower():
+        rollback_target = promotion_target
+    else:
+        connected_node_ids = {
+            str(edge.get("target") or "")
+            for edge in edges
+            if edge.get("source") == source
+        } | {
+            str(edge.get("source") or "")
+            for edge in edges
+            if edge.get("target") == source
+        }
+        registry_ids = [
+            node_id
+            for node_id, node in node_by_id.items()
+            if node_id in connected_node_ids
+            and "registry" in str(node.get("label") or "").lower()
+        ]
+        if len(registry_ids) != 1:
+            return None
+        rollback_target = registry_ids[0]
+    if not rollback_target or rollback_target == source:
+        return None
+    try:
+        completed = _apply_applied_graph_patch(
+            candidate,
+            {
+                "add_edges": [{
+                    "source": source,
+                    "target": rollback_target,
+                    "label": "rollback to prior approved release",
+                    "technology": "Versioned release control",
+                    "sync": promotion_edge.get("sync", "async"),
+                    "flow": "deployment",
+                    "description": (
+                        "Reactivates the prior immutable release when canary or production "
+                        "checks fail."
+                    ),
+                }]
+            },
+            min_nodes=min_nodes,
+            max_nodes=max_nodes,
+            resolved_complexity=resolved_complexity,
+        )
+        _validate_applied_architecture_patch(
+            query,
+            completed,
+            resolved_complexity,
+        )
+    except ValueError:
+        return None
+    return completed
 
 
 def _apply_applied_graph_patch(

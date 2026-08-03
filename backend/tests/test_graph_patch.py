@@ -630,6 +630,151 @@ def test_graph_parser_preserves_combined_deployment_edge_for_critic_repair():
     assert normalised["edges"][0]["technology"] == "Canary/promoted deployment"
 
 
+def _release_graph_for_completion():
+    graph = _domain_graph(9, production=True)
+    graph["nodes"][5].update({"label": "Release Controller", "type": "control"})
+    graph["nodes"][6].update({"label": "Campaign Runtime", "type": "service"})
+    graph["nodes"][7].update({"label": "Event Definition Registry", "type": "datastore"})
+    graph["edges"].extend([
+        {
+            "source": "fulfilment_stage_5",
+            "target": "fulfilment_stage_6",
+            "label": "deploy canary release",
+            "technology": "Immutable release manifest",
+            "sync": "async",
+            "flow": "deployment",
+            "description": "Activates the evaluated release in a bounded canary lane.",
+        },
+        {
+            "source": "fulfilment_stage_5",
+            "target": "fulfilment_stage_6",
+            "label": "promote full production release",
+            "technology": "Reviewed release decision",
+            "sync": "async",
+            "flow": "deployment",
+            "description": "Activates the canary-approved immutable release for all traffic.",
+        },
+        {
+            "source": "fulfilment_stage_7",
+            "target": "fulfilment_stage_5",
+            "label": "supply immutable evaluated release",
+            "technology": "Versioned release manifest",
+            "sync": "async",
+            "flow": "deployment",
+            "description": "Supplies the release controller with one immutable evaluated version.",
+        },
+    ])
+    return graph_worker._normalise_applied_graph(
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+
+def test_deterministic_completion_adds_only_missing_release_rollback():
+    graph = _release_graph_for_completion()
+
+    completed = graph_worker._complete_missing_release_rollback(
+        "Design a production model release workflow",
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+    assert completed is not None
+    assert len(completed["edges"]) == len(graph["edges"]) + 1
+    assert any(
+        edge["label"] == "rollback to prior approved release"
+        and edge["source"] == "fulfilment_stage_5"
+        and edge["target"] == "fulfilment_stage_7"
+        and edge["flow"] == "deployment"
+        for edge in completed["edges"]
+    )
+    graph_worker._validate_applied_architecture_patch(
+        "Design a production model release workflow",
+        completed,
+        "production",
+    )
+
+
+def test_deterministic_completion_does_not_hide_other_review_failures():
+    graph = _domain_graph(9, production=True)
+
+    completed = graph_worker._complete_missing_release_rollback(
+        "Design a production model release workflow",
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+    assert completed is None
+
+
+def test_deterministic_completion_fails_closed_at_edge_budget():
+    graph = _release_graph_for_completion()
+    while len(graph["edges"]) < graph_worker._edge_budget(9):
+        index = len(graph["edges"])
+        graph["edges"].append({
+            "source": f"fulfilment_stage_{index % 9}",
+            "target": f"fulfilment_stage_{(index + 2) % 9}",
+            "label": f"carry bounded release evidence {index}",
+            "technology": "Typed release evidence",
+            "sync": "async",
+            "flow": "control",
+            "description": "Carries one bounded release observation to its review owner.",
+        })
+    graph = graph_worker._normalise_applied_graph(
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+    completed = graph_worker._complete_missing_release_rollback(
+        "Design a production model release workflow",
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+    assert completed is None
+
+
+@pytest.mark.parametrize("failure_mode", ["ambiguous_promotion", "non_deployment"])
+def test_deterministic_completion_requires_unique_typed_release_topology(failure_mode):
+    graph = _release_graph_for_completion()
+    promotion = next(
+        edge for edge in graph["edges"] if edge["label"] == "promote full production release"
+    )
+    if failure_mode == "ambiguous_promotion":
+        graph["edges"].append({
+            **promotion,
+            "label": "promote full production event definitions",
+        })
+    else:
+        promotion["flow"] = "control"
+    graph = graph_worker._normalise_applied_graph(
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+    completed = graph_worker._complete_missing_release_rollback(
+        "Design a production model release workflow",
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+    assert completed is None
+
+
 def test_graph_parser_keeps_independent_control_defects_for_one_critic_review():
     graph = _domain_graph(5)
     graph["edges"][0].update({
