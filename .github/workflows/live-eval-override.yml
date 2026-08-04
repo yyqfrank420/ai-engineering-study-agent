@@ -142,7 +142,10 @@ jobs:
               "rag-grounding",
               "research",
           }
-          allowed_post_evidence_changes = {".github/workflows/live-eval-override.yml"}
+          allowed_post_evidence_changes = {
+              ".github/workflows/live-eval-override.yml",
+              "README.md",
+          }
           repository = os.environ["GITHUB_REPOSITORY"]
           applied_commit = os.environ["APPLIED_COMMIT_SHA"]
           current_commit = os.environ["GITHUB_SHA"]

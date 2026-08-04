@@ -1,6 +1,6 @@
 # AI Engineering Study Agent
 
-Graph-guided study companion for *AI Engineering* by Chip Huyen.
+Production-oriented, graph-guided study companion for *AI Engineering* by Chip Huyen.
 
 ## Current Stack
 
@@ -17,6 +17,7 @@ Graph-guided study companion for *AI Engineering* by Chip Huyen.
   - one-time PDF chunking / embedding / FAISS build
 - `infra/terraform/gcp/`
   - Cloud Run + Artifact Registry + Secret Manager provisioning
+  - immutable, evaluated-image promotion to production
 
 ## Runtime Model
 
@@ -46,6 +47,7 @@ Cost-first deploy target:
 - frontend on Vercel
 - backend on Cloud Run with `min instances = 0`
 - explicit frontend `Prepare` flow before first send in a cold session
+- exact-tree image approval before production traffic promotion
 
 Relevant docs:
 
@@ -62,6 +64,9 @@ Relevant docs:
 - **Three-way routing**: SIMPLE (Opus 5 high effort) / MEMORY (session history) / SEARCH (RAG + architecture workflow).
 - **Unified model quality**: Opus 5 at high effort handles every application model role, including compact graph repairs.
 - **D3 architecture diagram**: Interactive graph with step-by-step walkthrough and node detail enrichment.
+- **Protected live evaluation**: Browser journeys, deterministic graph contracts, and reviewed semantic rubrics run against isolated no-traffic Cloud Run revisions.
+- **Selective evidence reuse**: Audited per-case evidence composition avoids repeating already-passing paid evaluations while requiring exact evidence for the unresolved case.
+- **Immutable production delivery**: Production deploys only the approved Artifact Registry digest for the exact Git tree, smokes it without traffic, then promotes that revision.
 
 ## Local Development
 
@@ -112,9 +117,15 @@ Protected staging evaluation commands:
 
 The GitHub gate supplies the protected credentials, starts a frontend wired to the
 no-traffic candidate, captures the real WebSocket/browser journey, and then applies
-deterministic invariants plus reviewed semantic rubrics. The 20-case corpus is
-intentionally pending its one-time human review; see
+deterministic invariants plus reviewed semantic rubrics. The protected corpus is
+approved; diagnostic runs can select individual unresolved cases, while the manual
+override fails closed unless its evidence covers every protected PR case exactly once.
+See
 [docs/quality-system.md](docs/quality-system.md) for activation and operations.
+
+## Maintainer
+
+Maintained by [Frank Yang](https://github.com/yyqfrank420).
 
 ## Notes
 
