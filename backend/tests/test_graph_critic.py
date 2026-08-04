@@ -23,7 +23,7 @@ def test_revision_critic_uses_bounded_verification_budget():
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v19"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v20"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -1523,8 +1523,164 @@ async def test_hard_render_failure_skips_the_paid_semantic_critic(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_malformed_semantic_review_retries_once_then_accepts(monkeypatch):
+    calls = []
+    render_calls = 0
+    responses = iter([
+        '{"approved": tru',
+        json.dumps({
+            "approved": True,
+            "score": 0.9,
+            "strengths": ["The runtime path is explicit."],
+            "blocking_failures": [],
+            "advice": [],
+            "revision_instruction": "",
+        }),
+    ])
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return next(responses)
+
+    async def await_diagram(graph):
+        nonlocal render_calls
+        render_calls += 1
+        return {
+            "screenshot_base64": "private-render",
+            "report": {
+                "rendered_nodes": len(graph["nodes"]),
+                "rendered_edges": len(graph["edges"]),
+                "overlap_count": 0,
+                "clipped_nodes": 0,
+                "clipped_edges": 0,
+                "minimum_text_px": 8,
+            },
+        }
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr("agent.nodes.graph_critic.stream_llm", fake_stream_llm)
+    result = await graph_critic_node({
+        "graph_data": _domain_graph(),
+        "graph_changed": True,
+        "user_message": "growth marketing multi-agent system",
+        "complexity": "prototype",
+        "send": send,
+        "await_diagram_evaluation": await_diagram,
+        "user_id": "user-1",
+        "session_id": "thread-1",
+    })
+
+    assert result["graph_review"]["approved"] is True
+    assert len(calls) == 2
+    assert render_calls == 1
+    assert [call["telemetry"]["metadata"]["semantic_attempt"] for call in calls] == [0, 1]
+    assert calls[1]["effort"] == "low"
+    assert "Protocol failure: ValueError" in calls[1]["messages"][0]["content"]
+    assert "Prior response:" in calls[1]["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_malformed_semantic_review_twice_fails_closed(monkeypatch):
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return '{"approved": tru'
+
+    async def await_diagram(graph):
+        return {
+            "screenshot_base64": "private-render",
+            "report": {
+                "rendered_nodes": len(graph["nodes"]),
+                "rendered_edges": len(graph["edges"]),
+                "overlap_count": 0,
+                "clipped_nodes": 0,
+                "clipped_edges": 0,
+                "minimum_text_px": 8,
+            },
+        }
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr("agent.nodes.graph_critic.stream_llm", fake_stream_llm)
+    result = await graph_critic_node({
+        "graph_data": _domain_graph(),
+        "graph_changed": True,
+        "user_message": "growth marketing multi-agent system",
+        "complexity": "prototype",
+        "send": send,
+        "await_diagram_evaluation": await_diagram,
+        "user_id": "user-1",
+        "session_id": "thread-1",
+    })
+
+    assert len(calls) == 2
+    assert result["graph_review"]["approved"] is False
+    assert result["graph_review"]["terminal"] is True
+    assert any(
+        "semantic architecture review did not complete" in item
+        for item in result["graph_review"]["missing"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_valid_first_semantic_review_uses_one_call(monkeypatch):
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({
+            "approved": True,
+            "score": 0.9,
+            "strengths": ["The runtime path is explicit."],
+            "blocking_failures": [],
+            "advice": [],
+            "revision_instruction": "",
+        })
+
+    async def await_diagram(graph):
+        return {
+            "screenshot_base64": "private-render",
+            "report": {
+                "rendered_nodes": len(graph["nodes"]),
+                "rendered_edges": len(graph["edges"]),
+                "overlap_count": 0,
+                "clipped_nodes": 0,
+                "clipped_edges": 0,
+                "minimum_text_px": 8,
+            },
+        }
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr("agent.nodes.graph_critic.stream_llm", fake_stream_llm)
+    result = await graph_critic_node({
+        "graph_data": _domain_graph(),
+        "graph_changed": True,
+        "user_message": "growth marketing multi-agent system",
+        "complexity": "prototype",
+        "send": send,
+        "await_diagram_evaluation": await_diagram,
+        "user_id": "user-1",
+        "session_id": "thread-1",
+    })
+
+    assert result["graph_review"]["approved"] is True
+    assert len(calls) == 1
+    assert calls[0]["telemetry"]["metadata"]["semantic_attempt"] == 0
+
+
+@pytest.mark.asyncio
 async def test_semantic_critic_outage_fails_closed(monkeypatch):
+    calls = 0
+
     async def fail_stream_llm(**_kwargs):
+        nonlocal calls
+        calls += 1
         raise TimeoutError("provider unavailable")
 
     async def await_diagram(graph):
@@ -1555,6 +1711,7 @@ async def test_semantic_critic_outage_fails_closed(monkeypatch):
         "session_id": "thread-1",
     })
 
+    assert calls == 1
     assert result["graph_review"]["approved"] is False
     assert result["graph_review"]["terminal"] is True
     assert any(

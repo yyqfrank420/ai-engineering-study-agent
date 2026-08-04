@@ -190,11 +190,17 @@ jobs:
               )
               if tree.get("truncated"):
                   raise SystemExit(f"Recursive Git tree was truncated for {commit_sha}")
-              return {
-                  item["path"]: (item["mode"], item["type"], item["sha"])
-                  for item in tree.get("tree", [])
-                  if item.get("type") == "blob"
-              }
+              files = {}
+              for item in tree.get("tree", []):
+                  entry_type = item.get("type")
+                  if entry_type == "tree":
+                      continue
+                  if entry_type not in {"blob", "commit"}:
+                      raise SystemExit(
+                          f"Unsupported Git tree entry type for {commit_sha}: {entry_type}"
+                      )
+                  files[item["path"]] = (item["mode"], entry_type, item["sha"])
+              return files
 
           applied_files = tree_files(applied_commit)
           current_files = tree_files(current_commit)
@@ -253,16 +259,28 @@ jobs:
                           if not isinstance(context_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", context_commit):
                               raise SystemExit(f"deployment.json commit is invalid for run {run_id}")
                           tested = api_json(f"repos/{repository}/git/commits/{context_commit}")
-                          if context_commit != source_commit:
-                              parents = {parent["sha"] for parent in tested.get("parents", [])}
-                              if run.get("event") != "pull_request" or source_commit not in parents:
+                          if run.get("event") == "pull_request":
+                              if context_commit == source_commit:
+                                  raise SystemExit(f"deployment.json does not record the tested PR merge for run {run_id}")
+                              tested_parents = tested.get("parents", [])
+                              if len(tested_parents) != 2:
+                                  raise SystemExit(f"deployment.json does not record a two-parent PR merge for run {run_id}")
+                              parents = {parent["sha"] for parent in tested_parents}
+                              if source_commit not in parents:
                                   raise SystemExit(f"deployment.json is not the tested PR merge for run {run_id}")
-                          if context.get("tree_sha") and context["tree_sha"] != tested["tree"]["sha"]:
+                          elif context_commit != source_commit:
+                              raise SystemExit(f"deployment.json commit mismatch for run {run_id}")
+                          recorded_tree = context.get("tree_sha")
+                          if not isinstance(recorded_tree, str) or not re.fullmatch(r"[0-9a-f]{40}", recorded_tree):
+                              raise SystemExit(f"deployment.json tree is invalid for run {run_id}")
+                          if recorded_tree != tested["tree"]["sha"]:
                               raise SystemExit(f"deployment.json tree mismatch for run {run_id}")
                           deployment_commits.add(context_commit)
                       context_matches.append(context_name)
               if not context_matches:
                   raise SystemExit(f"Evidence run {run_id} contains no source identity document")
+              if run.get("event") == "pull_request" and not deployment_commits:
+                  raise SystemExit(f"Pull-request evidence run {run_id} contains no tested deployment identity")
               if len(deployment_commits) > 1:
                   raise SystemExit(f"Evidence run {run_id} records multiple tested commits")
               tested_commit = next(iter(deployment_commits), source_commit)

@@ -255,6 +255,99 @@ def test_feature_pull_requests_do_not_duplicate_required_workflows_on_push():
         assert "codex/**" not in triggers
 
 
+def test_live_eval_override_compares_release_content_by_tree_snapshot():
+    workflow = (ROOT / ".github/workflows/live-eval-override.yml").read_text(
+        encoding="utf-8"
+    )
+    verification = workflow.split(
+        "name: Verify complete per-case evidence and exact release identity", 1
+    )[1].split("- uses: google-github-actions/auth@v2", 1)[0]
+
+    assert "def tree_files(commit_sha):" in verification
+    assert "git/trees/{commit['tree']['sha']}?recursive=1" in verification
+    assert 'if entry_type not in {"blob", "commit"}:' in verification
+    assert 'files[item["path"]] = (item["mode"], entry_type, item["sha"])' in verification
+    assert "applied_files = tree_files(applied_commit)" in verification
+    assert "current_files = tree_files(current_commit)" in verification
+    assert "applied_files.keys() | current_files.keys()" in verification
+    assert "if applied_files.get(path) != current_files.get(path)" in verification
+    assert "/compare/" not in verification
+
+
+def test_live_eval_override_binds_pr_merge_evidence_to_parent_and_recorded_tree():
+    workflow = (ROOT / ".github/workflows/live-eval-override.yml").read_text(
+        encoding="utf-8"
+    )
+    verification = workflow.split(
+        "name: Verify complete per-case evidence and exact release identity", 1
+    )[1].split("- uses: google-github-actions/auth@v2", 1)[0]
+
+    assert 'if context_name == "run-context.json":' in verification
+    assert 'if run.get("event") == "pull_request":' in verification
+    assert "if context_commit == source_commit:" in verification
+    assert 'tested_parents = tested.get("parents", [])' in verification
+    assert "if len(tested_parents) != 2:" in verification
+    assert (
+        'parents = {parent["sha"] for parent in tested_parents}'
+        in verification
+    )
+    assert "if source_commit not in parents:" in verification
+    assert 'recorded_tree = context.get("tree_sha")' in verification
+    assert (
+        'not re.fullmatch(r"[0-9a-f]{40}", recorded_tree)'
+        in verification
+    )
+    assert 'if recorded_tree != tested["tree"]["sha"]:' in verification
+    assert (
+        'if run.get("event") == "pull_request" and not deployment_commits:'
+        in verification
+    )
+    assert "tested_commit = next(iter(deployment_commits), source_commit)" in verification
+    assert "source_cases = case_map(tested_commit)" in verification
+    assert 'context.get("commit_sha") != source_commit' not in verification
+
+
+def test_scheduled_eval_missing_approval_fails_closed_before_expensive_setup():
+    workflow = (ROOT / ".github/workflows/scheduled-eval.yml").read_text(
+        encoding="utf-8"
+    )
+    preflight = workflow.split(
+        "name: Preflight exact-tree approval before expensive setup", 1
+    )[1].split("- uses: actions/setup-python@v5", 1)[0]
+
+    assert "id: approved_image" in workflow
+    assert 'commit_sha="$(git rev-parse HEAD)"' in preflight
+    assert 'tree_sha="$(git rev-parse \'HEAD^{tree}\')"' in preflight
+    assert 'approval_tag="approved-tree-$tree_sha"' in preflight
+    assert '2>"$lookup_error_file"' in preflight
+    assert 'lookup_status=$?' in preflight
+    assert 'if ! grep -Fq "Image not found" "$lookup_error_file"; then' in preflight
+    assert "Exact-tree approval lookup failed:" in preflight
+    assert 'exit "$lookup_status"' in preflight
+    assert "Exact-tree approval lookup returned no digest:" in preflight
+    assert "2>/dev/null || true" not in preflight
+    assert (
+        'if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] '
+        '&& [ "$EVAL_SUITE" = diagnostic ]; then'
+        in preflight
+    )
+    assert "Missing exact-tree evaluation approval:" in preflight
+    assert "commit=$commit_sha tree=$tree_sha image_tag=$IMAGE:$approval_tag" in preflight
+    assert (
+        "The protected live evaluation must publish this exact-tree tag" in preflight
+    )
+    assert preflight.rstrip().endswith("exit 1")
+
+    dependency_setup = workflow.index("uses: actions/setup-python@v5")
+    assert workflow.index("id: approved_image") < dependency_setup
+    assert workflow.index("pip install -r backend/requirements.txt") > dependency_setup
+    assert workflow.index("python scripts/staging_database.py reset") > dependency_setup
+    assert (
+        "APPROVED_IMAGE_DIGEST: ${{ steps.approved_image.outputs.digest }}" in workflow
+    )
+    assert 'digest="$APPROVED_IMAGE_DIGEST"' in workflow
+
+
 def test_scheduled_eval_preserves_approval_and_diagnostic_build_boundaries():
     workflow = (ROOT / ".github/workflows/scheduled-eval.yml").read_text(
         encoding="utf-8"
@@ -265,11 +358,7 @@ def test_scheduled_eval_preserves_approval_and_diagnostic_build_boundaries():
     assert "corpus-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" in workflow
     assert "diagnostic-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" in workflow
     assert 'if [ "$CORPUS_STATUS" = approved ]; then' in workflow
-    assert (
-        "Approved corpus requires an existing exact-tree image approval outside a "
-        "manually dispatched diagnostic run."
-        in workflow
-    )
+    assert "Missing exact-tree evaluation approval:" in workflow
     assert (
         'if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || '
         '[ "$EVAL_SUITE" != diagnostic ]; then'
@@ -301,6 +390,9 @@ def test_scheduled_eval_preserves_approval_and_diagnostic_build_boundaries():
     approval_state = workflow.index(
         "name: Resolve corpus approval state without installing dependencies"
     )
+    approval_preflight = workflow.index(
+        "name: Preflight exact-tree approval before expensive setup"
+    )
     dependency_setup = workflow.index("uses: actions/setup-python@v5")
     candidate_resolution = workflow.index(
         "name: Resolve approved digest or build an ephemeral evaluation candidate"
@@ -309,6 +401,7 @@ def test_scheduled_eval_preserves_approval_and_diagnostic_build_boundaries():
     browser_capture = workflow.index("name: Start frontend and capture journeys")
     assert (
         approval_state
+        < approval_preflight
         < dependency_setup
         < candidate_resolution
         < candidate_readiness
