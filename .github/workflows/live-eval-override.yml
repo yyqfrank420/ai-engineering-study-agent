@@ -3,18 +3,26 @@ name: Live eval manual override
 on:
   workflow_dispatch:
     inputs:
-      run_id:
-        description: Failed live-eval run ID
+      evidence_sources:
+        description: JSON array of run_id, artifact_name, cases, and legacy_risk_accepted
         required: true
-      commit_sha:
-        description: Full tested commit SHA
+        type: string
+      applied_commit_sha:
+        description: Full commit SHA of the exact applied-domain diagnostic
         required: true
+        type: string
+      image_digest:
+        description: Immutable image digest used by the applied-domain diagnostic
+        required: true
+        type: string
       reviewer:
         description: Reviewer (must equal authenticated actor)
         required: true
+        type: string
       reason:
-        description: Specific reason for overriding the automated result
+        description: Specific reason for composing the recorded per-case evidence
         required: true
+        type: string
 
 permissions:
   contents: read
@@ -35,66 +43,306 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - name: Validate and record authenticated override
+      - name: Validate authenticated evidence request
         env:
-          OVERRIDE_RUN_ID: ${{ inputs.run_id }}
-          OVERRIDE_COMMIT_SHA: ${{ inputs.commit_sha }}
+          EVIDENCE_SOURCES: ${{ inputs.evidence_sources }}
+          APPLIED_COMMIT_SHA: ${{ inputs.applied_commit_sha }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
           OVERRIDE_REVIEWER: ${{ inputs.reviewer }}
           OVERRIDE_REASON: ${{ inputs.reason }}
         run: |
-          if [ "$GITHUB_SHA" != "$OVERRIDE_COMMIT_SHA" ]; then
-            echo "Dispatch this workflow from the tested commit's branch/ref; GITHUB_SHA must equal commit_sha." >&2
+          [ "$GITHUB_REF" = refs/heads/main ] || {
+            echo "Evidence approval must be dispatched from main." >&2
             exit 1
-          fi
-          ./scripts/ci override \
-            --run-id "$OVERRIDE_RUN_ID" \
-            --commit-sha "$OVERRIDE_COMMIT_SHA" \
-            --reviewer "$OVERRIDE_REVIEWER" \
-            --reason "$OVERRIDE_REASON" \
-            --output artifacts/live-eval/manual-override.json
-      - name: Download the original run identity
-        env:
-          GH_TOKEN: ${{ github.token }}
-          OVERRIDE_RUN_ID: ${{ inputs.run_id }}
-        run: gh run download "$OVERRIDE_RUN_ID" --name live-eval-artifacts --dir artifacts/original
-      - name: Verify original identity exactly matches this override
-        env:
-          OVERRIDE_RUN_ID: ${{ inputs.run_id }}
-          OVERRIDE_COMMIT_SHA: ${{ inputs.commit_sha }}
-        run: |
-          python - <<'PY'
+          }
+          [ "$OVERRIDE_REVIEWER" = "$GITHUB_ACTOR" ] || {
+            echo "Reviewer must equal the authenticated workflow actor." >&2
+            exit 1
+          }
+          [ "${#OVERRIDE_REASON}" -ge 20 ] || {
+            echo "Override reason must be specific (at least 20 characters)." >&2
+            exit 1
+          }
+          [[ "$APPLIED_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "applied_commit_sha must be a full lowercase commit SHA." >&2
+            exit 1
+          }
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "image_digest must be an immutable sha256 digest." >&2
+            exit 1
+          }
+          mkdir -p artifacts/evidence-sources artifacts/live-eval
+          python - <<'PY' > artifacts/evidence-sources/sources.tsv
           import json
           import os
+          import re
+
+          sources = json.loads(os.environ["EVIDENCE_SOURCES"])
+          if not isinstance(sources, list) or not sources:
+              raise SystemExit("evidence_sources must be a non-empty JSON array")
+          seen = set()
+          for source in sources:
+              if not isinstance(source, dict):
+                  raise SystemExit("Each evidence source must be an object")
+              run_id = str(source.get("run_id", ""))
+              artifact = str(source.get("artifact_name", ""))
+              cases = source.get("cases")
+              legacy = source.get("legacy_risk_accepted", False)
+              if not run_id.isdigit() or not re.fullmatch(r"[A-Za-z0-9_.-]+", artifact):
+                  raise SystemExit("Invalid evidence run_id or artifact_name")
+              if not isinstance(cases, list) or not cases or any(
+                  not isinstance(case_id, str) or not re.fullmatch(r"[a-z0-9-]+", case_id)
+                  for case_id in cases
+              ):
+                  raise SystemExit("Each source needs a non-empty valid cases array")
+              if len(cases) != len(set(cases)) or not isinstance(legacy, bool):
+                  raise SystemExit("Source cases must be unique and legacy_risk_accepted must be boolean")
+              key = (run_id, artifact)
+              if key in seen:
+                  raise SystemExit("Duplicate evidence source")
+              seen.add(key)
+              print(run_id, artifact, json.dumps(cases, separators=(",", ":")), str(legacy).lower(), sep="\t")
+          PY
+      - name: Download explicit evidence and source metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          while IFS=$'\t' read -r run_id artifact_name cases legacy; do
+            source_dir="artifacts/evidence-sources/$run_id"
+            mkdir -p "$source_dir/artifact"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$source_dir/run.json"
+            gh run download "$run_id" --name "$artifact_name" --dir "$source_dir/artifact"
+            gh run view "$run_id" --log > "$source_dir/run.log"
+            printf '%s\t%s\t%s\t%s\n' "$run_id" "$artifact_name" "$cases" "$legacy" > "$source_dir/assignment.tsv"
+          done < artifacts/evidence-sources/sources.tsv
+      - name: Verify complete per-case evidence and exact release identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_SOURCES: ${{ inputs.evidence_sources }}
+          APPLIED_COMMIT_SHA: ${{ inputs.applied_commit_sha }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          OVERRIDE_REVIEWER: ${{ inputs.reviewer }}
+          OVERRIDE_REASON: ${{ inputs.reason }}
+        run: |
+          python - <<'PY'
+          import base64
+          import json
+          import os
+          import re
           import subprocess
           from pathlib import Path
-          expected_commit = os.environ["OVERRIDE_COMMIT_SHA"]
-          deployment = json.loads(Path("artifacts/original/deployment.json").read_text())
-          if str(deployment["run_id"]) != os.environ["OVERRIDE_RUN_ID"] or deployment["commit_sha"] != expected_commit:
-              raise SystemExit("Original run identity does not match override inputs")
-          tree_sha = subprocess.run(
-              ["git", "rev-parse", "HEAD^{tree}"],
-              check=True,
-              capture_output=True,
-              text=True,
+
+          expected_cases = {
+              "applied-domain",
+              "graph-expansion",
+              "graph-off",
+              "memory",
+              "node-followup",
+              "prompt-injection",
+              "rag-grounding",
+              "research",
+          }
+          allowed_post_evidence_changes = {".github/workflows/live-eval-override.yml"}
+          repository = os.environ["GITHUB_REPOSITORY"]
+          applied_commit = os.environ["APPLIED_COMMIT_SHA"]
+          current_commit = os.environ["GITHUB_SHA"]
+          image_digest = os.environ["IMAGE_DIGEST"]
+          sources = json.loads(os.environ["EVIDENCE_SOURCES"])
+
+          def api_json(path):
+              result = subprocess.run(
+                  ["gh", "api", path], check=True, capture_output=True, text=True
+              )
+              return json.loads(result.stdout)
+
+          def case_map(commit_sha):
+              payload = api_json(
+                  f"repos/{repository}/contents/backend/eval/corpus/v1/cases.json?ref={commit_sha}"
+              )
+              document = json.loads(base64.b64decode(payload["content"]).decode())
+              return {case["id"]: case for case in document["cases"]}
+
+          def only_file(root, name):
+              matches = list(root.rglob(name))
+              if len(matches) != 1:
+                  raise SystemExit(f"Expected exactly one {name} under {root}, found {len(matches)}")
+              return matches[0]
+
+          def identity_value(document, key):
+              pending = [document]
+              while pending:
+                  value = pending.pop()
+                  if isinstance(value, dict):
+                      if value.get(key) not in (None, ""):
+                          return value[key]
+                      pending.extend(value.values())
+                  elif isinstance(value, list):
+                      pending.extend(value)
+              return None
+
+          comparison = api_json(
+              f"repos/{repository}/compare/{applied_commit}...{current_commit}"
+          )
+          changed_files = {item["filename"] for item in comparison.get("files", [])}
+          if not changed_files <= allowed_post_evidence_changes:
+              unexpected = sorted(changed_files - allowed_post_evidence_changes)
+              raise SystemExit(f"Runtime-affecting files changed after applied-domain evidence: {unexpected}")
+
+          current_cases = case_map(current_commit)
+          if not expected_cases <= current_cases.keys():
+              raise SystemExit("Current corpus no longer contains the complete protected PR case set")
+
+          assigned = set()
+          provenance = []
+          applied_source = None
+          reference_identity = None
+          for source in sources:
+              run_id = str(source["run_id"])
+              artifact_name = source["artifact_name"]
+              selected = source["cases"]
+              legacy = source.get("legacy_risk_accepted", False)
+              overlap = assigned.intersection(selected)
+              if overlap:
+                  raise SystemExit(f"Cases assigned more than once: {sorted(overlap)}")
+              assigned.update(selected)
+
+              root = Path("artifacts/evidence-sources") / run_id
+              run = json.loads((root / "run.json").read_text())
+              if str(run.get("id")) != run_id or run.get("status") != "completed":
+                  raise SystemExit(f"Evidence run {run_id} is not a completed matching run")
+              source_commit = run.get("head_sha")
+              if not isinstance(source_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+                  raise SystemExit(f"Evidence run {run_id} has no valid head SHA")
+              if source_commit != applied_commit and legacy is not True:
+                  raise SystemExit(f"Historical evidence run {run_id} requires explicit legacy risk acceptance")
+
+              artifact_root = root / "artifact"
+              browser = json.loads(only_file(artifact_root, "browser-results.json").read_text())
+              live = json.loads(only_file(artifact_root, "live-results.json").read_text())
+              context_matches = []
+              for context_name in ("run-context.json", "deployment.json"):
+                  for path in artifact_root.rglob(context_name):
+                      context = json.loads(path.read_text())
+                      if str(context.get("run_id")) != run_id or context.get("commit_sha") != source_commit:
+                          raise SystemExit(f"{context_name} identity mismatch for run {run_id}")
+                      context_matches.append(context_name)
+              if not context_matches:
+                  raise SystemExit(f"Evidence run {run_id} contains no source identity document")
+
+              browser_by_id = {item.get("id"): item for item in browser.get("results", [])}
+              live_by_id = {item.get("id"): item for item in live.get("evaluations", [])}
+              for case_id in selected:
+                  browser_case = browser_by_id.get(case_id)
+                  live_case = live_by_id.get(case_id)
+                  if not browser_case or browser_case.get("passed") is not True:
+                      raise SystemExit(f"Browser evidence is not passing for {case_id} in run {run_id}")
+                  if browser_case.get("execution_state") not in (None, "completed"):
+                      raise SystemExit(f"Browser execution is incomplete for {case_id} in run {run_id}")
+                  if not live_case or live_case.get("decision") != "pass":
+                      raise SystemExit(f"Semantic evidence is not passing for {case_id} in run {run_id}")
+
+              source_cases = case_map(source_commit)
+              for case_id in selected:
+                  if source_cases.get(case_id) != current_cases.get(case_id):
+                      raise SystemExit(f"Protected case definition changed after evidence for {case_id}")
+
+              identity = {
+                  "corpus_version": identity_value(browser, "corpus_version"),
+                  "corpus_hash": identity_value(browser, "corpus_hash"),
+                  "release_identity": identity_value(browser, "release_identity"),
+              }
+              live_identity = {
+                  "corpus_version": identity_value(live, "corpus_version"),
+                  "corpus_hash": identity_value(live, "corpus_hash"),
+                  "release_identity": identity_value(live, "release_identity"),
+              }
+              for key in ("corpus_version", "release_identity"):
+                  if not identity[key] or live_identity[key] != identity[key]:
+                      raise SystemExit(f"Evidence identity {key} is missing or inconsistent in run {run_id}")
+              if identity["corpus_hash"] and live_identity["corpus_hash"] not in (None, identity["corpus_hash"]):
+                  raise SystemExit(f"Browser/live corpus hashes disagree in run {run_id}")
+              if reference_identity is None and source_commit == applied_commit:
+                  reference_identity = identity
+              provenance.append({
+                  "run_id": run_id,
+                  "artifact_name": artifact_name,
+                  "source_commit_sha": source_commit,
+                  "workflow": run.get("name"),
+                  "event": run.get("event"),
+                  "conclusion": run.get("conclusion"),
+                  "cases": selected,
+                  "identity": identity,
+                  "legacy_risk_accepted": legacy,
+                  "identity_documents": sorted(context_matches),
+              })
+              if "applied-domain" in selected:
+                  if selected != ["applied-domain"]:
+                      raise SystemExit("applied-domain must come from its own exact diagnostic artifact")
+                  if source_commit != applied_commit or legacy:
+                      raise SystemExit("applied-domain evidence must be exact and cannot use a legacy waiver")
+                  if run.get("name") != "Scheduled evaluation" or run.get("event") != "workflow_dispatch" or run.get("conclusion") != "success":
+                      raise SystemExit("applied-domain must come from a successful dispatched scheduled diagnostic")
+                  applied_source = (run_id, root)
+
+          if assigned != expected_cases:
+              raise SystemExit(
+                  f"Evidence must cover every protected case exactly once; missing={sorted(expected_cases-assigned)}, extra={sorted(assigned-expected_cases)}"
+              )
+          if applied_source is None or reference_identity is None:
+              raise SystemExit("Exact applied-domain evidence is required")
+          for item in provenance:
+              for key in ("corpus_version", "release_identity"):
+                  if item["identity"][key] != reference_identity[key]:
+                      raise SystemExit(f"Evidence release identity mismatch in run {item['run_id']}")
+
+          applied_run_id, applied_root = applied_source
+          logged_digests = set(
+              re.findall(r"IMAGE_DIGEST:\s*(sha256:[0-9a-f]{64})", (applied_root / "run.log").read_text())
+          )
+          if logged_digests != {image_digest}:
+              raise SystemExit(
+                  f"Applied-domain run log digest mismatch: expected {image_digest}, found {sorted(logged_digests)}"
+              )
+
+          current_tree = subprocess.run(
+              ["git", "rev-parse", "HEAD^{tree}"], check=True, capture_output=True, text=True
           ).stdout.strip()
-          if deployment["tree_sha"] != tree_sha:
-              raise SystemExit("Original run tree does not match the checked-out commit")
-          if not deployment.get("digest"):
-              raise SystemExit("Original run did not record an image digest")
-          Path("artifacts/live-eval/verified-deployment.json").write_text(json.dumps(deployment, indent=2) + "\n")
+          record = {
+              "schema_version": 1,
+              "decision": "pass",
+              "current_commit_sha": current_commit,
+              "current_tree_sha": current_tree,
+              "applied_commit_sha": applied_commit,
+              "applied_run_id": applied_run_id,
+              "image_digest": image_digest,
+              "allowed_post_evidence_changes": sorted(changed_files),
+              "protected_cases": sorted(expected_cases),
+              "reviewer": os.environ["OVERRIDE_REVIEWER"],
+              "reason": os.environ["OVERRIDE_REASON"],
+              "sources": provenance,
+          }
+          output = Path("artifacts/live-eval/composite-evidence.json")
+          output.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+          print(json.dumps(record, indent=2, sort_keys=True))
           PY
       - uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
-      - name: Publish the explicitly reviewed exact-tree approval
+      - name: Publish the reviewed exact-tree approval
+        env:
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
         run: |
-          tree_sha="$(python -c 'import json; print(json.load(open("artifacts/live-eval/verified-deployment.json"))["tree_sha"])')"
-          digest="$(python -c 'import json; print(json.load(open("artifacts/live-eval/verified-deployment.json"))["digest"])')"
-          gcloud artifacts docker tags add "$IMAGE@$digest" "$IMAGE:approved-tree-$tree_sha" --quiet
+          resolved="$(gcloud artifacts docker images describe "$IMAGE@$IMAGE_DIGEST" --format='value(image_summary.digest)')"
+          [ "$resolved" = "$IMAGE_DIGEST" ] || {
+            echo "Reviewed image digest is no longer present in Artifact Registry." >&2
+            exit 1
+          }
+          tree_sha="$(python -c 'import json; print(json.load(open("artifacts/live-eval/composite-evidence.json"))["current_tree_sha"])')"
+          gcloud artifacts docker tags add "$IMAGE@$IMAGE_DIGEST" "$IMAGE:approved-tree-$tree_sha" --quiet
       - uses: actions/upload-artifact@v4
         with:
-          name: live-eval-manual-override-${{ inputs.run_id }}
+          name: live-eval-composite-override-${{ github.run_id }}
           path: artifacts/live-eval
           retention-days: 30
