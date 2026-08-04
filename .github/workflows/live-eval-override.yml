@@ -239,14 +239,33 @@ jobs:
               browser = json.loads(only_file(artifact_root, "browser-results.json").read_text())
               live = json.loads(only_file(artifact_root, "live-results.json").read_text())
               context_matches = []
+              deployment_commits = set()
               for context_name in ("run-context.json", "deployment.json"):
                   for path in artifact_root.rglob(context_name):
                       context = json.loads(path.read_text())
-                      if str(context.get("run_id")) != run_id or context.get("commit_sha") != source_commit:
-                          raise SystemExit(f"{context_name} identity mismatch for run {run_id}")
+                      if str(context.get("run_id")) != run_id:
+                          raise SystemExit(f"{context_name} run ID mismatch for run {run_id}")
+                      context_commit = context.get("commit_sha")
+                      if context_name == "run-context.json":
+                          if context_commit != source_commit:
+                              raise SystemExit(f"run-context.json commit mismatch for run {run_id}")
+                      else:
+                          if not isinstance(context_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", context_commit):
+                              raise SystemExit(f"deployment.json commit is invalid for run {run_id}")
+                          tested = api_json(f"repos/{repository}/git/commits/{context_commit}")
+                          if context_commit != source_commit:
+                              parents = {parent["sha"] for parent in tested.get("parents", [])}
+                              if run.get("event") != "pull_request" or source_commit not in parents:
+                                  raise SystemExit(f"deployment.json is not the tested PR merge for run {run_id}")
+                          if context.get("tree_sha") and context["tree_sha"] != tested["tree"]["sha"]:
+                              raise SystemExit(f"deployment.json tree mismatch for run {run_id}")
+                          deployment_commits.add(context_commit)
                       context_matches.append(context_name)
               if not context_matches:
                   raise SystemExit(f"Evidence run {run_id} contains no source identity document")
+              if len(deployment_commits) > 1:
+                  raise SystemExit(f"Evidence run {run_id} records multiple tested commits")
+              tested_commit = next(iter(deployment_commits), source_commit)
 
               browser_by_id = {item.get("id"): item for item in browser.get("results", [])}
               live_by_id = {item.get("id"): item for item in live.get("evaluations", [])}
@@ -260,7 +279,7 @@ jobs:
                   if not live_case or live_case.get("decision") != "pass":
                       raise SystemExit(f"Semantic evidence is not passing for {case_id} in run {run_id}")
 
-              source_cases = case_map(source_commit)
+              source_cases = case_map(tested_commit)
               for case_id in selected:
                   if source_cases.get(case_id) != current_cases.get(case_id):
                       raise SystemExit(f"Protected case definition changed after evidence for {case_id}")
@@ -286,6 +305,7 @@ jobs:
                   "run_id": run_id,
                   "artifact_name": artifact_name,
                   "source_commit_sha": source_commit,
+                  "tested_commit_sha": tested_commit,
                   "workflow": run.get("name"),
                   "event": run.get("event"),
                   "conclusion": run.get("conclusion"),
