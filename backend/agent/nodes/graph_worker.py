@@ -700,59 +700,80 @@ def _complete_missing_release_rollback(
     edges = candidate.get("edges") or []
     if len(edges) >= _edge_budget(max_nodes):
         return None
-    promotion_edges = [
-        edge
-        for edge in edges
-        if edge.get("flow") == "deployment"
-        and (
-            "full production" in str(edge.get("label") or "").lower()
-            or "canary-approved" in str(edge.get("label") or "").lower()
-            or re.search(r"\bpromotes?\b", str(edge.get("label") or ""), re.I)
+    deployment_edges = [edge for edge in edges if edge.get("flow") == "deployment"]
+
+    def is_promotion(edge: dict[str, Any]) -> bool:
+        label = str(edge.get("label") or "")
+        return (
+            "full production" in label.lower()
+            or "canary-approved" in label.lower()
+            or bool(re.search(r"\bpromotes?\b", label, re.I))
         )
-    ]
-    if len(promotion_edges) != 1:
+
+    release_owners: list[
+        tuple[str, list[dict[str, Any]], list[dict[str, Any]]]
+    ] = []
+    for source in {str(edge.get("source") or "") for edge in deployment_edges}:
+        canary_edges = [
+            edge
+            for edge in deployment_edges
+            if str(edge.get("source") or "") == source
+            and "canary" in str(edge.get("label") or "").lower()
+            and not is_promotion(edge)
+        ]
+        promotion_edges = [
+            edge
+            for edge in deployment_edges
+            if str(edge.get("source") or "") == source and is_promotion(edge)
+        ]
+        if canary_edges and promotion_edges:
+            release_owners.append((source, canary_edges, promotion_edges))
+    if len(release_owners) != 1:
+        return None
+    source, canary_edges, promotion_edges = release_owners[0]
+    if len(canary_edges) != 1 or len(promotion_edges) != 1:
         return None
     promotion_edge = promotion_edges[0]
-    source = str(promotion_edge.get("source") or "")
-    promotion_target = str(promotion_edge.get("target") or "")
+    release_targets = {
+        str(edge.get("target") or "")
+        for edge in (canary_edges + promotion_edges)
+    }
+    if len(release_targets) != 1:
+        return None
+    release_target = next(iter(release_targets))
     node_by_id = {
         str(node.get("id") or ""): node
         for node in (candidate.get("nodes") or [])
         if node.get("id")
     }
     source_node = node_by_id.get(source) or {}
-    if str(source_node.get("type") or "") not in {"control", "decision", "datastore"}:
+    if str(source_node.get("type") or "") not in {
+        "control",
+        "decision",
+        "datastore",
+        "service",
+    }:
         return None
-    canary_edges = [
-        edge
+    if release_target not in node_by_id or release_target == source:
+        return None
+    connected_node_ids = {
+        str(edge.get("target") or "")
         for edge in edges
-        if edge.get("flow") == "deployment"
-        and edge.get("source") == source
-        and "canary" in str(edge.get("label") or "").lower()
+        if edge.get("source") == source
+    } | {
+        str(edge.get("source") or "")
+        for edge in edges
+        if edge.get("target") == source
+    }
+    registry_ids = [
+        node_id
+        for node_id, node in node_by_id.items()
+        if node_id in connected_node_ids
+        and "registry" in str(node.get("label") or "").lower()
     ]
-    if not canary_edges:
+    if len(registry_ids) > 1:
         return None
-    if "registry" in str(source_node.get("label") or "").lower():
-        rollback_target = promotion_target
-    else:
-        connected_node_ids = {
-            str(edge.get("target") or "")
-            for edge in edges
-            if edge.get("source") == source
-        } | {
-            str(edge.get("source") or "")
-            for edge in edges
-            if edge.get("target") == source
-        }
-        registry_ids = [
-            node_id
-            for node_id, node in node_by_id.items()
-            if node_id in connected_node_ids
-            and "registry" in str(node.get("label") or "").lower()
-        ]
-        if len(registry_ids) != 1:
-            return None
-        rollback_target = registry_ids[0]
+    rollback_target = registry_ids[0] if registry_ids else release_target
     if not rollback_target or rollback_target == source:
         return None
     try:

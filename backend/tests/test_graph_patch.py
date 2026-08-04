@@ -699,6 +699,28 @@ def test_deterministic_completion_adds_only_missing_release_rollback():
     )
 
 
+def test_deterministic_completion_allows_service_owner_without_registry():
+    graph = _release_graph_for_completion()
+    graph["nodes"][5].update({"label": "Evaluation Release Ops", "type": "service"})
+    graph["nodes"][7]["label"] = "Evaluated Release Archive"
+
+    completed = graph_worker._complete_missing_release_rollback(
+        "Design a production model release workflow",
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+    assert completed is not None
+    assert any(
+        edge["label"] == "rollback to prior approved release"
+        and edge["source"] == "fulfilment_stage_5"
+        and edge["target"] == "fulfilment_stage_6"
+        for edge in completed["edges"]
+    )
+
+
 def test_deterministic_completion_does_not_hide_other_review_failures():
     graph = _domain_graph(9, production=True)
 
@@ -757,6 +779,41 @@ def test_deterministic_completion_requires_unique_typed_release_topology(failure
         })
     else:
         promotion["flow"] = "control"
+    graph = graph_worker._normalise_applied_graph(
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+    completed = graph_worker._complete_missing_release_rollback(
+        "Design a production model release workflow",
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+    assert completed is None
+
+
+@pytest.mark.parametrize("failure_mode", ["ambiguous_owner", "different_targets"])
+def test_deterministic_completion_requires_one_owner_and_shared_target(failure_mode):
+    graph = _release_graph_for_completion()
+    promotion = next(
+        edge for edge in graph["edges"] if edge["label"] == "promote full production release"
+    )
+    if failure_mode == "ambiguous_owner":
+        canary = next(
+            edge for edge in graph["edges"] if edge["label"] == "deploy canary release"
+        )
+        graph["nodes"][4].update({"label": "Secondary Release Ops", "type": "service"})
+        graph["edges"].extend([
+            {**canary, "source": "fulfilment_stage_4"},
+            {**promotion, "source": "fulfilment_stage_4"},
+        ])
+    else:
+        promotion["target"] = "fulfilment_stage_8"
     graph = graph_worker._normalise_applied_graph(
         graph,
         min_nodes=9,
