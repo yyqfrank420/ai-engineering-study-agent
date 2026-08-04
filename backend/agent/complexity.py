@@ -226,8 +226,17 @@ def is_applied_system_design_request(query: str) -> bool:
 def resolve_complexity(requested: str, query: str) -> ComplexityProfile:
     requested = requested if requested in {"auto", "low", "prototype", "production"} else "auto"
     if requested == "auto":
-        text = query.lower()
-        if is_applied_system_design_request(query):
+        text = " ".join(query.lower().split())
+        explanatory_flow = (
+            bool(_CONCEPT_QUESTION.match(text))
+            and any(phrase in text for phrase in _DESIGN_FLOW_PHRASES)
+            and not any(hint in text for hint in _PRODUCTION_HINTS)
+        )
+        if is_applied_system_design_request(query) and explanatory_flow:
+            # A concept walkthrough can need an applied runtime diagram without
+            # implicitly requesting every production-hardening guarantee.
+            resolved = "prototype"
+        elif is_applied_system_design_request(query):
             # The default architecture experience targets an implementation-
             # ready system map. Users can still explicitly choose prototype.
             resolved = "production"

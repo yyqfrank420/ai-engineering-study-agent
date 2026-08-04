@@ -18,8 +18,9 @@ from graph.runtime import select_canonical_graph
 logger = logging.getLogger(__name__)
 
 _APPLIED_GRAPH_PROMPT_VERSION = "applied_architecture_v17"
-_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v11"
+_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v20"
 _MAX_GRAPH_PATCH_CHARS = 20_000
+_MISSING_RELEASE_ROLLBACK = "Draw release rollback as its own directed edge."
 
 
 _APPLIED_GRAPH_SYSTEM = """<role>
@@ -246,8 +247,26 @@ approval/policy/compensation-to-executor bypass. Those controls write bound enve
 store; only its lease/outbox edge feeds executable work.
 While resolving the supplied review, re-audit the complete candidate against this entire contract.
 Use the same bounded patch to fix any other blocking path defect you can observe, especially one
-that would become visible only after the requested repair. Do not spend the sole revision on the
+that would become visible only after the requested repair. Do not spend a bounded revision on the
 first symptom while leaving another label-only guarantee, bypass, or incomplete branch behind.
+Privately map every supplied blocking failure to at least one concrete patch operation before
+returning. A structurally valid patch that leaves any supplied blocker unresolved is invalid.
+Treat every entry in review.missing as an independent conjunction, including repeated failures of
+the same class at different node or edge selectors. Repair every named selector in this one patch;
+never stop after fixing the first approval owner or collapsed release edge.
+For each named approval decision, either draw two outbound edges (one approval-only and one
+rejection-only), or draw one combined approve/reject edge to durable lifecycle state whose complete
+edge text includes payload, target, policy version, expiry, and idempotency key. For release repair,
+no edge text may combine promotion with rollback, and canary-to-full-production promotion must be a
+separate directed edge.
+The approval-only route must explicitly say accept, approve, authorize, permit, release, or sign-off.
+The rejection-only route must explicitly say block, cancel, decline, deny, reject, refuse, or stop.
+Human review, a manual lane, escalation, or hold alone does not name either decision outcome.
+When splitting promotion from rollback, remove or update the combined edge and add two directed
+edges. Audit each edge's label, technology, and description: the promotion edge must not mention
+rollback, and the rollback edge must not mention promotion. Do not leave the old combined edge.
+The complete patched graph must pass the deterministic publication contract; validation feedback
+will identify any residual collapsed branch, approval route, bypass, or release transition.
 </trust_and_bounds>
 
 <output_contract>
@@ -452,23 +471,24 @@ async def _generate_applied_architecture(state: AgentState, query: str, profile)
                 "domain responsibilities, then return one complete replacement JSON object.\n\n"
                 f"Validation error: {repair_context}"
             )
-        # Contract-informed JSON repair does not need the premium repair model;
-        # the independent critic remains the semantic quality gate. Recent
-        # live runs showed that low-effort integration routinely required the
-        # bounded repair, so medium effort on both attempts is cheaper overall.
+        # The independent architect and challenger already own the open-ended
+        # reasoning. Keep the initial constrained JSON integration at low
+        # effort: higher effort can exhaust the output cap before satisfying
+        # the deterministic graph contract. A validation-informed structural
+        # repair remains medium because it must preserve and correct a draft.
         design_model = settings.orchestrator_model
         raw = await stream_llm(
             model=design_model,
             system=_APPLIED_GRAPH_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
-            # The architect and challenger already own domain reasoning. This
-            # role integrates their bounded outputs into a densely constrained
-            # JSON contract; medium effort reduces duplicate structural calls.
+            # This role integrates bounded inputs into a densely constrained
+            # JSON contract; the independent semantic critic remains the
+            # quality gate.
             thinking_budget=None,
             temperature=settings.graph_temperature,
             top_p=settings.graph_top_p,
             top_k=settings.graph_top_k,
-            effort="medium",
+            effort="low" if revision_count == 0 and structural_attempt == 0 else "medium",
             telemetry=build_telemetry(
                 "graph_worker_applied_design",
                 user_id=state.get("user_id"),
@@ -539,10 +559,16 @@ async def _generate_applied_architecture_patch(
         "only the minimal patch."
     )
     repair_context = ""
-    # Patches are normally small and cheap. Give one validation-informed retry
-    # before falling back to the approved graph so a single malformed operation
-    # cannot erase an otherwise repairable diagram. The two-call ceiling keeps
-    # retries bounded under the request and evaluation budgets.
+    revision_count = int(state.get("graph_revision_count", 0))
+    # A workflow semantic revision applies exact critic feedback, so its first
+    # typed attempt uses low effort to stay within the turn deadline. Ordinary
+    # user-requested graph refinements remain medium effort. A malformed patch
+    # gets one medium-effort, validation-informed retry before falling back to
+    # the approved graph. A
+    # structurally valid but semantically incomplete candidate is deliberately
+    # returned to the workflow critic: that owning layer supplies canonical
+    # feedback between its two bounded revisions. Retrying it here as well
+    # duplicates the repair loop and can exhaust the whole-turn deadline.
     for patch_attempt in range(2):
         raw = ""
         attempt_prompt = prompt
@@ -563,7 +589,11 @@ async def _generate_applied_architecture_patch(
                 temperature=settings.graph_temperature,
                 top_p=settings.graph_top_p,
                 top_k=settings.graph_top_k,
-                effort="low",
+                effort=(
+                    "low"
+                    if revision_count > 0 and patch_attempt == 0
+                    else "medium"
+                ),
                 telemetry=build_telemetry(
                     "graph_worker_applied_patch",
                     user_id=state.get("user_id"),
@@ -571,7 +601,7 @@ async def _generate_applied_architecture_patch(
                     metadata={
                         "complexity_requested": state.get("complexity", "auto"),
                         "complexity_resolved": profile.resolved,
-                        "revision_count": state.get("graph_revision_count", 0),
+                        "revision_count": revision_count,
                         "model_role": "incremental_patch",
                         "patch_attempt": patch_attempt,
                         "prompt_version": _APPLIED_GRAPH_PATCH_PROMPT_VERSION,
@@ -584,13 +614,38 @@ async def _generate_applied_architecture_patch(
             if len(raw) > _MAX_GRAPH_PATCH_CHARS:
                 raise ValueError("graph patch exceeds the bounded output contract")
             patch = _parse_json_object(raw)
-            return _apply_applied_graph_patch(
+            candidate = _apply_applied_graph_patch(
                 existing_graph,
                 patch,
                 min_nodes=effective_min_nodes,
                 max_nodes=profile.max_graph_nodes,
                 resolved_complexity=profile.resolved,
             )
+            try:
+                _validate_applied_architecture_patch(
+                    query,
+                    candidate,
+                    profile.resolved,
+                )
+            except ValueError as exc:
+                completed = _complete_missing_release_rollback(
+                    query,
+                    candidate,
+                    min_nodes=effective_min_nodes,
+                    max_nodes=profile.max_graph_nodes,
+                    resolved_complexity=profile.resolved,
+                )
+                if completed is not None:
+                    return completed
+                # This candidate is not publishable yet, but it is structurally
+                # valid and may contain useful partial repairs. Preserve it for
+                # the canonical critic so the next workflow revision operates
+                # on the improved topology with exact residual feedback.
+                logger.info(
+                    "Applied architecture patch needs workflow review: %s",
+                    exc,
+                )
+            return candidate
         except Exception as exc:
             if patch_attempt == 0:
                 invalid_patch = raw[:6000] if raw else "(model call did not return a patch)"
@@ -611,6 +666,147 @@ async def _generate_applied_architecture_patch(
     raise RuntimeError("applied architecture patch repair loop ended unexpectedly")
 
 
+def _validate_applied_architecture_patch(
+    query: str,
+    candidate: GraphData,
+    resolved_complexity: str,
+) -> None:
+    # Import lazily so the graph worker remains independently importable while
+    # reusing the critic's single canonical publication contract.
+    from agent.nodes.graph_critic import _deterministic_review
+
+    review = _deterministic_review(query, candidate, resolved_complexity)
+    if review.get("approved"):
+        return
+    missing = [str(item) for item in (review.get("missing") or [])[:8]]
+    detail = " ".join(missing) or "the deterministic publication contract rejected the patch"
+    raise ValueError(f"patched graph still violates deterministic publication contract: {detail}")
+
+
+def _complete_missing_release_rollback(
+    query: str,
+    candidate: GraphData,
+    *,
+    min_nodes: int,
+    max_nodes: int,
+    resolved_complexity: str,
+) -> GraphData | None:
+    """Complete the one mechanical release edge that needs no model judgment."""
+    from agent.nodes.graph_critic import _deterministic_review
+
+    review = _deterministic_review(query, candidate, resolved_complexity)
+    if review.get("missing") != [_MISSING_RELEASE_ROLLBACK]:
+        return None
+    edges = candidate.get("edges") or []
+    if len(edges) >= _edge_budget(max_nodes):
+        return None
+    deployment_edges = [edge for edge in edges if edge.get("flow") == "deployment"]
+
+    def is_promotion(edge: dict[str, Any]) -> bool:
+        label = str(edge.get("label") or "")
+        return (
+            "full production" in label.lower()
+            or "canary-approved" in label.lower()
+            or bool(re.search(r"\bpromotes?\b", label, re.I))
+        )
+
+    release_owners: list[
+        tuple[str, list[dict[str, Any]], list[dict[str, Any]]]
+    ] = []
+    for source in {str(edge.get("source") or "") for edge in deployment_edges}:
+        canary_edges = [
+            edge
+            for edge in deployment_edges
+            if str(edge.get("source") or "") == source
+            and "canary" in str(edge.get("label") or "").lower()
+            and not is_promotion(edge)
+        ]
+        promotion_edges = [
+            edge
+            for edge in deployment_edges
+            if str(edge.get("source") or "") == source and is_promotion(edge)
+        ]
+        if canary_edges and promotion_edges:
+            release_owners.append((source, canary_edges, promotion_edges))
+    if len(release_owners) != 1:
+        return None
+    source, canary_edges, promotion_edges = release_owners[0]
+    if len(canary_edges) != 1 or len(promotion_edges) != 1:
+        return None
+    promotion_edge = promotion_edges[0]
+    release_targets = {
+        str(edge.get("target") or "")
+        for edge in (canary_edges + promotion_edges)
+    }
+    if len(release_targets) != 1:
+        return None
+    release_target = next(iter(release_targets))
+    node_by_id = {
+        str(node.get("id") or ""): node
+        for node in (candidate.get("nodes") or [])
+        if node.get("id")
+    }
+    source_node = node_by_id.get(source) or {}
+    if str(source_node.get("type") or "") not in {
+        "control",
+        "decision",
+        "datastore",
+        "service",
+    }:
+        return None
+    if release_target not in node_by_id or release_target == source:
+        return None
+    connected_node_ids = {
+        str(edge.get("target") or "")
+        for edge in edges
+        if edge.get("source") == source
+    } | {
+        str(edge.get("source") or "")
+        for edge in edges
+        if edge.get("target") == source
+    }
+    registry_ids = [
+        node_id
+        for node_id, node in node_by_id.items()
+        if node_id in connected_node_ids
+        and "registry" in str(node.get("label") or "").lower()
+    ]
+    if len(registry_ids) > 1:
+        return None
+    rollback_target = registry_ids[0] if registry_ids else release_target
+    if not rollback_target or rollback_target == source:
+        return None
+    try:
+        completed = _apply_applied_graph_patch(
+            candidate,
+            {
+                "add_edges": [{
+                    "source": source,
+                    "target": rollback_target,
+                    "label": "rollback to prior approved release",
+                    "technology": "Versioned release control",
+                    "sync": promotion_edge.get("sync", "async"),
+                    "flow": "deployment",
+                    "description": (
+                        "Reactivates the prior immutable release when canary or production "
+                        "checks fail."
+                    ),
+                }]
+            },
+            min_nodes=min_nodes,
+            max_nodes=max_nodes,
+            resolved_complexity=resolved_complexity,
+        )
+        _validate_applied_architecture_patch(
+            query,
+            completed,
+            resolved_complexity,
+        )
+    except ValueError:
+        return None
+    return completed
+
+
 def _apply_applied_graph_patch(
     existing_graph: GraphData,
     patch: dict[str, Any],
@@ -619,6 +815,10 @@ def _apply_applied_graph_patch(
     max_nodes: int,
     resolved_complexity: str,
 ) -> GraphData:
+    # Models commonly preserve an optional patch key with JSON null to mean
+    # "unchanged". Treat only top-level nulls as omissions; nested operation
+    # fields remain strict because they can alter the selected graph object.
+    patch = {key: value for key, value in patch.items() if value is not None}
     unknown_keys = set(patch) - _GRAPH_PATCH_KEYS
     if unknown_keys:
         raise ValueError(f"unknown graph patch fields: {', '.join(sorted(unknown_keys))}")
@@ -767,8 +967,19 @@ def _patch_reference(value: Any, field: str) -> str:
 
 
 def _edge_selector(selector: Any) -> tuple[str, str, str]:
-    if not isinstance(selector, dict) or set(selector) != {"source", "target", "label"}:
-        raise ValueError("edge selector must contain exactly source, target, and label")
+    # ``update_edges`` uses a match wrapper, and models sometimes preserve the
+    # same unambiguous shape when copying a selector into ``remove_edges``.
+    if isinstance(selector, dict) and set(selector) == {"match"}:
+        selector = selector["match"]
+    required_fields = {"source", "target", "label"}
+    if (
+        not isinstance(selector, dict)
+        or not required_fields <= set(selector)
+        or set(selector) - _PATCH_EDGE_FIELDS
+    ):
+        raise ValueError(
+            "edge selector must contain source, target, and label with only known edge fields"
+        )
     return (
         _patch_reference(selector["source"], "edge selector source"),
         _patch_reference(selector["target"], "edge selector target"),

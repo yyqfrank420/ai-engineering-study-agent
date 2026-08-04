@@ -31,7 +31,9 @@ jobs:
   evaluate:
     name: Rotating real-model corpus
     runs-on: ubuntu-latest
-    timeout-minutes: 70
+    # A weekly full run can independently consume the bounded 60-minute browser
+    # and semantic budgets, plus isolated staging setup and cleanup.
+    timeout-minutes: 130
     environment: staging-eval
     concurrency:
       group: staging-live-eval-global
@@ -120,14 +122,31 @@ jobs:
           echo "EVAL_INTERNAL_PASSWORD=$password" >> "$GITHUB_ENV"
           echo "EVAL_EMAIL=$email" >> "$GITHUB_ENV"
           DB_SCHEMA=staging SUPABASE_DB_URL="$db_url" EVAL_EMAIL="$email" python scripts/staging_database.py reset
-      - name: Resolve approved digest or build the one-time corpus candidate
+      - name: Resolve approved digest or build an ephemeral evaluation candidate
         env:
           CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
         run: |
           tree_sha="$(git rev-parse 'HEAD^{tree}')"
           if [ "$CORPUS_STATUS" = approved ]; then
-            digest="$(gcloud artifacts docker images describe "$IMAGE:approved-tree-$tree_sha" --format='value(image_summary.digest)')"
-            [ -n "$digest" ] || { echo "Approved corpus requires an existing exact-tree image approval." >&2; exit 1; }
+            digest="$(gcloud artifacts docker images describe "$IMAGE:approved-tree-$tree_sha" --format='value(image_summary.digest)' 2>/dev/null || true)"
+            if [ -z "$digest" ]; then
+              if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || [ "$EVAL_SUITE" != diagnostic ]; then
+                echo "Approved corpus requires an existing exact-tree image approval outside a manually dispatched diagnostic run." >&2
+                exit 1
+              fi
+              commit_sha="$(git rev-parse HEAD)"
+              diagnostic_tag="diagnostic-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              echo "DIAGNOSTIC_IMAGE_TAG=$diagnostic_tag" >> "$GITHUB_ENV"
+              docker buildx build \
+                --file backend/Dockerfile \
+                --cache-from "type=registry,ref=$IMAGE:buildcache" \
+                --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
+                --label "org.opencontainers.image.revision=$commit_sha" \
+                --tag "$IMAGE:$diagnostic_tag" \
+                --push .
+              digest="$(gcloud artifacts docker images describe "$IMAGE:$diagnostic_tag" --format='value(image_summary.digest)')"
+              [ -n "$digest" ] || { echo "Diagnostic build did not produce an immutable digest." >&2; exit 1; }
+            fi
           else
             if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || { [ "$EVAL_SUITE" != full ] && [ "$EVAL_SUITE" != diagnostic ]; }; then
               echo "A pending corpus can be bootstrapped only by a manually dispatched full or diagnostic run." >&2
@@ -151,7 +170,7 @@ jobs:
         run: |
           tag="scheduled-${GITHUB_RUN_ID}"
           echo "REVISION_TAG=$tag" >> "$GITHUB_ENV"
-          gcloud run deploy "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE@$IMAGE_DIGEST" --no-traffic --tag "$tag" --quiet
+          gcloud run deploy "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE@$IMAGE_DIGEST" --no-traffic --tag "$tag" --timeout 420s --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4 --quiet
           url="$(gcloud run services describe "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json | python -c 'import json,os,sys; d=json.load(sys.stdin); t="scheduled-"+os.environ["GITHUB_RUN_ID"]; print(next((x.get("url", "") for x in d.get("status",{}).get("traffic",[]) if x.get("tag")==t), ""))')"
           [ -n "$url" ] || { echo "Cloud Run did not expose the tagged evaluation URL." >&2; exit 1; }
           echo "CANDIDATE_URL=$url" >> "$GITHUB_ENV"
@@ -165,7 +184,9 @@ jobs:
           done
           echo "Scheduled staging candidate did not become ready." >&2
           exit 1
-      - name: Start frontend and capture journeys
+      - id: browser
+        name: Start frontend and capture journeys
+        continue-on-error: true
         run: |
           VITE_EVAL_AUTH_BOOTSTRAP=true VITE_API_PROXY_TARGET="$CANDIDATE_URL" npm --prefix frontend run dev -- --host localhost --port 5173 --strictPort > artifacts/live-eval/vite.log 2>&1 &
           echo "VITE_PID=$!" >> "$GITHUB_ENV"
@@ -186,6 +207,7 @@ jobs:
           EVAL_BACKEND_URL="$CANDIDATE_URL" ./scripts/ci browser --suite "$EVAL_SUITE" --target http://localhost:5173 --output artifacts/live-eval/browser-results.json "${case_args[@]}"
       - id: semantic
         name: Generate semantic proposals or apply the approved gate
+        if: always() && hashFiles('artifacts/live-eval/browser-results.json') != ''
         continue-on-error: true
         env:
           OPENAI_API_KEY: ${{ secrets.EVAL_JUDGE_API_KEY }}
@@ -206,6 +228,7 @@ jobs:
         run: |
           [ -z "${VITE_PID:-}" ] || kill "$VITE_PID" || true
           [ -z "${REVISION_TAG:-}" ] || gcloud run services update-traffic "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --remove-tags "$REVISION_TAG" --quiet || true
+          [ -z "${DIAGNOSTIC_IMAGE_TAG:-}" ] || gcloud artifacts docker tags delete "$IMAGE:$DIAGNOSTIC_IMAGE_TAG" --quiet || true
           [ -z "${BOOTSTRAP_IMAGE_TAG:-}" ] || gcloud artifacts docker tags delete "$IMAGE:$BOOTSTRAP_IMAGE_TAG" --quiet || true
       - uses: actions/upload-artifact@v4
         if: always()
@@ -225,13 +248,14 @@ jobs:
         if: always()
         env:
           CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
+          BROWSER_OUTCOME: ${{ steps.browser.outcome }}
           SEMANTIC_OUTCOME: ${{ steps.semantic.outcome }}
         run: |
           if [ "$CORPUS_STATUS" != approved ]; then
             echo "Corpus is pending human review; this run produced non-blocking proposals."
             exit 0
           fi
-          if [ "$SEMANTIC_OUTCOME" != success ]; then
+          if [ "$BROWSER_OUTCOME" != success ] || [ "$SEMANTIC_OUTCOME" != success ]; then
             echo "Approved scheduled evaluation did not pass." >&2
             exit 1
           fi

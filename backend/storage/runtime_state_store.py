@@ -109,6 +109,7 @@ def try_acquire_active_stream(
     *,
     limit: int,
     ttl_s: float,
+    scope_id: str | None = None,
 ) -> str | None:
     if limit <= 0:
         return str(uuid.uuid4())
@@ -116,7 +117,8 @@ def try_acquire_active_stream(
     now = time.time()
     stream_id = str(uuid.uuid4())
     expires_at = now + ttl_s
-    lock_key = f"active_streams:{stream_type}:{user_id}"
+    effective_stream_type = f"{stream_type}:scope:{scope_id}" if scope_id else stream_type
+    lock_key = f"active_streams:{effective_stream_type}:{user_id}"
 
     with _connect() as conn:
         if settings.use_postgres:
@@ -136,7 +138,7 @@ def try_acquire_active_stream(
                 WHERE user_id = ? AND stream_type = ?
                 """
             ),
-            (user_id, stream_type),
+            (user_id, effective_stream_type),
         ).fetchone()
         active_count = row["n"] if row else 0
         if active_count >= limit:
@@ -149,7 +151,7 @@ def try_acquire_active_stream(
                 VALUES (?, ?, ?, ?, ?)
                 """
             ),
-            (stream_id, user_id, stream_type, now, expires_at),
+            (stream_id, user_id, effective_stream_type, now, expires_at),
         )
 
     return stream_id

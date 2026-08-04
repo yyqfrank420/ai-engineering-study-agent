@@ -60,7 +60,7 @@ async def stream_suggested_questions(
         temperature=settings.suggestion_chip_temperature,
         top_p=settings.suggestion_chip_top_p,
         top_k=settings.suggestion_chip_top_k,
-        effort="low",
+        effort="high",
         telemetry=telemetry,
     ):
         if event_type == "provider_switch":

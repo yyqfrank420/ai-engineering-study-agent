@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from eval.calibration import calculate_calibration
@@ -10,8 +12,13 @@ from eval.judge_adapter import (
     _validate_evidence,
     judge_with_transport_retry,
 )
-from eval.live_runner import _exit_code_for_statuses, _judge_payload, _write_outputs
-from eval.quality_corpus import load_corpus
+from eval.live_runner import (
+    _assert_approved_judge_identity,
+    _exit_code_for_statuses,
+    _judge_payload,
+    _write_outputs,
+)
+from eval.quality_corpus import corpus_sha256, load_corpus
 from eval.semantic_gate import (
     DimensionJudgment,
     EvaluationBudget,
@@ -226,6 +233,7 @@ def test_judge_payload_removes_duplicate_graph_events_and_internal_graph_metadat
     })
 
     assert payload["graph"]["title"] == "Candidate"
+    assert payload["graph"]["artifact_role"] == "browser-rendered diagram"
     assert "evidence_chunk_ids" not in payload["graph"]["nodes"][0]
     assert payload["events"] == [
         {"type": "worker_status", "worker": "graph", "status": "ready"}
@@ -318,6 +326,9 @@ async def test_judge_transport_retry_counts_every_provider_attempt(monkeypatch):
 
 def test_calibration_report_uses_every_reviewed_case_and_dimension():
     corpus = load_corpus().model_copy(deep=True)
+    corpus.approval.calibration.evidence_sha256 = "a" * 64
+    corpus.approval.calibration.evidence_run_id = "123"
+    corpus.approval.calibration.evidence_commit_sha = "b" * 40
     evaluations = []
     label_count = 0
     for case in corpus.cases:
@@ -332,8 +343,11 @@ def test_calibration_report_uses_every_reviewed_case_and_dimension():
         evaluations.append(
             {
                 "id": case.id,
+                "decision": "pass",
                 "judgments": [
                     {
+                        "prompt_release": JUDGE_PROMPT_RELEASE,
+                        "model": "gpt-5.4-mini-2026-03-17",
                         "dimensions": [
                             {"dimension": dimension, "grade": "pass"}
                             for dimension in case.rubric_dimensions
@@ -343,12 +357,87 @@ def test_calibration_report_uses_every_reviewed_case_and_dimension():
             }
         )
 
-    report = calculate_calibration(corpus, {"evaluations": evaluations})
+    report = calculate_calibration(
+        corpus,
+        {
+            "kind": "live_gate",
+            "suite": "full",
+            "status": "pass",
+            "execution_mode": "semantic_replay",
+            "corpus_version": corpus.corpus_version,
+            "corpus_sha256": corpus_sha256(),
+            "evaluations": evaluations,
+        },
+        evidence_sha256="a" * 64,
+        source_context={"source_run_id": "123", "source_commit_sha": "b" * 40},
+    )
 
     assert report["passed"] is True
     assert report["judge_release"] == JUDGE_PROMPT_RELEASE
     assert report["agreement"] == 1
     assert report["labels"] == label_count
+    assert report["judge_models"] == ["gpt-5.4-mini-2026-03-17"]
+    assert report["evidence_sha256"] == "a" * 64
+    assert report["disagreements"] == []
+    assert set(report["per_dimension_agreement"]) == set(corpus.rubrics)
+
+
+def test_calibration_rejects_stale_corpus_or_judge_release():
+    corpus = load_corpus()
+    report = {
+        "kind": "live_gate",
+        "suite": "full",
+        "status": "pass",
+        "execution_mode": "semantic_replay",
+        "corpus_version": corpus.corpus_version,
+        "corpus_sha256": "wrong",
+        "evaluations": [],
+    }
+
+    with pytest.raises(ValueError, match="corpus digest"):
+        calculate_calibration(
+            corpus,
+            report,
+            evidence_sha256=corpus.approval.calibration.evidence_sha256,
+            source_context={
+                "source_run_id": corpus.approval.calibration.evidence_run_id,
+                "source_commit_sha": corpus.approval.calibration.evidence_commit_sha,
+            },
+        )
+
+
+def test_calibration_rejects_infrastructure_after_a_judgment():
+    corpus = load_corpus()
+    report = {
+        "kind": "live_gate",
+        "suite": "full",
+        "status": "infrastructure",
+        "execution_mode": "semantic_replay",
+        "corpus_version": corpus.corpus_version,
+        "corpus_sha256": corpus_sha256(),
+        "evaluations": [],
+    }
+
+    with pytest.raises(ValueError, match="infrastructure-failed replay"):
+        calculate_calibration(
+            corpus,
+            report,
+            evidence_sha256=corpus.approval.calibration.evidence_sha256,
+            source_context={
+                "source_run_id": corpus.approval.calibration.evidence_run_id,
+                "source_commit_sha": corpus.approval.calibration.evidence_commit_sha,
+            },
+        )
+
+
+def test_approved_gate_rejects_an_uncalibrated_judge_model():
+    corpus = load_corpus()
+
+    with pytest.raises(RuntimeError, match="judge model"):
+        _assert_approved_judge_identity(
+            corpus,
+            SimpleNamespace(model="different-judge-model"),
+        )
 
 
 def test_infrastructure_startup_failure_still_writes_review_artifacts(tmp_path, monkeypatch):

@@ -44,7 +44,7 @@ def test_synthesis_prompts_enforce_evidence_bounded_attribution():
         _SYNTHESIS_SYSTEM,
     )
 
-    assert _SYNTHESIS_PROMPT_VERSION == "architecture_blocks_v8"
+    assert _SYNTHESIS_PROMPT_VERSION == "architecture_blocks_v9"
     assert _QUICK_SYNTHESIS_PROMPT_VERSION == "quick_synthesis_v2"
     assert "complete citation allowlist" in _SYNTHESIS_SYSTEM
     assert "Never infer a chapter, page, author attribution, or book claim" in _SYNTHESIS_SYSTEM
@@ -60,6 +60,8 @@ def test_synthesis_prompts_enforce_evidence_bounded_attribution():
     assert "does not support claims absent from its supplied snippet" in _SYNTHESIS_SYSTEM
     assert "does not establish that one adaptation" in _SYNTHESIS_SYSTEM
     assert "technique is cheaper, faster, or better than another" in _SYNTHESIS_SYSTEM
+    assert "relabel every grounded conclusion as an untested hypothesis" in _SYNTHESIS_SYSTEM
+    assert "diagram is rendered" in _SYNTHESIS_SYSTEM
     assert "Cache population, logging, feedback capture, index publication" in _SYNTHESIS_SYSTEM
     assert "externally visible business mutations from internal operational state changes" in _SYNTHESIS_SYSTEM
     assert '"no downstream business writes"' in _SYNTHESIS_SYSTEM

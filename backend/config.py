@@ -25,12 +25,11 @@ class Settings(BaseSettings):
     # ── LLM ───────────────────────────────────────────────────────────────────
     anthropic_api_key: str = ""
 
-    # Sonnet 5 is the single runtime model. Role-specific ``effort`` settings,
-    # rather than a weaker worker model, control latency and spend per node.
-    orchestrator_model: str = "claude-sonnet-5"
-    worker_model: str = "claude-sonnet-5"
-    # Used only after the combined architecture/render gate requests a repair.
-    graph_repair_model: str = "claude-opus-4-8"
+    # Opus 5 is the single runtime model; each role selects its measured effort.
+    orchestrator_model: str = "claude-opus-5"
+    worker_model: str = "claude-opus-5"
+    # Retained as an independently configurable repair role.
+    graph_repair_model: str = "claude-opus-5"
     # Extended thinking budget per agent call (tokens)
     # Extended reasoning budgets used by prototype and production design paths.
     # max_tokens must leave room for both hidden reasoning and the final answer.
@@ -50,13 +49,12 @@ class Settings(BaseSettings):
     # Initial provider attempt plus one bounded retry before fallback/failure.
     llm_max_retries: int = 2
     llm_retry_delay_s: float = 1.0
-    # Anthropic enforces a low concurrent streaming connection cap on smaller plans.
-    # Queue locally instead of letting bursty evals/users turn into 429 errors.
-    anthropic_max_concurrent_streams: int = 2
+    # Bound concurrent Anthropic streams within each application process.
+    anthropic_max_concurrent_streams: int = 4
     # Cap per LLM call — prevents runaway generation eating tokens
     llm_max_tokens: int = 12000
     # Hard timeout on the whole agent run (seconds); yields a timeout error event
-    agent_timeout_s: int = 210
+    agent_timeout_s: int = 360
     # A browser renders candidate graphs off-screen and returns a bounded image
     # plus layout metrics before an applied diagram may be published.
     diagram_evaluation_timeout_s: float = 15.0

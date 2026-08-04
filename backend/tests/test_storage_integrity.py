@@ -180,6 +180,27 @@ def test_runtime_state_active_stream_limits_release_and_prune(temp_data_dir, mon
     runtime_state_store.release_active_stream(None)
 
 
+def test_runtime_state_scopes_active_stream_exclusivity(temp_data_dir, monkeypatch):
+    init_db()
+    upsert_profile("user-1", "friend@example.com")
+    monkeypatch.setattr(runtime_state_store.time, "time", lambda: 100.0)
+
+    first = runtime_state_store.try_acquire_active_stream(
+        "user-1", "chat", limit=1, ttl_s=60, scope_id="thread-1"
+    )
+    assert first
+    assert runtime_state_store.try_acquire_active_stream(
+        "user-1", "chat", limit=1, ttl_s=60, scope_id="thread-1"
+    ) is None
+    second = runtime_state_store.try_acquire_active_stream(
+        "user-1", "chat", limit=1, ttl_s=60, scope_id="thread-2"
+    )
+    assert second
+
+    runtime_state_store.release_active_stream(first)
+    runtime_state_store.release_active_stream(second)
+
+
 def test_product_analytics_round_trips_properties_and_ignores_bad_json(temp_data_dir):
     init_db()
     upsert_profile("user-1", "friend@example.com")

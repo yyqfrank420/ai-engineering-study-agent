@@ -7,6 +7,15 @@ from config import settings
 from storage.rate_limit_store import RateLimitDimension, reserve_rate_limit
 
 
+def internal_test_stream_scope(user: dict, thread_id: str) -> str | None:
+    """Scope trusted eval-session exclusivity to one conversation thread."""
+    claims = user.get("claims")
+    app_metadata = claims.get("app_metadata") if isinstance(claims, dict) else None
+    if not isinstance(app_metadata, dict):
+        return None
+    return thread_id if app_metadata.get("provider") == "internal_test" else None
+
+
 def check_rate_limit(key: str) -> str | None:
     """Return an error string when the user is over limit, otherwise None."""
     now = time.time()

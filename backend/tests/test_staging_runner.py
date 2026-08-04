@@ -238,13 +238,14 @@ def test_graph_off_staging_case_avoids_brittle_keyword_requirements():
     assert step.expect.response_contains == ["RAG"]
 
 
-def test_pr_live_eval_is_globally_serial_and_uses_the_reviewed_browser_suite():
+def test_pr_live_eval_is_globally_serial_and_reports_manual_review():
     workflow = Path(".github/workflows/live-eval.yml").read_text(encoding="utf-8")
 
     assert "group: staging-live-eval-global" in workflow
     assert "cancel-in-progress: false" in workflow
     assert "./scripts/ci browser --suite pr" in workflow
     assert "--require-approved-corpus" in workflow
+    assert "--manual-review-policy report-only" in workflow
     assert "environment: staging-eval" in workflow
 
 
@@ -253,7 +254,12 @@ def test_scheduled_eval_reports_manual_review_without_masking_hard_failures():
 
     assert "--require-approved-corpus" in workflow
     assert "--manual-review-policy report-only" in workflow
-    assert 'if [ "$SEMANTIC_OUTCOME" != success ]; then' in workflow
+    assert "BROWSER_OUTCOME: ${{ steps.browser.outcome }}" in workflow
+    assert "SEMANTIC_OUTCOME: ${{ steps.semantic.outcome }}" in workflow
+    assert (
+        'if [ "$BROWSER_OUTCOME" != success ] || '
+        '[ "$SEMANTIC_OUTCOME" != success ]; then'
+    ) in workflow
 
 
 def test_dashboard_smoke_checks_every_frontend_endpoint_sequentially(monkeypatch):

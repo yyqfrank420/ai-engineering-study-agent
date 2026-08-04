@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from statistics import mean
+import re
 import time
 from typing import Any
 
@@ -23,6 +24,7 @@ _FUNNEL_STEPS = [
     "chat_sent",
     "chat_stream_completed",
 ]
+_SAFE_EVAL_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 def _actor_key(row: dict[str, Any]) -> str:
@@ -56,6 +58,20 @@ def _percentile(values: list[float], percentile: float) -> int | None:
     ordered = sorted(values)
     index = min(len(ordered) - 1, max(0, int(round((len(ordered) - 1) * percentile))))
     return int(ordered[index])
+
+
+def _safe_eval_identifier(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return text if _SAFE_EVAL_IDENTIFIER.fullmatch(text) else None
+
+
+def _nonnegative_int(value: Any, *, default: int = 0) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
 
 
 @router.get("/overview")
@@ -325,7 +341,8 @@ async def dashboard_eval_telemetry(
     _user=Depends(get_internal_dashboard_user),
 ):
     """Return bounded, sanitized call accounting for an authenticated eval run."""
-    if not thread_id or len(thread_id) > 20:
+    # Full live suites contain twenty cases and retain one infrastructure retry.
+    if not thread_id or len(thread_id) > 40:
         return {"calls": []}
     wanted = set(thread_id)
     rows = list_recent_llm_telemetry(since_epoch=since_epoch)
@@ -334,6 +351,22 @@ async def dashboard_eval_telemetry(
         if row.get("thread_id") not in wanted:
             continue
         metadata = row.get("metadata") or {}
+        attempts = []
+        for attempt in metadata.get("attempts") or []:
+            if not isinstance(attempt, dict):
+                continue
+            attempts.append(
+                {
+                    "attempt": max(1, _nonnegative_int(attempt.get("attempt"), default=1)),
+                    "provider": str(attempt.get("provider") or "unknown")[:64],
+                    "model": str(attempt.get("model") or "unknown")[:128],
+                    "status": str(attempt.get("status") or "unknown")[:32],
+                    "input_tokens": _nonnegative_int(attempt.get("input_tokens")),
+                    "output_tokens": _nonnegative_int(attempt.get("output_tokens")),
+                    "queue_wait_ms": _nonnegative_int(attempt.get("queue_wait_ms")),
+                    "duration_ms": _nonnegative_int(attempt.get("duration_ms")),
+                }
+            )
         calls.append(
             {
                 "thread_id": row.get("thread_id"),
@@ -343,9 +376,18 @@ async def dashboard_eval_telemetry(
                 "status": row["status"],
                 "latency_ms": row["duration_ms"],
                 "fallback": row["used_fallback"],
-                "input_tokens": int(metadata.get("input_tokens") or 0),
-                "output_tokens": int(metadata.get("output_tokens") or 0),
-                "provider_attempts": max(1, int(metadata.get("provider_attempts") or 1)),
+                "input_tokens": _nonnegative_int(metadata.get("input_tokens")),
+                "output_tokens": _nonnegative_int(metadata.get("output_tokens")),
+                "provider_attempts": max(
+                    1,
+                    _nonnegative_int(metadata.get("provider_attempts"), default=1),
+                ),
+                "queue_wait_ms": _nonnegative_int(metadata.get("queue_wait_ms")),
+                "attempts": attempts[:10],
+                "request_id": _safe_eval_identifier(metadata.get("request_id")),
+                "client_request_id": _safe_eval_identifier(
+                    metadata.get("client_request_id")
+                ),
                 "created_at_epoch": row["created_at_epoch"],
             }
         )

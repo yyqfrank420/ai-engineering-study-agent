@@ -38,7 +38,7 @@ def test_graph_off_skips_paid_applied_design_roles():
     assert _should_run_applied_design_roles(state) is False
 
 
-def test_failed_review_gets_exactly_one_bounded_revision():
+def test_failed_review_gets_at_most_two_bounded_revisions():
     from agent.graph import _route_after_review, _route_after_revision
 
     failed = {
@@ -48,7 +48,8 @@ def test_failed_review_gets_exactly_one_bounded_revision():
     }
 
     assert _route_after_review({**failed, "graph_revision_count": 0}) == "revise"
-    assert _route_after_review({**failed, "graph_revision_count": 1}) == "reject"
+    assert _route_after_review({**failed, "graph_revision_count": 1}) == "revise"
+    assert _route_after_review({**failed, "graph_revision_count": 2}) == "reject"
     assert _route_after_review({
         **failed,
         "graph_revision_count": 0,
@@ -59,7 +60,7 @@ def test_failed_review_gets_exactly_one_bounded_revision():
 
 
 @pytest.mark.asyncio
-async def test_langgraph_repairs_one_failed_review_then_publishes(monkeypatch):
+async def test_langgraph_can_verify_two_bounded_repairs_then_publish(monkeypatch):
     import asyncio
     import agent.graph as agent_graph
 
@@ -87,7 +88,11 @@ async def test_langgraph_repairs_one_failed_review_then_publishes(monkeypatch):
             "graph_changed": True,
             "graph_data": {
                 "design_origin": "applied",
-                "title": "Repaired draft" if revision_count else "First draft",
+                "title": (
+                    "First draft"
+                    if revision_count == 0
+                    else f"Repair {revision_count}"
+                ),
                 "nodes": [],
                 "edges": [],
                 "sequence": [],
@@ -116,7 +121,7 @@ async def test_langgraph_repairs_one_failed_review_then_publishes(monkeypatch):
 
     async def fake_review(state):
         reviews.append(state["graph_data"]["title"])
-        if state.get("graph_revision_count") == 1:
+        if state.get("graph_revision_count") == 2:
             return {
                 **state,
                 "graph_review": {"approved": True, "score": 0.9, "missing": []},
@@ -149,9 +154,9 @@ async def test_langgraph_repairs_one_failed_review_then_publishes(monkeypatch):
 
     result = await agent_graph.run_agent(_state(send), [], [], [])
 
-    assert reviews == ["First draft", "Repaired draft"]
-    assert result["graph_revision_count"] == 1
-    assert result["graph_data"]["title"] == "Repaired draft"
+    assert reviews == ["First draft", "Repair 1", "Repair 2"]
+    assert result["graph_revision_count"] == 2
+    assert result["graph_data"]["title"] == "Repair 2"
     assert result["graph_notice_sent"] is False
     assert result["response_text"] == "reviewed answer"
     assert set(role_order) == {"architect", "challenger"}

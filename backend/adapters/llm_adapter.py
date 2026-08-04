@@ -186,15 +186,22 @@ async def _openai_stream(
 
 
 async def _anthropic_stream_once(kwargs: dict) -> AsyncGenerator[object, None]:
+    sdk_kwargs = dict(kwargs)
+    queue_wait_observer = sdk_kwargs.pop("_queue_wait_observer", None)
     semaphore = _get_anthropic_stream_semaphore()
     if semaphore is None:
-        async with _get_anthropic_client().messages.stream(**kwargs) as stream:
+        if queue_wait_observer:
+            queue_wait_observer(0)
+        async with _get_anthropic_client().messages.stream(**sdk_kwargs) as stream:
             async for event in stream:
                 yield event
         return
 
+    queued_at = time.perf_counter()
     async with semaphore:
-        async with _get_anthropic_client().messages.stream(**kwargs) as stream:
+        if queue_wait_observer:
+            queue_wait_observer(max(0, int((time.perf_counter() - queued_at) * 1000)))
+        async with _get_anthropic_client().messages.stream(**sdk_kwargs) as stream:
             async for event in stream:
                 yield event
 
@@ -240,10 +247,9 @@ async def stream_response(
     uses_adaptive_effort = _uses_adaptive_effort(model)
     effective_effort = effort or _effort_from_legacy_budget(thinking_budget)
     if uses_adaptive_effort:
-        # Sonnet 5 rejects manual thinking budgets and non-default sampling.
-        # Effort is the supported quality/cost control and adaptive thinking is
-        # enabled by default for Sonnet 5.
-        kwargs["output_config"] = {"effort": effective_effort or "medium"}
+        # Current adaptive-thinking Claude models reject manual thinking budgets
+        # and non-default sampling. Effort is their quality/cost control.
+        kwargs["output_config"] = {"effort": effective_effort or "high"}
         if model.startswith("claude-opus-4-8"):
             kwargs["thinking"] = {"type": "adaptive"}
     else:
@@ -265,6 +271,7 @@ async def stream_response(
     input_tokens = 0
     output_tokens = 0
     provider_attempts = 0
+    attempts: list[dict[str, object]] = []
     used_fallback = False
     final_provider = "anthropic"
     final_model = model
@@ -280,6 +287,7 @@ async def stream_response(
         trace_context = current_trace_context()
         duration_ms = max(1, int((time.perf_counter() - started_at) * 1000))
         metadata = {
+            **details_metadata,
             "message_count": len(messages),
             "thinking_budget": thinking_budget,
             "temperature": temperature,
@@ -290,11 +298,14 @@ async def stream_response(
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "provider_attempts": provider_attempts,
+            "queue_wait_ms": sum(
+                int(attempt.get("queue_wait_ms") or 0) for attempt in attempts
+            ),
+            "attempts": [dict(attempt) for attempt in attempts],
             "request_id": details_metadata.get("request_id"),
             "client_request_id": details_metadata.get("client_request_id"),
             "trace_id": trace_context.get("trace_id"),
             "span_id": trace_context.get("span_id"),
-            **details_metadata,
         }
         try:
             record_llm_telemetry(
@@ -331,6 +342,8 @@ async def stream_response(
                 "duration_ms": duration_ms,
                 "output_chars": output_chars,
                 "used_fallback": used_fallback,
+                "provider_attempts": provider_attempts,
+                "queue_wait_ms": metadata["queue_wait_ms"],
                 "error_type": error_type,
                 "message_count": len(messages),
                 "prompt_sha256": prompt_sha256,
@@ -348,15 +361,48 @@ async def stream_response(
     for attempt in range(1, settings.llm_max_retries + 1):
         tokens_yielded = False
         provider_attempts += 1
+        attempt_started = time.perf_counter()
+        attempt_usage: dict[str, object] = {
+            "attempt": provider_attempts,
+            "provider": "anthropic",
+            "model": model,
+            "status": "started",
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "queue_wait_ms": 0,
+            "accepted": False,
+            "usage_complete": False,
+        }
+        attempts.append(attempt_usage)
+
+        def observe_queue_wait(queue_wait_ms: int) -> None:
+            attempt_usage["queue_wait_ms"] = queue_wait_ms
+
         try:
-            async for event in _anthropic_stream_once(kwargs):
+            async for event in _anthropic_stream_once(
+                {**kwargs, "_queue_wait_observer": observe_queue_wait}
+            ):
                 if event.type == "message_start":
+                    attempt_usage["accepted"] = True
                     usage = getattr(getattr(event, "message", None), "usage", None)
-                    input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+                    attempt_usage["input_tokens"] = int(
+                        getattr(usage, "input_tokens", 0) or 0
+                    )
+                    input_tokens = sum(
+                        int(item.get("input_tokens") or 0) for item in attempts
+                    )
                 elif event.type == "message_delta":
+                    attempt_usage["accepted"] = True
+                    attempt_usage["usage_complete"] = True
                     usage = getattr(event, "usage", None)
-                    output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+                    attempt_usage["output_tokens"] = int(
+                        getattr(usage, "output_tokens", 0) or 0
+                    )
+                    output_tokens = sum(
+                        int(item.get("output_tokens") or 0) for item in attempts
+                    )
                 if event.type == "content_block_delta":
+                    attempt_usage["accepted"] = True
                     tokens_yielded = True
                     delta = event.delta
                     if delta.type == "thinking_delta":
@@ -364,12 +410,31 @@ async def stream_response(
                     elif delta.type == "text_delta":
                         output_chars += len(delta.text)
                         yield ("text", delta.text)
+            attempt_usage["status"] = (
+                "success_incomplete_usage"
+                if attempt_usage["accepted"]
+                and not attempt_usage["usage_complete"]
+                else "success"
+            )
+            attempt_usage["duration_ms"] = max(
+                1, int((time.perf_counter() - attempt_started) * 1000)
+            )
             _record("success")
             yield ("done", "")
             return   # Anthropic succeeded
 
         except Exception as exc:
             last_exc = exc
+            attempt_usage["status"] = (
+                "error_incomplete_usage"
+                if attempt_usage["accepted"]
+                and not attempt_usage["usage_complete"]
+                else "error"
+            )
+            attempt_usage["error_type"] = type(exc).__name__
+            attempt_usage["duration_ms"] = max(
+                1, int((time.perf_counter() - attempt_started) * 1000)
+            )
             if tokens_yielded:
                 # Already sent partial output — can't replay safely, surface the error
                 _record("error", error_type=type(exc).__name__)
@@ -393,6 +458,19 @@ async def stream_response(
         final_provider = "openai"
         final_model = fallback_model
         provider_attempts += 1
+        attempt_started = time.perf_counter()
+        attempt_usage = {
+            "attempt": provider_attempts,
+            "provider": "openai",
+            "model": fallback_model,
+            "status": "started",
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "queue_wait_ms": 0,
+            "accepted": False,
+            "usage_complete": False,
+        }
+        attempts.append(attempt_usage)
         yield ("provider_switch", "openai")
         reasoning_effort = effective_effort
         if reasoning_effort is None and thinking_budget is not None:
@@ -413,15 +491,47 @@ async def stream_response(
                 top_p,
             ):
                 if event[0] == "text":
+                    attempt_usage["accepted"] = True
                     output_chars += len(event[1])
                 elif event[0] == "usage":
+                    attempt_usage["accepted"] = True
+                    attempt_usage["usage_complete"] = True
                     usage = json.loads(event[1])
-                    input_tokens = int(usage.get("input_tokens") or 0)
-                    output_tokens = int(usage.get("output_tokens") or 0)
+                    attempt_usage["input_tokens"] = int(
+                        usage.get("input_tokens") or 0
+                    )
+                    attempt_usage["output_tokens"] = int(
+                        usage.get("output_tokens") or 0
+                    )
+                    input_tokens = sum(
+                        int(item.get("input_tokens") or 0) for item in attempts
+                    )
+                    output_tokens = sum(
+                        int(item.get("output_tokens") or 0) for item in attempts
+                    )
                     continue
                 yield event
+            attempt_usage["status"] = (
+                "success_incomplete_usage"
+                if attempt_usage["accepted"]
+                and not attempt_usage["usage_complete"]
+                else "success"
+            )
+            attempt_usage["duration_ms"] = max(
+                1, int((time.perf_counter() - attempt_started) * 1000)
+            )
             _record("success")
         except Exception as exc:
+            attempt_usage["status"] = (
+                "error_incomplete_usage"
+                if attempt_usage["accepted"]
+                and not attempt_usage["usage_complete"]
+                else "error"
+            )
+            attempt_usage["error_type"] = type(exc).__name__
+            attempt_usage["duration_ms"] = max(
+                1, int((time.perf_counter() - attempt_started) * 1000)
+            )
             _record("error", error_type=type(exc).__name__)
             raise
     else:
@@ -434,6 +544,7 @@ def _uses_adaptive_effort(model: str) -> bool:
     return model.startswith((
         "claude-sonnet-5",
         "claude-opus-4-8",
+        "claude-opus-5",
     ))
 
 

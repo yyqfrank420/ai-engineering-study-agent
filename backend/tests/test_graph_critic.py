@@ -23,7 +23,7 @@ def test_revision_critic_uses_bounded_verification_budget():
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v15"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v19"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -323,6 +323,39 @@ def test_production_gate_does_not_treat_approval_audit_store_as_a_decision():
     assert not any("rejection/cancellation" in item for item in review["missing"])
 
 
+def test_production_gate_does_not_treat_approved_registry_as_a_decision():
+    graph = {
+        "nodes": [
+            {"id": "entry", "label": "Definition Proposal", "type": "service"},
+            {
+                "id": "registry",
+                "label": "Event Definition Registry",
+                "type": "control",
+                "description": "Stores approved versioned definitions for canary release.",
+            },
+            {"id": "outcome", "label": "Definition Outcome", "type": "service"},
+        ],
+        "edges": [
+            {"source": "entry", "target": "registry", "label": "register approved version"},
+            {"source": "registry", "target": "outcome", "label": "publish immutable version"},
+            {
+                "source": "outcome",
+                "target": "entry",
+                "label": "return measured outcome",
+                "flow": "feedback",
+            },
+        ],
+    }
+
+    review = _deterministic_review(
+        "Design controlled event-definition releases",
+        graph,
+        "production",
+    )
+
+    assert not any("approval decision registry" in item for item in review["missing"])
+
+
 @pytest.mark.parametrize(
     ("owner_type", "owner_label", "owner_description"),
     [
@@ -368,6 +401,45 @@ def test_approval_owner_requires_distinct_approval_and_rejection_routes(
 
     assert review["approved"] is False
     assert any("approval decision" in item for item in review["missing"])
+
+
+def test_review_reports_every_incomplete_approval_owner_with_its_node_id():
+    graph = {
+        "nodes": [
+            {"id": "proposal", "label": "Campaign Proposal", "type": "service"},
+            {"id": "policy_gate", "label": "Policy Approval", "type": "control"},
+            {"id": "human_gate", "label": "Human Approval", "type": "decision"},
+            {"id": "outcome", "label": "Campaign Outcome", "type": "service"},
+        ],
+        "edges": [
+            {"source": "proposal", "target": "policy_gate", "label": "submit action"},
+            {
+                "source": "policy_gate",
+                "target": "human_gate",
+                "label": "approve or reject policy decision",
+            },
+            {
+                "source": "human_gate",
+                "target": "outcome",
+                "label": "approve or reject campaign decision",
+            },
+            {
+                "source": "outcome",
+                "target": "proposal",
+                "label": "return measured outcome",
+                "flow": "feedback",
+            },
+        ],
+    }
+
+    review = _deterministic_review("Design a controlled campaign system", graph, "production")
+
+    approval_failures = [
+        item for item in review["missing"] if "approval decision" in item
+    ]
+    assert len(approval_failures) == 2
+    assert any("policy_gate" in item for item in approval_failures)
+    assert any("human_gate" in item for item in approval_failures)
 
 
 def test_approval_owner_accepts_separate_approval_and_rejection_routes():
@@ -952,6 +1024,138 @@ def test_explicit_model_blocking_failure_still_rejects_the_diagram():
     assert review["missing"] == ["The requested rollback path is absent."]
 
 
+def test_prototype_review_downgrades_only_production_reconciliation_detail():
+    review = _normalise_review(
+        {
+            "approved": False,
+            "score": 0.7,
+            "blocking_failures": [
+                "Replace the narrated outcome edge with explicit COMMITTED, NOT_FOUND, and STILL_UNKNOWN branches."
+            ],
+            "revision_instruction": "Draw all three reconciliation branches.",
+        },
+        query="Draw an AI agent architecture with tools and memory.",
+        resolved_complexity="prototype",
+    )
+
+    assert review["approved"] is True
+    assert review["missing"] == []
+    assert review["revision_instruction"] == ""
+    assert review["advice"] == [
+        "Production-depth hardening: Replace the narrated outcome edge with explicit COMMITTED, NOT_FOUND, and STILL_UNKNOWN branches."
+    ]
+
+
+def test_selected_prototype_depth_scopes_generic_production_wording():
+    failure = "Split COMMITTED, NOT_FOUND, and STILL_UNKNOWN into distinct branches."
+    review = _normalise_review(
+        {
+            "approved": False,
+            "score": 0.7,
+            "blocking_failures": [failure],
+        },
+        query="Design a production model-serving stack.",
+        resolved_complexity="prototype",
+    )
+
+    assert review["approved"] is True
+    assert review["missing"] == []
+    assert review["advice"] == [f"Production-depth hardening: {failure}"]
+
+
+def test_explicit_reconciliation_request_remains_blocking_at_prototype_depth():
+    failure = "Show COMMITTED, NOT_FOUND, and STILL_UNKNOWN reconciliation branches."
+    review = _normalise_review(
+        {
+            "approved": False,
+            "score": 0.7,
+            "blocking_failures": [failure],
+        },
+        query="Prototype the flow, including reconciliation after ambiguous outcomes.",
+        resolved_complexity="prototype",
+    )
+
+    assert review["approved"] is False
+    assert review["missing"] == [failure]
+
+
+def test_prototype_review_downgrades_production_approval_envelope_detail():
+    failure = (
+        "Give every approval decision distinct approval and rejection routes, or persist "
+        "both outcomes in one complete exact-action envelope at durable lifecycle state."
+    )
+    review = _normalise_review(
+        {
+            "approved": False,
+            "score": 0.72,
+            "blocking_failures": [failure],
+        },
+        query="Explain RAG and draw the runtime flow.",
+        resolved_complexity="prototype",
+    )
+
+    assert review["approved"] is True
+    assert review["missing"] == []
+    assert review["advice"] == [f"Production-depth hardening: {failure}"]
+
+
+def test_explicit_approval_boundary_request_remains_blocking_at_prototype_depth():
+    failure = "Give every approval decision distinct approval and rejection routes."
+    review = _normalise_review(
+        {
+            "approved": False,
+            "score": 0.72,
+            "blocking_failures": [failure],
+        },
+        query="Prototype the workflow and show its human approval boundaries.",
+        resolved_complexity="prototype",
+    )
+
+    assert review["approved"] is False
+    assert review["missing"] == [failure]
+
+
+def test_depth_scoping_preserves_independent_prototype_blockers():
+    review = _normalise_review(
+        {
+            "approved": False,
+            "score": 0.65,
+            "blocking_failures": [
+                "Show COMMITTED, NOT_FOUND, and STILL_UNKNOWN reconciliation branches.",
+                "The memory store has no directed read path back to the agent.",
+            ],
+            "revision_instruction": "Repair both paths.",
+        },
+        query="Draw an AI agent architecture with tools and memory.",
+        resolved_complexity="prototype",
+    )
+
+    assert review["approved"] is False
+    assert review["missing"] == [
+        "The memory store has no directed read path back to the agent."
+    ]
+    assert review["revision_instruction"] == (
+        "The memory store has no directed read path back to the agent."
+    )
+    assert len(review["advice"]) == 1
+
+
+def test_production_reconciliation_failure_is_never_depth_scoped_away():
+    failure = "Show COMMITTED, NOT_FOUND, and STILL_UNKNOWN reconciliation branches."
+    review = _normalise_review(
+        {
+            "approved": False,
+            "score": 0.7,
+            "blocking_failures": [failure],
+        },
+        query="Draw the architecture.",
+        resolved_complexity="production",
+    )
+
+    assert review["approved"] is False
+    assert review["missing"] == [failure]
+
+
 def test_render_gate_rejects_overlap_clipping_or_missing_capture():
     graph = {"nodes": [{"id": "a"}, {"id": "b"}], "edges": []}
     review = _deterministic_render_review(graph, {
@@ -1144,7 +1348,15 @@ def test_visual_revision_instruction_cannot_hide_a_remaining_semantic_failure():
 
 
 @pytest.mark.asyncio
-async def test_semantic_critic_never_receives_the_rendered_image(monkeypatch):
+@pytest.mark.parametrize(
+    ("revision_count", "expected_effort"),
+    [(0, "medium"), (1, "low")],
+)
+async def test_semantic_critic_never_receives_the_rendered_image(
+    monkeypatch,
+    revision_count,
+    expected_effort,
+):
     captured = {}
 
     async def fake_stream_llm(**kwargs):
@@ -1209,9 +1421,11 @@ async def test_semantic_critic_never_receives_the_rendered_image(monkeypatch):
         "await_diagram_evaluation": await_diagram,
         "user_id": "user-1",
         "session_id": "thread-1",
+        "graph_revision_count": revision_count,
     })
 
     assert result["graph_review"]["approved"] is True
+    assert captured["effort"] == expected_effort
     assert isinstance(captured["messages"][0]["content"], str)
     assert "private-render-must-not-reach-the-semantic-model" not in captured["messages"][0]["content"]
     assert "Browser layout report" not in captured["messages"][0]["content"]

@@ -1,0 +1,179 @@
+name: Promote calibration evidence
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+env:
+  PROJECT_ID: project-c170fa55-f0d5-4d83-bfe
+  EVIDENCE_BUCKET: project-c170fa55-f0d5-4d83-bfe-eval-evidence
+
+jobs:
+  promote:
+    name: Verify and preserve reviewed browser evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging-eval
+    concurrency:
+      group: calibration-evidence-promotion
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - id: approved
+        name: Resolve the human-approved source identity
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import hashlib
+          import json
+          from pathlib import Path
+
+          corpus = json.loads(Path("backend/eval/corpus/v1/cases.json").read_text(encoding="utf-8"))
+          approved = str(corpus["approval"].get("approved_manifest_sha256") or "")
+          approval_manifest = json.loads(json.dumps(corpus))
+          approval_manifest["approval"]["approved_manifest_sha256"] = None
+          approval_sha = hashlib.sha256(
+              json.dumps(approval_manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+          ).hexdigest()
+          if approved != approval_sha:
+              raise SystemExit("approved corpus manifest digest does not match")
+          calibration = corpus["approval"].get("calibration") or {}
+          if corpus["approval"].get("status") != "approved":
+              raise SystemExit("only an approved corpus can promote calibration evidence")
+          values = {
+              "source_run_id": str(calibration.get("evidence_run_id") or ""),
+              "source_commit_sha": str(calibration.get("evidence_commit_sha") or ""),
+              "evidence_sha": str(calibration.get("evidence_sha256") or ""),
+              "judge_model": str(calibration.get("judge_model") or ""),
+          }
+          if not (
+              values["source_run_id"].isdigit()
+              and len(values["source_commit_sha"]) == 40
+              and len(values["evidence_sha"]) == 64
+              and values["judge_model"]
+          ):
+              raise SystemExit("approved calibration identity is incomplete")
+          for key, value in values.items():
+              print(f"{key}={value}")
+          PY
+      - name: Download the exact human-reviewed full-suite artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ steps.approved.outputs.source_run_id }}
+          SOURCE_COMMIT_SHA: ${{ steps.approved.outputs.source_commit_sha }}
+        run: |
+          source_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")"
+          [ "$(printf '%s' "$source_json" | jq -r .head_sha)" = "$SOURCE_COMMIT_SHA" ] || { echo "Source run SHA mismatch." >&2; exit 1; }
+          [ "$(printf '%s' "$source_json" | jq -r .head_branch)" = main ] || { echo "Reviewed evidence must come from main." >&2; exit 1; }
+          [ "$(printf '%s' "$source_json" | jq -r .conclusion)" = success ] || { echo "Source run was not successful." >&2; exit 1; }
+          [ "$(printf '%s' "$source_json" | jq -r .path)" = .github/workflows/scheduled-eval.yml ] || { echo "Source is not a scheduled evaluation." >&2; exit 1; }
+          if ! gh run download "$SOURCE_RUN_ID" \
+            --name "scheduled-eval-replay-$SOURCE_RUN_ID" \
+            --dir artifacts/source; then
+            gh run download "$SOURCE_RUN_ID" \
+              --name "scheduled-eval-$SOURCE_RUN_ID" \
+              --dir artifacts/source
+          fi
+          gh api \
+            -H "Accept: application/vnd.github.raw+json" \
+            "repos/$GITHUB_REPOSITORY/contents/backend/eval/corpus/v1/cases.json?ref=$SOURCE_COMMIT_SHA" \
+            > artifacts/source/source-cases.json
+      - name: Validate and hash the approved evidence
+        env:
+          SOURCE_RUN_ID: ${{ steps.approved.outputs.source_run_id }}
+          SOURCE_COMMIT_SHA: ${{ steps.approved.outputs.source_commit_sha }}
+          EXPECTED_EVIDENCE_SHA: ${{ steps.approved.outputs.evidence_sha }}
+          JUDGE_MODEL: ${{ steps.approved.outputs.judge_model }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          def behavior_digest(value):
+              value = json.loads(json.dumps(value))
+              value.pop("approval", None)
+              for case in value["cases"]:
+                  case.pop("approval", None)
+              canonical = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+              return hashlib.sha256(canonical).hexdigest()
+
+          def legacy_digest(value):
+              value = json.loads(json.dumps(value))
+              value["approval"]["approved_manifest_sha256"] = None
+              canonical = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+              return hashlib.sha256(canonical).hexdigest()
+
+          current = json.loads(Path("backend/eval/corpus/v1/cases.json").read_text(encoding="utf-8"))
+          source_corpus = json.loads(Path("artifacts/source/source-cases.json").read_text(encoding="utf-8"))
+          corpus_sha = behavior_digest(current)
+          if behavior_digest(source_corpus) != corpus_sha:
+              raise SystemExit("reviewed source behavior does not match the approved corpus")
+          capture_path = Path("artifacts/source/browser-results.json")
+          capture = json.loads(capture_path.read_text(encoding="utf-8"))
+          context = json.loads(Path("artifacts/source/run-context.json").read_text(encoding="utf-8"))
+          if context.get("run_id") != os.environ["SOURCE_RUN_ID"] or context.get("commit_sha") != os.environ["SOURCE_COMMIT_SHA"]:
+              raise SystemExit("source context does not match the human-approved run")
+          if capture.get("kind") != "browser_capture" or capture.get("suite") != "full":
+              raise SystemExit("source is not a full browser capture")
+          if capture.get("status") not in {None, "complete"}:
+              raise SystemExit("source browser capture did not complete")
+          expected_ids = [case["id"] for case in current["cases"]]
+          results = capture.get("results") or []
+          actual_ids = [item.get("id") for item in results]
+          failures = [item.get("id") for item in results if not item.get("passed")]
+          if actual_ids != expected_ids or failures:
+              raise SystemExit(f"source browser evidence is incomplete, reordered, duplicated, or failed: {failures}")
+          if capture.get("corpus_version") != current["corpus_version"]:
+              raise SystemExit("source browser evidence has the wrong corpus version")
+          if capture.get("corpus_sha256") not in {corpus_sha, legacy_digest(source_corpus)}:
+              raise SystemExit("source capture corpus digest is not valid for its source revision")
+          evidence_sha = hashlib.sha256(capture_path.read_bytes()).hexdigest()
+          if evidence_sha != os.environ["EXPECTED_EVIDENCE_SHA"]:
+              raise SystemExit("source evidence digest does not match the human-approved identity")
+          promotion = {
+              "format_version": 1,
+              "source_run_id": os.environ["SOURCE_RUN_ID"],
+              "source_commit_sha": os.environ["SOURCE_COMMIT_SHA"],
+              "corpus_version": current["corpus_version"],
+              "corpus_sha256": corpus_sha,
+              "evidence_sha256": evidence_sha,
+              "judge_model": os.environ["JUDGE_MODEL"],
+          }
+          output = Path("artifacts/promotion")
+          output.mkdir(parents=True, exist_ok=True)
+          (output / "promotion.json").write_text(json.dumps(promotion, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          with (output / "github-env.txt").open("w", encoding="utf-8") as env:
+              env.write(f"CORPUS_SHA={corpus_sha}\nEVIDENCE_SHA={evidence_sha}\n")
+          PY
+          cat artifacts/promotion/github-env.txt >> "$GITHUB_ENV"
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Upload content-addressed evidence and promotion record
+        run: |
+          prefix="gs://$EVIDENCE_BUCKET/reviewed/$CORPUS_SHA"
+          ensure_object() {
+            local source="$1" destination="$2" existing
+            if gcloud storage cp --if-generation-match=0 "$source" "$destination"; then
+              return
+            fi
+            existing="$(mktemp /tmp/eval-evidence.XXXXXX)"
+            gcloud storage cp "$destination" "$existing"
+            cmp -s "$source" "$existing" || { echo "Existing immutable evidence differs: $destination" >&2; exit 1; }
+            rm -f "$existing"
+          }
+          ensure_object artifacts/source/browser-results.json "$prefix/browser-results-$EVIDENCE_SHA.json"
+          printf '%s\n' "$prefix/browser-results-$EVIDENCE_SHA.json" > artifacts/promotion/evidence-uri.txt
+          ensure_object artifacts/promotion/promotion.json "$prefix/promotion-$EVIDENCE_SHA.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: calibration-evidence-promotion-${{ github.run_id }}
+          path: artifacts/promotion
+          retention-days: 90

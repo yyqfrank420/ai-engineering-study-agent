@@ -38,7 +38,7 @@ async def stream_explanation_blocks(
         model=model,
         system=protect_system_prompt(system),
         messages=messages,
-        effort="low",
+        effort="high",
         temperature=None,
         top_p=None,
         top_k=None,

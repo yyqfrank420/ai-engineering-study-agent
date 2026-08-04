@@ -279,9 +279,9 @@
     <text x="29" y="64" font-size="38" font-weight="700" fill="#111827">AI</text>
     <text class="region-title" x="102" y="59">Anthropic Claude</text>
     <rect x="26" y="89" width="286" height="43" rx="9" fill="#faf8ff" stroke="#7357d8" stroke-width="1.3"/>
-    <text x="169" y="116" text-anchor="middle" font-size="15" font-weight="700" fill="#4c1d95">Sonnet 5 · normal workflow</text>
+    <text x="169" y="116" text-anchor="middle" font-size="15" font-weight="700" fill="#4c1d95">Opus 5 high · normal workflow</text>
     <rect x="26" y="142" width="286" height="43" rx="9" fill="#faf8ff" stroke="#7357d8" stroke-width="1.3"/>
-    <text x="169" y="169" text-anchor="middle" font-size="15" font-weight="700" fill="#4c1d95">Opus 4.8 · repair only</text>
+    <text x="169" y="169" text-anchor="middle" font-size="15" font-weight="700" fill="#4c1d95">Opus 5 high · repair role</text>
   </g>
 
   <!-- Runtime connectors -->

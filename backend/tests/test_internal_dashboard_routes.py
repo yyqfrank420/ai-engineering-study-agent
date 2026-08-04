@@ -222,7 +222,27 @@ async def test_eval_telemetry_is_thread_scoped_bounded_and_sanitized(monkeypatch
             "synthesis",
             "anthropic",
             "claude",
-            metadata={"input_tokens": 12, "output_tokens": 5, "secret": "never-return"},
+            metadata={
+                "input_tokens": 12,
+                "output_tokens": 5,
+                "queue_wait_ms": 23,
+                "request_id": "request-1",
+                "client_request_id": "secret/path",
+                "attempts": [
+                    {
+                        "attempt": 1,
+                        "provider": "anthropic",
+                        "model": "claude-opus-5",
+                        "status": "success",
+                        "input_tokens": 12,
+                        "output_tokens": 5,
+                        "queue_wait_ms": 23,
+                        "duration_ms": 100,
+                        "secret": "never-return",
+                    }
+                ],
+                "secret": "never-return",
+            },
         )
         | {"thread_id": "thread-1"},
         _llm("routing", "openai", "gpt") | {"thread_id": "another-thread"},
@@ -248,13 +268,28 @@ async def test_eval_telemetry_is_thread_scoped_bounded_and_sanitized(monkeypatch
                 "input_tokens": 12,
                 "output_tokens": 5,
                 "provider_attempts": 1,
+                "queue_wait_ms": 23,
+                "attempts": [
+                    {
+                        "attempt": 1,
+                        "provider": "anthropic",
+                        "model": "claude-opus-5",
+                        "status": "success",
+                        "input_tokens": 12,
+                        "output_tokens": 5,
+                        "queue_wait_ms": 23,
+                        "duration_ms": 100,
+                    }
+                ],
+                "request_id": "request-1",
+                "client_request_id": None,
                 "created_at_epoch": 1000.0,
             }
         ]
     }
     assert await dashboard.dashboard_eval_telemetry(
         since_epoch=900,
-        thread_id=[str(index) for index in range(21)],
+        thread_id=[str(index) for index in range(41)],
         _user={"email": "admin@example.com"},
     ) == {"calls": []}
 

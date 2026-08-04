@@ -22,7 +22,7 @@ from agent.state import AgentState
 from agent.stream_utils import stream_llm
 from config import settings
 
-_SYNTHESIS_PROMPT_VERSION = "architecture_blocks_v8"
+_SYNTHESIS_PROMPT_VERSION = "architecture_blocks_v9"
 _QUICK_SYNTHESIS_PROMPT_VERSION = "quick_synthesis_v2"
 
 _ROUTER_SYSTEM = """<role>
@@ -136,6 +136,9 @@ Answer in the same language as the user's latest message unless they ask to swit
   links. Never invent or alter a source URL.
 - When research was requested but unavailable, say so plainly and do not imply that a web search
   succeeded or that book evidence is current web evidence.
+- For comparison or trade-off research, make the supported qualitative conclusions decision-useful.
+  Separate source-backed observations from recommendations and remaining evidence gaps; do not
+  relabel every grounded conclusion as an untested hypothesis merely because snippets lack numbers.
 - For a grounded explanation or safety lesson, prefer a few fully supported claims over extra
   extrapolation. Do not call something the "main" failure mode, a "hard" boundary, or say it
   "always" or "entirely" behaves a certain way unless the supplied evidence explicitly says so.
@@ -167,6 +170,8 @@ Answer in the same language as the user's latest message unless they ask to swit
 - For an applied design, start with your interpretation and material assumptions, then walk the
   primary runtime loop using exact graph node and edge names. Cover inputs, decisions, actions,
   outcome measurement, control boundaries, and the biggest failure modes relevant to the depth contract.
+- If the user explicitly requested a diagram and a graph exists, say that the diagram is rendered
+  on the canvas, then explain its exact nodes and edges. Do not duplicate the canvas as ASCII art.
 - Explain why each major boundary exists and what crosses it; do not merely restate node descriptions.
 - Distinguish facts supplied by the user, inferred assumptions, and recommendations.
 - Use a compact table when it materially clarifies component responsibilities or contracts.
@@ -354,7 +359,7 @@ def _is_memory_followup(user_message: str, history: list[dict]) -> bool:
 async def quick_synthesise(state: AgentState) -> AgentState:
     """
     Fast path for simple factual questions.
-    Uses Sonnet 5 at low effort with a short direct prompt — no RAG, no graph.
+    Uses Opus 5 at high effort with a short direct prompt — no RAG, no graph.
     """
     send = state["send"]
     await send({"type": "worker_status", "worker": "orchestrator", "status": "Looking it up…"})
@@ -376,7 +381,7 @@ async def quick_synthesise(state: AgentState) -> AgentState:
         temperature=settings.quick_synthesis_temperature,
         top_p=settings.quick_synthesis_top_p,
         top_k=settings.quick_synthesis_top_k,
-        effort="low",
+        effort="high",
         telemetry=build_telemetry(
             "quick_synthesise",
             user_id=state.get("user_id"),
@@ -404,7 +409,18 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
     """
     send = state["send"]
     history = state.get("history") or []
-    history = await maybe_condense_history(history)
+    history = await maybe_condense_history(
+        history,
+        telemetry=build_telemetry(
+            "context_condense",
+            user_id=state.get("user_id"),
+            thread_id=state.get("session_id"),
+            metadata={
+                "request_id": state.get("request_id"),
+                "client_request_id": state.get("client_request_id"),
+            },
+        ),
+    )
 
     current_graph = state.get("graph_data") or {}
     design_query = state.get("design_query") or state.get("user_message", "")
@@ -525,7 +541,7 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
             model=settings.orchestrator_model,
             system=_SYNTHESIS_SYSTEM,
             messages=messages,
-            effort="low",
+            effort="high",
             temperature=settings.synthesis_temperature,
             top_p=settings.synthesis_top_p,
             top_k=settings.synthesis_top_k,

@@ -3,6 +3,7 @@ locals {
     "artifactregistry.googleapis.com",
     "cloudbuild.googleapis.com",
     "run.googleapis.com",
+    "storage.googleapis.com",
     "secretmanager.googleapis.com",
     "iam.googleapis.com",
     "cloudresourcemanager.googleapis.com",
@@ -43,6 +44,7 @@ locals {
       FRONTEND_ORIGIN                  = var.frontend_origin
       DB_SCHEMA                        = "public"
       FAISS_ARTIFACT_TIMEOUT_S         = tostring(var.faiss_artifact_timeout_s)
+      ANTHROPIC_MAX_CONCURRENT_STREAMS = "4"
       INTERNAL_DASHBOARD_ALLOWLIST_RAW = var.internal_dashboard_allowlist_raw
     },
     var.env_vars,

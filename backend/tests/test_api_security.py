@@ -35,6 +35,17 @@ def _parse_sse_events(response_text: str) -> list[dict]:
     return events
 
 
+def test_only_signed_internal_test_sessions_scope_active_streams_by_thread():
+    from api.chat_guards import internal_test_stream_scope
+
+    internal_user = {
+        "claims": {"app_metadata": {"provider": "internal_test"}}
+    }
+    assert internal_test_stream_scope(internal_user, "thread-1") == "thread-1"
+    assert internal_test_stream_scope({"claims": {}}, "thread-1") is None
+    assert internal_test_stream_scope({}, "thread-1") is None
+
+
 def test_cors_allows_vercel_preview_origin():
     app = create_app(load_resources=False)
     client = TestClient(app)

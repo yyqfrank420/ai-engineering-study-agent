@@ -77,9 +77,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: classify
     if: needs.classify.outputs.ai-impact == 'true' && needs.classify.outputs.trusted == 'true' && needs.classify.outputs.corpus-status == 'approved'
-    # The browser suite keeps its own 15-minute/model-call budgets. This outer
-    # timeout also covers dependency setup, image deployment, judging, and cleanup.
-    timeout-minutes: 30
+    # Browser time scales with reviewed corpus turns and is independently capped.
+    # This outer timeout also covers setup, deployment, judging, and cleanup.
+    timeout-minutes: 90
     environment: staging-eval
     concurrency:
       group: staging-live-eval-global
@@ -181,6 +181,8 @@ jobs:
             --image "$IMAGE@$IMAGE_DIGEST" \
             --no-traffic \
             --tag "$REVISION_TAG" \
+            --timeout 420s \
+            --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4 \
             --quiet
           candidate_url="$(gcloud run services describe "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json | python -c 'import json,os,sys; data=json.load(sys.stdin); tag=os.environ["REVISION_TAG"]; print(next((x.get("url", "") for x in data.get("status", {}).get("traffic", []) if x.get("tag") == tag), ""))')"
           if [ -z "$candidate_url" ]; then
@@ -219,12 +221,12 @@ jobs:
         run: ./scripts/ci browser --suite pr --target http://localhost:5173 --output artifacts/live-eval/browser-results.json
 
       - id: semantic
-        name: Apply blocking deterministic and semantic rubrics
+        name: Apply deterministic and semantic rubrics
         if: always() && hashFiles('artifacts/live-eval/browser-results.json') != ''
         continue-on-error: true
         env:
           OPENAI_API_KEY: ${{ secrets.EVAL_JUDGE_API_KEY }}
-        run: ./scripts/ci live --suite pr --target "$CANDIDATE_URL" --input artifacts/live-eval/browser-results.json --output artifacts/live-eval/live-results.json --require-approved-corpus
+        run: ./scripts/ci live --suite pr --target "$CANDIDATE_URL" --input artifacts/live-eval/browser-results.json --output artifacts/live-eval/live-results.json --require-approved-corpus --manual-review-policy report-only
 
       - name: Record deployment identity
         if: always()

@@ -22,7 +22,7 @@ async def test_one_provider_call_emits_complete_explanation_blocks(monkeypatch):
         events.append(event)
 
     response = await explanation_blocks.stream_explanation_blocks(
-        model="claude-sonnet-5",
+        model="claude-opus-5",
         system="system",
         messages=[{"role": "user", "content": "explain"}],
         telemetry={"operation": "test"},
@@ -32,7 +32,7 @@ async def test_one_provider_call_emits_complete_explanation_blocks(monkeypatch):
     )
 
     assert len(calls) == 1
-    assert calls[0]["effort"] == "low"
+    assert calls[0]["effort"] == "high"
     assert "<untrusted_context>" in calls[0]["system"]
     blocks = [event for event in events if event["type"] == "explanation_block"]
     assert [block["title"] for block in blocks] == ["In one minute", "Safety"]

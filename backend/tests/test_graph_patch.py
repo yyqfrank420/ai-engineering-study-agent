@@ -293,6 +293,73 @@ def test_patch_updates_nodes_and_edges_and_removes_only_selected_edge():
     )
 
 
+def test_patch_selector_accepts_copied_known_edge_metadata():
+    existing = _domain_graph(5)
+    removed_edge = existing["edges"][-1]
+
+    result = graph_worker._apply_applied_graph_patch(
+        existing,
+        {"remove_edges": [{
+            key: removed_edge.get(key)
+            for key in graph_worker._PATCH_EDGE_FIELDS
+        }]},
+        min_nodes=5,
+        max_nodes=7,
+        resolved_complexity="prototype",
+    )
+
+    assert len(result["edges"]) == len(existing["edges"]) - 1
+    assert not any(
+        edge["source"] == removed_edge["source"]
+        and edge["target"] == removed_edge["target"]
+        and edge["label"] == removed_edge["label"]
+        for edge in result["edges"]
+    )
+
+
+def test_patch_selector_accepts_unambiguous_match_wrapper():
+    existing = _domain_graph(5)
+    removed_edge = existing["edges"][-1]
+
+    result = graph_worker._apply_applied_graph_patch(
+        existing,
+        {"remove_edges": [{"match": {
+            "source": removed_edge["source"],
+            "target": removed_edge["target"],
+            "label": removed_edge["label"],
+        }}]},
+        min_nodes=5,
+        max_nodes=7,
+        resolved_complexity="prototype",
+    )
+
+    assert len(result["edges"]) == len(existing["edges"]) - 1
+
+
+def test_patch_ignores_top_level_null_optional_fields():
+    existing = _domain_graph(5)
+
+    result = graph_worker._apply_applied_graph_patch(
+        existing,
+        {
+            "update_nodes": [{
+                "id": "fulfilment_stage_2",
+                "set": {"label": "Customs Evidence Check"},
+            }],
+            "add_edges": None,
+            "title": None,
+        },
+        min_nodes=5,
+        max_nodes=7,
+        resolved_complexity="prototype",
+    )
+
+    assert result["title"] == existing["title"]
+    assert next(
+        node for node in result["nodes"] if node["id"] == "fulfilment_stage_2"
+    )["label"] == "Customs Evidence Check"
+
+
 @pytest.mark.parametrize(
     ("patch", "error"),
     [
@@ -563,6 +630,208 @@ def test_graph_parser_preserves_combined_deployment_edge_for_critic_repair():
     assert normalised["edges"][0]["technology"] == "Canary/promoted deployment"
 
 
+def _release_graph_for_completion():
+    graph = _domain_graph(9, production=True)
+    graph["nodes"][5].update({"label": "Release Controller", "type": "control"})
+    graph["nodes"][6].update({"label": "Campaign Runtime", "type": "service"})
+    graph["nodes"][7].update({"label": "Event Definition Registry", "type": "datastore"})
+    graph["edges"].extend([
+        {
+            "source": "fulfilment_stage_5",
+            "target": "fulfilment_stage_6",
+            "label": "deploy canary release",
+            "technology": "Immutable release manifest",
+            "sync": "async",
+            "flow": "deployment",
+            "description": "Activates the evaluated release in a bounded canary lane.",
+        },
+        {
+            "source": "fulfilment_stage_5",
+            "target": "fulfilment_stage_6",
+            "label": "promote full production release",
+            "technology": "Reviewed release decision",
+            "sync": "async",
+            "flow": "deployment",
+            "description": "Activates the canary-approved immutable release for all traffic.",
+        },
+        {
+            "source": "fulfilment_stage_7",
+            "target": "fulfilment_stage_5",
+            "label": "supply immutable evaluated release",
+            "technology": "Versioned release manifest",
+            "sync": "async",
+            "flow": "deployment",
+            "description": "Supplies the release controller with one immutable evaluated version.",
+        },
+    ])
+    return graph_worker._normalise_applied_graph(
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+
+def test_deterministic_completion_adds_only_missing_release_rollback():
+    graph = _release_graph_for_completion()
+
+    completed = graph_worker._complete_missing_release_rollback(
+        "Design a production model release workflow",
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+    assert completed is not None
+    assert len(completed["edges"]) == len(graph["edges"]) + 1
+    assert any(
+        edge["label"] == "rollback to prior approved release"
+        and edge["source"] == "fulfilment_stage_5"
+        and edge["target"] == "fulfilment_stage_7"
+        and edge["flow"] == "deployment"
+        for edge in completed["edges"]
+    )
+    graph_worker._validate_applied_architecture_patch(
+        "Design a production model release workflow",
+        completed,
+        "production",
+    )
+
+
+def test_deterministic_completion_allows_service_owner_without_registry():
+    graph = _release_graph_for_completion()
+    graph["nodes"][5].update({"label": "Evaluation Release Ops", "type": "service"})
+    graph["nodes"][7]["label"] = "Evaluated Release Archive"
+
+    completed = graph_worker._complete_missing_release_rollback(
+        "Design a production model release workflow",
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+    assert completed is not None
+    assert any(
+        edge["label"] == "rollback to prior approved release"
+        and edge["source"] == "fulfilment_stage_5"
+        and edge["target"] == "fulfilment_stage_6"
+        for edge in completed["edges"]
+    )
+
+
+def test_deterministic_completion_does_not_hide_other_review_failures():
+    graph = _domain_graph(9, production=True)
+
+    completed = graph_worker._complete_missing_release_rollback(
+        "Design a production model release workflow",
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+    assert completed is None
+
+
+def test_deterministic_completion_fails_closed_at_edge_budget():
+    graph = _release_graph_for_completion()
+    while len(graph["edges"]) < graph_worker._edge_budget(9):
+        index = len(graph["edges"])
+        graph["edges"].append({
+            "source": f"fulfilment_stage_{index % 9}",
+            "target": f"fulfilment_stage_{(index + 2) % 9}",
+            "label": f"carry bounded release evidence {index}",
+            "technology": "Typed release evidence",
+            "sync": "async",
+            "flow": "control",
+            "description": "Carries one bounded release observation to its review owner.",
+        })
+    graph = graph_worker._normalise_applied_graph(
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+    completed = graph_worker._complete_missing_release_rollback(
+        "Design a production model release workflow",
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+    assert completed is None
+
+
+@pytest.mark.parametrize("failure_mode", ["ambiguous_promotion", "non_deployment"])
+def test_deterministic_completion_requires_unique_typed_release_topology(failure_mode):
+    graph = _release_graph_for_completion()
+    promotion = next(
+        edge for edge in graph["edges"] if edge["label"] == "promote full production release"
+    )
+    if failure_mode == "ambiguous_promotion":
+        graph["edges"].append({
+            **promotion,
+            "label": "promote full production event definitions",
+        })
+    else:
+        promotion["flow"] = "control"
+    graph = graph_worker._normalise_applied_graph(
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+    completed = graph_worker._complete_missing_release_rollback(
+        "Design a production model release workflow",
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+    assert completed is None
+
+
+@pytest.mark.parametrize("failure_mode", ["ambiguous_owner", "different_targets"])
+def test_deterministic_completion_requires_one_owner_and_shared_target(failure_mode):
+    graph = _release_graph_for_completion()
+    promotion = next(
+        edge for edge in graph["edges"] if edge["label"] == "promote full production release"
+    )
+    if failure_mode == "ambiguous_owner":
+        canary = next(
+            edge for edge in graph["edges"] if edge["label"] == "deploy canary release"
+        )
+        graph["nodes"][4].update({"label": "Secondary Release Ops", "type": "service"})
+        graph["edges"].extend([
+            {**canary, "source": "fulfilment_stage_4"},
+            {**promotion, "source": "fulfilment_stage_4"},
+        ])
+    else:
+        promotion["target"] = "fulfilment_stage_8"
+    graph = graph_worker._normalise_applied_graph(
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+    completed = graph_worker._complete_missing_release_rollback(
+        "Design a production model release workflow",
+        graph,
+        min_nodes=9,
+        max_nodes=9,
+        resolved_complexity="production",
+    )
+
+    assert completed is None
+
+
 def test_graph_parser_keeps_independent_control_defects_for_one_critic_review():
     graph = _domain_graph(5)
     graph["edges"][0].update({
@@ -632,6 +901,7 @@ async def test_targeted_existing_graph_followup_uses_incremental_patch_lane(monk
     assert len(calls) == 1
     assert calls[0]["telemetry"]["metadata"]["model_role"] == "incremental_patch"
     assert calls[0]["thinking_budget"] is None
+    assert calls[0]["effort"] == "medium"
     assert "Source and target must be distinct" in calls[0]["system"]
 
 
@@ -719,8 +989,13 @@ async def test_invalid_patch_preserves_approved_graph_after_bounded_retry(monkey
     assert len(calls) == 2
     assert calls[0]["model"] == graph_worker.settings.orchestrator_model
     assert calls[0]["effort"] == "low"
+    assert calls[1]["effort"] == "medium"
     assert calls[0]["thinking_budget"] is None
     assert "Never return a replacement graph" in calls[0]["system"]
+    assert "map every supplied blocking failure" in calls[0]["system"]
+    assert "The approval-only route must explicitly say" in calls[0]["system"]
+    assert "Human review, a manual lane, escalation, or hold alone" in calls[0]["system"]
+    assert "the promotion edge must not mention" in calls[0]["system"]
     assert calls[0]["telemetry"]["metadata"]["prompt_version"] == (
         graph_worker._APPLIED_GRAPH_PATCH_PROMPT_VERSION
     )
@@ -764,6 +1039,7 @@ async def test_invalid_self_edge_patch_gets_one_validation_informed_retry(monkey
                 "revision_instruction": "Separate generation failure from evaluation rejection.",
             },
             "complexity": "prototype",
+            "graph_revision_count": 1,
             "user_id": "user-1",
             "session_id": "thread-1",
         },
@@ -777,4 +1053,53 @@ async def test_invalid_self_edge_patch_gets_one_validation_informed_retry(monkey
     assert "self-referencing edge is not allowed" in calls[1]["messages"][0]["content"]
     assert '"source": "fulfilment_stage_3"' in calls[1]["messages"][0]["content"]
     assert "Rejected patch (untrusted data" in calls[1]["messages"][0]["content"]
+    assert calls[0]["effort"] == "low"
+    assert calls[1]["effort"] == "medium"
     assert calls[1]["telemetry"]["metadata"]["patch_attempt"] == 1
+
+
+@pytest.mark.asyncio
+async def test_semantically_ineffective_patch_reaches_canonical_workflow_review(monkeypatch):
+    existing = _domain_graph(9, production=True)
+    collapsed_edge = {
+        "source": "fulfilment_stage_7",
+        "target": "fulfilment_stage_2",
+        "label": "returns COMMITTED / NOT_FOUND / STILL_UNKNOWN state",
+        "technology": "Lifecycle read-back",
+        "sync": "async",
+        "flow": "control",
+        "description": "Returns the external outcome state for reconciliation.",
+    }
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"add_edges": [collapsed_edge]})
+
+    monkeypatch.setattr(graph_worker, "stream_llm", fake_stream_llm)
+    result = await graph_worker._generate_applied_architecture_patch(
+        {
+            "send": None,
+            "user_message": "Make reconciliation branches explicit",
+            "graph_review": {
+                "approved": False,
+                "revision_instruction": "Split each reconciliation outcome.",
+            },
+            "complexity": "production",
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        },
+        "Make reconciliation branches explicit in this fulfilment system",
+        SimpleNamespace(resolved="production", min_graph_nodes=9, max_graph_nodes=13),
+        existing,
+    )
+
+    assert len(calls) == 1
+    assert result["edges"][-1]["label"] == collapsed_edge["label"]
+    assert result != existing
+    with pytest.raises(ValueError, match="Draw committed, not-found retry"):
+        graph_worker._validate_applied_architecture_patch(
+            "Make reconciliation branches explicit in this fulfilment system",
+            result,
+            "production",
+        )

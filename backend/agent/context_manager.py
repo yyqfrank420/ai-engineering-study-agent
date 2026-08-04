@@ -3,7 +3,7 @@
 # Purpose: Auto-condense long conversation histories before sending to the LLM.
 #          When the total character count of a thread's history exceeds
 #          settings.context_condense_threshold_chars, older turns are
-#          summarised at low effort and replaced with a single summary message.
+#          summarised at the shared high effort and replaced with one message.
 #          The most recent `settings.context_condense_keep_recent` turns are
 #          always kept verbatim so the LLM has full context for the current
 #          exchange.
@@ -21,6 +21,7 @@
 
 import asyncio
 import logging
+from typing import Any
 
 from adapters.llm_adapter import build_telemetry, stream_response, stream_response_compat
 from agent.prompt_security import protect_system_prompt
@@ -32,9 +33,13 @@ logger = logging.getLogger(__name__)
 _CONDENSE_TIMEOUT_S = 5.0
 
 
-async def _call_summary(old_text: str) -> str:
+async def _call_summary(
+    old_text: str,
+    *,
+    telemetry: dict[str, Any] | None = None,
+) -> str:
     """
-    Ask the configured worker model for a low-effort summary of `old_text`.
+    Ask the configured worker model for a concise high-effort summary of `old_text`.
 
     Collects the full streamed response into a single string.
     Raises on any error so the caller can fall back gracefully.
@@ -59,8 +64,8 @@ async def _call_summary(old_text: str) -> str:
         temperature=settings.condense_temperature,
         top_p=settings.condense_top_p,
         top_k=settings.condense_top_k,
-        effort="low",
-        telemetry=build_telemetry("context_condense"),
+        effort="high",
+        telemetry=telemetry or build_telemetry("context_condense"),
     ):
         if event_type == "text":
             tokens.append(content)
@@ -71,13 +76,14 @@ async def maybe_condense_history(
     history: list[dict],
     threshold_chars: int | None = None,
     keep_recent: int | None = None,
+    telemetry: dict[str, Any] | None = None,
 ) -> list[dict]:
     """
     Conditionally condense a conversation history.
 
     Decision tree:
         total_chars ≤ threshold  →  return history unchanged
-        total_chars > threshold  →  summarise old turns at low effort (5s timeout)
+        total_chars > threshold  →  summarise old turns at high effort (5s timeout)
                                      success: return [summary_msg] + recent turns
                                      failure: log warning, return original history
 
@@ -118,7 +124,7 @@ async def maybe_condense_history(
 
     try:
         summary = await asyncio.wait_for(
-            _call_summary(old_text),
+            _call_summary(old_text, telemetry=telemetry),
             timeout=_CONDENSE_TIMEOUT_S,
         )
         condensed: list[dict] = [

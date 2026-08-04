@@ -147,7 +147,7 @@ async def enrich_node(
         temperature=settings.node_detail_temperature,
         top_p=settings.node_detail_top_p,
         top_k=settings.node_detail_top_k,
-        effort="low",
+        effort="high",
         telemetry=build_telemetry(
             "node_detail_worker",
             user_id=user_id,

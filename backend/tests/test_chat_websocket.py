@@ -7,6 +7,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from adapters.database_adapter import init_db
 from main import create_app
+from storage import runtime_state_store
 from storage.message_store import get_history
 from storage.profile_store import upsert_profile
 from storage.thread_store import create_thread, persist_turn
@@ -137,6 +138,39 @@ def test_websocket_replays_completed_idempotent_turn_without_running_agent(temp_
         {"type": "response_delta", "content": "Canonical stored answer"},
         {"type": "done"},
     ]
+
+
+def test_internal_eval_websocket_acquires_a_thread_scoped_guard(temp_data_dir, monkeypatch):
+    app, user, thread = _ready_app(temp_data_dir, monkeypatch)
+    user["claims"] = {"app_metadata": {"provider": "internal_test"}}
+    observed: dict[str, str | None] = {}
+    original_acquire = runtime_state_store.try_acquire_active_stream
+
+    def acquire(*args, **kwargs):
+        observed["scope_id"] = kwargs.get("scope_id")
+        return original_acquire(*args, **kwargs)
+
+    async def fake_run_agent(state, _rag_tools, _graph_tools, _detail_tools):
+        await state["send"]({"type": "response_delta", "content": "ok"})
+        await state["send"]({"type": "done"})
+        return {**state, "response_text": "ok", "graph_data": None}
+
+    monkeypatch.setattr(runtime_state_store, "try_acquire_active_stream", acquire)
+    monkeypatch.setattr("api.chat_websocket.run_agent", fake_run_agent)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws", headers={"origin": "http://localhost:5173"}) as socket:
+            socket.send_json({"type": "auth", "access_token": "test-token"})
+            assert socket.receive_json() == {"type": "ready"}
+            socket.send_json({
+                "type": "start",
+                "thread_id": thread["id"],
+                "content": "run eval",
+                "client_request_id": "client-eval-scope",
+            })
+            _receive_until(socket, "done")
+
+    assert observed["scope_id"] == thread["id"]
 
 
 def test_websocket_keeps_candidate_private_until_browser_evaluation(temp_data_dir, monkeypatch):

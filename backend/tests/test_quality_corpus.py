@@ -1,8 +1,23 @@
+import asyncio
 import json
+import time
 
 import pytest
 
-from eval.quality_corpus import CORPUS_PATH, corpus_sha256, load_corpus
+from eval.quality_corpus import (
+    CORPUS_PATH,
+    approval_manifest_sha256,
+    corpus_sha256,
+    load_corpus,
+)
+from eval.runtime_budget import (
+    application_turn_timeout_seconds,
+    browser_case_concurrency,
+    browser_graph_case_concurrency,
+    browser_infrastructure_retry_count,
+    browser_suite_timeout_seconds,
+    semantic_suite_timeout_seconds,
+)
 
 
 def test_corpus_has_exactly_twenty_versioned_cases_and_six_anchored_rubrics():
@@ -17,7 +32,10 @@ def test_corpus_has_exactly_twenty_versioned_cases_and_six_anchored_rubrics():
         "domain_specificity",
         "safety",
     }
-    assert all(rubric.pass_ and rubric.borderline and rubric.fail for rubric in corpus.rubrics.values())
+    assert all(
+        rubric.pass_ and rubric.borderline and rubric.fail
+        for rubric in corpus.rubrics.values()
+    )
     assert all(case.provenance and case.risk_tags for case in corpus.cases)
 
 
@@ -27,6 +45,527 @@ def test_empty_and_oversized_inputs_are_not_live_model_cases():
     prompts = [step.prompt for case in corpus.cases for step in case.steps]
     assert all(prompt.strip() for prompt in prompts)
     assert all(len(prompt.encode("utf-8")) <= 12_000 for prompt in prompts)
+
+
+def test_browser_budget_scales_with_turns_and_retains_a_hard_ceiling():
+    corpus = load_corpus()
+    one_turn = [corpus.by_id["rag-grounding"]]
+    two_turns = [corpus.by_id["graph-expansion"]]
+    manifest = json.loads(
+        (CORPUS_PATH.parents[4] / "ci" / "quality.json").read_text(encoding="utf-8")
+    )
+    pr_cases = [corpus.by_id[case_id] for case_id in manifest["live"]["suites"]["pr"]]
+
+    assert browser_suite_timeout_seconds(pr_cases) > browser_suite_timeout_seconds(
+        one_turn
+    )
+    assert browser_suite_timeout_seconds(one_turn) > application_turn_timeout_seconds()
+    assert (
+        browser_suite_timeout_seconds(two_turns)
+        > 2 * application_turn_timeout_seconds()
+    )
+    pr_graph_turns = sum(
+        len(case.steps) for case in pr_cases if case.deterministic.graph_emitted is True
+    )
+    graph_lane_count = manifest["live"]["budgets"]["browser_graph_case_concurrency"]
+    graph_lane_batches = (pr_graph_turns + graph_lane_count - 1) // graph_lane_count
+    assert browser_suite_timeout_seconds(pr_cases) >= (
+        manifest["live"]["budgets"]["browser_suite_base_timeout_seconds"]
+        + graph_lane_batches * application_turn_timeout_seconds()
+    )
+    assert browser_suite_timeout_seconds(corpus.cases * 10) == 3600
+    assert browser_case_concurrency() == 4
+    assert browser_graph_case_concurrency() == 2
+    assert browser_infrastructure_retry_count() == 1
+    assert application_turn_timeout_seconds() == 390
+    assert semantic_suite_timeout_seconds("pr") == 1200
+    assert semantic_suite_timeout_seconds("full") == 3600
+
+
+@pytest.mark.asyncio
+async def test_browser_cases_run_with_bounded_concurrency_and_keep_corpus_order():
+    from eval.browser_runner import _run_cases_bounded
+
+    corpus = load_corpus()
+    case_ids = ("rag-grounding", "research", "memory", "graph-off")
+    cases = [corpus.by_id[case_id] for case_id in case_ids]
+    active = 0
+    maximum_active = 0
+    graph_active = 0
+    maximum_graph_active = 0
+    four_cases_started = asyncio.Event()
+    checkpoint_ids: list[list[str]] = []
+
+    async def run_case(case):
+        nonlocal active, maximum_active, graph_active, maximum_graph_active
+        active += 1
+        maximum_active = max(maximum_active, active)
+        is_graph = case.deterministic.graph_emitted is True
+        if is_graph:
+            graph_active += 1
+            maximum_graph_active = max(maximum_graph_active, graph_active)
+        if active == 4:
+            four_cases_started.set()
+        await asyncio.wait_for(four_cases_started.wait(), timeout=1)
+        await asyncio.sleep(
+            {
+                "rag-grounding": 0.03,
+                "research": 0.01,
+                "memory": 0.02,
+                "graph-off": 0.0,
+            }[case.id]
+        )
+        if is_graph:
+            graph_active -= 1
+        active -= 1
+        return {"id": case.id}
+
+    async def checkpoint(results):
+        checkpoint_ids.append([result["id"] for result in results])
+
+    results = await _run_cases_bounded(
+        cases,
+        max_concurrency=4,
+        graph_max_concurrency=2,
+        run_case=run_case,
+        on_result=checkpoint,
+    )
+
+    assert maximum_active == 4
+    assert maximum_graph_active == 2
+    assert [result["id"] for result in results] == list(case_ids)
+    assert checkpoint_ids[-1] == list(case_ids)
+    assert checkpoint_ids.count(list(case_ids)) == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_cases_defer_retry_until_every_first_attempt_completes():
+    from eval.browser_runner import _run_cases_with_deferred_retries
+
+    corpus = load_corpus()
+    cases = [corpus.by_id["research"], corpus.by_id["node-followup"]]
+    calls: list[tuple[str, int]] = []
+
+    async def run_attempt(case, attempt_number):
+        calls.append((case.id, attempt_number))
+        retryable_failure = case.id == "research" and attempt_number == 1
+        detail = {
+            "kind": "infrastructure",
+            "code": "browser_transport_failed",
+            "message": "temporary transport failure",
+            "blocking": True,
+            "retryable": True,
+        }
+        return {
+            "id": case.id,
+            "attempt": attempt_number,
+            "thread_id": f"{case.id}-{attempt_number}",
+            "passed": not retryable_failure,
+            "failure_details": [detail] if retryable_failure else [],
+            "deterministic_failures": (
+                [detail["message"]] if retryable_failure else []
+            ),
+        }
+
+    results = await _run_cases_with_deferred_retries(
+        cases,
+        max_concurrency=2,
+        graph_max_concurrency=1,
+        retry_count=1,
+        run_attempt=run_attempt,
+    )
+
+    assert calls == [
+        ("research", 1),
+        ("node-followup", 1),
+        ("research", 2),
+    ]
+    assert results[0]["attempt_count"] == 2
+    assert results[0]["thread_ids"] == ["research-1", "research-2"]
+    assert results[1]["attempt_count"] == 1
+    assert results[1]["retried"] is False
+
+
+@pytest.mark.asyncio
+async def test_multi_turn_browser_case_sends_each_step_sequentially(monkeypatch):
+    from eval.browser_runner import _send_case_steps
+
+    case = load_corpus().by_id["memory"]
+    active = 0
+    maximum_active = 0
+    step_order: list[int] = []
+
+    async def fake_send_step(page, sent_case, step_index, frames, *, timeout_seconds):
+        nonlocal active, maximum_active
+        assert sent_case is case
+        assert timeout_seconds == 390
+        active += 1
+        maximum_active = max(maximum_active, active)
+        step_order.append(step_index)
+        await asyncio.sleep(0)
+        active -= 1
+        return [{"type": "done", "step": step_index}]
+
+    monkeypatch.setattr("eval.browser_runner._send_step", fake_send_step)
+    events: list[dict] = []
+    await _send_case_steps(None, case, [], events, timeout_seconds=390)
+
+    assert step_order == [0, 1]
+    assert maximum_active == 1
+    assert [event["step"] for event in events] == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_multi_turn_case_stops_after_unexpected_timeout_error(monkeypatch):
+    from eval.browser_runner import BrowserInfrastructureError, _send_case_steps
+
+    case = load_corpus().by_id["graph-expansion"]
+    step_order: list[int] = []
+
+    async def fake_send_step(page, sent_case, step_index, frames, *, timeout_seconds):
+        del page, sent_case, frames, timeout_seconds
+        step_order.append(step_index)
+        return [
+            {"type": "error", "content": "Response timed out. Please try again."},
+            {"type": "done"},
+        ]
+
+    monkeypatch.setattr("eval.browser_runner._send_step", fake_send_step)
+    events: list[dict] = []
+    timings: list[dict] = []
+    with pytest.raises(BrowserInfrastructureError) as raised:
+        await _send_case_steps(
+            None,
+            case,
+            [],
+            events,
+            timeout_seconds=390,
+            turn_timings=timings,
+        )
+
+    assert raised.value.code == "application_response_timeout"
+    assert raised.value.retryable is False
+    assert step_order == [0]
+    assert [event["type"] for event in events] == ["error", "done"]
+    assert len(timings) == 1
+
+
+@pytest.mark.asyncio
+async def test_expected_error_case_can_continue_to_a_later_turn(monkeypatch):
+    from eval.browser_runner import _send_case_steps
+
+    original = load_corpus().by_id["graph-expansion"]
+    case = original.model_copy(
+        update={
+            "deterministic": original.deterministic.model_copy(
+                update={"error_expected": True}
+            )
+        }
+    )
+    step_order: list[int] = []
+
+    async def fake_send_step(page, sent_case, step_index, frames, *, timeout_seconds):
+        del page, sent_case, frames, timeout_seconds
+        step_order.append(step_index)
+        if step_index == 0:
+            return [{"type": "error", "content": "expected"}, {"type": "done"}]
+        return [{"type": "done"}]
+
+    monkeypatch.setattr("eval.browser_runner._send_step", fake_send_step)
+    await _send_case_steps(None, case, [], [], timeout_seconds=390)
+
+    assert step_order == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_browser_turn_timing_captures_request_identifiers(monkeypatch):
+    from eval.browser_runner import _send_case_steps
+
+    case = load_corpus().by_id["rag-grounding"]
+
+    async def fake_send_step(page, sent_case, step_index, frames, *, timeout_seconds):
+        del page, sent_case, step_index, timeout_seconds
+        now = time.time()
+        frames.extend(
+            [
+                {
+                    "direction": "sent",
+                    "message": {
+                        "type": "start",
+                        "client_request_id": "client-123",
+                    },
+                    "at": now,
+                },
+                {
+                    "direction": "received",
+                    "message": {"type": "worker_status", "request_id": "request-456"},
+                    "at": now + 0.01,
+                },
+                {
+                    "direction": "received",
+                    "message": {"type": "response_delta", "content": "answer"},
+                    "at": now + 0.02,
+                },
+                {
+                    "direction": "received",
+                    "message": {"type": "done"},
+                    "at": now + 0.03,
+                },
+            ]
+        )
+        return [
+            frame["message"] for frame in frames if frame["direction"] == "received"
+        ]
+
+    monkeypatch.setattr("eval.browser_runner._send_step", fake_send_step)
+    timings = []
+    await _send_case_steps(
+        None,
+        case,
+        [],
+        [],
+        timeout_seconds=390,
+        turn_timings=timings,
+    )
+
+    assert timings[0]["client_request_id"] == "client-123"
+    assert timings[0]["request_id"] == "request-456"
+    assert timings[0]["first_event_ms"] is not None
+    assert timings[0]["first_token_ms"] >= timings[0]["first_event_ms"]
+
+
+@pytest.mark.asyncio
+async def test_browser_case_retries_once_only_for_infrastructure_failures():
+    from eval.browser_runner import _run_case_with_retries
+
+    case = load_corpus().by_id["rag-grounding"]
+    calls = 0
+
+    async def run_attempt(_case, attempt_number):
+        nonlocal calls
+        calls += 1
+        if attempt_number == 1:
+            return {
+                "id": case.id,
+                "thread_id": "thread-first",
+                "screenshot": "screenshots/first.png",
+                "trace": "traces/first.zip",
+                "failure_details": [
+                    {
+                        "kind": "infrastructure",
+                        "code": "provider_timeout",
+                        "message": "provider timed out",
+                        "blocking": True,
+                        "retryable": True,
+                    },
+                    {
+                        "kind": "infrastructure",
+                        "code": "screenshot_failed",
+                        "message": "screenshot capture failed",
+                        "blocking": True,
+                        "retryable": False,
+                    },
+                ],
+                "deterministic_failures": [
+                    "provider timed out",
+                    "screenshot capture failed",
+                ],
+                "passed": False,
+            }
+        return {
+            "id": case.id,
+            "thread_id": "thread-second",
+            "screenshot": "screenshots/second.png",
+            "trace": "traces/second.zip",
+            "failure_details": [],
+            "deterministic_failures": [],
+            "passed": True,
+        }
+
+    result = await _run_case_with_retries(
+        case,
+        retry_count=1,
+        run_attempt=run_attempt,
+    )
+
+    assert calls == 2
+    assert result["passed"] is True
+    assert result["thread_ids"] == ["thread-first", "thread-second"]
+    assert [attempt["screenshot"] for attempt in result["attempts"]] == [
+        "screenshots/first.png",
+        "screenshots/second.png",
+    ]
+    assert [attempt["trace"] for attempt in result["attempts"]] == [
+        "traces/first.zip",
+        "traces/second.zip",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure_details",
+    [
+        [
+            {
+                "kind": "quality",
+                "code": "graph_missing",
+                "message": "graph missing",
+                "blocking": True,
+            }
+        ],
+        [
+            {
+                "kind": "infrastructure",
+                "code": "provider_timeout",
+                "message": "provider timed out",
+                "blocking": True,
+                "retryable": True,
+            },
+            {
+                "kind": "quality",
+                "code": "graph_missing",
+                "message": "graph missing",
+                "blocking": True,
+            },
+        ],
+        [
+            {
+                "kind": "infrastructure",
+                "code": "screenshot_failed",
+                "message": "screenshot capture failed",
+                "blocking": True,
+                "retryable": False,
+            }
+        ],
+    ],
+)
+async def test_browser_case_does_not_retry_quality_or_mixed_failures(failure_details):
+    from eval.browser_runner import _run_case_with_retries
+
+    case = load_corpus().by_id["rag-grounding"]
+    calls = 0
+
+    async def run_attempt(_case, attempt_number):
+        nonlocal calls
+        calls += 1
+        return {
+            "id": case.id,
+            "thread_id": f"thread-{attempt_number}",
+            "failure_details": failure_details,
+            "deterministic_failures": [item["message"] for item in failure_details],
+            "passed": False,
+        }
+
+    result = await _run_case_with_retries(case, retry_count=1, run_attempt=run_attempt)
+
+    assert calls == 1
+    assert result["retried"] is False
+
+
+def test_application_deadline_infrastructure_is_explicitly_non_retryable():
+    from eval.browser_runner import (
+        BrowserInfrastructureError,
+        _exception_failure_detail,
+    )
+
+    detail = _exception_failure_detail(
+        BrowserInfrastructureError(
+            "application_turn_timeout",
+            "application exceeded its deadline",
+            retryable=False,
+        )
+    )
+
+    assert detail["kind"] == "infrastructure"
+    assert detail["code"] == "application_turn_timeout"
+    assert detail["retryable"] is False
+
+
+@pytest.mark.asyncio
+async def test_browser_case_does_not_retry_a_missing_done_event():
+    from eval.browser_runner import BrowserQualityError, _run_case_with_retries
+
+    case = load_corpus().by_id["rag-grounding"]
+    calls = 0
+
+    async def run_attempt(_case, _attempt_number):
+        nonlocal calls
+        calls += 1
+        raise BrowserQualityError(
+            "websocket_done_missing", "WebSocket done event was missing"
+        )
+
+    result = await _run_case_with_retries(case, retry_count=1, run_attempt=run_attempt)
+
+    assert calls == 1
+    assert result["retried"] is False
+    assert result["failure_details"][0]["kind"] == "quality"
+    assert result["failure_details"][0]["code"] == "websocket_done_missing"
+    assert result["failure_details"][0]["retryable"] is False
+
+
+def test_browser_latency_summary_reports_nearest_rank_and_optional_gates():
+    from eval.browser_runner import _latency_summary
+
+    results = [
+        {
+            "latency_ms": case_latency,
+            "failure_details": [],
+            "turns": [
+                {
+                    "latency_ms": turn_latency,
+                    "first_event_ms": first_event,
+                    "first_token_ms": first_token,
+                }
+            ],
+        }
+        for case_latency, turn_latency, first_event, first_token in zip(
+            [100, 200, 300, 400, 1000],
+            [80, 180, 280, 380, 980],
+            [10, 20, 30, 40, 50],
+            [20, 40, 60, 80, 100],
+            strict=True,
+        )
+    ]
+    results.append(
+        {
+            "latency_ms": 9000,
+            "failure_details": [
+                {
+                    "kind": "infrastructure",
+                    "code": "provider_timeout",
+                    "message": "provider timed out",
+                    "blocking": True,
+                    "retryable": True,
+                }
+            ],
+            "turns": [{"latency_ms": 9000, "first_event_ms": 9000}],
+        }
+    )
+
+    report_only = _latency_summary(results)
+    blocking = _latency_summary(
+        results,
+        p50_threshold_ms=250,
+        p95_threshold_ms=900,
+        baseline_run_count=5,
+    )
+
+    assert report_only["metrics"] == {
+        "case_end_to_end": {"sample_count": 5, "p50_ms": 300, "p95_ms": 1000},
+        "turn_end_to_end": {"sample_count": 5, "p50_ms": 280, "p95_ms": 980},
+        "first_event": {"sample_count": 5, "p50_ms": 30, "p95_ms": 50},
+        "first_token": {"sample_count": 5, "p50_ms": 60, "p95_ms": 100},
+    }
+    assert report_only["excluded_infrastructure_case_count"] == 1
+    assert report_only["baseline_min_runs"] == 5
+    assert report_only["baseline_run_count"] == 1
+    assert report_only["baseline_ready"] is False
+    assert report_only["mode"] == "report-only"
+    assert report_only["passed"] is True
+    assert blocking["mode"] == "blocking"
+    assert blocking["passed"] is False
+    assert len(blocking["violations"]) == 2
 
 
 def test_diagnostic_browser_suite_accepts_only_bounded_corpus_case_selection():
@@ -53,7 +592,9 @@ def test_browser_capture_checkpoint_preserves_completed_results(monkeypatch):
 
     monkeypatch.setattr("eval.browser_runner.corpus_sha256", lambda: "corpus-sha")
     report = _browser_report(
-        args=Namespace(suite="pr", target="http://frontend", backend_target="https://backend"),
+        args=Namespace(
+            suite="pr", target="http://frontend", backend_target="https://backend"
+        ),
         corpus=SimpleNamespace(corpus_version="v1", release_identity="release-v1"),
         started_at=datetime(2026, 7, 22, tzinfo=UTC),
         started=0.0,
@@ -64,6 +605,95 @@ def test_browser_capture_checkpoint_preserves_completed_results(monkeypatch):
     assert report["status"] == "partial"
     assert report["results"] == [{"id": "completed-case", "passed": False}]
     assert report["corpus_sha256"] == "corpus-sha"
+
+
+@pytest.mark.asyncio
+async def test_browser_timeout_finalization_keeps_partial_results_and_telemetry(
+    tmp_path, monkeypatch
+):
+    from argparse import Namespace
+    from datetime import UTC, datetime
+
+    from eval.browser_runner import _finalize_timed_out_browser, _write_json_atomic
+
+    output = tmp_path / "browser-results.json"
+    checkpoint = {
+        "format_version": 1,
+        "kind": "browser_capture",
+        "suite": "diagnostic",
+        "corpus_version": "v1",
+        "corpus_sha256": corpus_sha256(),
+        "release_identity": "release",
+        "target": "http://frontend",
+        "backend_target": "https://backend",
+        "started_at": datetime(2026, 8, 2, tzinfo=UTC).isoformat(),
+        "duration_ms": 11_000,
+        "status": "partial",
+        "results": [
+            {
+                "id": "rag-grounding",
+                "execution_state": "completed",
+                "deterministic_failures": [],
+                "failure_details": [],
+                "answer": "grounded answer",
+                "turns": [],
+                "events": [],
+                "thread_id": "thread-1",
+                "thread_ids": ["thread-1"],
+                "screenshot": None,
+                "latency_ms": 1_000,
+                "passed": True,
+            }
+        ],
+    }
+    _write_json_atomic(output, checkpoint)
+    args = Namespace(
+        suite="diagnostic",
+        case=["rag-grounding", "memory"],
+        output=str(output),
+        target="http://frontend",
+        backend_target="https://backend",
+        email="eval@example.com",
+        internal_password="secret",
+    )
+
+    async def fake_internal_session(*_args):
+        return {"access_token": "token"}
+
+    def fake_request(_method, url, _payload, _token):
+        if "eval-telemetry" in url:
+            assert "thread_id=thread-1" in url
+            return {"calls": [{"thread_id": "thread-1", "model": "claude-opus-5"}]}
+        if url.endswith("/overview"):
+            return {"kpis": {}, "providers": {}}
+        raise AssertionError(url)
+
+    monkeypatch.setattr("eval.browser_runner._internal_session", fake_internal_session)
+    monkeypatch.setattr("eval.browser_runner._blocking_json_request", fake_request)
+    monkeypatch.setattr(
+        "eval.browser_runner.browser_suite_timeout_seconds", lambda _cases: 12
+    )
+
+    report = await _finalize_timed_out_browser(args)
+
+    assert report["status"] == "timed_out"
+    assert report["failure"]["code"] == "browser_suite_timeout"
+    assert [result["id"] for result in report["results"]] == [
+        "rag-grounding",
+        "memory",
+    ]
+    assert report["results"][0]["passed"] is True
+    assert report["results"][1]["execution_state"] == "not_started"
+    assert report["results"][1]["failure_details"][0]["code"] == (
+        "browser_suite_timeout"
+    )
+    assert report["application_telemetry"][0]["thread_id"] == "thread-1"
+    assert report["dashboard_smoke"]["passed"] is True
+    assert report["finalization_failures"] == []
+    assert json.loads(output.read_text(encoding="utf-8"))["status"] == "timed_out"
+    assert 'tests="2" failures="1"' in (
+        tmp_path / "browser-junit.xml"
+    ).read_text(encoding="utf-8")
 
 
 def test_current_research_cases_require_verifiable_web_sources():
@@ -85,7 +715,11 @@ def test_web_research_does_not_accept_a_book_citation_as_current_evidence():
             "type": "worker_status",
             "worker": worker,
             "status": "ready",
-            **({"sources": ["https://example.com/report"]} if worker == "research" else {}),
+            **(
+                {"sources": ["https://example.com/report"]}
+                if worker == "research"
+                else {}
+            ),
         }
         for worker in case.deterministic.workers_include
     ] + [
@@ -95,27 +729,44 @@ def test_web_research_does_not_accept_a_book_citation_as_current_evidence():
 
     book_only = _deterministic_failures(
         case,
-        [*base_events, {"type": "response_delta", "content": "Supported (Chapter 3, p.42)."}],
+        [
+            *base_events,
+            {"type": "response_delta", "content": "Supported (Chapter 3, p.42)."},
+        ],
         rendered_nodes=1,
     )
     web_cited = _deterministic_failures(
         case,
-        [*base_events, {"type": "response_delta", "content": "Supported https://example.com/report"}],
+        [
+            *base_events,
+            {
+                "type": "response_delta",
+                "content": "Supported https://example.com/report",
+            },
+        ],
         rendered_nodes=1,
     )
     fabricated = _deterministic_failures(
         case,
-        [*base_events, {"type": "response_delta", "content": "Supported https://made-up.invalid"}],
+        [
+            *base_events,
+            {"type": "response_delta", "content": "Supported https://made-up.invalid"},
+        ],
         rendered_nodes=1,
     )
 
     assert "required web citation did not match supplied research evidence" in book_only
-    assert "required web citation did not match supplied research evidence" in fabricated
+    assert (
+        "required web citation did not match supplied research evidence" in fabricated
+    )
     assert not any("citation" in failure for failure in web_cited)
 
 
 def test_web_research_provider_failure_is_classified_as_infrastructure():
-    from eval.browser_runner import _deterministic_failures
+    from eval.browser_runner import (
+        _deterministic_failure_details,
+        _deterministic_failures,
+    )
 
     case = load_corpus().by_id["research"]
     events = [
@@ -127,13 +778,21 @@ def test_web_research_provider_failure_is_classified_as_infrastructure():
         for worker in case.deterministic.workers_include
     ] + [
         {"type": "graph_data", "data": {"nodes": [{"id": "agent"}], "edges": []}},
-        {"type": "response_delta", "content": "Book-grounded answer (Chapter 3, p.42)."},
+        {
+            "type": "response_delta",
+            "content": "Book-grounded answer (Chapter 3, p.42).",
+        },
         {"type": "done"},
     ]
 
     failures = _deterministic_failures(case, events, rendered_nodes=1)
+    details = _deterministic_failure_details(case, events, rendered_nodes=1)
 
     assert "research infrastructure unavailable: no citable web sources" in failures
+    research_failure = next(
+        detail for detail in details if detail["code"] == "research_unavailable"
+    )
+    assert research_failure["kind"] == "infrastructure"
 
 
 def test_book_citations_must_match_retrieval_provenance():
@@ -149,7 +808,11 @@ def test_book_citations_must_match_retrieval_provenance():
         "query": "Why should eval data grow?",
         "chunks": [
             {"chapter": 4, "page_number": 224, "text": "rubrics are refined"},
-            {"chapter": 8, "page_number": 404, "text": "evaluation examples can seed data"},
+            {
+                "chapter": 8,
+                "page_number": 404,
+                "text": "evaluation examples can seed data",
+            },
         ],
     }
     answer = {
@@ -157,15 +820,23 @@ def test_book_citations_must_match_retrieval_provenance():
         "content": "Rubrics evolve (Chapter 4, p.224), and examples seed data (Chapter 8, p.404).",
     }
 
-    matching = _deterministic_failures(case, [*base_events, evidence, answer], rendered_nodes=0)
+    matching = _deterministic_failures(
+        case, [*base_events, evidence, answer], rendered_nodes=0
+    )
     missing = _deterministic_failures(case, [*base_events, answer], rendered_nodes=0)
     unsupported = _deterministic_failures(
         case,
-        [*base_events, evidence, {**answer, "content": "Unsupported (Chapter 9, p.999)."}],
+        [
+            *base_events,
+            evidence,
+            {**answer, "content": "Unsupported (Chapter 9, p.999)."},
+        ],
         rendered_nodes=0,
     )
 
-    assert not any("citation" in failure or "provenance" in failure for failure in matching)
+    assert not any(
+        "citation" in failure or "provenance" in failure for failure in matching
+    )
     assert "book retrieval completed without source provenance telemetry" in missing
     assert "book citation did not match supplied retrieval evidence" in unsupported
 
@@ -174,24 +845,61 @@ def test_browser_review_includes_retrieved_evidence_for_human_review(tmp_path):
     from eval.browser_runner import _write_html
 
     output = tmp_path / "review.html"
-    _write_html(output, {
-        "corpus_version": "test-v1",
-        "results": [{
-            "id": "citations",
-            "passed": True,
-            "answer": "Grounded answer (Chapter 8, p.404).",
-            "deterministic_failures": [],
-            "screenshot": "screenshots/citations.png",
-            "events": [{
-                "type": "retrieval_evidence",
-                "chunks": [{"chapter": 8, "page_number": 404, "text": "source passage"}],
-            }],
-        }],
-    })
+    _write_html(
+        output,
+        {
+            "corpus_version": "test-v1",
+            "results": [
+                {
+                    "id": "citations",
+                    "passed": True,
+                    "answer": "Grounded answer (Chapter 8, p.404).",
+                    "deterministic_failures": [],
+                    "screenshot": "screenshots/citations.png",
+                    "events": [
+                        {
+                            "type": "retrieval_evidence",
+                            "chunks": [
+                                {
+                                    "chapter": 8,
+                                    "page_number": 404,
+                                    "text": "source passage",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+    )
 
     review = output.read_text(encoding="utf-8")
     assert "Retrieved evidence" in review
     assert "source passage" in review
+
+
+def test_browser_review_handles_an_attempt_without_a_screenshot(tmp_path):
+    from eval.browser_runner import _write_html
+
+    output = tmp_path / "review.html"
+    _write_html(
+        output,
+        {
+            "corpus_version": "test-v1",
+            "results": [
+                {
+                    "id": "rag-grounding",
+                    "passed": False,
+                    "answer": "",
+                    "deterministic_failures": ["browser failed before capture"],
+                    "screenshot": None,
+                    "events": [],
+                }
+            ],
+        },
+    )
+
+    assert "No screenshot was captured" in output.read_text(encoding="utf-8")
 
 
 def test_unapproved_corpus_cannot_enable_the_blocking_judge(tmp_path):
@@ -226,6 +934,10 @@ def test_approved_hash_is_content_addressed(tmp_path):
             "reviewed_at": "2026-07-18T12:00:00Z",
             "calibration": {
                 "judge_release": "semantic-rubric-judge-v1",
+                "judge_model": "claude-opus-5",
+                "evidence_run_id": "123456789",
+                "evidence_commit_sha": "a" * 40,
+                "evidence_sha256": "b" * 64,
                 "agreement": 0.9,
                 "critical_false_passes": 1,
                 "evaluated_at": "2026-07-18T12:00:00Z",
@@ -239,18 +951,34 @@ def test_approved_hash_is_content_addressed(tmp_path):
                 "reviewer": "reviewer",
                 "reviewed_at": "2026-07-18T12:00:00Z",
                 "review_run_id": "github-run-123",
-                "reviewed_grades": {dimension: "pass" for dimension in case["rubric_dimensions"]},
+                "reviewed_grades": {
+                    dimension: "pass" for dimension in case["rubric_dimensions"]
+                },
             }
         )
     path = tmp_path / "cases.json"
     path.write_text(json.dumps(raw), encoding="utf-8")
-    raw["approval"]["approved_manifest_sha256"] = corpus_sha256(path)
+    raw["approval"]["approved_manifest_sha256"] = approval_manifest_sha256(path)
     path.write_text(json.dumps(raw), encoding="utf-8")
 
     assert load_corpus(require_approved=True, path=path).approval.status == "approved"
 
     raw["cases"][0]["steps"][0]["prompt"] += " changed"
     path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="hash does not match"):
+        load_corpus(require_approved=True, path=path)
+
+
+def test_approval_changes_do_not_change_behavior_identity_but_invalidate_approval(tmp_path):
+    raw = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
+    path = tmp_path / "cases.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    behavior_sha = corpus_sha256(path)
+
+    raw["approval"]["calibration"]["evidence_sha256"] = "f" * 64
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    assert corpus_sha256(path) == behavior_sha
     with pytest.raises(RuntimeError, match="hash does not match"):
         load_corpus(require_approved=True, path=path)
 
@@ -273,6 +1001,10 @@ def test_approved_corpus_rejects_uncalibrated_judge(
             "reviewed_at": "2026-07-18T12:00:00Z",
             "calibration": {
                 "judge_release": "semantic-rubric-judge-v1",
+                "judge_model": "claude-opus-5",
+                "evidence_run_id": "123456789",
+                "evidence_commit_sha": "a" * 40,
+                "evidence_sha256": "b" * 64,
                 "agreement": agreement,
                 "critical_false_passes": critical_false_passes,
                 "evaluated_at": "2026-07-18T12:00:00Z",
@@ -286,7 +1018,9 @@ def test_approved_corpus_rejects_uncalibrated_judge(
                 "reviewer": "reviewer",
                 "reviewed_at": "2026-07-18T12:00:00Z",
                 "review_run_id": "github-run-123",
-                "reviewed_grades": {dimension: "pass" for dimension in case["rubric_dimensions"]},
+                "reviewed_grades": {
+                    dimension: "pass" for dimension in case["rubric_dimensions"]
+                },
             }
         )
     path = tmp_path / "cases.json"
