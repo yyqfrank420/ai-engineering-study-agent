@@ -180,10 +180,26 @@ jobs:
                       pending.extend(value)
               return None
 
-          comparison = api_json(
-              f"repos/{repository}/compare/{applied_commit}...{current_commit}"
-          )
-          changed_files = {item["filename"] for item in comparison.get("files", [])}
+          def tree_files(commit_sha):
+              commit = api_json(f"repos/{repository}/git/commits/{commit_sha}")
+              tree = api_json(
+                  f"repos/{repository}/git/trees/{commit['tree']['sha']}?recursive=1"
+              )
+              if tree.get("truncated"):
+                  raise SystemExit(f"Recursive Git tree was truncated for {commit_sha}")
+              return {
+                  item["path"]: (item["mode"], item["type"], item["sha"])
+                  for item in tree.get("tree", [])
+                  if item.get("type") == "blob"
+              }
+
+          applied_files = tree_files(applied_commit)
+          current_files = tree_files(current_commit)
+          changed_files = {
+              path
+              for path in applied_files.keys() | current_files.keys()
+              if applied_files.get(path) != current_files.get(path)
+          }
           if not changed_files <= allowed_post_evidence_changes:
               unexpected = sorted(changed_files - allowed_post_evidence_changes)
               raise SystemExit(f"Runtime-affecting files changed after applied-domain evidence: {unexpected}")
