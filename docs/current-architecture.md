@@ -1,6 +1,6 @@
 # Current Architecture
 
-Last updated: 2026-07-21
+Last updated: 2026-08-07
 
 This is the current runtime contract for the production-quality demo.
 
@@ -40,15 +40,15 @@ This is the current runtime contract for the production-quality demo.
    version-checked screenshot and layout report over idempotent WebSocket chunks.
 7. The critic judges architecture correctness plus novice clarity, logical flow, succinctness,
    readability, and MECE-ish coverage from the actual render. A semantic rejection can receive one
-   typed Opus 5 low-effort patch, with at most two workflow revisions. A malformed patch gets one
-   medium-effort retry; both attempts
-   change only named nodes, edges, or bounded graph collections;
-   unchanged topology is preserved and the complete result passes deterministic validation again.
-   Node and edge budgets are explicit in both generation lanes; over-budget topology and semantic
-   no-op patches fail visibly instead of being silently truncated by output order.
-   A second failure suppresses the diagram. Geometry-only failures are terminal because layout
-   belongs to the deterministic renderer, so they never spend another model call on a topology rewrite.
-8. The accepted graph remains private while one Opus 5 high-effort call completes its explanation cards. The
+   full Kimi K3 max-effort redraw. The rejected unpublished candidate has no identity-retention
+   requirement, and Kimi receives every Sonnet blocker. A second failure suppresses the diagram.
+   Previously published graphs use typed incremental patches for user refinements and preserve at
+   least 60% of their node IDs. The model chooses graph size, groups, and runtime sequence from the
+   design. Node and edge safety ceilings protect persistence and rendering, stay out of the prompt,
+   and reject malformed output without deleting authored responsibilities or paths. Browser capture
+   or geometry failure stops publication before semantic QA. Sonnet receives every successful private
+   render, so visual hierarchy and architecture semantics share one publication decision.
+8. The accepted graph remains private while one Opus 5 low-effort call completes its explanation cards. The
    server then emits `graph_data` followed by the buffered cards, so an unfinished walkthrough never
    reveals a new diagram. Pause can still hold card reveal in the browser without another model call.
 9. The transport persists the completed turn before emitting `done`.
@@ -72,13 +72,12 @@ capture use shared transactional storage. Rate-limit identifiers are HMAC-derive
 persistence, so Cloud Run scale-out neither resets the limits nor stores raw emails/IPs in the
 limiter table.
 
-The normal applied-design path uses Opus 5 with role-specific effort: high for Architect and
-Challenger, low for constrained graph integration, medium for the first independent
-architecture/render review, and high for the explanation stream. Each failed semantic quality pass
-can add a low-effort compact patch and one low-effort bounded re-review, up to two revisions. A malformed patch or
-structurally invalid first draft may use its medium-effort repair role once;
-renderer-only failures add no model calls. Retrieval and the standing checklist do not add model calls.
-Ordinary user-requested refinements to an existing graph remain medium effort.
+The applied-design path gives each role one explicit owner. Opus 5 xhigh writes the primary
+architecture brief. A second Opus 5 xhigh pass reconstructs the design from the request and evidence,
+then audits the primary plan. Kimi K3 max creates graph topology, fully redraws one rejected unpublished
+candidate, and applies typed patches to published user refinements. Sonnet 5
+high reviews every graph candidate and revision. Opus 5 low writes the explanation stream. Renderer-only
+failures add no model calls. Retrieval and the standing checklist do not add model calls.
 
 During steps 4-7 the client may send `steer`. The server cancels the active workflow, emits
 `response_reset`, and restarts with the steering correction folded into the same turn. `stop`
@@ -111,7 +110,7 @@ The distinction is orchestration versus concurrency, not framework versus no fra
 - applied designer: `backend/agent/nodes/graph_worker.py`
 - independent reviewer: `backend/agent/nodes/graph_critic.py`
 - stable review frame: `backend/agent/architecture_playbook.py`
-- parallel design roles: `backend/agent/nodes/architecture_workers.py`
+- sequential architecture and review roles: `backend/agent/nodes/architecture_workers.py`
 - browser evaluation channel: `backend/api/diagram_evaluation_channel.py`
 - progressive explanation stream: `backend/agent/explanation_blocks.py`
 - frontend transport: `frontend/src/services/agentTransport.ts`

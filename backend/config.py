@@ -24,19 +24,22 @@ class Settings(BaseSettings):
 
     # ── LLM ───────────────────────────────────────────────────────────────────
     anthropic_api_key: str = ""
+    moonshot_api_key: str = ""
+    moonshot_base_url: str = "https://api.moonshot.ai/v1"
 
-    # Opus 5 is the single runtime model; each role selects its measured effort.
+    # General conversation roles retain their independent fallback policy.
     orchestrator_model: str = "claude-opus-5"
     worker_model: str = "claude-opus-5"
-    # Retained as an independently configurable repair role.
-    graph_repair_model: str = "claude-sonnet-5"
+    # Applied-design roles are explicit so quality and cost changes cannot drift
+    # behind a shared model setting.
+    architecture_model: str = "claude-opus-5"
+    graph_builder_model: str = "kimi-k3"
+    graph_qa_model: str = "claude-sonnet-5"
     # Extended thinking budget per agent call (tokens)
     # Extended reasoning budgets used by prototype and production design paths.
     # max_tokens must leave room for both hidden reasoning and the final answer.
     thinking_budget_tokens: int = 6000
     production_thinking_budget_tokens: int = 9000
-    graph_critic_thinking_budget_tokens: int = 2000
-    graph_revision_critic_thinking_budget_tokens: int = 1200
 
     # ── OpenAI fallback ───────────────────────────────────────────────────────
     # Used when Anthropic fails after llm_max_retries attempts.
@@ -49,22 +52,28 @@ class Settings(BaseSettings):
     # Initial provider attempt plus one bounded retry before fallback/failure.
     llm_max_retries: int = 2
     llm_retry_delay_s: float = 1.0
+    # CI and protected evaluation revisions opt in. Production app traffic does
+    # not pay cache-write premiums for low-reuse prompts.
+    anthropic_prompt_cache_enabled: bool = False
     # Bound concurrent Anthropic streams within each application process.
     anthropic_max_concurrent_streams: int = 4
-    # Cap per LLM call — prevents runaway generation eating tokens
-    llm_max_tokens: int = 12000
+    # Ordinary calls use the bounded default. Reasoning-heavy roles may request
+    # more room up to the hard cap without changing their visible output contract.
+    llm_default_max_tokens: int = 12000
+    llm_max_tokens: int = 131072
+    architecture_max_completion_tokens: int = 64000
+    graph_builder_max_completion_tokens: int = 65536
+    graph_qa_max_completion_tokens: int = 16384
     # Hard timeout on the whole agent run (seconds); yields a timeout error event
     agent_timeout_s: int = 360
     # Graph work must leave fixed synthesis, persistence, and transport headroom.
     agent_terminal_headroom_s: float = 30.0
     graph_design_timeout_s: float = 90.0
-    graph_design_max_output_tokens: int = 7000
+    architecture_pass_timeout_s: float = 60.0
+    architecture_review_timeout_s: float = 60.0
     graph_critic_initial_timeout_s: float = 45.0
     graph_critic_revision_timeout_s: float = 35.0
-    graph_critic_initial_max_output_tokens: int = 4500
-    graph_critic_revision_max_output_tokens: int = 3500
     graph_patch_timeout_s: float = 90.0
-    graph_patch_max_output_tokens: int = 7500
     graph_synthesis_timeout_s: float = 55.0
     graph_finalization_reserve_s: float = 8.0
     # A browser renders candidate graphs off-screen and returns a bounded image
@@ -212,7 +221,13 @@ class Settings(BaseSettings):
 
     # ── RAG ───────────────────────────────────────────────────────────────────
     rag_top_k: int = 5          # child chunks retrieved from FAISS
-    max_graph_nodes: int = 13   # bounded production map; deeper detail belongs in node drill-downs
+    # Malformed-output guards for rendering and persistence. These values never
+    # appear in design prompts and do not define a preferred diagram size.
+    graph_safety_max_nodes: int = 60
+    graph_safety_max_edges: int = 180
+    # Concept-map enrichment makes one paid call per selected node. Keep its
+    # spend boundary independent from applied-architecture topology capacity.
+    max_node_detail_nodes: int = 13
     search_tool_decision_timeout_s: float = 3.0
     # Backpressure for the temporary HTTP/SSE compatibility transport.
     max_sse_queue_events: int = 256
@@ -293,6 +308,8 @@ class Settings(BaseSettings):
             "SUPABASE_JWT_AUDIENCE": self.effective_supabase_jwt_audience,
             "TURNSTILE_SECRET_KEY": self.turnstile_secret_key,
         }
+        if self.graph_builder_model.startswith("kimi-"):
+            required_strings["MOONSHOT_API_KEY"] = self.moonshot_api_key
         missing = sorted(name for name, value in required_strings.items() if not value.strip())
         if missing:
             raise RuntimeError(f"Cloud Run configuration is incomplete: {', '.join(missing)}")
@@ -307,28 +324,26 @@ class Settings(BaseSettings):
         positive_limits = {
             "AGENT_TIMEOUT_S": self.agent_timeout_s,
             "AGENT_TERMINAL_HEADROOM_S": self.agent_terminal_headroom_s,
+            "ARCHITECTURE_PASS_TIMEOUT_S": self.architecture_pass_timeout_s,
+            "ARCHITECTURE_REVIEW_TIMEOUT_S": self.architecture_review_timeout_s,
+            "ARCHITECTURE_MAX_COMPLETION_TOKENS": (
+                self.architecture_max_completion_tokens
+            ),
             "GRAPH_DESIGN_TIMEOUT_S": self.graph_design_timeout_s,
-            "GRAPH_DESIGN_MAX_OUTPUT_TOKENS": self.graph_design_max_output_tokens,
+            "GRAPH_BUILDER_MAX_COMPLETION_TOKENS": (
+                self.graph_builder_max_completion_tokens
+            ),
             "GRAPH_CRITIC_INITIAL_TIMEOUT_S": self.graph_critic_initial_timeout_s,
             "GRAPH_CRITIC_REVISION_TIMEOUT_S": self.graph_critic_revision_timeout_s,
-            "GRAPH_CRITIC_INITIAL_MAX_OUTPUT_TOKENS": (
-                self.graph_critic_initial_max_output_tokens
-            ),
-            "GRAPH_CRITIC_REVISION_MAX_OUTPUT_TOKENS": (
-                self.graph_critic_revision_max_output_tokens
-            ),
+            "GRAPH_QA_MAX_COMPLETION_TOKENS": self.graph_qa_max_completion_tokens,
             "GRAPH_PATCH_TIMEOUT_S": self.graph_patch_timeout_s,
-            "GRAPH_PATCH_MAX_OUTPUT_TOKENS": self.graph_patch_max_output_tokens,
             "GRAPH_SYNTHESIS_TIMEOUT_S": self.graph_synthesis_timeout_s,
             "GRAPH_FINALIZATION_RESERVE_S": self.graph_finalization_reserve_s,
             "LLM_MAX_RETRIES": self.llm_max_retries,
+            "LLM_DEFAULT_MAX_TOKENS": self.llm_default_max_tokens,
             "LLM_MAX_TOKENS": self.llm_max_tokens,
             "THINKING_BUDGET_TOKENS": self.thinking_budget_tokens,
             "PRODUCTION_THINKING_BUDGET_TOKENS": self.production_thinking_budget_tokens,
-            "GRAPH_CRITIC_THINKING_BUDGET_TOKENS": self.graph_critic_thinking_budget_tokens,
-            "GRAPH_REVISION_CRITIC_THINKING_BUDGET_TOKENS": (
-                self.graph_revision_critic_thinking_budget_tokens
-            ),
             "DIAGRAM_EVALUATION_TIMEOUT_S": self.diagram_evaluation_timeout_s,
             "MAX_DIAGRAM_SCREENSHOT_BYTES": self.max_diagram_screenshot_bytes,
             "MAX_REQUEST_BODY_BYTES": self.max_request_body_bytes,
@@ -364,6 +379,23 @@ class Settings(BaseSettings):
         if self.llm_max_tokens <= self.production_thinking_budget_tokens:
             raise RuntimeError(
                 "LLM_MAX_TOKENS must be greater than PRODUCTION_THINKING_BUDGET_TOKENS."
+            )
+        role_token_limits = {
+            "ARCHITECTURE_MAX_COMPLETION_TOKENS": (
+                self.architecture_max_completion_tokens
+            ),
+            "GRAPH_BUILDER_MAX_COMPLETION_TOKENS": (
+                self.graph_builder_max_completion_tokens
+            ),
+            "GRAPH_QA_MAX_COMPLETION_TOKENS": self.graph_qa_max_completion_tokens,
+        }
+        above_hard_cap = sorted(
+            name for name, value in role_token_limits.items() if value > self.llm_max_tokens
+        )
+        if above_hard_cap:
+            raise RuntimeError(
+                "Role completion limits exceed LLM_MAX_TOKENS: "
+                + ", ".join(above_hard_cap)
             )
 
 

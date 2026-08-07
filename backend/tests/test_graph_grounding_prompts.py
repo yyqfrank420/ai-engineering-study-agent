@@ -8,39 +8,23 @@ def test_applied_graph_prompts_preserve_gates_across_cached_or_replayed_work():
     from agent.nodes.graph_worker import (
         _APPLIED_GRAPH_PATCH_PROMPT_VERSION,
         _APPLIED_GRAPH_PATCH_SYSTEM,
-        _APPLIED_GRAPH_PROMPT_VERSION,
-        _APPLIED_GRAPH_SYSTEM,
+        _APPLIED_GRAPH_TOPOLOGY_SYSTEM,
+        _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION,
     )
 
-    assert _APPLIED_GRAPH_PROMPT_VERSION == "applied_architecture_v17"
-    assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v24"
-    assert "Stateful shortcuts, caches, replay paths, and retries" in _APPLIED_GRAPH_SYSTEM
-    assert "accepted post-gate artifacts" in _APPLIED_GRAPH_SYSTEM
+    assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v26"
+    assert _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION == "applied_topology_v8"
+    assert "Choose graph size from the material design" in _APPLIED_GRAPH_TOPOLOGY_SYSTEM
+    assert "presentation metadata" in _APPLIED_GRAPH_TOPOLOGY_SYSTEM
     assert "cache, replay, shortcut, or retry bypass" in _APPLIED_GRAPH_PATCH_SYSTEM
-    assert "directed paths, not words" in _APPLIED_GRAPH_SYSTEM
-    assert "same idempotency key before retrying" in _APPLIED_GRAPH_SYSTEM
-    assert "Rejection stops before execution" in _APPLIED_GRAPH_SYSTEM
-    assert "untrusted after sanitization" in _APPLIED_GRAPH_SYSTEM
-    assert "versioned evidence -> offline evaluation" in _APPLIED_GRAPH_SYSTEM
     assert "Guarantees must remain enforced by directed topology" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "return the complete groups replacement" in _APPLIED_GRAPH_PATCH_SYSTEM
-    assert "durably reserve" in _APPLIED_GRAPH_SYSTEM
-    assert "COMMITTED, NOT_FOUND, and STILL_UNKNOWN" in _APPLIED_GRAPH_SYSTEM
-    assert "all retrieved bytes as untrusted" in _APPLIED_GRAPH_SYSTEM
-    assert "complete retriever/embedding/reranker/model/prompt release identity" in _APPLIED_GRAPH_SYSTEM
-    assert "Edges express possible transitions, not narrative order" in _APPLIED_GRAPH_SYSTEM
     assert "cache lookup separate from" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "re-audit the complete candidate" in _APPLIED_GRAPH_PATCH_SYSTEM
-    assert "sole source of executable work" in _APPLIED_GRAPH_SYSTEM
     assert "remove every direct" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "repeated failures of" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "Repair every named selector" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "immutable repair-only edge_id" in _APPLIED_GRAPH_PATCH_SYSTEM
-    assert "finite read-only or advisory request" in _APPLIED_GRAPH_SYSTEM
-    assert "bounded backpressure and overload" in _APPLIED_GRAPH_SYSTEM
-    assert "partition/order or event-time semantics" in _APPLIED_GRAPH_SYSTEM
-    assert "replay/checkpoint and deduplication ownership" in _APPLIED_GRAPH_SYSTEM
-    assert "compatible schema evolution" in _APPLIED_GRAPH_SYSTEM
 
 
 def test_applied_graph_text_limits_preserve_sentence_or_word_boundaries():
@@ -80,43 +64,6 @@ def test_applied_graph_rejects_malformed_or_unverifiable_edges(edge):
 
     with pytest.raises(ValueError):
         _normalise_edges([edge], {"known": "known"}, max_edges=4)
-
-
-def test_existing_graph_context_keeps_the_complete_bounded_topology():
-    from agent.nodes.graph_worker import _format_existing_graph
-
-    graph = {
-        "graph_type": "architecture",
-        "title": "Complete topology",
-        "nodes": [
-            {
-                "id": f"node_{index}",
-                "label": f"Node {index}",
-                "type": "service",
-                "technology": "bounded capability",
-                "description": "Owns one bounded responsibility.",
-            }
-            for index in range(13)
-        ],
-        "edges": [
-            {
-                "source": f"node_{index % 13}",
-                "target": f"node_{(index + 1) % 13}",
-                "label": f"moves artifact {index}",
-                "technology": "typed payload",
-                "sync": "sync",
-                "flow": "runtime",
-                "description": "Preserves the complete directed topology.",
-            }
-            for index in range(26)
-        ],
-    }
-
-    formatted = json.loads(_format_existing_graph(graph))
-
-    assert len(formatted["nodes"]) == 13
-    assert len(formatted["edges"]) == 26
-    assert formatted["edges"][-1]["label"] == "moves artifact 25"
 
 
 @pytest.mark.asyncio
@@ -190,7 +137,7 @@ async def test_explicit_runtime_flow_uses_applied_architecture_not_concept_map(m
     def fail_canonical_load():
         raise AssertionError("explicit runtime flow must not use the concept-map selector")
 
-    monkeypatch.setattr(graph_worker, "_generate_bounded_applied_architecture", fake_generate)
+    monkeypatch.setattr(graph_worker, "_generate_applied_architecture", fake_generate)
     monkeypatch.setattr(graph_worker, "load_canonical_graph_cached", fail_canonical_load)
 
     async def send(_event):
@@ -299,41 +246,53 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
     }
     captured = {}
 
-    selected_nodes = payload["nodes"][:9]
+    group_by_node = {
+        node_id: (group["label"], group.get("kind", "runtime"))
+        for group in payload["groups"]
+        for node_id in group["nodeIds"]
+    }
+    sequence_by_node = {
+        node_id: step["step"]
+        for step in payload["sequence"]
+        for node_id in step["nodes"]
+    }
     topology = {
         "title": payload["title"],
-        "nodes": {
-            f"n{index}": {
+        "nodes": [
+            {
                 "label": node["label"],
                 "type": node["type"],
                 "tier": "public" if node["type"] == "client" else "private",
                 "lane": "bottom" if node["type"] in {"control", "decision"} else "main",
                 "responsibility": node["description"][:80],
-                "parent": "ROOT" if index == 1 else "n1",
-                "parent_label": "starts campaign design" if index == 1 else f"routes validated work to {node['label']}",
+                "group": group_by_node[node["id"]][0],
+                "group_kind": group_by_node[node["id"]][1],
+                "parent_index": -1 if index == 0 else index - 1,
+                "parent_label": "" if index == 0 else f"routes validated work to {node['label']}",
                 "parent_flow": "runtime",
                 "parent_sync": "sync",
+                "sequence_step": sequence_by_node.get(node["id"], 0),
             }
-            for index, node in enumerate(selected_nodes, start=1)
-        },
+            for index, node in enumerate(payload["nodes"])
+        ],
         "cross_links": [
             {
-                "source": "n9",
-                "target": "n2",
+                "source_index": 9,
+                "target_index": 4,
                 "label": "Measured outcome feedback",
                 "flow": "feedback",
                 "sync": "async",
             },
             {
-                "source": "n8",
-                "target": "n9",
-                "label": "Approval route",
-                "flow": "control",
-                "sync": "sync",
+                "source_index": 10,
+                "target_index": 4,
+                "label": "Promotes evaluated strategy version",
+                "flow": "deployment",
+                "sync": "async",
             },
             {
-                "source": "n8",
-                "target": "n6",
+                "source_index": 7,
+                "target_index": 5,
                 "label": "Reject campaign revision",
                 "flow": "control",
                 "sync": "sync",
@@ -374,6 +333,8 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
             "challenger_review": {
                 "risks": [{"area": "safety", "risk": "Unapproved campaign writes"}],
             },
+            "architecture_ready": True,
+            "approved_graph_data": None,
         },
         tools=[],
     )
@@ -382,27 +343,36 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
     assert graph is not None
     assert graph["graph_type"] == "architecture"
     labels = {node["label"] for node in graph["nodes"]}
-    assert {"Objective Config", "Creative Studio", "Audience Optimizer", "Policy Approval Gate"} <= labels
+    assert {
+        "Objective Config",
+        "Creative Studio",
+        "Audience Optimizer",
+        "Policy Approval Gate",
+        "Outcome Attribution",
+        "Strategy Release Registry",
+    } <= labels
     assert not ({"Agent", "Tool Use", "Planning", "Evaluation", "Foundation Model"} & labels)
     assert graph["design_origin"] == "applied"
     assert graph["resolved_complexity"] == "production"
     assert graph["assumptions"] == []
-    assert len(graph["groups"]) == 3
-    assert {edge["flow"] for edge in graph["edges"]} == {"runtime", "feedback", "control"}
+    assert len(graph["groups"]) == 4
+    assert {edge["flow"] for edge in graph["edges"]} == {
+        "runtime", "feedback", "control", "deployment",
+    }
     # Low initial integration effort avoids the routinely duplicated
     # structural repair call while the critic remains an independent gate.
-    assert captured["effort"] == "low"
-    assert captured["response_schema"]["properties"]["nodes"]["type"] == "object"
-    assert captured["response_schema"]["properties"]["cross_links"] == {
-        "type": "array",
-        "items": {"$ref": "#/$defs/cross_link_record"},
-    }
-    assert "conforms exactly to the provided JSON schema" in captured["system"]
+    assert captured["effort"] == "max"
+    assert captured["response_schema"]["properties"]["nodes"]["type"] == "array"
+    cross_links = captured["response_schema"]["properties"]["cross_links"]
+    assert cross_links["type"] == "array"
+    assert cross_links["items"]["additionalProperties"] is False
+    assert "$ref" not in json.dumps(captured["response_schema"])
+    assert "schema-constrained object" in captured["system"]
     prompt = captured["messages"][0]["content"]
-    assert '"node_budget"' in prompt
+    assert '"node_budget"' not in prompt
     assert "Cache versioned channel reads" in prompt
     assert "Unapproved campaign writes" in prompt
-    assert '"challenger_blockers"' in prompt
+    assert '"challenger_review"' in prompt
     assert '"diagram_commitments"' in prompt
     assert "Designing a production domain architecture" in events[0]["status"]
 
@@ -445,8 +415,7 @@ def test_applied_graph_validator_rejects_generic_book_taxonomy():
     with pytest.raises(ValueError, match="generic concept labels"):
         _normalise_applied_graph(
             {"title": "Agent Map", "nodes": nodes, "edges": edges},
-            min_nodes=8,
-            max_nodes=13,
+            safety_max_nodes=13,
             resolved_complexity="prototype",
         )
 
@@ -480,8 +449,7 @@ def test_applied_graph_validator_rejects_one_standalone_generic_label():
     with pytest.raises(ValueError, match="generic concept labels"):
         _normalise_applied_graph(
             {"title": "Campaign system", "nodes": nodes, "edges": edges},
-            min_nodes=5,
-            max_nodes=7,
+            safety_max_nodes=7,
             resolved_complexity="prototype",
         )
 
@@ -520,8 +488,7 @@ def test_applied_graph_validator_ignores_scalar_collection_fields():
             "sequence": [{"nodes": "node_1", "description": "invalid scalar nodes"}],
             "groups": [{"label": "Invalid", "nodeIds": "node_1"}],
         },
-        min_nodes=5,
-        max_nodes=9,
+        safety_max_nodes=9,
         resolved_complexity="prototype",
     )
 
@@ -558,8 +525,7 @@ def test_applied_graph_validator_rejects_isolated_concept_islands():
     with pytest.raises(ValueError, match="isolated nodes"):
         _normalise_applied_graph(
             {"title": "Disconnected campaign map", "nodes": nodes, "edges": edges},
-            min_nodes=5,
-            max_nodes=7,
+            safety_max_nodes=7,
             resolved_complexity="prototype",
         )
 
@@ -592,14 +558,13 @@ def test_applied_graph_validator_rejects_book_metadata_subtitles():
     with pytest.raises(ValueError, match="book metadata"):
         _normalise_applied_graph(
             {"title": "Campaign system", "nodes": nodes, "edges": edges},
-            min_nodes=5,
-            max_nodes=7,
+            safety_max_nodes=7,
             resolved_complexity="prototype",
         )
 
 
 @pytest.mark.asyncio
-async def test_max_plus_one_model_graph_compacts_after_one_generation_attempt(monkeypatch):
+async def test_generation_does_not_compact_material_node_to_old_profile_cap(monkeypatch):
     import agent.nodes.graph_worker as graph_worker
 
     def payload(node_count):
@@ -637,7 +602,21 @@ async def test_max_plus_one_model_graph_compacts_after_one_generation_attempt(mo
             "title": "Cold-chain advisory loop",
             "nodes": nodes,
             "edges": edges,
-            "sequence": [],
+            "sequence": [
+                {
+                    "step": 1,
+                    "nodes": [f"node_{index}" for index in range(node_count)],
+                    "description": "Move a validated reading through every responsibility.",
+                }
+            ],
+            "groups": [
+                {
+                    "id": "cold_chain_runtime",
+                    "label": "Cold-chain runtime",
+                    "kind": "runtime",
+                    "nodeIds": [f"node_{index}" for index in range(node_count)],
+                }
+            ],
         }
 
     calls = []
@@ -647,36 +626,16 @@ async def test_max_plus_one_model_graph_compacts_after_one_generation_attempt(mo
         return json.dumps(payload(9))
 
     monkeypatch.setattr(graph_worker, "stream_llm", fake_stream_llm)
-    result = await graph_worker._generate_applied_architecture(
-            {
-                "send": None,
-                "user_message": "Design a production cold-chain advisory system",
-                "history": [],
-                "graph_data": None,
-                "complexity": "production",
-                "research_context": "",
-                "rag_chunks": [],
-                "user_id": "user-1",
-                "session_id": "thread-1",
-            },
-            "Design a production cold-chain advisory system",
-            SimpleNamespace(
-                resolved="production",
-                min_graph_nodes=5,
-                max_graph_nodes=8,
-                answer_contract="Production responsibilities and controls.",
-                thinking_budget=None,
-            ),
-        )
+    result = graph_worker._normalise_applied_graph_candidate(
+        payload(9),
+        safety_max_nodes=graph_worker.settings.graph_safety_max_nodes,
+        resolved_complexity="production",
+        context="unit.no-design-compaction",
+    )
 
-    assert len(result["nodes"]) == 8
-    assert len({node["id"] for node in result["nodes"]}) == 8
-    assert len(calls) == 1
-    assert calls[0]["model"] == graph_worker.settings.graph_repair_model
-    assert calls[0]["timeout_seconds"] == graph_worker.settings.graph_design_timeout_s
-    assert calls[0]["max_output_tokens"] == graph_worker.settings.graph_design_max_output_tokens
-    assert calls[0]["effort"] == "low"
-    assert calls[0]["telemetry"]["metadata"]["structural_attempt"] == 0
+    assert len(result["nodes"]) == 9
+    assert len({node["id"] for node in result["nodes"]}) == 9
+    assert calls == []
 
 
 @pytest.mark.asyncio
@@ -715,7 +674,7 @@ async def test_invalid_refinement_preserves_approved_graph_after_one_patch_attem
         return json.dumps(invalid_candidate)
 
     monkeypatch.setattr(graph_worker, "stream_llm", fake_stream_llm)
-    result = await graph_worker._generate_applied_architecture(
+    result = await graph_worker._generate_applied_architecture_patch(
         {
             "send": None,
             "user_message": "Expand the action proposal service",
@@ -729,24 +688,19 @@ async def test_invalid_refinement_preserves_approved_graph_after_one_patch_attem
             "session_id": "thread-1",
         },
         "customer support chatbot expand the action proposal service",
-        SimpleNamespace(
-            resolved="production",
-            min_graph_nodes=5,
-            max_graph_nodes=8,
-            answer_contract="Production responsibilities and controls.",
-            thinking_budget=None,
-        ),
+        SimpleNamespace(resolved="production"),
+        existing,
     )
 
     assert result == existing
     assert result is not existing
     assert len(calls) == 1
-    assert calls[0]["model"] == graph_worker.settings.graph_repair_model
-    assert calls[0]["effort"] == "medium"
+    assert calls[0]["model"] == graph_worker.settings.graph_builder_model
+    assert calls[0]["effort"] == "max"
     assert calls[0]["telemetry"]["metadata"]["patch_attempt"] == 0
     prompt = calls[0]["messages"][0]["content"]
     assert "currently has 5 nodes" in prompt
-    assert "keep at least 60%" in prompt
+    assert "Keep at least 60%" in prompt
     assert "node_0" in prompt
     assert "Support Responsibility 0" in prompt
     assert '"nodes"' in prompt
@@ -830,3 +784,31 @@ async def test_node_detail_prompt_prefers_canonical_evidence(monkeypatch):
     assert events[-1]["type"] == "node_detail"
     assert events[-1]["book_refs"] == ["(Chapter 7, p.356)"]
     assert events[-1]["graph_version"] == "graph-v1"
+
+
+@pytest.mark.asyncio
+async def test_node_detail_spend_limit_does_not_limit_graph_size(monkeypatch):
+    import agent.nodes.node_detail_worker as node_detail_worker
+
+    enriched_ids = []
+
+    async def fake_enrich_node(node, *_args, **_kwargs):
+        enriched_ids.append(node["id"])
+
+    monkeypatch.setattr(node_detail_worker, "enrich_node", fake_enrich_node)
+    monkeypatch.setattr(node_detail_worker.settings, "max_node_detail_nodes", 3)
+
+    nodes = [
+        {"id": f"node-{index}", "label": f"Node {index}", "type": "service"}
+        for index in range(6)
+    ]
+
+    await node_detail_worker.enrich_all_nodes(
+        nodes,
+        edges=[],
+        rag_search_tool=None,
+        send=lambda _event: None,
+    )
+
+    assert enriched_ids == ["node-0", "node-1", "node-2"]
+    assert len(nodes) == 6

@@ -135,8 +135,10 @@ export function ThreadSidebar({
   // which would cause the effect below to fire repeatedly even with no real state change.
   const authSessionRef = useRef(authSession);
   const backendReadyRef = useRef(backendReady);
-  authSessionRef.current = authSession;
-  backendReadyRef.current = backendReady;
+  useEffect(() => {
+    authSessionRef.current = authSession;
+    backendReadyRef.current = backendReady;
+  }, [authSession, backendReady]);
 
   const fetchThreads = useCallback(async () => {
     if (!authSessionRef.current || !backendReadyRef.current) return;

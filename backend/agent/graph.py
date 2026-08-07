@@ -44,6 +44,7 @@ NodeResult = Awaitable[AgentState]
 AgentNode = Callable[[AgentState], NodeResult]
 
 _GRAPH_STAGE_DEADLINE_KEY = "_graph_stage_deadline_s"
+_MAX_GRAPH_REVISIONS = 1
 
 
 def _with_graph_stage_deadline(state: AgentState, timeout_s: float) -> AgentState:
@@ -202,7 +203,8 @@ def build_agent_workflow(
             "status": "retry",
             "title": "Refining the diagram",
             "detail": (
-                f"Applying bounded clarity repair {revision_count} of 3, then checking "
+                f"Applying bounded clarity repair {revision_count} of "
+                f"{_MAX_GRAPH_REVISIONS}, then checking "
                 "the real layout again."
             ),
         })
@@ -346,13 +348,12 @@ def build_agent_workflow(
     )
     workflow.add_edge("quick_answer", END)
     # Resolve an optional weak-book web escalation before the canonical brief
-    # is written. The architect and challenger then inspect the same evidence
-    # independently and in parallel; graph integration waits for both. This
-    # preserves the adversarial review while removing avoidable serial latency.
+    # is written. The reviewer starts from the original evidence, then checks
+    # the primary plan as a clean second pass before graph construction.
     workflow.add_edge("gather_context", "expand_context")
     workflow.add_edge("expand_context", "architect")
-    workflow.add_edge("expand_context", "challenger")
-    workflow.add_edge(["architect", "challenger"], "draft_graph")
+    workflow.add_edge("architect", "challenger")
+    workflow.add_edge("challenger", "draft_graph")
     workflow.add_edge("draft_graph", "review_graph")
     workflow.add_conditional_edges(
         "review_graph",
@@ -391,7 +392,10 @@ def _route_after_review(state: AgentState) -> Literal["accept", "revise", "rejec
     review = state.get("graph_review") or {}
     if review.get("approved"):
         return "accept"
-    if not review.get("terminal") and int(state.get("graph_revision_count", 0)) < 3:
+    if (
+        not review.get("terminal")
+        and int(state.get("graph_revision_count", 0)) < _MAX_GRAPH_REVISIONS
+    ):
         return "revise"
     return "reject"
 

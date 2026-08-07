@@ -144,18 +144,17 @@ export function useThreadSession({
   );
 
   useEffect(() => {
-    if (!authSession) {
-      resetThreadState();
-    }
-  }, [authSession, resetThreadState]);
-
-  useEffect(() => {
     // Reset everything only on sign-out — never on backend going not-ready.
     // Wiping state when the backend TTL expires or is re-preparing would
     // destroy live streamed content that hasn't been persisted yet.
     if (!authSession) {
-      resetThreadState();
-      return;
+      let cancelled = false;
+      queueMicrotask(() => {
+        if (!cancelled) resetThreadState();
+      });
+      return () => {
+        cancelled = true;
+      };
     }
 
     // Backend warming up — preserve existing state, wait for it to become ready.

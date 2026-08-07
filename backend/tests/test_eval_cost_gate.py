@@ -91,6 +91,24 @@ def test_application_cost_prices_anthropic_cache_writes_and_reads():
     }
 
 
+def test_application_cost_prices_kimi_automatic_cache_reads():
+    accounting = account_application_cost(
+        [{"id": "case", "thread_id": "thread"}],
+        [{
+            "thread_id": "thread",
+            "operation": "graph_worker",
+            "provider": "kimi",
+            "model": "kimi-k3",
+            "input_tokens": 1_000,
+            "cache_read_input_tokens": 2_000,
+            "output_tokens": 100,
+        }],
+    )
+
+    assert accounting["status"] == "pass"
+    assert accounting["total"]["estimated_usd"] == 0.0051
+
+
 def test_application_cost_rejects_cache_usage_without_provider_pricing():
     accounting = account_application_cost(
         [{"id": "case", "thread_id": "thread"}],

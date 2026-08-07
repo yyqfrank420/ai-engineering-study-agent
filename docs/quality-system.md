@@ -87,9 +87,9 @@ multi-turn case remain sequential on that context, and result ordering remains t
 canonical corpus ordering even when cases finish out of order.
 
 The Anthropic semaphore allows four streams per application process/Cloud Run
-instance; it is not a global account cap. Two graph lanes may consume all four
-streams while lightweight cases wait. That is the intentional speed-over-cost
-tradeoff for this evaluation profile.
+instance; it is not a global account cap. It bounds Opus architecture and Sonnet QA
+calls. Kimi graph construction uses the Moonshot OpenAI-compatible endpoint and the
+two-case graph lane remains the suite-level concurrency bound.
 
 Each attempt records received events, final answers, graph JSON, rendered-node
 counts, screenshots, redacted traces, persistence, cleanup, fallback, and typed
@@ -164,8 +164,11 @@ rather than added into a false critical path.
 
 Application cost accounting is likewise retry-aware: all threads from all browser
 attempts are attributed back to their case, then split by model operation and
-provider attempt. Input/output tokens, queue wait, and estimated USD use a dated
-price table; fallback and failed charged attempts are included. Judge usage is
+provider attempt. Input/output tokens, prompt-cache reads, queue wait, and estimated USD use a dated
+price table; fallback and failed charged attempts are included. Protected evaluation revisions enable
+Anthropic's five-minute prompt cache for repeated stable role prompts. Production app revisions leave
+it disabled because sparse traffic may not recover the cache-write premium. Kimi automatic-cache hits
+use their discounted input price. Judge usage is
 reported separately and per case. An unknown model price is an infrastructure
 failure, never zero cost. Cost limits are currently report-only and unset while at
 least five clean runs establish per-case and suite baselines; only reviewed limits

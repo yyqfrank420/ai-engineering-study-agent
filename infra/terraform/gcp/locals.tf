@@ -14,6 +14,7 @@ locals {
 
   secret_bindings = {
     ANTHROPIC_API_KEY                 = "anthropic-api-key"
+    MOONSHOT_API_KEY                  = "moonshot-api-key"
     OPENAI_API_KEY                    = "openai-api-key"
     SUPABASE_URL                      = "supabase-url"
     SUPABASE_ANON_KEY                 = "supabase-anon-key"
@@ -45,6 +46,7 @@ locals {
       DB_SCHEMA                        = "public"
       FAISS_ARTIFACT_TIMEOUT_S         = tostring(var.faiss_artifact_timeout_s)
       ANTHROPIC_MAX_CONCURRENT_STREAMS = "4"
+      ANTHROPIC_PROMPT_CACHE_ENABLED   = "false"
       INTERNAL_DASHBOARD_ALLOWLIST_RAW = var.internal_dashboard_allowlist_raw
     },
     var.env_vars,

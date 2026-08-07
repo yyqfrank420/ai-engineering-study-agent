@@ -41,7 +41,7 @@ async def stream_structured_llm(
     timeout_seconds: float | None = None,
     max_output_tokens: int | None = None,
 ) -> StructuredLLMResponse:
-    """Run one schema-constrained Anthropic chain with ordinary telemetry/retries."""
+    """Run one schema-constrained provider call with ordinary telemetry."""
     if timeout_seconds is not None and timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
     accumulated = ""
@@ -73,7 +73,7 @@ async def stream_structured_llm(
         finish_reason=metadata.get("finish_reason"),
         input_tokens=int(metadata.get("input_tokens") or 0),
         output_tokens=int(metadata.get("output_tokens") or 0),
-        provider=str(metadata.get("provider") or "anthropic"),
+        provider=str(metadata.get("provider") or "unknown"),
         model=str(metadata.get("model") or model),
     )
 
@@ -91,6 +91,7 @@ async def stream_llm(
     telemetry: dict | None = None,
     timeout_seconds: float | None = None,
     max_output_tokens: int | None = None,
+    allow_fallback: bool = True,
     send: Callable[[dict], Awaitable[None]] | None = None,
     stream_deltas: bool = False,
     stream_thinking: bool = False,
@@ -121,6 +122,7 @@ async def stream_llm(
             effort=effort,
             telemetry=telemetry,
             max_output_tokens=max_output_tokens,
+            allow_fallback=allow_fallback,
         )
         async with aclosing(response):
             async for event_type, content in response:

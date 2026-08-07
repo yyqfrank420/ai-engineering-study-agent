@@ -20,6 +20,7 @@ ENV_FILE="${ENV_FILE:-$(dirname "$0")/../backend/.env}"
 declare -A SECRET_MAP
 SECRET_MAP=(
   [ANTHROPIC_API_KEY]="anthropic-api-key"
+  [MOONSHOT_API_KEY]="moonshot-api-key"
   [OPENAI_API_KEY]="openai-api-key"
   [SUPABASE_URL]="supabase-url"
   [SUPABASE_ANON_KEY]="supabase-anon-key"

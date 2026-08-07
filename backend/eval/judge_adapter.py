@@ -19,7 +19,7 @@ from eval.quality_corpus import EvaluationCase, EvaluationCorpus
 from eval.semantic_gate import DimensionJudgment, JudgeResult
 
 
-DEFAULT_JUDGE_PROVIDER = "openai"
+DEFAULT_JUDGE_PROVIDER = "anthropic"
 DEFAULT_JUDGE_MODEL = "gpt-5.4-mini-2026-03-17"
 DEFAULT_ANTHROPIC_JUDGE_MODEL = "claude-sonnet-5"
 JUDGE_PROMPT_RELEASE = "semantic-rubric-judge-v5"
@@ -27,7 +27,7 @@ INPUT_USD_PER_MILLION = 0.75
 OUTPUT_USD_PER_MILLION = 4.50
 _JUDGE_PRICING_USD_PER_MILLION = {
     ("openai", DEFAULT_JUDGE_MODEL): (INPUT_USD_PER_MILLION, OUTPUT_USD_PER_MILLION),
-    ("anthropic", DEFAULT_ANTHROPIC_JUDGE_MODEL): (3.00, 15.00),
+    ("anthropic", DEFAULT_ANTHROPIC_JUDGE_MODEL): (2.00, 10.00),
     ("anthropic", "claude-opus-5"): (5.00, 25.00),
 }
 _RETRYABLE_JUDGE_ERRORS = (
@@ -289,6 +289,7 @@ class SemanticJudge:
                 system=system,
                 messages=[{"role": "user", "content": user}],
                 output_config={
+                    "effort": "high",
                     "format": {
                         "type": "json_schema",
                         "schema": _anthropic_response_schema(schema),

@@ -18,7 +18,11 @@ def clear_cached_clients():
 
 
 def _clear_client_caches(llm):
-    for client_factory in (llm._get_anthropic_client, llm._get_openai_client):
+    for client_factory in (
+        llm._get_anthropic_client,
+        llm._get_openai_client,
+        llm._get_kimi_client,
+    ):
         clear = getattr(client_factory, "cache_clear", None)
         if clear:
             clear()
@@ -73,13 +77,17 @@ def test_lazy_clients_and_semaphore_branches(monkeypatch):
 
     llm._get_anthropic_client.cache_clear()
     llm._get_openai_client.cache_clear()
+    llm._get_kimi_client.cache_clear()
     monkeypatch.setitem(sys.modules, "anthropic", _AnthropicModule)
     monkeypatch.setitem(sys.modules, "openai", _OpenAIModule)
     monkeypatch.setattr(settings, "anthropic_api_key", "anthropic-key")
     monkeypatch.setattr(settings, "openai_api_key", "")
     monkeypatch.setattr(settings, "anthropic_max_concurrent_streams", 0)
 
-    assert llm._get_anthropic_client().kwargs == {"api_key": "anthropic-key"}
+    assert llm._get_anthropic_client().kwargs == {
+        "api_key": "anthropic-key",
+        "max_retries": 0,
+    }
     assert llm._get_openai_client() is None
     assert llm._get_anthropic_stream_semaphore() is None
 
@@ -87,10 +95,35 @@ def test_lazy_clients_and_semaphore_branches(monkeypatch):
     monkeypatch.setattr(settings, "openai_api_key", "openai-key")
     monkeypatch.setattr(settings, "anthropic_max_concurrent_streams", 3)
 
-    assert llm._get_openai_client().kwargs == {"api_key": "openai-key"}
+    assert llm._get_openai_client().kwargs == {
+        "api_key": "openai-key",
+        "max_retries": 0,
+    }
     first = llm._get_anthropic_stream_semaphore()
     second = llm._get_anthropic_stream_semaphore()
     assert first is second
+
+
+def test_kimi_client_uses_the_moonshot_openai_compatible_endpoint(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    calls = []
+
+    class _OpenAIModule:
+        class AsyncOpenAI:
+            def __init__(self, **kwargs):
+                calls.append(kwargs)
+
+    monkeypatch.setitem(sys.modules, "openai", _OpenAIModule)
+    monkeypatch.setattr(settings, "moonshot_api_key", "moonshot-key")
+    monkeypatch.setattr(settings, "moonshot_base_url", "https://api.moonshot.ai/v1")
+
+    assert llm._get_kimi_client() is not None
+    assert calls == [{
+        "api_key": "moonshot-key",
+        "base_url": "https://api.moonshot.ai/v1",
+        "max_retries": 0,
+    }]
 
 
 def test_stream_response_compat_only_passes_telemetry_when_supported():
@@ -180,8 +213,11 @@ def test_application_model_roles_default_to_calibrated_models():
 
     assert configured.orchestrator_model == "claude-opus-5"
     assert configured.worker_model == "claude-opus-5"
-    assert configured.graph_repair_model == "claude-sonnet-5"
-    assert configured.graph_repair_model not in llm._FALLBACK_MODELS
+    assert configured.architecture_model == "claude-opus-5"
+    assert configured.graph_builder_model == "kimi-k3"
+    assert configured.graph_qa_model == "claude-sonnet-5"
+    assert configured.graph_builder_model not in llm._FALLBACK_MODELS
+    assert configured.graph_qa_model not in llm._FALLBACK_MODELS
     assert configured.anthropic_max_concurrent_streams == 4
 
 
@@ -536,6 +572,203 @@ async def test_openai_stream_builds_reasoning_or_sampling_kwargs(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_kimi_routes_directly_with_max_reasoning_and_strict_schema(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    calls = []
+    telemetry_records, _ = _patch_llm_telemetry(monkeypatch)
+
+    class _Stream:
+        def __init__(self):
+            self.chunks = iter([
+                SimpleNamespace(
+                    usage=None,
+                    choices=[SimpleNamespace(
+                        finish_reason=None,
+                        delta=SimpleNamespace(
+                            reasoning_content="reasoning",
+                            content=None,
+                        ),
+                    )],
+                ),
+                SimpleNamespace(
+                    usage=None,
+                    choices=[SimpleNamespace(
+                        finish_reason="stop",
+                        delta=SimpleNamespace(
+                            reasoning_content=None,
+                            content='{"ok":true}',
+                        ),
+                    )],
+                ),
+                SimpleNamespace(
+                    usage=None,
+                    choices=[SimpleNamespace(
+                        finish_reason=None,
+                        delta=SimpleNamespace(
+                            reasoning_content=None,
+                            content=None,
+                        ),
+                        usage={
+                            "prompt_tokens": 120,
+                            "cached_tokens": 80,
+                            "completion_tokens": 9,
+                        },
+                    )],
+                ),
+            ])
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self.chunks)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+    class _Completions:
+        async def create(self, **kwargs):
+            calls.append(kwargs)
+            return _Stream()
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=_Completions()),
+    )
+    monkeypatch.setattr(llm, "_get_kimi_client", lambda: client)
+    schema = {
+        "type": "object",
+        "properties": {"ok": {"type": "boolean"}},
+        "required": ["ok"],
+        "additionalProperties": False,
+    }
+
+    events = await _collect(llm.stream_response(
+        "kimi-k3",
+        "system",
+        [{"role": "user", "content": "build"}],
+        effort="max",
+        temperature=0.1,
+        top_p=0.8,
+        max_output_tokens=500,
+        response_schema=schema,
+        allow_fallback=False,
+        telemetry={"operation": "graph_worker", "thread_id": "thread-1"},
+    ))
+
+    assert calls[0]["reasoning_effort"] == "max"
+    assert calls[0]["max_completion_tokens"] == 500
+    assert "temperature" not in calls[0]
+    assert "top_p" not in calls[0]
+    assert calls[0]["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "structured_response",
+            "strict": True,
+            "schema": schema,
+        },
+    }
+    assert events[:2] == [
+        ("thinking", "reasoning"),
+        ("text", '{"ok":true}'),
+    ]
+    assert json.loads(events[2][1]) == {
+        "finish_reason": "end_turn",
+        "input_tokens": 40,
+        "output_tokens": 9,
+        "provider": "kimi",
+        "model": "kimi-k3",
+    }
+    assert events[3] == ("done", "")
+    assert telemetry_records[0]["provider"] == "kimi"
+    assert telemetry_records[0]["metadata"]["input_tokens"] == 40
+    assert telemetry_records[0]["metadata"]["cache_read_input_tokens"] == 80
+
+
+@pytest.mark.asyncio
+async def test_kimi_rejects_unsupported_reasoning_effort(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    monkeypatch.setattr(llm, "_get_kimi_client", lambda: object())
+    with pytest.raises(ValueError, match="low, high, or max"):
+        await _collect(llm._kimi_stream(
+            "kimi-k3",
+            "system",
+            [],
+            reasoning_effort="medium",
+        ))
+
+
+@pytest.mark.asyncio
+async def test_kimi_retries_only_before_any_provider_output(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    monkeypatch.setattr(settings, "llm_max_retries", 2)
+    monkeypatch.setattr(settings, "llm_retry_delay_s", 0)
+    telemetry_records, _ = _patch_llm_telemetry(monkeypatch)
+    calls = []
+
+    async def fake_kimi(*args, **_kwargs):
+        calls.append(args)
+        if len(calls) == 1:
+            raise RuntimeError("transient failure")
+        yield "text", "graph"
+        yield "usage", json.dumps({
+            "input_tokens": 10,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 4,
+        })
+        yield "done", ""
+
+    monkeypatch.setattr(llm, "_kimi_stream", fake_kimi)
+
+    events = await _collect(llm.stream_response(
+        "kimi-k3",
+        "system",
+        [],
+        thinking_budget=1000,
+        telemetry={"operation": "graph_worker"},
+    ))
+
+    assert events == [("text", "graph"), ("done", "")]
+    assert len(calls) == 2
+    assert all(call[3] == "max" for call in calls)
+    attempts = telemetry_records[0]["metadata"]["attempts"]
+    assert [attempt["status"] for attempt in attempts] == ["error", "success"]
+
+
+@pytest.mark.asyncio
+async def test_kimi_does_not_replay_after_a_reasoning_delta(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    monkeypatch.setattr(settings, "llm_max_retries", 2)
+    telemetry_records, _ = _patch_llm_telemetry(monkeypatch)
+    calls = 0
+
+    async def failing_kimi(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        yield "thinking", "partial reasoning"
+        raise RuntimeError("stream dropped")
+
+    monkeypatch.setattr(llm, "_kimi_stream", failing_kimi)
+
+    with pytest.raises(RuntimeError, match="stream dropped"):
+        await _collect(llm.stream_response(
+            "kimi-k3",
+            "system",
+            [],
+            effort="max",
+            telemetry={"operation": "graph_worker"},
+        ))
+
+    assert calls == 1
+    attempt = telemetry_records[0]["metadata"]["attempts"][0]
+    assert attempt["status"] == "error_incomplete_usage"
+    assert attempt["accepted"] is True
+
+
+@pytest.mark.asyncio
 async def test_stream_response_records_openai_fallback_error(monkeypatch):
     import adapters.llm_adapter as llm
 
@@ -582,10 +815,15 @@ def test_stream_response_compat_filters_max_output_tokens():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_structured_output_merges_schema_effort_and_metadata(monkeypatch):
+@pytest.mark.parametrize("cache_enabled", [False, True])
+async def test_anthropic_structured_output_merges_schema_effort_and_metadata(
+    monkeypatch,
+    cache_enabled,
+):
     import adapters.llm_adapter as llm
 
     monkeypatch.setattr(settings, "llm_max_retries", 1)
+    monkeypatch.setattr(settings, "anthropic_prompt_cache_enabled", cache_enabled)
     _patch_llm_telemetry(monkeypatch)
     calls = []
 
@@ -623,13 +861,10 @@ async def test_anthropic_structured_output_merges_schema_effort_and_metadata(mon
     ))
 
     output_config = calls[0]["output_config"]
-    assert calls[0]["system"] == [
-        {
-            "type": "text",
-            "text": "system",
-            "cache_control": {"type": "ephemeral"},
-        }
-    ]
+    expected_system = {"type": "text", "text": "system"}
+    if cache_enabled:
+        expected_system["cache_control"] = {"type": "ephemeral"}
+    assert calls[0]["system"] == [expected_system]
     assert output_config["effort"] == "low"
     assert output_config["format"]["type"] == "json_schema"
     assert "minItems" not in json.dumps(output_config["format"]["schema"])

@@ -265,6 +265,7 @@ async def test_anthropic_judge_uses_direct_structured_output_schema(monkeypatch)
     assert request["system"].startswith("You are an evaluation judge")
     assert request["messages"][0]["role"] == "user"
     assert request["output_config"] == {
+        "effort": "high",
         "format": {
             "type": "json_schema",
             "schema": _anthropic_response_schema(
@@ -351,6 +352,22 @@ def test_anthropic_judge_requires_its_provider_key(monkeypatch):
 
     with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
         SemanticJudge()
+
+
+def test_semantic_judge_defaults_to_sonnet_5(monkeypatch):
+    client = SimpleNamespace(messages=SimpleNamespace())
+    monkeypatch.delenv("EVAL_JUDGE_PROVIDER", raising=False)
+    monkeypatch.delenv("EVAL_JUDGE_MODEL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-test-key")
+    monkeypatch.setattr(
+        "eval.judge_adapter.AsyncAnthropic",
+        lambda **_kwargs: client,
+    )
+
+    judge = SemanticJudge()
+
+    assert judge.provider == "anthropic"
+    assert judge.model == DEFAULT_ANTHROPIC_JUDGE_MODEL
 
 
 @pytest.mark.asyncio
@@ -564,7 +581,7 @@ def test_judge_cost_uses_exact_provider_and_model_pricing():
     )
 
     assert estimated_judge_cost_usd(openai_result) == 0.00003
-    assert estimated_judge_cost_usd(anthropic_result) == 0.000105
+    assert estimated_judge_cost_usd(anthropic_result) == 0.00007
     with pytest.raises(RuntimeError, match="pricing is not configured"):
         estimated_judge_cost_usd(replace(anthropic_result, model="unknown"))
 

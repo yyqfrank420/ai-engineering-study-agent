@@ -71,14 +71,6 @@ def critic_timeout_seconds(state: dict[str, Any], revision_count: int) -> float:
     )
 
 
-def critic_max_output_tokens(revision_count: int) -> int:
-    return (
-        settings.graph_critic_initial_max_output_tokens
-        if revision_count == 0
-        else settings.graph_critic_revision_max_output_tokens
-    )
-
-
 def patch_timeout_seconds(state: dict[str, Any]) -> float:
     following_reserve = (
         settings.graph_critic_revision_timeout_s

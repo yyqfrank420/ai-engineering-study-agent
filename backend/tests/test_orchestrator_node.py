@@ -46,7 +46,7 @@ def test_synthesis_prompts_enforce_evidence_bounded_attribution():
         _SYNTHESIS_SYSTEM,
     )
 
-    assert _SYNTHESIS_PROMPT_VERSION == "architecture_blocks_v10"
+    assert _SYNTHESIS_PROMPT_VERSION == "architecture_blocks_v11"
     assert _QUICK_SYNTHESIS_PROMPT_VERSION == "quick_synthesis_v2"
     assert "complete citation allowlist" in _SYNTHESIS_SYSTEM
     assert "exactly one of two provenance lanes" in _SYNTHESIS_SYSTEM

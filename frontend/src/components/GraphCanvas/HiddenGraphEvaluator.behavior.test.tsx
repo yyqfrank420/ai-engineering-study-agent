@@ -1,13 +1,19 @@
 import { act, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('./D3Graph', () => ({
-  D3Graph: () => (
-    <svg width="320" height="240">
-      <text>Candidate graph</text>
-    </svg>
-  ),
-}));
+vi.mock('./D3Graph', async () => {
+  const React = await import('react');
+  return {
+    D3Graph: ({ onLayoutReady }: { onLayoutReady?: (key: string) => void }) => {
+      React.useEffect(() => onLayoutReady?.('candidate-layout'), [onLayoutReady]);
+      return (
+        <svg width="320" height="240">
+          <text>Candidate graph</text>
+        </svg>
+      );
+    },
+  };
+});
 
 vi.mock('./diagramMeasurement', () => ({
   measureDiagram: vi.fn(() => ({
@@ -92,9 +98,9 @@ describe('HiddenGraphEvaluator browser boundary', () => {
       <HiddenGraphEvaluator candidate={candidate} viewport={{ width: 320, height: 240 }} />,
     );
 
-    await act(async () => vi.advanceTimersByTimeAsync(520));
+    await act(async () => vi.runAllTimersAsync());
 
-    expect(measureDiagram).toHaveBeenCalledWith(expect.any(SVGSVGElement), 1);
+    expect(measureDiagram).toHaveBeenCalledWith(expect.any(SVGSVGElement));
     expect(URL.createObjectURL).toHaveBeenCalled();
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:candidate');
     expect(agentTransport.submitDiagramEvaluation).toHaveBeenCalledWith(
@@ -107,7 +113,7 @@ describe('HiddenGraphEvaluator browser boundary', () => {
     view.rerender(
       <HiddenGraphEvaluator candidate={candidate} viewport={{ width: 400, height: 300 }} />,
     );
-    await act(async () => vi.advanceTimersByTimeAsync(520));
+    await act(async () => vi.runAllTimersAsync());
     expect(agentTransport.submitDiagramEvaluation).toHaveBeenCalledTimes(1);
   });
 

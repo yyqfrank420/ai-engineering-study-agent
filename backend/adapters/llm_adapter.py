@@ -35,7 +35,10 @@ logger = logging.getLogger(__name__)
 def _get_anthropic_client():
     import anthropic
 
-    return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    return anthropic.AsyncAnthropic(
+        api_key=settings.anthropic_api_key,
+        max_retries=0,
+    )
 
 
 @lru_cache(maxsize=1)
@@ -44,7 +47,23 @@ def _get_openai_client():
         return None
     import openai
 
-    return openai.AsyncOpenAI(api_key=settings.openai_api_key)
+    return openai.AsyncOpenAI(
+        api_key=settings.openai_api_key,
+        max_retries=0,
+    )
+
+
+@lru_cache(maxsize=1)
+def _get_kimi_client():
+    if not settings.moonshot_api_key:
+        return None
+    import openai
+
+    return openai.AsyncOpenAI(
+        api_key=settings.moonshot_api_key,
+        base_url=settings.moonshot_base_url,
+        max_retries=0,
+    )
 
 # Maps Anthropic model name → OpenAI fallback model name.
 # Populated from settings so a config change is all that's needed to swap models.
@@ -64,6 +83,12 @@ _NON_RETRYABLE_ANTHROPIC_ERRORS = {
     "PermissionDeniedError",
     "UnprocessableEntityError",
 }
+
+
+def _field(value: object, name: str, default=0):
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
 
 
 def _aggregate_attempt_token_usage(
@@ -116,6 +141,14 @@ def _is_non_retryable_anthropic_error(exc: Exception) -> bool:
     return getattr(exc, "status_code", None) in {400, 401, 403, 404, 422}
 
 
+def _is_non_retryable_chat_error(exc: Exception) -> bool:
+    if isinstance(exc, (TypeError, ValueError)):
+        return True
+    if isinstance(exc, RuntimeError) and "not initialised" in str(exc):
+        return True
+    return getattr(exc, "status_code", None) in {400, 401, 403, 404, 422}
+
+
 def stream_response_compat(streamer, **kwargs):
     optional = {
         "telemetry": kwargs.pop("telemetry", None),
@@ -137,7 +170,9 @@ def stream_response_compat(streamer, **kwargs):
     return streamer(**kwargs)
 
 
-async def _openai_stream(
+async def _chat_completions_stream(
+    client,
+    provider: str,
     model: str,
     system: str,
     messages: list[dict],
@@ -145,62 +180,85 @@ async def _openai_stream(
     temperature: float | None = None,
     top_p: float | None = None,
     max_output_tokens: int | None = None,
+    response_schema: dict | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
-    """
-    Stream a response from the OpenAI Chat Completions API.
-    Normalises output to the same (event_type, content) tuple format as
-    the Anthropic path so all callers are provider-agnostic.
-
-    Args:
-        model:            OpenAI model ID (e.g. "gpt-5.4")
-        system:           System prompt — prepended as role="system" message
-        messages:         Chat history in {"role": ..., "content": ...} format
-        reasoning_effort: Optional reasoning depth for thinking models
-                          ("low" | "medium" | "high" | "xhigh")
-    """
-    openai_client = _get_openai_client()
-    if openai_client is None:
-        raise RuntimeError("OpenAI client not initialised (OPENAI_API_KEY not set)")
-
-    # OpenAI takes the system prompt as the first message in the list. Convert
-    # Anthropic image blocks when a browser-rendered diagram is being judged.
-    openai_messages = [{"role": "system", "content": system}, *_to_openai_messages(messages)]
+    """Stream one OpenAI-compatible Chat Completions response."""
+    completion_messages = [
+        {"role": "system", "content": system},
+        *_to_openai_messages(messages),
+    ]
 
     kwargs: dict = {
-        "model":    model,
-        "messages": openai_messages,
-        "stream":   True,
+        "model": model,
+        "messages": completion_messages,
+        "stream": True,
         "stream_options": {"include_usage": True},
     }
     if reasoning_effort:
-        # Supported on gpt-5.4 and o-series thinking models
+        if provider == "kimi" and reasoning_effort not in {"low", "high", "max"}:
+            raise ValueError("Kimi reasoning_effort must be low, high, or max")
         kwargs["reasoning_effort"] = reasoning_effort
-    else:
+    elif provider != "kimi":
         if temperature is not None:
             kwargs["temperature"] = temperature
         if top_p is not None:
             kwargs["top_p"] = top_p
     if max_output_tokens is not None:
         kwargs["max_completion_tokens"] = max_output_tokens
+    if response_schema is not None:
+        kwargs["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "structured_response",
+                "strict": True,
+                "schema": response_schema,
+            },
+        }
 
-    stream = await openai_client.chat.completions.create(**kwargs)
+    stream = await client.chat.completions.create(**kwargs)
+    finish_reason: str | None = None
+    input_tokens = 0
+    cache_read_input_tokens = 0
+    output_tokens = 0
     try:
         async for chunk in stream:
+            choice = chunk.choices[0] if chunk.choices else None
             usage = getattr(chunk, "usage", None)
+            if provider == "kimi" and choice is not None:
+                usage = _field(choice, "usage", None) or usage
             if usage:
+                prompt_tokens = int(_field(usage, "prompt_tokens") or 0)
+                prompt_details = _field(usage, "prompt_tokens_details", None)
+                cached_tokens = int(
+                    _field(usage, "cached_tokens")
+                    or _field(prompt_details, "cached_tokens")
+                    or 0
+                )
+                input_tokens = max(0, prompt_tokens - cached_tokens)
+                cache_read_input_tokens = cached_tokens
+                output_tokens = int(
+                    _field(usage, "completion_tokens") or 0
+                )
                 yield (
                     "usage",
                     json.dumps(
                         {
-                            "input_tokens": int(usage.prompt_tokens or 0),
-                            "output_tokens": int(usage.completion_tokens or 0),
+                            "input_tokens": input_tokens,
+                            "cache_read_input_tokens": cache_read_input_tokens,
+                            "output_tokens": output_tokens,
                         }
                     ),
                 )
-            if chunk.choices:
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    yield ("text", delta.content)
+            if choice is not None:
+                if isinstance(getattr(choice, "finish_reason", None), str):
+                    finish_reason = choice.finish_reason
+                delta = getattr(choice, "delta", None)
+                reasoning_content = getattr(delta, "reasoning_content", None)
+                if isinstance(reasoning_content, str) and reasoning_content:
+                    yield ("thinking", reasoning_content)
+                content = getattr(delta, "content", None)
+                if isinstance(content, str) and content:
+                    yield ("text", content)
     finally:
         try:
             close = getattr(stream, "aclose", None) or getattr(stream, "close", None)
@@ -209,9 +267,78 @@ async def _openai_stream(
                 if inspect.isawaitable(close_result):
                     await close_result
         except Exception as exc:
-            logger.warning("OpenAI stream close failed: %s", type(exc).__name__)
+            logger.warning(
+                "%s stream close failed: %s", provider, type(exc).__name__
+            )
 
+    if response_schema is not None:
+        yield (
+            "response_metadata",
+            json.dumps({
+                "finish_reason": _normalise_finish_reason(finish_reason),
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "provider": provider,
+                "model": model,
+            }),
+        )
     yield ("done", "")
+
+
+async def _openai_stream(
+    model: str,
+    system: str,
+    messages: list[dict],
+    reasoning_effort: str | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    max_output_tokens: int | None = None,
+    response_schema: dict | None = None,
+) -> AsyncGenerator[tuple[str, str], None]:
+    client = _get_openai_client()
+    if client is None:
+        raise RuntimeError("OpenAI client not initialised (OPENAI_API_KEY not set)")
+    async for event in _chat_completions_stream(
+        client,
+        "openai",
+        model,
+        system,
+        messages,
+        reasoning_effort,
+        temperature,
+        top_p,
+        max_output_tokens,
+        response_schema,
+    ):
+        yield event
+
+
+async def _kimi_stream(
+    model: str,
+    system: str,
+    messages: list[dict],
+    reasoning_effort: str | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    max_output_tokens: int | None = None,
+    response_schema: dict | None = None,
+) -> AsyncGenerator[tuple[str, str], None]:
+    client = _get_kimi_client()
+    if client is None:
+        raise RuntimeError("Kimi client not initialised (MOONSHOT_API_KEY not set)")
+    async for event in _chat_completions_stream(
+        client,
+        "kimi",
+        model,
+        system,
+        messages,
+        reasoning_effort or "max",
+        temperature,
+        top_p,
+        max_output_tokens,
+        response_schema,
+    ):
+        yield event
 
 
 async def _anthropic_stream_once(kwargs: dict) -> AsyncGenerator[object, None]:
@@ -272,22 +399,26 @@ async def stream_response(
     if max_output_tokens is not None and max_output_tokens <= 0:
         raise ValueError("max_output_tokens must be positive")
     effective_max_output_tokens = min(
-        max_output_tokens if max_output_tokens is not None else settings.llm_max_tokens,
+        (
+            max_output_tokens
+            if max_output_tokens is not None
+            else settings.llm_default_max_tokens
+        ),
         settings.llm_max_tokens,
     )
     prompt_sha256 = hashlib.sha256(system.encode("utf-8")).hexdigest()
+    system_block: dict[str, object] = {
+        "type": "text",
+        "text": system,
+    }
+    if settings.anthropic_prompt_cache_enabled:
+        # Protected evaluation repeats stable role prompts often enough to
+        # recover Anthropic's cache-write premium within the cache lifetime.
+        system_block["cache_control"] = {"type": "ephemeral"}
     kwargs: dict = {
         "model":      model,
         "max_tokens": effective_max_output_tokens,
-        # The protected system prompt is the stable prefix shared by calls.
-        # Anthropic skips caching when this block is below the model minimum.
-        "system":     [
-            {
-                "type": "text",
-                "text": system,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
+        "system":     [system_block],
         "messages":   messages,
     }
     uses_adaptive_effort = _uses_adaptive_effort(model)
@@ -417,9 +548,10 @@ async def stream_response(
             status=status,
         )
 
-    async def _stream_openai_route(
-        openai_model: str,
+    async def _stream_chat_completions_route(
+        chat_model: str,
         *,
+        provider: str,
         is_fallback: bool,
     ) -> AsyncGenerator[tuple[str, str], None]:
         nonlocal final_model, final_provider, input_tokens, output_chars
@@ -427,94 +559,137 @@ async def stream_response(
         nonlocal output_tokens, provider_attempts, used_fallback
 
         used_fallback = is_fallback
-        final_provider = "openai"
-        final_model = openai_model
-        provider_attempts += 1
-        attempt_started = time.perf_counter()
-        attempt_usage: dict[str, object] = {
-            "attempt": provider_attempts,
-            "provider": "openai",
-            "model": openai_model,
-            "status": "started",
-            "input_tokens": 0,
-            "cache_creation_input_tokens": 0,
-            "cache_read_input_tokens": 0,
-            "output_tokens": 0,
-            "queue_wait_ms": 0,
-            "accepted": False,
-            "usage_complete": False,
-        }
-        attempts.append(attempt_usage)
+        final_provider = provider
+        final_model = chat_model
         if is_fallback:
-            yield ("provider_switch", "openai")
-        reasoning_effort = effective_effort
+            yield ("provider_switch", provider)
+        reasoning_effort = (
+            "max" if provider == "kimi" and effort is None else effective_effort
+        )
         if reasoning_effort is None and thinking_budget is not None:
             reasoning_effort = (
                 "high"
                 if thinking_budget >= settings.production_thinking_budget_tokens
                 else "medium"
             )
-        if reasoning_effort is None and model == settings.orchestrator_model:
+        if reasoning_effort is None and model in {
+            settings.orchestrator_model,
+            settings.architecture_model,
+        }:
             reasoning_effort = settings.orchestrator_fallback_reasoning_effort
-        try:
-            async for event in _openai_stream(
-                openai_model,
-                system,
-                messages,
-                reasoning_effort,
-                temperature,
-                top_p,
-                effective_max_output_tokens,
-            ):
-                if event[0] == "text":
-                    attempt_usage["accepted"] = True
-                    output_chars += len(event[1])
-                elif event[0] == "usage":
-                    attempt_usage["accepted"] = True
-                    attempt_usage["usage_complete"] = True
-                    usage = json.loads(event[1])
-                    attempt_usage["input_tokens"] = int(
-                        usage.get("input_tokens") or 0
-                    )
-                    attempt_usage["output_tokens"] = int(
-                        usage.get("output_tokens") or 0
-                    )
-                    (
-                        input_tokens,
-                        cache_creation_input_tokens,
-                        cache_read_input_tokens,
-                        output_tokens,
-                    ) = _aggregate_attempt_token_usage(attempts)
+        streamer = _kimi_stream if provider == "kimi" else _openai_stream
+        attempt_limit = (
+            settings.llm_max_retries
+            if provider == "kimi" and not is_fallback
+            else 1
+        )
+        for route_attempt in range(1, attempt_limit + 1):
+            provider_attempts += 1
+            attempt_started = time.perf_counter()
+            attempt_usage: dict[str, object] = {
+                "attempt": provider_attempts,
+                "provider": provider,
+                "model": chat_model,
+                "status": "started",
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 0,
+                "queue_wait_ms": 0,
+                "accepted": False,
+                "usage_complete": False,
+            }
+            attempts.append(attempt_usage)
+            try:
+                stream_args = (
+                    chat_model,
+                    system,
+                    messages,
+                    reasoning_effort,
+                    temperature,
+                    top_p,
+                    effective_max_output_tokens,
+                )
+                response = (
+                    streamer(*stream_args, response_schema=response_schema)
+                    if response_schema is not None
+                    else streamer(*stream_args)
+                )
+                async for event in response:
+                    if event[0] == "text":
+                        attempt_usage["accepted"] = True
+                        output_chars += len(event[1])
+                    elif event[0] == "thinking":
+                        attempt_usage["accepted"] = True
+                    elif event[0] == "usage":
+                        attempt_usage["accepted"] = True
+                        attempt_usage["usage_complete"] = True
+                        usage = json.loads(event[1])
+                        attempt_usage["input_tokens"] = int(
+                            usage.get("input_tokens") or 0
+                        )
+                        attempt_usage["cache_read_input_tokens"] = int(
+                            usage.get("cache_read_input_tokens") or 0
+                        )
+                        attempt_usage["output_tokens"] = int(
+                            usage.get("output_tokens") or 0
+                        )
+                        (
+                            input_tokens,
+                            cache_creation_input_tokens,
+                            cache_read_input_tokens,
+                            output_tokens,
+                        ) = _aggregate_attempt_token_usage(attempts)
+                        continue
+                    yield event
+                attempt_usage["status"] = (
+                    "success_incomplete_usage"
+                    if attempt_usage["accepted"]
+                    and not attempt_usage["usage_complete"]
+                    else "success"
+                )
+                attempt_usage["duration_ms"] = max(
+                    1, int((time.perf_counter() - attempt_started) * 1000)
+                )
+                _record("success")
+                return
+            except Exception as exc:
+                accepted = bool(attempt_usage["accepted"])
+                attempt_usage["status"] = (
+                    "error_incomplete_usage"
+                    if accepted and not attempt_usage["usage_complete"]
+                    else "error"
+                )
+                attempt_usage["error_type"] = type(exc).__name__
+                attempt_usage["duration_ms"] = max(
+                    1, int((time.perf_counter() - attempt_started) * 1000)
+                )
+                can_retry = (
+                    not accepted
+                    and not _is_non_retryable_chat_error(exc)
+                    and route_attempt < attempt_limit
+                )
+                if can_retry:
+                    await asyncio.sleep(settings.llm_retry_delay_s)
                     continue
-                yield event
-            attempt_usage["status"] = (
-                "success_incomplete_usage"
-                if attempt_usage["accepted"]
-                and not attempt_usage["usage_complete"]
-                else "success"
-            )
-            attempt_usage["duration_ms"] = max(
-                1, int((time.perf_counter() - attempt_started) * 1000)
-            )
-            _record("success")
-        except Exception as exc:
-            attempt_usage["status"] = (
-                "error_incomplete_usage"
-                if attempt_usage["accepted"]
-                and not attempt_usage["usage_complete"]
-                else "error"
-            )
-            attempt_usage["error_type"] = type(exc).__name__
-            attempt_usage["duration_ms"] = max(
-                1, int((time.perf_counter() - attempt_started) * 1000)
-            )
-            _record("error", error_type=type(exc).__name__)
-            raise
+                _record("error", error_type=type(exc).__name__)
+                raise
 
     if _is_openai_model(model):
-        if response_schema is not None:
-            raise ValueError("structured stream_response requires an Anthropic model")
-        async for event in _stream_openai_route(model, is_fallback=False):
+        async for event in _stream_chat_completions_route(
+            model,
+            provider="openai",
+            is_fallback=False,
+        ):
+            yield event
+        return
+
+    if _is_kimi_model(model):
+        async for event in _stream_chat_completions_route(
+            model,
+            provider="kimi",
+            is_fallback=False,
+        ):
             yield event
         return
 
@@ -643,7 +818,11 @@ async def stream_response(
     fallback_model = _FALLBACK_MODELS.get(model)
     if allow_fallback and fallback_model and _get_openai_client():
         logger.warning("Falling back to OpenAI model %s", fallback_model)
-        async for event in _stream_openai_route(fallback_model, is_fallback=True):
+        async for event in _stream_chat_completions_route(
+            fallback_model,
+            provider="openai",
+            is_fallback=True,
+        ):
             yield event
         return
     else:
@@ -674,6 +853,17 @@ def _uses_adaptive_effort(model: str) -> bool:
 
 def _is_openai_model(model: str) -> bool:
     return model.startswith("gpt-") or model.startswith("o")
+
+
+def _is_kimi_model(model: str) -> bool:
+    return model.startswith("kimi-")
+
+
+def _normalise_finish_reason(finish_reason: str | None) -> str | None:
+    return {
+        "stop": "end_turn",
+        "length": "max_tokens",
+    }.get(finish_reason, finish_reason)
 
 
 def _effort_from_legacy_budget(thinking_budget: int | None) -> str | None:

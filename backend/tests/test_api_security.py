@@ -112,6 +112,7 @@ def test_cloud_run_config_rejects_disabled_security_limits(monkeypatch):
     monkeypatch.setattr(settings, "supabase_db_url", "postgresql://example")
     monkeypatch.setattr(settings, "dev_bypass_auth", False)
     monkeypatch.setattr(settings, "anthropic_api_key", "anthropic-key")
+    monkeypatch.setattr(settings, "moonshot_api_key", "moonshot-key")
     monkeypatch.setattr(settings, "supabase_url", "https://project.supabase.co")
     monkeypatch.setattr(settings, "supabase_anon_key", "anon-key")
     monkeypatch.setattr(settings, "supabase_jwt_issuer", "https://project.supabase.co/auth/v1")
@@ -121,6 +122,26 @@ def test_cloud_run_config_rejects_disabled_security_limits(monkeypatch):
     monkeypatch.setattr(settings, "rate_limit_per_minute", 0)
 
     with pytest.raises(RuntimeError, match="RATE_LIMIT_PER_MINUTE"):
+        settings.validate_for_cloud_run()
+
+
+def test_cloud_run_config_requires_moonshot_for_a_kimi_graph_builder(monkeypatch):
+    monkeypatch.setattr(settings, "supabase_db_url", "postgresql://example")
+    monkeypatch.setattr(settings, "dev_bypass_auth", False)
+    monkeypatch.setattr(settings, "anthropic_api_key", "anthropic-key")
+    monkeypatch.setattr(settings, "moonshot_api_key", "")
+    monkeypatch.setattr(settings, "graph_builder_model", "kimi-k3")
+    monkeypatch.setattr(settings, "supabase_url", "https://project.supabase.co")
+    monkeypatch.setattr(settings, "supabase_anon_key", "anon-key")
+    monkeypatch.setattr(
+        settings,
+        "supabase_jwt_issuer",
+        "https://project.supabase.co/auth/v1",
+    )
+    monkeypatch.setattr(settings, "turnstile_secret_key", "turnstile-key")
+    monkeypatch.setattr(settings, "frontend_origin", "https://example.com")
+
+    with pytest.raises(RuntimeError, match="MOONSHOT_API_KEY"):
         settings.validate_for_cloud_run()
 
 

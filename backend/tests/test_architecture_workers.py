@@ -1,5 +1,6 @@
 import pytest
 
+from config import settings
 from agent.nodes.architecture_workers import (
     _ARCHITECT_PROMPT_VERSION,
     _ARCHITECT_SYSTEM,
@@ -14,7 +15,7 @@ from agent.nodes.architecture_workers import (
 
 
 def test_architecture_roles_reason_about_enforced_control_paths():
-    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v11"
+    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v12"
     assert "production guarantees as directed paths" in _ARCHITECT_SYSTEM
     assert "timeout-after-commit as an unknown outcome" in _ARCHITECT_SYSTEM
     assert "retrieved content stays untrusted" in _ARCHITECT_SYSTEM
@@ -157,8 +158,22 @@ def test_challenger_context_ignores_a_stale_architect_brief():
     assert "Channel write APIs are available" not in context
 
 
+def test_challenger_context_includes_the_primary_plan_for_the_second_pass():
+    context = _worker_context(
+        {
+            "design_query": "growth marketing system",
+            "evidence_bundle": {},
+        },
+        "Production depth",
+        primary_plan={"interpretation": "Bounded growth optimisation loop"},
+    )
+
+    assert "Primary architect candidate" in context
+    assert "Bounded growth optimisation loop" in context
+
+
 @pytest.mark.asyncio
-async def test_architect_failure_keeps_a_bounded_enriched_contract(monkeypatch):
+async def test_architect_failure_stops_graph_input_instead_of_inventing_a_plan(monkeypatch):
     async def fail_model(**_kwargs):
         raise TimeoutError("provider timeout")
 
@@ -175,20 +190,11 @@ async def test_architect_failure_keeps_a_bounded_enriched_contract(monkeypatch):
         "send": send,
     })
 
-    brief = result["architect_plan"]
-    assert brief["interpretation"] == "customer support chatbot"
-    assert brief["required_capabilities"]
-    assert brief["runtime_flow"]
-    assert brief["assumptions"]
-    assert brief["outputs"] == ["Auditable, policy-compliant advisory result"]
-    assert not any(
-        "execute external" in capability.lower()
-        for capability in brief["required_capabilities"]
-    )
+    assert result == {"architect_plan": {}, "architecture_ready": False}
 
 
 @pytest.mark.asyncio
-async def test_architect_empty_success_uses_the_bounded_fallback(monkeypatch):
+async def test_architect_empty_success_stops_graph_input(monkeypatch):
     captured = {}
 
     async def empty_model(**kwargs):
@@ -208,20 +214,16 @@ async def test_architect_empty_success_uses_the_bounded_fallback(monkeypatch):
         "send": send,
     })
 
-    brief = result["architect_plan"]
-    assert brief["interpretation"] == "growth marketing multi-agent system"
-    assert brief["actors"]
-    assert brief["inputs"]
-    assert brief["outputs"]
-    assert len(brief["required_capabilities"]) >= 4
-    assert len(brief["runtime_flow"]) >= 4
-    assert captured["effort"] == "medium"
-    assert captured["timeout_seconds"] == 70
-    assert captured["max_output_tokens"] == 6000
+    assert result == {"architect_plan": {}, "architecture_ready": False}
+    assert captured["effort"] == "xhigh"
+    assert captured["model"] == "claude-opus-5"
+    assert captured["timeout_seconds"] == settings.architecture_pass_timeout_s
+    assert captured["max_output_tokens"] == settings.architecture_max_completion_tokens
+    assert captured["allow_fallback"] is False
 
 
 @pytest.mark.asyncio
-async def test_challenger_failure_keeps_an_independent_risk_review(monkeypatch):
+async def test_challenger_failure_stops_graph_input(monkeypatch):
     captured = {}
 
     async def fail_model(**kwargs):
@@ -238,10 +240,15 @@ async def test_challenger_failure_keeps_an_independent_risk_review(monkeypatch):
         "user_message": "airport baggage recovery system",
         "complexity": "production",
         "evidence_bundle": {},
+        "architecture_ready": True,
+        "architect_plan": {"interpretation": "Airport baggage recovery"},
         "send": send,
     })
 
-    assert result["challenger_review"]["risks"]
-    assert captured["effort"] == "medium"
-    assert captured["timeout_seconds"] == 70
-    assert captured["max_output_tokens"] == 3500
+    assert result == {"challenger_review": {}, "architecture_ready": False}
+    assert captured["effort"] == "xhigh"
+    assert captured["model"] == "claude-opus-5"
+    assert "Primary architect candidate" in captured["messages"][0]["content"]
+    assert captured["timeout_seconds"] == settings.architecture_review_timeout_s
+    assert captured["max_output_tokens"] == settings.architecture_max_completion_tokens
+    assert captured["allow_fallback"] is False

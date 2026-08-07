@@ -3,8 +3,8 @@
 # Purpose: Phase 3 async node enrichment — for each graph node, runs two RAG
 #          searches (by label + by connection context) and generates a concise
 #          description with book citations.
-#          Runs N workers in parallel (capped at max_graph_nodes) via
-#          asyncio.gather. Does NOT block the done event — fires after Phase 2.
+#          Runs paid enrichment only for max_node_detail_nodes nodes. This spend
+#          limit does not change the graph. The workflow awaits the workers.
 # Language: Python
 # Connects to: adapters/llm_adapter.py, agent/tools/rag_worker_tools/rag_search_tool.py
 #              agent/state.py, config.py
@@ -201,9 +201,9 @@ async def enrich_all_nodes(
     thread_id: str | None = None,
 ) -> None:
     """
-    Enrich canonical graph nodes in parallel, capped at
-    ``settings.max_graph_nodes`` workers. The workflow awaits enrichment before
-    the transport publishes its terminal event.
+    Enrich the first ``settings.max_node_detail_nodes`` canonical graph nodes in
+    parallel. This paid-call boundary does not remove nodes from the graph. The
+    workflow awaits enrichment before the transport publishes its terminal event.
 
     Args:
         nodes:           list of GraphNode dicts from the current graph
@@ -212,7 +212,7 @@ async def enrich_all_nodes(
         rag_search_tool: bound rag_search tool (vectorstore pre-loaded)
         send:            SSE event callback
     """
-    capped_nodes = nodes[:settings.max_graph_nodes]
+    capped_nodes = nodes[:settings.max_node_detail_nodes]
     tasks = [
         enrich_node(
             node,
