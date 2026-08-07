@@ -38,6 +38,8 @@ def _assert_approved_judge_identity(corpus: Any, judge: Any) -> None:
     identity = corpus.approval.calibration
     if identity.judge_release != JUDGE_PROMPT_RELEASE:
         raise RuntimeError("active judge prompt release is not approved for this corpus")
+    if identity.judge_provider != getattr(judge, "provider", "openai"):
+        raise RuntimeError("active judge provider is not approved for this corpus")
     if identity.judge_model != judge.model:
         raise RuntimeError("active judge model is not approved for this corpus")
 
@@ -70,6 +72,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Rejudge saved browser evidence without charging application calls again",
     )
+    parser.add_argument(
+        "--resume-input",
+        help="Prior semantic-replay report whose authenticated valid judgments can be reused",
+    )
     return parser
 
 
@@ -90,6 +96,66 @@ def _load_capture(args: argparse.Namespace) -> dict[str, Any]:
     if capture.get("corpus_sha256") != corpus_sha256():
         raise RuntimeError("browser capture was produced with a different corpus manifest")
     return capture
+
+
+def _load_resume_evaluations(
+    args: argparse.Namespace,
+    corpus: Any,
+    judge: Any,
+    actual_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    if not args.resume_input:
+        return {}
+    if not args.capture_replay:
+        raise RuntimeError("judge resume is restricted to authenticated capture replay")
+    report = json.loads((ROOT / args.resume_input).read_text(encoding="utf-8"))
+    expected_identity = {
+        "kind": "live_gate",
+        "execution_mode": "semantic_replay",
+        "suite": args.suite,
+        "target": args.target,
+        "corpus_version": corpus.corpus_version,
+        "corpus_sha256": corpus_sha256(),
+        "release_identity": corpus.release_identity,
+    }
+    for key, expected in expected_identity.items():
+        if report.get(key) != expected:
+            raise RuntimeError(f"resume report {key} does not match this replay")
+    raw_evaluations = report.get("evaluations")
+    if not isinstance(raw_evaluations, list):
+        raise RuntimeError("resume report evaluations are missing")
+    resume_ids = [item.get("id") for item in raw_evaluations if isinstance(item, dict)]
+    if resume_ids != actual_ids:
+        raise RuntimeError("resume report cases do not match the browser capture")
+
+    reusable: dict[str, dict[str, Any]] = {}
+    for evaluation in raw_evaluations:
+        judgments = evaluation.get("judgments") or []
+        if evaluation.get("decision") == "infrastructure" or not judgments:
+            continue
+        case_id = str(evaluation.get("id") or "")
+        case = corpus.by_id[case_id]
+        if evaluation.get("decision") not in {"pass", "manual_review", "fail"}:
+            raise RuntimeError(f"resume report has an invalid decision for {case_id}")
+        if evaluation.get("deterministic_failures"):
+            raise RuntimeError(f"resume judgment for {case_id} has deterministic failures")
+        for judgment in judgments:
+            if judgment.get("provider") != judge.provider:
+                raise RuntimeError(f"resume judge provider does not match for {case_id}")
+            if judgment.get("model") != judge.model:
+                raise RuntimeError(f"resume judge model does not match for {case_id}")
+            if judgment.get("prompt_release") != JUDGE_PROMPT_RELEASE:
+                raise RuntimeError(f"resume judge release does not match for {case_id}")
+            dimensions = judgment.get("dimensions") or []
+            names = [item.get("dimension") for item in dimensions]
+            if names != list(case.rubric_dimensions):
+                raise RuntimeError(f"resume judgment dimensions do not match for {case_id}")
+            for dimension in dimensions:
+                evidence = dimension.get("evidence")
+                if not isinstance(evidence, list) or not 1 <= len(evidence) <= 3:
+                    raise RuntimeError(f"resume judgment evidence is invalid for {case_id}")
+        reusable[case_id] = evaluation
+    return reusable
 
 
 def _judge_payload(result: dict[str, Any]) -> dict[str, Any]:
@@ -298,10 +364,22 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     judge = SemanticJudge()
     if args.require_approved_corpus:
         _assert_approved_judge_identity(corpus, judge)
+    resume_evaluations = _load_resume_evaluations(
+        args,
+        corpus,
+        judge,
+        actual_ids,
+    )
     evaluations: list[dict[str, Any]] = []
 
     for browser_result in capture["results"]:
         case = corpus.by_id[browser_result["id"]]
+        resumed = resume_evaluations.get(case.id)
+        if resumed is not None:
+            for _judgment in resumed["judgments"]:
+                budget.record_judge_call()
+            evaluations.append(resumed)
+            continue
         deterministic_failures = tuple(browser_result.get("deterministic_failures") or [])
         if deterministic_failures:
             classification = _classify_deterministic(list(deterministic_failures))
@@ -394,6 +472,7 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "judge_calls": budget.judge_calls,
             "judge_limit": budget.judge_limit,
         },
+        "resumed_case_ids": list(resume_evaluations),
         "application_telemetry": app_telemetry,
         "cost_accounting": {
             "policy": cost_policy,

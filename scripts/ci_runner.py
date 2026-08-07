@@ -269,6 +269,8 @@ def _dispatch_eval(kind: str, args: argparse.Namespace) -> None:
         argv.extend(["--manual-review-policy", args.manual_review_policy])
     if getattr(args, "capture_replay", False):
         argv.append("--capture-replay")
+    if getattr(args, "resume_input", None):
+        argv.extend(["--resume-input", args.resume_input])
     for case_id in getattr(args, "case", []):
         argv.extend(["--case", case_id])
     # Module and argument structure are fixed; user values remain individual argv entries.
@@ -344,6 +346,7 @@ def build_parser() -> argparse.ArgumentParser:
                 default="blocking",
             )
             evaluation.add_argument("--capture-replay", action="store_true")
+            evaluation.add_argument("--resume-input")
     override = subparsers.add_parser("override")
     override.add_argument("--run-id", required=True)
     override.add_argument("--commit-sha", required=True)

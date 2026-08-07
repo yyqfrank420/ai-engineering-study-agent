@@ -19,6 +19,7 @@ def calculate_calibration(
     *,
     evidence_sha256: str,
     source_context: dict[str, Any],
+    judge_selection: dict[str, Any],
 ) -> dict[str, Any]:
     if live_report.get("kind") != "live_gate" or live_report.get("suite") != "full":
         raise ValueError("calibration requires a full live-gate report")
@@ -35,6 +36,14 @@ def calculate_calibration(
     calibration_identity = corpus.approval.calibration
     if calibration_identity.judge_release != JUDGE_PROMPT_RELEASE:
         raise ValueError("approved judge release is not the active judge release")
+    candidate_provider = str(judge_selection.get("provider") or "")
+    candidate_model = str(judge_selection.get("model") or "")
+    if judge_selection.get("format_version") != 1:
+        raise ValueError("candidate judge selection has an unknown format")
+    if candidate_provider not in {"anthropic", "openai"}:
+        raise ValueError("candidate judge selection has an unsupported provider")
+    if not candidate_model:
+        raise ValueError("candidate judge selection is missing its model")
     if evidence_sha256 != calibration_identity.evidence_sha256:
         raise ValueError("calibration evidence digest does not match approved identity")
     if str(source_context.get("source_run_id") or "") != calibration_identity.evidence_run_id:
@@ -54,6 +63,7 @@ def calculate_calibration(
     dimension_totals: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     disagreements: list[dict[str, str]] = []
     critical_false_pass_case_ids: set[str] = set()
+    judge_providers: set[str] = set()
     judge_models: set[str] = set()
     for case in corpus.cases:
         if case.approval.status != "approved":
@@ -67,10 +77,14 @@ def calculate_calibration(
         for judgment in judgments:
             if judgment.get("prompt_release") != calibration_identity.judge_release:
                 raise ValueError(f"case {case.id} judge release does not match calibration identity")
-            if judgment.get("model") != calibration_identity.judge_model:
-                raise ValueError(f"case {case.id} judge model does not match calibration identity")
+            if judgment.get("provider") != candidate_provider:
+                raise ValueError(f"case {case.id} judge provider does not match candidate selection")
+            if judgment.get("model") != candidate_model:
+                raise ValueError(f"case {case.id} judge model does not match candidate selection")
         first_judgment = judgments[0]
+        provider = str(first_judgment.get("provider") or "")
         model = str(first_judgment.get("model") or "")
+        judge_providers.add(provider)
         judge_models.add(model)
         raw_dimensions = first_judgment.get("dimensions") or []
         proposed = {dimension["dimension"]: dimension["grade"] for dimension in raw_dimensions}
@@ -117,6 +131,12 @@ def calculate_calibration(
         "agreement_drop": round(agreement_drop, 6),
         "critical_false_passes": critical_false_passes,
         "critical_false_pass_case_ids": sorted(critical_false_pass_case_ids),
+        "candidate_judge": {
+            "provider": candidate_provider,
+            "model": candidate_model,
+            "prompt_release": JUDGE_PROMPT_RELEASE,
+        },
+        "judge_providers": sorted(judge_providers),
         "judge_models": sorted(judge_models),
         "evidence_sha256": evidence_sha256,
         "source_context": source_context,
@@ -138,6 +158,7 @@ def main() -> None:
     parser.add_argument("--input", required=True, help="Full-suite live-results.json")
     parser.add_argument("--evidence", required=True, help="Immutable browser-results.json used for replay")
     parser.add_argument("--context", required=True, help="Replay context JSON identifying source run and commit")
+    parser.add_argument("--judge-selection", required=True, help="Frozen calibration judge provider/model JSON")
     parser.add_argument("--output", default="artifacts/live-eval/calibration.json")
     args = parser.parse_args()
     evidence_sha256 = hashlib.sha256(Path(args.evidence).read_bytes()).hexdigest()
@@ -147,6 +168,7 @@ def main() -> None:
         json.loads(Path(args.input).read_text(encoding="utf-8")),
         evidence_sha256=evidence_sha256,
         source_context=source_context,
+        judge_selection=json.loads(Path(args.judge_selection).read_text(encoding="utf-8")),
     )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

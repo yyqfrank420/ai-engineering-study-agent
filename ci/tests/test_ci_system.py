@@ -53,11 +53,22 @@ def test_manifest_validation_fails_when_a_tracked_test_is_omitted():
         (["docs/current-architecture.md"], {"pipeline-policy"}),
         (
             ["backend/agent/nodes/research_worker.py"],
-            {"agent-rag-llm", "static-security", "container", "pipeline-policy"},
+            {
+                "agent-rag-llm",
+                "backend-coverage",
+                "static-security",
+                "container",
+                "pipeline-policy",
+            },
         ),
         (
             ["backend/tests/test_quality_corpus.py"],
-            {"eval-quality", "static-security", "pipeline-policy"},
+            {
+                "eval-quality",
+                "backend-coverage",
+                "static-security",
+                "pipeline-policy",
+            },
         ),
         (["frontend/src/index.css"], {"frontend", "pipeline-policy"}),
     ],
@@ -255,6 +266,308 @@ def test_feature_pull_requests_do_not_duplicate_required_workflows_on_push():
         assert "codex/**" not in triggers
 
 
+def test_live_eval_override_compares_release_content_by_tree_snapshot():
+    workflow = (ROOT / ".github/workflows/live-eval-override.yml").read_text(
+        encoding="utf-8"
+    )
+    verification = workflow.split(
+        "name: Verify complete per-case evidence and exact release identity", 1
+    )[1].split("- uses: google-github-actions/auth@v2", 1)[0]
+
+    assert "def tree_files(commit_sha):" in verification
+    assert "git/trees/{commit['tree']['sha']}?recursive=1" in verification
+    assert 'if entry_type not in {"blob", "commit"}:' in verification
+    assert 'files[item["path"]] = (item["mode"], entry_type, item["sha"])' in verification
+    assert "applied_files = tree_files(applied_commit)" in verification
+    assert "current_files = tree_files(current_commit)" in verification
+    assert "applied_files.keys() | current_files.keys()" in verification
+    assert "if applied_files.get(path) != current_files.get(path)" in verification
+    assert "/compare/" not in verification
+
+
+def test_live_eval_override_binds_pr_merge_evidence_to_parent_and_recorded_tree():
+    workflow = (ROOT / ".github/workflows/live-eval-override.yml").read_text(
+        encoding="utf-8"
+    )
+    verification = workflow.split(
+        "name: Verify complete per-case evidence and exact release identity", 1
+    )[1].split("- uses: google-github-actions/auth@v2", 1)[0]
+
+    assert 'if context_name == "run-context.json":' in verification
+    assert 'if run.get("event") == "pull_request":' in verification
+    assert 'pull_requests = run.get("pull_requests")' in verification
+    assert "len(pull_requests) != 1" in verification
+    assert 'head_sha = head.get("sha")' in verification
+    assert 'base_sha = base.get("sha")' in verification
+    assert "if head_sha != source_commit:" in verification
+    assert "expected_pr_parents = {head_sha, base_sha}" in verification
+    assert "if len(expected_pr_parents) != 2:" in verification
+    assert "if context_commit == source_commit:" in verification
+    assert 'tested_parents = tested.get("parents", [])' in verification
+    assert "len(tested_parent_shas) != 2" in verification
+    assert "len(set(tested_parent_shas)) != 2" in verification
+    assert "if set(tested_parent_shas) != expected_pr_parents:" in verification
+    assert 'recorded_tree = context.get("tree_sha")' in verification
+    assert (
+        'not re.fullmatch(r"[0-9a-f]{40}", recorded_tree)'
+        in verification
+    )
+    assert 'if recorded_tree != tested["tree"]["sha"]:' in verification
+    assert (
+        'if run.get("event") == "pull_request" and not deployment_commits:'
+        in verification
+    )
+    assert "tested_commit = next(iter(deployment_commits), source_commit)" in verification
+    assert "source_cases = case_map(tested_commit)" in verification
+    assert 'context.get("commit_sha") != source_commit' not in verification
+
+
+def test_live_eval_override_rejects_ambiguous_composite_evidence():
+    workflow = (ROOT / ".github/workflows/live-eval-override.yml").read_text(
+        encoding="utf-8"
+    )
+    request_validation = workflow.split(
+        "name: Validate authenticated evidence request", 1
+    )[1].split("name: Download explicit evidence and source metadata", 1)[0]
+    verification = workflow.split(
+        "name: Verify complete per-case evidence and exact release identity", 1
+    )[1].split("- uses: google-github-actions/auth@v2", 1)[0]
+
+    assert "seen_run_ids = set()" in request_validation
+    assert "if run_id in seen_run_ids:" in request_validation
+    assert "Each evidence source must use a distinct run_id" in request_validation
+    assert "def raw_case_results(document, key, label, run_id):" in verification
+    assert "len(case_ids) != len(set(case_ids))" in verification
+    assert "if replay is None and browser_ids != live_ids:" in verification
+    assert 'identity_value(browser, "corpus_sha256")' in verification
+    assert 'identity_value(live, "corpus_sha256")' in verification
+    assert "if missing_corpus_sha256 and not legacy:" in verification
+    assert "if len(present_corpus_sha256) > 1:" in verification
+    assert '"corpus_sha256_documents": corpus_sha256_documents' in verification
+    assert '("corpus_version", "release_identity", "corpus_sha256")' in verification
+    assert 'browser.get("suite") != "diagnostic"' in verification
+    assert 'live.get("suite") != "diagnostic"' in verification
+    assert 'browser_ids != ["applied-domain"]' in verification
+    assert 'live_ids != ["applied-domain"]' in verification
+
+
+def test_live_eval_override_supports_exact_pr_check_and_production_scopes():
+    workflow = (ROOT / ".github/workflows/live-eval-override.yml").read_text(
+        encoding="utf-8"
+    )
+    inputs = workflow.split("workflow_dispatch:", 1)[1].split("\npermissions:", 1)[0]
+    validation = workflow.split(
+        "name: Validate authenticated evidence request", 1
+    )[1].split("name: Download explicit evidence and source metadata", 1)[0]
+    verification = workflow.split(
+        "name: Verify complete per-case evidence and exact release identity", 1
+    )[1].split("- uses: google-github-actions/auth@v2", 1)[0]
+    publication = workflow.split("- uses: google-github-actions/auth@v2", 1)[1]
+
+    assert "scope:" in inputs
+    assert "options: [pr-check, production]" in inputs
+    assert "current_commit_sha:" in inputs
+    assert "pr_number:" in inputs
+    assert "ref: ${{ inputs.current_commit_sha }}" in workflow
+    assert "environment: staging-eval" in workflow
+    assert "name: Live eval required" in workflow
+    assert '[ "$GITHUB_SHA" = "$CURRENT_COMMIT_SHA" ]' in validation
+    assert '[ "$GITHUB_REF" = refs/heads/main ]' in validation
+    assert 'if approval_scope == "pr-check":' in verification
+    assert 'api_json(f"repos/{repository}/pulls/{pr_number}")' in verification
+    assert 'head_sha != current_commit' in verification
+    assert 'base.get("ref") != "main"' in verification
+    assert 'os.environ["GITHUB_REF"] != f"refs/heads/{head_ref}"' in verification
+    assert 'os.environ["GITHUB_SHA"] != head_sha' in verification
+    assert '"head_sha": head_sha' in verification
+    assert '"base_sha": base_sha' in verification
+    assert publication.count("if: inputs.scope == 'production'") == 3
+    assert "gcloud artifacts docker tags add" in publication
+    assert "gcloud artifacts docker tags add" not in verification
+
+
+def test_live_eval_override_authenticates_replay_and_diagnostic_composition():
+    workflow = (ROOT / ".github/workflows/live-eval-override.yml").read_text(
+        encoding="utf-8"
+    )
+    request_validation = workflow.split(
+        "name: Validate authenticated evidence request", 1
+    )[1].split("name: Download explicit evidence and source metadata", 1)[0]
+    verification = workflow.split(
+        "name: Verify complete per-case evidence and exact release identity", 1
+    )[1].split("- uses: google-github-actions/auth@v2", 1)[0]
+
+    assert 'source.get("browser_sha256", "")' in request_validation
+    assert 'source.get("semantic_sha256", "")' in request_validation
+    assert 'source.get("semantic_replay")' in request_validation
+    assert "replay_count != 1" in request_validation
+    assert "exactly one source-linked semantic replay" in request_validation
+    assert "def file_sha256(path):" in verification
+    assert "Browser artifact hash mismatch" in verification
+    assert "Semantic artifact hash mismatch" in verification
+    assert "Semantic replay context hash mismatch" in verification
+    assert 'replay_context.get("source_run_id")' in verification
+    assert 'replay_context.get("source_commit_sha")' in verification
+    assert 'replay_context.get("judge_commit_sha")' in verification
+    assert 'replay_run.get("path") != ".github/workflows/semantic-review-replay.yml"' in verification
+    assert 'run.get("path") != ".github/workflows/live-eval.yml"' in verification
+    assert 'run.get("path") != ".github/workflows/scheduled-eval.yml"' in verification
+    assert 'browser.get("suite") != "pr"' in verification
+    assert 'browser.get("suite") != "diagnostic"' in verification
+    assert "browser_ids != selected or live_ids != selected" in verification
+    assert "assigned != expected_cases" in verification
+    assert "Cases assigned more than once" in verification
+    assert 'selected != ["applied-domain"]' in verification
+    assert 'tested_tree_sha = tested_metadata["tree"]["sha"]' in verification
+    assert "logged_digests != {image_digest}" in verification
+    assert '"current_commit_sha": current_commit' in verification
+    assert '"current_tree_sha": current_tree_sha' in verification
+
+
+def test_live_eval_override_replay_source_is_the_bounded_failed_pr_lane():
+    workflow = (ROOT / ".github/workflows/live-eval-override.yml").read_text(
+        encoding="utf-8"
+    )
+    verification = workflow.split(
+        "name: Verify complete per-case evidence and exact release identity", 1
+    )[1].split("- uses: google-github-actions/auth@v2", 1)[0]
+
+    assert 'run.get("path") != ".github/workflows/live-eval.yml"' in verification
+    assert 'run.get("event") != "pull_request"' in verification
+    assert 'run.get("status") != "completed"' in verification
+    assert 'run.get("conclusion") != "failure"' in verification
+    assert 'job.get("name") == "Live eval required"' in verification
+    assert 'required_jobs[0].get("conclusion") != "failure"' in verification
+    assert "set(selected) != replay_expected_cases" in verification
+    assert 'replay_expected_cases = {"memory", "graph-off", "prompt-injection"}' in verification
+    assert "source_commit != evidence_commit" in verification
+    assert "head_sha != applied_commit" in verification
+    assert 'base_sha != pr_identity["base_sha"]' in verification
+    assert "set(browser_ids) != expected_cases" in verification
+    assert 'browser.get("suite") != "pr"' in verification
+    assert 'live_ids != selected or live.get("status") != "pass"' in verification
+
+
+def test_live_eval_override_replay_selection_has_no_graph_operation_provenance():
+    workflow = (ROOT / ".github/workflows/live-eval-override.yml").read_text(
+        encoding="utf-8"
+    )
+    verification = workflow.split(
+        "name: Verify complete per-case evidence and exact release identity", 1
+    )[1].split("- uses: google-github-actions/auth@v2", 1)[0]
+
+    assert 'application_telemetry = browser.get("application_telemetry")' in verification
+    assert 'thread_ids = browser_case.get("thread_ids")' in verification
+    assert 'item.get("thread_id") in set(thread_ids)' in verification
+    assert 'operation.startswith("graph_")' in verification
+    assert "if graph_operations:" in verification
+    assert 'replay_provenance["selection"] = selected' in verification
+    assert 'replay_provenance["case_operations"] = replay_case_operations' in verification
+    assert '"graph_operations": graph_operations' in verification
+
+
+def test_live_eval_override_tree_equality_has_one_bounded_legacy_replay_exception():
+    workflow = (ROOT / ".github/workflows/live-eval-override.yml").read_text(
+        encoding="utf-8"
+    )
+    verification = workflow.split(
+        "name: Verify complete per-case evidence and exact release identity", 1
+    )[1].split("- uses: google-github-actions/auth@v2", 1)[0]
+    allowed_paths = {
+        "backend/agent/nodes/graph_worker.py",
+        "backend/agent/nodes/graph_critic.py",
+        "backend/tests/test_graph_patch.py",
+        "backend/tests/test_graph_critic.py",
+        "backend/tests/test_graph_grounding_prompts.py",
+        "backend/eval/evidence_replay.py",
+        "backend/tests/test_quality_corpus.py",
+        "ci/tests/test_ci_system.py",
+        ".github/workflows/semantic-review-replay.yml",
+        ".github/workflows/live-eval-override.yml",
+        ".github/workflows/scheduled-eval.yml",
+        "docs/quality-system.md",
+    }
+
+    assert "legacy_replay_allowed_changes = {" in verification
+    for path in allowed_paths:
+        assert f'"{path}"' in verification
+    assert 'tested_tree_sha = tested_metadata["tree"]["sha"]' in verification
+    assert "if tested_tree_sha != applied_tree_sha:" in verification
+    assert "if replay is None or not legacy:" in verification
+    assert "replay_case_operations is None or any(" in verification
+    assert 'item["graph_operations"] for item in replay_case_operations.values()' in verification
+    assert "if not replay_tree_changes <= legacy_replay_allowed_changes:" in verification
+    assert "replay_tree_changes - legacy_replay_allowed_changes" in verification
+    assert verification.index("if graph_operations:") < verification.index(
+        "if tested_tree_sha != applied_tree_sha:"
+    )
+    assert '"legacy_replay_tree_changes": legacy_replay_tree_changes' in verification
+
+
+def test_scheduled_eval_missing_approval_fails_closed_before_expensive_setup():
+    workflow = (ROOT / ".github/workflows/scheduled-eval.yml").read_text(
+        encoding="utf-8"
+    )
+    preflight = workflow.split(
+        "name: Preflight exact-tree approval before expensive setup", 1
+    )[1].split("- uses: actions/setup-python@v5", 1)[0]
+
+    assert "id: approved_image" in workflow
+    assert 'commit_sha="$(git rev-parse HEAD)"' in preflight
+    assert 'tree_sha="$(git rev-parse \'HEAD^{tree}\')"' in preflight
+    assert 'approval_tag="approved-tree-$tree_sha"' in preflight
+    assert '2>"$lookup_error_file"' in preflight
+    assert 'lookup_status=$?' in preflight
+    classifier_pattern = (
+        r"^(ERROR: \(gcloud\.artifacts\.docker\.images\.describe\) "
+        r"(Docker image .+ not found\.?|Image not found\.)|Image not found\.)$"
+    )
+    assert f"grep -Eiq '{classifier_pattern}' \"$lookup_error_file\"" in preflight
+    classifier = __import__("re").compile(classifier_pattern, __import__("re").IGNORECASE)
+    assert classifier.fullmatch(
+        "ERROR: (gcloud.artifacts.docker.images.describe) "
+        "Docker image [europe-west2-docker.pkg.dev/p/r/i:approved-tree-deadbeef] not found."
+    )
+    assert classifier.fullmatch("Image not found.")
+    assert classifier.fullmatch(
+        "ERROR: (gcloud.artifacts.docker.images.describe) Image not found."
+    )
+    assert not classifier.fullmatch("Unexpected Image not found.")
+    assert not classifier.fullmatch(
+        "ERROR: (gcloud.artifacts.docker.images.describe) PERMISSION_DENIED: "
+        "Permission artifactregistry.dockerimages.get denied."
+    )
+    assert not classifier.fullmatch(
+        "ERROR: (gcloud.artifacts.docker.images.describe) "
+        "ResponseError: status=[503], code=[Unavailable]"
+    )
+    assert "Exact-tree approval lookup failed:" in preflight
+    assert 'exit "$lookup_status"' in preflight
+    assert "Exact-tree approval lookup returned no digest:" in preflight
+    assert preflight.index('if [ -z "$digest" ]; then') < preflight.index("grep -Eiq")
+    assert "2>/dev/null || true" not in preflight
+    assert (
+        'if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] '
+        '&& [ "$EVAL_SUITE" = diagnostic ]; then'
+        in preflight
+    )
+    assert "Missing exact-tree evaluation approval:" in preflight
+    assert "commit=$commit_sha tree=$tree_sha image_tag=$IMAGE:$approval_tag" in preflight
+    assert (
+        "The protected live evaluation must publish this exact-tree tag" in preflight
+    )
+    assert preflight.rstrip().endswith("exit 1")
+
+    dependency_setup = workflow.index("uses: actions/setup-python@v5")
+    assert workflow.index("id: approved_image") < dependency_setup
+    assert workflow.index("pip install -r backend/requirements.txt") > dependency_setup
+    assert workflow.index("python scripts/staging_database.py reset") > dependency_setup
+    assert (
+        "APPROVED_IMAGE_DIGEST: ${{ steps.approved_image.outputs.digest }}" in workflow
+    )
+    assert 'digest="$APPROVED_IMAGE_DIGEST"' in workflow
+
+
 def test_scheduled_eval_preserves_approval_and_diagnostic_build_boundaries():
     workflow = (ROOT / ".github/workflows/scheduled-eval.yml").read_text(
         encoding="utf-8"
@@ -265,11 +578,7 @@ def test_scheduled_eval_preserves_approval_and_diagnostic_build_boundaries():
     assert "corpus-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" in workflow
     assert "diagnostic-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" in workflow
     assert 'if [ "$CORPUS_STATUS" = approved ]; then' in workflow
-    assert (
-        "Approved corpus requires an existing exact-tree image approval outside a "
-        "manually dispatched diagnostic run."
-        in workflow
-    )
+    assert "Missing exact-tree evaluation approval:" in workflow
     assert (
         'if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || '
         '[ "$EVAL_SUITE" != diagnostic ]; then'
@@ -301,6 +610,9 @@ def test_scheduled_eval_preserves_approval_and_diagnostic_build_boundaries():
     approval_state = workflow.index(
         "name: Resolve corpus approval state without installing dependencies"
     )
+    approval_preflight = workflow.index(
+        "name: Preflight exact-tree approval before expensive setup"
+    )
     dependency_setup = workflow.index("uses: actions/setup-python@v5")
     candidate_resolution = workflow.index(
         "name: Resolve approved digest or build an ephemeral evaluation candidate"
@@ -309,6 +621,7 @@ def test_scheduled_eval_preserves_approval_and_diagnostic_build_boundaries():
     browser_capture = workflow.index("name: Start frontend and capture journeys")
     assert (
         approval_state
+        < approval_preflight
         < dependency_setup
         < candidate_resolution
         < candidate_readiness

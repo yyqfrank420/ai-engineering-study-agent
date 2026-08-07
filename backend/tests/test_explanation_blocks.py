@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 import agent.explanation_blocks as explanation_blocks
@@ -25,6 +27,9 @@ async def test_one_provider_call_emits_complete_explanation_blocks(monkeypatch):
         model="claude-opus-5",
         system="system",
         messages=[{"role": "user", "content": "explain"}],
+        effort="medium",
+        max_output_tokens=4500,
+        timeout_seconds=40,
         telemetry={"operation": "test"},
         send=send,
         graph_version="v1",
@@ -32,12 +37,99 @@ async def test_one_provider_call_emits_complete_explanation_blocks(monkeypatch):
     )
 
     assert len(calls) == 1
-    assert calls[0]["effort"] == "high"
+    assert calls[0]["effort"] == "medium"
+    assert calls[0]["max_output_tokens"] == 4500
     assert "<untrusted_context>" in calls[0]["system"]
     blocks = [event for event in events if event["type"] == "explanation_block"]
     assert [block["title"] for block in blocks] == ["In one minute", "Safety"]
     assert blocks[1]["related_node_ids"] == ["approval"]
     assert "## Safety" in response
+
+
+@pytest.mark.asyncio
+async def test_stream_timeout_preserves_parsed_block_and_closes_provider_iterator(monkeypatch):
+    closed = False
+
+    async def stalled_stream_response(**_kwargs):
+        nonlocal closed
+        try:
+            yield (
+                "text",
+                '{"block_id":"overview","title":"Overview","content":"Ready",'
+                '"related_node_ids":["input"],"evidence_refs":[]}',
+            )
+            await asyncio.Future()
+        finally:
+            closed = True
+
+    monkeypatch.setattr(explanation_blocks, "stream_response", stalled_stream_response)
+
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    response = await explanation_blocks.stream_explanation_blocks(
+        model="claude-opus-5",
+        system="system",
+        messages=[{"role": "user", "content": "explain"}],
+        effort="low",
+        max_output_tokens=4500,
+        timeout_seconds=0.01,
+        telemetry={"operation": "test"},
+        send=send,
+        graph_version="v1",
+        allowed_node_ids={"input"},
+    )
+
+    assert closed is True
+    assert "## Overview\n\nReady" in response
+    assert [event["status"] for event in events if event["type"] == "workflow_progress"] == [
+        "degraded"
+    ]
+    assert len([event for event in events if event["type"] == "explanation_block"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_timeout_before_complete_block_emits_bounded_fallback(monkeypatch):
+    closed = False
+
+    async def stalled_stream_response(**_kwargs):
+        nonlocal closed
+        try:
+            yield ("text", '{"block_id":"overview","content":"partial')
+            await asyncio.Future()
+        finally:
+            closed = True
+
+    monkeypatch.setattr(explanation_blocks, "stream_response", stalled_stream_response)
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    response = await explanation_blocks.stream_explanation_blocks(
+        model="claude-opus-5",
+        system="system",
+        messages=[{"role": "user", "content": "explain"}],
+        effort="low",
+        max_output_tokens=4500,
+        timeout_seconds=0.01,
+        telemetry={"operation": "test"},
+        send=send,
+        graph_version="v1",
+        allowed_node_ids={"input"},
+    )
+
+    fallback = next(event for event in events if event["type"] == "explanation_block")
+    assert closed is True
+    assert fallback["title"] == "Architecture explanation"
+    assert len(fallback["content"]) <= 4000
+    assert "partial" in response
+    assert any(
+        event["type"] == "workflow_progress" and event["status"] == "degraded"
+        for event in events
+    )
 
 
 def test_block_normalisation_rejects_scalar_lists_and_empty_identifiers():

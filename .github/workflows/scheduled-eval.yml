@@ -82,6 +82,50 @@ jobs:
             echo "A pending corpus can be bootstrapped only by a manually dispatched full or diagnostic run." >&2
             exit 1
           fi
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - id: approved_image
+        name: Preflight exact-tree approval before expensive setup
+        env:
+          CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
+        run: |
+          commit_sha="$(git rev-parse HEAD)"
+          tree_sha="$(git rev-parse 'HEAD^{tree}')"
+          approval_tag="approved-tree-$tree_sha"
+          echo "commit_sha=$commit_sha" >> "$GITHUB_OUTPUT"
+          echo "tree_sha=$tree_sha" >> "$GITHUB_OUTPUT"
+          if [ "$CORPUS_STATUS" != approved ]; then
+            exit 0
+          fi
+          lookup_error_file="$(mktemp "$RUNNER_TEMP/approved-image-lookup.XXXXXX")"
+          if digest="$(gcloud artifacts docker images describe "$IMAGE:$approval_tag" --format='value(image_summary.digest)' 2>"$lookup_error_file")"; then
+            rm -f "$lookup_error_file"
+            if [ -z "$digest" ]; then
+              echo "Exact-tree approval lookup returned no digest: commit=$commit_sha tree=$tree_sha image_tag=$IMAGE:$approval_tag" >&2
+              exit 1
+            fi
+            echo "digest=$digest" >> "$GITHUB_OUTPUT"
+            exit 0
+          else
+            lookup_status=$?
+          fi
+          if ! grep -Eiq '^(ERROR: \(gcloud\.artifacts\.docker\.images\.describe\) (Docker image .+ not found\.?|Image not found\.)|Image not found\.)$' "$lookup_error_file"; then
+            echo "Exact-tree approval lookup failed: commit=$commit_sha tree=$tree_sha image_tag=$IMAGE:$approval_tag" >&2
+            sed 's/^/gcloud: /' "$lookup_error_file" >&2
+            rm -f "$lookup_error_file"
+            exit "$lookup_status"
+          fi
+          rm -f "$lookup_error_file"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$EVAL_SUITE" = diagnostic ]; then
+            echo "Exact-tree approval is absent; the manually dispatched diagnostic will build an ephemeral candidate: commit=$commit_sha tree=$tree_sha image_tag=$IMAGE:$approval_tag"
+            exit 0
+          fi
+          echo "Missing exact-tree evaluation approval: commit=$commit_sha tree=$tree_sha image_tag=$IMAGE:$approval_tag" >&2
+          echo "The protected live evaluation must publish this exact-tree tag before a scheduled nightly or full evaluation can run." >&2
+          exit 1
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -98,11 +142,6 @@ jobs:
           pip install -r backend/requirements.txt -r backend/requirements-eval.txt
           python -m playwright install --with-deps chromium
           npm ci --prefix frontend --prefer-offline --no-audit --no-fund
-      - uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-      - uses: google-github-actions/setup-gcloud@v2
       - name: Configure registry authentication
         run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
       - uses: docker/setup-buildx-action@v3
@@ -125,23 +164,23 @@ jobs:
       - name: Resolve approved digest or build an ephemeral evaluation candidate
         env:
           CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
+          APPROVED_IMAGE_DIGEST: ${{ steps.approved_image.outputs.digest }}
+          EVALUATION_COMMIT_SHA: ${{ steps.approved_image.outputs.commit_sha }}
         run: |
-          tree_sha="$(git rev-parse 'HEAD^{tree}')"
           if [ "$CORPUS_STATUS" = approved ]; then
-            digest="$(gcloud artifacts docker images describe "$IMAGE:approved-tree-$tree_sha" --format='value(image_summary.digest)' 2>/dev/null || true)"
+            digest="$APPROVED_IMAGE_DIGEST"
             if [ -z "$digest" ]; then
               if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || [ "$EVAL_SUITE" != diagnostic ]; then
                 echo "Approved corpus requires an existing exact-tree image approval outside a manually dispatched diagnostic run." >&2
                 exit 1
               fi
-              commit_sha="$(git rev-parse HEAD)"
               diagnostic_tag="diagnostic-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
               echo "DIAGNOSTIC_IMAGE_TAG=$diagnostic_tag" >> "$GITHUB_ENV"
               docker buildx build \
                 --file backend/Dockerfile \
                 --cache-from "type=registry,ref=$IMAGE:buildcache" \
                 --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
-                --label "org.opencontainers.image.revision=$commit_sha" \
+                --label "org.opencontainers.image.revision=$EVALUATION_COMMIT_SHA" \
                 --tag "$IMAGE:$diagnostic_tag" \
                 --push .
               digest="$(gcloud artifacts docker images describe "$IMAGE:$diagnostic_tag" --format='value(image_summary.digest)')"
@@ -152,14 +191,13 @@ jobs:
               echo "A pending corpus can be bootstrapped only by a manually dispatched full or diagnostic run." >&2
               exit 1
             fi
-            commit_sha="$(git rev-parse HEAD)"
             bootstrap_tag="corpus-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             echo "BOOTSTRAP_IMAGE_TAG=$bootstrap_tag" >> "$GITHUB_ENV"
             docker buildx build \
               --file backend/Dockerfile \
               --cache-from "type=registry,ref=$IMAGE:buildcache" \
               --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
-              --label "org.opencontainers.image.revision=$commit_sha" \
+              --label "org.opencontainers.image.revision=$EVALUATION_COMMIT_SHA" \
               --tag "$IMAGE:$bootstrap_tag" \
               --push .
             digest="$(gcloud artifacts docker images describe "$IMAGE:$bootstrap_tag" --format='value(image_summary.digest)')"
@@ -170,7 +208,7 @@ jobs:
         run: |
           tag="scheduled-${GITHUB_RUN_ID}"
           echo "REVISION_TAG=$tag" >> "$GITHUB_ENV"
-          gcloud run deploy "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE@$IMAGE_DIGEST" --no-traffic --tag "$tag" --timeout 420s --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4 --quiet
+          gcloud run deploy "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE@$IMAGE_DIGEST" --no-traffic --tag "$tag" --timeout 420s --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4,GRAPH_REPAIR_MODEL=claude-sonnet-5 --quiet
           url="$(gcloud run services describe "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json | python -c 'import json,os,sys; d=json.load(sys.stdin); t="scheduled-"+os.environ["GITHUB_RUN_ID"]; print(next((x.get("url", "") for x in d.get("status",{}).get("traffic",[]) if x.get("tag")==t), ""))')"
           [ -n "$url" ] || { echo "Cloud Run did not expose the tagged evaluation URL." >&2; exit 1; }
           echo "CANDIDATE_URL=$url" >> "$GITHUB_ENV"
@@ -210,7 +248,9 @@ jobs:
         if: always() && hashFiles('artifacts/live-eval/browser-results.json') != ''
         continue-on-error: true
         env:
-          OPENAI_API_KEY: ${{ secrets.EVAL_JUDGE_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EVAL_JUDGE_PROVIDER: anthropic
+          EVAL_JUDGE_MODEL: claude-sonnet-5
           CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
         run: |
           approval_args=()

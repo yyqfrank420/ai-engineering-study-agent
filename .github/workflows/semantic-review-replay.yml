@@ -3,13 +3,39 @@ name: Semantic review replay
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: Replay mode
+        required: true
+        default: full-scheduled
+        type: choice
+        options: [full-scheduled, pr-selective]
       source_run_id:
-        description: Successful scheduled-evaluation run containing browser evidence
+        description: Source evaluation run ID
         required: true
         type: string
       source_commit_sha:
-        description: Full application commit SHA recorded by the source run
+        description: Full source application/head commit SHA
         required: true
+        type: string
+      source_artifact_name:
+        description: Exact live-eval artifact name (pr-selective only)
+        required: false
+        default: ''
+        type: string
+      selected_cases_json:
+        description: Ordered JSON case-ID array (pr-selective only)
+        required: false
+        default: '[]'
+        type: string
+      reviewer:
+        description: Reviewer, equal to the authenticated actor (pr-selective only)
+        required: false
+        default: ''
+        type: string
+      reason:
+        description: Specific reason for selective semantic replay
+        required: false
+        default: ''
         type: string
 
 permissions:
@@ -31,7 +57,8 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - name: Install judge dependencies only
         run: pip install -r backend/requirements.txt
-      - name: Download and authenticate immutable browser evidence
+      - name: Download and authenticate immutable scheduled browser evidence
+        if: inputs.mode == 'full-scheduled'
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_RUN_ID: ${{ inputs.source_run_id }}
@@ -56,7 +83,8 @@ jobs:
               --name "scheduled-eval-$SOURCE_RUN_ID" \
               --dir artifacts/source
           fi
-      - name: Validate deterministic source evidence
+      - name: Validate deterministic scheduled source evidence
+        if: inputs.mode == 'full-scheduled'
         env:
           SOURCE_RUN_ID: ${{ inputs.source_run_id }}
           SOURCE_COMMIT_SHA: ${{ inputs.source_commit_sha }}
@@ -91,27 +119,242 @@ jobs:
               encoding="utf-8",
           )
           PY
+      - name: Download exact failed PR evidence
+        if: inputs.mode == 'pr-selective'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SOURCE_COMMIT_SHA: ${{ inputs.source_commit_sha }}
+          SOURCE_ARTIFACT_NAME: ${{ inputs.source_artifact_name }}
+          SELECTED_CASES_JSON: ${{ inputs.selected_cases_json }}
+          REPLAY_REVIEWER: ${{ inputs.reviewer }}
+          REPLAY_REASON: ${{ inputs.reason }}
+        run: |
+          [ "$GITHUB_REF" = refs/heads/main ] || { echo "Selective replay must be dispatched from main." >&2; exit 1; }
+          [ "$REPLAY_REVIEWER" = "$GITHUB_ACTOR" ] || { echo "Reviewer must equal the authenticated actor." >&2; exit 1; }
+          [ "${#REPLAY_REASON}" -ge 20 ] || { echo "Replay reason must contain at least 20 characters." >&2; exit 1; }
+          [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]] || { echo "Source run ID must be numeric." >&2; exit 1; }
+          [[ "$SOURCE_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Source head must be a full lowercase SHA." >&2; exit 1; }
+          [[ "$SOURCE_ARTIFACT_NAME" =~ ^[A-Za-z0-9]([A-Za-z0-9_.-]{0,253}[A-Za-z0-9])?$ ]] || { echo "Source artifact name is invalid." >&2; exit 1; }
+          mkdir -p artifacts/source artifacts/semantic-replay
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > artifacts/source-run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts?name=$SOURCE_ARTIFACT_NAME" > artifacts/source-artifacts.json
+          python - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          expected_cases = {
+              "rag-grounding", "memory", "graph-off", "research",
+              "node-followup", "graph-expansion", "applied-domain", "prompt-injection",
+          }
+          selected = json.loads(os.environ["SELECTED_CASES_JSON"])
+          if (
+              not isinstance(selected, list)
+              or not selected
+              or len(selected) > 8
+              or len(selected) != len(set(selected))
+              or any(not isinstance(case_id, str) or case_id not in expected_cases for case_id in selected)
+          ):
+              raise SystemExit("selected_cases_json must be an ordered unique non-empty subset of the PR cases")
+          run = json.loads(Path("artifacts/source-run.json").read_text())
+          if (
+              str(run.get("id")) != os.environ["SOURCE_RUN_ID"]
+              or run.get("status") != "completed"
+              or run.get("conclusion") != "failure"
+              or run.get("event") != "pull_request"
+              or run.get("path") != ".github/workflows/live-eval.yml"
+              or run.get("head_sha") != os.environ["SOURCE_COMMIT_SHA"]
+          ):
+              raise SystemExit("source must be the exact completed failed PR live-eval run")
+          pull_requests = run.get("pull_requests")
+          if not isinstance(pull_requests, list) or len(pull_requests) != 1:
+              raise SystemExit("source run has ambiguous pull-request metadata")
+          pull_request = pull_requests[0]
+          head = pull_request.get("head") if isinstance(pull_request, dict) else None
+          base = pull_request.get("base") if isinstance(pull_request, dict) else None
+          repository = run.get("repository")
+          if not isinstance(head, dict) or not isinstance(base, dict) or not isinstance(repository, dict):
+              raise SystemExit("source run has incomplete pull-request repository metadata")
+          if head.get("sha") != os.environ["SOURCE_COMMIT_SHA"] or head.get("repo", {}).get("id") != repository.get("id"):
+              raise SystemExit("source run is not a same-repository PR head")
+          base_sha = base.get("sha")
+          if not isinstance(base_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", base_sha) or base_sha == head.get("sha"):
+              raise SystemExit("source run has invalid PR base identity")
+          artifacts = json.loads(Path("artifacts/source-artifacts.json").read_text()).get("artifacts")
+          if not isinstance(artifacts, list) or len(artifacts) != 1:
+              raise SystemExit("source artifact name does not resolve uniquely within the run")
+          artifact = artifacts[0]
+          if (
+              artifact.get("name") != os.environ["SOURCE_ARTIFACT_NAME"]
+              or artifact.get("expired") is not False
+              or str((artifact.get("workflow_run") or {}).get("id")) != os.environ["SOURCE_RUN_ID"]
+              or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(artifact.get("digest") or ""))
+          ):
+              raise SystemExit("source artifact is expired or lacks immutable run-bound identity")
+          Path("artifacts/semantic-replay/selection.json").write_text(
+              json.dumps(selected, separators=(",", ":")) + "\n"
+          )
+          PY
+          gh run download "$SOURCE_RUN_ID" --name "$SOURCE_ARTIFACT_NAME" --dir artifacts/source
+      - name: Validate PR deployment identity and create replay subset
+        if: inputs.mode == 'pr-selective'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SOURCE_COMMIT_SHA: ${{ inputs.source_commit_sha }}
+          SOURCE_ARTIFACT_NAME: ${{ inputs.source_artifact_name }}
+          SELECTED_CASES_JSON: ${{ inputs.selected_cases_json }}
+          REPLAY_REVIEWER: ${{ inputs.reviewer }}
+          REPLAY_REASON: ${{ inputs.reason }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import shutil
+          import subprocess
+          from pathlib import Path
+
+          root = Path("artifacts/source")
+          def only_file(name):
+              matches = list(root.rglob(name))
+              if len(matches) != 1:
+                  raise SystemExit(f"expected exactly one {name}, found {len(matches)}")
+              return matches[0]
+
+          browser_path = only_file("browser-results.json")
+          deployment_path = only_file("deployment.json")
+          deployment = json.loads(deployment_path.read_text())
+          run = json.loads(Path("artifacts/source-run.json").read_text())
+          pull_request = run["pull_requests"][0]
+          source_head = os.environ["SOURCE_COMMIT_SHA"]
+          expected_parents = {source_head, pull_request["base"]["sha"]}
+          tested_commit = deployment.get("commit_sha")
+          recorded_tree = deployment.get("tree_sha")
+          digest = deployment.get("digest")
+          if str(deployment.get("run_id")) != os.environ["SOURCE_RUN_ID"]:
+              raise SystemExit("deployment run identity mismatch")
+          if not isinstance(tested_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", tested_commit):
+              raise SystemExit("deployment tested commit is invalid")
+          tested = json.loads(subprocess.run(
+              ["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/git/commits/{tested_commit}"],
+              check=True, capture_output=True, text=True,
+          ).stdout)
+          parents = [parent.get("sha") for parent in tested.get("parents", []) if isinstance(parent, dict)]
+          if len(parents) != 2 or len(set(parents)) != 2 or set(parents) != expected_parents:
+              raise SystemExit("deployment commit is not the exact source-head/base synthetic merge")
+          if not isinstance(recorded_tree, str) or recorded_tree != (tested.get("tree") or {}).get("sha"):
+              raise SystemExit("deployment tree does not match the tested merge")
+          if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+              raise SystemExit("deployment image digest is invalid")
+          canonical_browser = root / "browser-results.json"
+          if browser_path != canonical_browser:
+              shutil.copyfile(browser_path, canonical_browser)
+          artifact = json.loads(Path("artifacts/source-artifacts.json").read_text())["artifacts"][0]
+          source_identity = {
+              "run_id": os.environ["SOURCE_RUN_ID"],
+              "artifact_name": os.environ["SOURCE_ARTIFACT_NAME"],
+              "artifact_sha256": artifact["digest"],
+              "head_sha": source_head,
+              "tested_commit_sha": tested_commit,
+              "tree_sha": recorded_tree,
+              "image_digest": digest,
+          }
+          (root / "source-identity.json").write_text(
+              json.dumps(source_identity, indent=2, sort_keys=True) + "\n"
+          )
+          PY
+          case_args=()
+          while IFS= read -r case_id; do case_args+=(--case "$case_id"); done < <(
+            python -c 'import json,os; print("\n".join(json.loads(os.environ["SELECTED_CASES_JSON"])))'
+          )
+          PYTHONPATH=backend python -m eval.evidence_replay subset \
+            --source-capture artifacts/source/browser-results.json \
+            --source-identity artifacts/source/source-identity.json \
+            --output-capture artifacts/selective/browser-results.json \
+            --output-provenance artifacts/selective/replay-provenance.json \
+            "${case_args[@]}" \
+            --replay-run-id "$GITHUB_RUN_ID" \
+            --replay-commit-sha "$GITHUB_SHA" \
+            --actor "$GITHUB_ACTOR" \
+            --reason "$REPLAY_REASON"
       - id: judge
         name: Replay judge against saved browser evidence
         continue-on-error: true
         env:
-          OPENAI_API_KEY: ${{ secrets.EVAL_JUDGE_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EVAL_JUDGE_PROVIDER: anthropic
+          EVAL_JUDGE_MODEL: claude-sonnet-5
+          REPLAY_MODE: ${{ inputs.mode }}
+          SELECTED_CASES_JSON: ${{ inputs.selected_cases_json }}
         run: |
-          target="$(python -c 'import json; print(json.load(open("artifacts/source/browser-results.json"))["backend_target"])')"
-          ./scripts/ci live \
-            --suite full \
-            --target "$target" \
-            --input artifacts/source/browser-results.json \
-            --output artifacts/semantic-replay/live-results.json \
-            --capture-replay
+          if [ "$REPLAY_MODE" = pr-selective ]; then
+            input=artifacts/selective/browser-results.json
+            target="$(python -c 'import json; print(json.load(open("artifacts/selective/browser-results.json"))["backend_target"])')"
+            case_args=()
+            while IFS= read -r case_id; do case_args+=(--case "$case_id"); done < <(
+              python -c 'import json,os; print("\n".join(json.loads(os.environ["SELECTED_CASES_JSON"])))'
+            )
+            ./scripts/ci live \
+              --suite diagnostic \
+              --target "$target" \
+              --input "$input" \
+              --output artifacts/selective/live-results.json \
+              --require-approved-corpus \
+              --capture-replay \
+              "${case_args[@]}"
+          else
+            target="$(python -c 'import json; print(json.load(open("artifacts/source/browser-results.json"))["backend_target"])')"
+            ./scripts/ci live \
+              --suite full \
+              --target "$target" \
+              --input artifacts/source/browser-results.json \
+              --output artifacts/semantic-replay/live-results.json \
+              --capture-replay
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: semantic-replay-${{ github.run_id }}
-          path: artifacts/semantic-replay
+          path: |
+            artifacts/semantic-replay
+            artifacts/selective
           retention-days: 30
+      - name: Require selective decisions to pass
+        if: always() && inputs.mode == 'pr-selective'
+        env:
+          SELECTED_CASES_JSON: ${{ inputs.selected_cases_json }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report_path = Path("artifacts/selective/live-results.json")
+          provenance_path = Path("artifacts/selective/replay-provenance.json")
+          subset_path = Path("artifacts/selective/browser-results.json")
+          if not all(path.exists() for path in (report_path, provenance_path, subset_path)):
+              raise SystemExit("selective replay did not produce subset, semantic, and provenance evidence")
+          report = json.loads(report_path.read_text())
+          expected = json.loads(os.environ["SELECTED_CASES_JSON"])
+          evaluations = report.get("evaluations")
+          actual = [item.get("id") for item in evaluations] if isinstance(evaluations, list) else []
+          if (
+              report.get("kind") != "live_gate"
+              or report.get("suite") != "diagnostic"
+              or report.get("status") != "pass"
+              or report.get("blocking_status") != "pass"
+              or actual != expected
+              or len(actual) != len(set(actual))
+              or any(item.get("decision") != "pass" for item in evaluations or [])
+          ):
+              raise SystemExit("selective semantic replay did not pass every exact ordered case")
+          print(f"Selective semantic replay passed: {', '.join(actual)}")
+          PY
       - name: Require judge infrastructure, preserve review outcomes
-        if: always()
+        if: always() && inputs.mode == 'full-scheduled'
         run: |
           python - <<'PY'
           import json

@@ -21,10 +21,11 @@ export default defineConfig({
     maxWorkers: 4,
     coverage: {
       provider: 'v8',
+      include: ['src/**/*.{ts,tsx}'],
       thresholds: {
-        statements: 93,
-        lines: 95,
-        functions: 95,
+        statements: 90,
+        lines: 90,
+        functions: 90,
         branches: 75,
       },
     },

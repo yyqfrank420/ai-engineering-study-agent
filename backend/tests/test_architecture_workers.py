@@ -189,7 +189,10 @@ async def test_architect_failure_keeps_a_bounded_enriched_contract(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_architect_empty_success_uses_the_bounded_fallback(monkeypatch):
-    async def empty_model(**_kwargs):
+    captured = {}
+
+    async def empty_model(**kwargs):
+        captured.update(kwargs)
         return "{}"
 
     async def send(_event):
@@ -212,11 +215,17 @@ async def test_architect_empty_success_uses_the_bounded_fallback(monkeypatch):
     assert brief["outputs"]
     assert len(brief["required_capabilities"]) >= 4
     assert len(brief["runtime_flow"]) >= 4
+    assert captured["effort"] == "medium"
+    assert captured["timeout_seconds"] == 70
+    assert captured["max_output_tokens"] == 6000
 
 
 @pytest.mark.asyncio
 async def test_challenger_failure_keeps_an_independent_risk_review(monkeypatch):
-    async def fail_model(**_kwargs):
+    captured = {}
+
+    async def fail_model(**kwargs):
+        captured.update(kwargs)
         raise TimeoutError("provider timeout")
 
     async def send(_event):
@@ -233,3 +242,6 @@ async def test_challenger_failure_keeps_an_independent_risk_review(monkeypatch):
     })
 
     assert result["challenger_review"]["risks"]
+    assert captured["effort"] == "medium"
+    assert captured["timeout_seconds"] == 70
+    assert captured["max_output_tokens"] == 3500
