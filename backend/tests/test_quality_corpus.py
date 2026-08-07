@@ -762,6 +762,55 @@ def test_web_research_does_not_accept_a_book_citation_as_current_evidence():
     assert not any("citation" in failure for failure in web_cited)
 
 
+@pytest.mark.asyncio
+async def test_node_followup_missing_graph_skips_activation_and_reports_graph_failure():
+    from eval.browser_runner import (
+        _deterministic_failure_details,
+        _node_followup_interaction_failure_details,
+    )
+
+    class ActivationForbiddenPage:
+        def get_by_role(self, *_args, **_kwargs):
+            raise AssertionError("node activation must not start without an accepted graph")
+
+        def expect_request(self, *_args, **_kwargs):
+            raise AssertionError("activation request must not start without an accepted graph")
+
+        def locator(self, *_args, **_kwargs):
+            raise AssertionError("node locator must not run without an accepted graph")
+
+    case = load_corpus().by_id["node-followup"]
+    events = [
+        {
+            "type": "graph_notice",
+            "message": "The graph was withheld after bounded repair.",
+        },
+        {"type": "done"},
+    ]
+    failure_details = _deterministic_failure_details(
+        case,
+        events,
+        rendered_nodes=0,
+    )
+
+    interaction_failures = await _node_followup_interaction_failure_details(
+        ActivationForbiddenPage(),
+        case,
+        None,
+        failure_details,
+    )
+
+    assert any(
+        detail["message"] == "graph_emitted expected True, got False"
+        for detail in failure_details
+    )
+    assert interaction_failures == []
+    assert not any(
+        detail["code"] == "node_followup_interaction_failed"
+        for detail in failure_details
+    )
+
+
 def test_web_research_provider_failure_is_classified_as_infrastructure():
     from eval.browser_runner import (
         _deterministic_failure_details,
@@ -912,6 +961,7 @@ def test_unapproved_corpus_cannot_enable_the_blocking_judge(tmp_path):
             "approved_manifest_sha256": None,
             "calibration": {
                 "judge_release": "semantic-rubric-judge-v5",
+                "judge_provider": "openai",
                 "agreement": None,
                 "critical_false_passes": None,
                 "evaluated_at": None,
@@ -934,6 +984,7 @@ def test_approved_hash_is_content_addressed(tmp_path):
             "reviewed_at": "2026-07-18T12:00:00Z",
             "calibration": {
                 "judge_release": "semantic-rubric-judge-v1",
+                "judge_provider": "openai",
                 "judge_model": "claude-opus-5",
                 "evidence_run_id": "123456789",
                 "evidence_commit_sha": "a" * 40,
@@ -1001,6 +1052,7 @@ def test_approved_corpus_rejects_uncalibrated_judge(
             "reviewed_at": "2026-07-18T12:00:00Z",
             "calibration": {
                 "judge_release": "semantic-rubric-judge-v1",
+                "judge_provider": "openai",
                 "judge_model": "claude-opus-5",
                 "evidence_run_id": "123456789",
                 "evidence_commit_sha": "a" * 40,
@@ -1028,3 +1080,358 @@ def test_approved_corpus_rejects_uncalibrated_judge(
 
     with pytest.raises(ValueError, match=message):
         load_corpus(path=path)
+
+
+_REPLAY_PR_CASES = (
+    "rag-grounding",
+    "memory",
+    "graph-off",
+    "research",
+    "node-followup",
+    "graph-expansion",
+    "applied-domain",
+    "prompt-injection",
+)
+
+
+def _selective_replay_source_capture():
+    graph_cases = {
+        "rag-grounding",
+        "research",
+        "node-followup",
+        "graph-expansion",
+        "applied-domain",
+    }
+    results = []
+    telemetry = []
+    for case_id in _REPLAY_PR_CASES:
+        thread_id = f"thread-{case_id}"
+        results.append(
+            {
+                "id": case_id,
+                "passed": True,
+                "execution_state": "completed",
+                "thread_id": thread_id,
+                "thread_ids": [thread_id],
+                "attempts": [
+                    {
+                        "attempt": 1,
+                        "thread_id": thread_id,
+                        "thread_ids": [thread_id],
+                    }
+                ],
+            }
+        )
+        telemetry.append(
+            {
+                "thread_id": thread_id,
+                "operation": (
+                    "graph_worker_applied_design"
+                    if case_id in graph_cases
+                    else "orchestrator_synthesise"
+                ),
+                "provider_attempts": 1,
+                "attempts": [{"attempt": 1, "status": "success"}],
+            }
+        )
+    return {
+        "format_version": 1,
+        "kind": "browser_capture",
+        "suite": "pr",
+        "corpus_version": "2026-07-19.v2",
+        "corpus_sha256": "a" * 64,
+        "release_identity": "browser-rubric-v2",
+        "target": "http://localhost:5173",
+        "backend_target": "https://candidate.example",
+        "started_at": "2026-08-05T09:19:21+00:00",
+        "duration_ms": 999999,
+        "status": "complete",
+        "case_states": [
+            {"id": case_id, "state": "completed"} for case_id in _REPLAY_PR_CASES
+        ],
+        "results": results,
+        "application_telemetry": telemetry,
+        "latency": {"sample_count": 8},
+        "dashboard_smoke": {"passed": True},
+    }
+
+
+def test_selective_replay_subsets_only_passing_non_graph_evidence():
+    from eval.evidence_replay import subset_browser_capture
+
+    source = _selective_replay_source_capture()
+    source["results"][1]["thread_ids"].append("thread-memory-retry")
+    source["results"][1]["attempts"].append(
+        {
+            "attempt": 2,
+            "thread_id": "thread-memory-retry",
+            "thread_ids": ["thread-memory-retry"],
+        }
+    )
+    source["application_telemetry"].append(
+        {
+            "thread_id": "thread-memory-retry",
+            "operation": "quick_synthesise",
+            "provider_attempts": 2,
+            "attempts": [
+                {"attempt": 1, "status": "error"},
+                {"attempt": 2, "status": "success"},
+            ],
+        }
+    )
+
+    derived = subset_browser_capture(
+        source,
+        selected_case_ids=("memory", "graph-off", "prompt-injection"),
+        expected_source_case_ids=_REPLAY_PR_CASES,
+    )
+
+    assert derived["suite"] == "diagnostic"
+    assert [item["id"] for item in derived["results"]] == [
+        "memory",
+        "graph-off",
+        "prompt-injection",
+    ]
+    assert [item["id"] for item in derived["case_states"]] == [
+        "memory",
+        "graph-off",
+        "prompt-injection",
+    ]
+    assert {item["thread_id"] for item in derived["application_telemetry"]} == {
+        "thread-memory",
+        "thread-memory-retry",
+        "thread-graph-off",
+        "thread-prompt-injection",
+    }
+    assert "latency" not in derived
+    assert "dashboard_smoke" not in derived
+    assert "duration_ms" not in derived
+    for key in (
+        "corpus_version",
+        "corpus_sha256",
+        "release_identity",
+        "target",
+        "backend_target",
+    ):
+        assert derived[key] == source[key]
+
+
+def test_selective_replay_rejects_noncanonical_or_unusable_cases():
+    import copy
+
+    import pytest
+
+    from eval.evidence_replay import EvidenceReplayError, subset_browser_capture
+
+    duplicate = _selective_replay_source_capture()
+    duplicate["results"][2]["id"] = "memory"
+    with pytest.raises(EvidenceReplayError, match="duplicate case IDs"):
+        subset_browser_capture(
+            duplicate,
+            selected_case_ids=("memory",),
+            expected_source_case_ids=_REPLAY_PR_CASES,
+        )
+
+    bad_state = _selective_replay_source_capture()
+    bad_state["case_states"][1]["state"] = "pending"
+    with pytest.raises(EvidenceReplayError, match="incomplete case state"):
+        subset_browser_capture(
+            bad_state,
+            selected_case_ids=("memory",),
+            expected_source_case_ids=_REPLAY_PR_CASES,
+        )
+
+    for field, value, message in (
+        ("passed", False, "did not pass"),
+        ("execution_state", "partial", "incomplete result"),
+    ):
+        unusable = copy.deepcopy(_selective_replay_source_capture())
+        unusable["results"][1][field] = value
+        with pytest.raises(EvidenceReplayError, match=message):
+            subset_browser_capture(
+                unusable,
+                selected_case_ids=("memory",),
+                expected_source_case_ids=_REPLAY_PR_CASES,
+            )
+
+    with pytest.raises(EvidenceReplayError, match="canonical PR order"):
+        subset_browser_capture(
+            _selective_replay_source_capture(),
+            selected_case_ids=("prompt-injection", "memory"),
+            expected_source_case_ids=_REPLAY_PR_CASES,
+        )
+
+
+def test_selective_replay_rejects_unattributed_ambiguous_or_graph_telemetry():
+    import pytest
+
+    from eval.evidence_replay import EvidenceReplayError, subset_browser_capture
+
+    unattributed = _selective_replay_source_capture()
+    unattributed["application_telemetry"].append(
+        {
+            "thread_id": "unknown-thread",
+            "operation": "orchestrator_synthesise",
+            "provider_attempts": 1,
+        }
+    )
+    with pytest.raises(EvidenceReplayError, match="not attributed"):
+        subset_browser_capture(
+            unattributed,
+            selected_case_ids=("memory",),
+            expected_source_case_ids=_REPLAY_PR_CASES,
+        )
+
+    ambiguous = _selective_replay_source_capture()
+    ambiguous["results"][1]["thread_ids"].append("shared-thread")
+    ambiguous["results"][2]["thread_ids"].append("shared-thread")
+    with pytest.raises(EvidenceReplayError, match="multiple cases"):
+        subset_browser_capture(
+            ambiguous,
+            selected_case_ids=("memory",),
+            expected_source_case_ids=_REPLAY_PR_CASES,
+        )
+
+    graph_operation = _selective_replay_source_capture()
+    graph_operation["application_telemetry"][1]["operation"] = "graph_critic"
+    with pytest.raises(EvidenceReplayError, match="used graph operation"):
+        subset_browser_capture(
+            graph_operation,
+            selected_case_ids=("memory",),
+            expected_source_case_ids=_REPLAY_PR_CASES,
+        )
+
+    missing_telemetry = _selective_replay_source_capture()
+    missing_telemetry["application_telemetry"] = [
+        item
+        for item in missing_telemetry["application_telemetry"]
+        if item["thread_id"] != "thread-memory"
+    ]
+    with pytest.raises(EvidenceReplayError, match="threads have no application telemetry"):
+        subset_browser_capture(
+            missing_telemetry,
+            selected_case_ids=("memory",),
+            expected_source_case_ids=_REPLAY_PR_CASES,
+        )
+
+
+def test_selective_replay_writes_authenticated_hash_provenance(tmp_path):
+    import hashlib
+    import json
+
+    from eval.evidence_replay import (
+        SourceEvidenceIdentity,
+        write_selective_replay_artifacts,
+    )
+
+    source_path = tmp_path / "browser-results.json"
+    output_path = tmp_path / "selective" / "browser-results.json"
+    provenance_path = tmp_path / "selective" / "replay-provenance.json"
+    source_path.write_text(
+        json.dumps(_selective_replay_source_capture(), indent=2) + "\n",
+        encoding="utf-8",
+    )
+    identity = SourceEvidenceIdentity(
+        run_id="30990613938",
+        artifact_name="live-eval-artifacts",
+        artifact_sha256="b" * 64,
+        head_sha="c" * 40,
+        tested_commit_sha="d" * 40,
+        tree_sha="e" * 40,
+        image_digest="sha256:" + "f" * 64,
+    )
+
+    provenance = write_selective_replay_artifacts(
+        source_capture_path=source_path,
+        source_identity=identity,
+        output_capture_path=output_path,
+        output_provenance_path=provenance_path,
+        selected_case_ids=("memory", "graph-off", "prompt-injection"),
+        replay_run_id="31000000000",
+        replay_commit_sha="1" * 40,
+        actor="reviewer",
+        reason="Reuse only cases outside the changed graph runtime.",
+        expected_source_case_ids=_REPLAY_PR_CASES,
+    )
+
+    assert provenance["source"]["browser_capture_sha256"] == hashlib.sha256(
+        source_path.read_bytes()
+    ).hexdigest()
+    assert provenance["derived"]["browser_capture_sha256"] == hashlib.sha256(
+        output_path.read_bytes()
+    ).hexdigest()
+    assert provenance["selection"]["case_ids"] == [
+        "memory",
+        "graph-off",
+        "prompt-injection",
+    ]
+    assert provenance["selection"]["provider_attempts"] == 3
+    assert json.loads(provenance_path.read_text(encoding="utf-8")) == provenance
+
+
+def test_candidate_calibration_accepts_alternate_identity_but_production_rejects_it():
+    from types import SimpleNamespace
+
+    from eval.calibration import calculate_calibration
+    from eval.live_runner import _assert_approved_judge_identity
+
+    corpus = load_corpus(require_approved=True)
+    candidate_provider = "openai"
+    candidate_model = "gpt-5.4-mini-2026-03-17"
+    evaluations = []
+    for case in corpus.cases:
+        evaluations.append(
+            {
+                "id": case.id,
+                "decision": "pass",
+                "judgments": [
+                    {
+                        "provider": candidate_provider,
+                        "model": candidate_model,
+                        "prompt_release": corpus.approval.calibration.judge_release,
+                        "dimensions": [
+                            {
+                                "dimension": dimension,
+                                "grade": case.approval.reviewed_grades[dimension],
+                            }
+                            for dimension in case.rubric_dimensions
+                        ],
+                    }
+                ],
+            }
+        )
+
+    report = calculate_calibration(
+        corpus,
+        {
+            "kind": "live_gate",
+            "suite": "full",
+            "execution_mode": "semantic_replay",
+            "status": "pass",
+            "corpus_version": corpus.corpus_version,
+            "corpus_sha256": corpus_sha256(),
+            "evaluations": evaluations,
+        },
+        evidence_sha256=corpus.approval.calibration.evidence_sha256,
+        source_context={
+            "source_run_id": corpus.approval.calibration.evidence_run_id,
+            "source_commit_sha": corpus.approval.calibration.evidence_commit_sha,
+        },
+        judge_selection={
+            "format_version": 1,
+            "provider": candidate_provider,
+            "model": candidate_model,
+        },
+    )
+
+    assert report["passed"] is True
+    assert report["candidate_judge"] == {
+        "provider": candidate_provider,
+        "model": candidate_model,
+        "prompt_release": corpus.approval.calibration.judge_release,
+    }
+    with pytest.raises(RuntimeError, match="provider is not approved"):
+        _assert_approved_judge_identity(
+            corpus,
+            SimpleNamespace(provider=candidate_provider, model=candidate_model),
+        )

@@ -17,6 +17,11 @@ change-impact rules, live suites, and PR budgets. `scripts/ci` is the only runne
 validation test discovers every `backend/tests/test_*.py` file and fails when a
 test is omitted or a stale path remains. Frontend and ingestion commands use
 glob-covering test runners, so newly tracked tests are automatically included.
+Backend changes also run the full configured source set under Coverage.py with a
+90% line floor. Frontend coverage includes every production TypeScript and TSX
+module, including modules that no test imports, and enforces 90% statements,
+lines, and functions plus 75% branches. These suites use dummy credentials and
+fake provider clients; live model evaluation remains a separate protected gate.
 
 The stable branch checks are `CI required` and `Live eval required`. Both workflows
 listen to `pull_request`, trusted pushes, and `merge_group`. The 20-case corpus is
@@ -113,6 +118,28 @@ builds and deploys an ephemeral image for that exact checked-out tree, then remo
 its temporary tag. It never publishes an approval tag. Scheduled, nightly, and full
 runs still require an existing exact-tree approval when the corpus is approved.
 
+`Semantic review replay` has two isolated modes. The default `full-scheduled` mode
+preserves the existing behavior: it authenticates a successful full scheduled run,
+reuses its deterministic browser capture, and records semantic proposals without
+generating application answers again. `pr-selective` is a trusted, main-dispatched
+manual review lane for rejudging an ordered subset of the eight PR cases from one
+exact failed same-repository `Live eval required` run. It requires the exact run ID,
+artifact name, source head SHA, authenticated reviewer, and a specific reason.
+
+The selective lane verifies the completed failed PR run and immutable GitHub
+artifact, binds the recorded deployment to the two distinct source-head/base merge
+parents, tree, and image digest, and then uses `eval.evidence_replay subset` to write
+a diagnostic capture containing only the selected results, case states, and
+attributed telemetry. It runs `scripts/ci live --suite diagnostic --capture-replay`
+with the selected cases, so it performs judge calls only: it does not open a browser,
+call the application model, authenticate to GCP, deploy, or mutate staging. Every
+selected semantic decision must be `pass`; failure, manual review, infrastructure
+failure, reordered/duplicate results, or missing provenance fails closed. The
+30-day replay artifact contains the subset capture, live result, and provenance with
+original/derived hashes, source run/head/tested commit/tree/digest, selection,
+artifact digest, replay commit/actor, reviewer, and reason. Selective replay is
+review evidence only and does not itself publish an image approval or deploy.
+
 PR evaluation limits are eight cases, 50 application provider attempts, and 16
 judge provider attempts. The timeout chain is deliberately nested: the backend
 agent stops at 360 seconds, the Playwright turn waits at most 390 seconds so it can
@@ -155,11 +182,11 @@ rubrics, invariants, and intentionally reviewed exemplars belong in source contr
 
 The current `2026-07-19.v2` corpus and every case say `approved`; the manifest stores
 its reviewer, review runs, reviewed grades, canonical SHA-256, and a calibrated
-`semantic-rubric-judge-v5` result of 91.5663% agreement with zero critical false
-passes. The calibration identity pins reviewed main run `29689189704`, commit
+`semantic-rubric-judge-v5` result of 90.3614% agreement with zero critical false
+passes. Calibration run `31014653521` approved the Anthropic judge model
+`claude-sonnet-5` against frozen browser evidence from reviewed main run `29689189704`, commit
 `fc3dbf97910b59005c2e25d825852f47d5d790c7`, browser-evidence SHA-256
-`f6075c9091a4594848cf34dc82c535308467585c75a73bc333578e654518700f`, and judge
-model `gpt-5.4-mini-2026-03-17`.
+`f6075c9091a4594848cf34dc82c535308467585c75a73bc333578e654518700f`.
 
 `corpus_sha256()` hashes behavior only: corpus-level and per-case approval metadata
 are excluded while prompts, rubrics, UI modes, and deterministic expectations remain

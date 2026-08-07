@@ -1,11 +1,18 @@
 import asyncio
 import base64
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
 from adapters.database_adapter import init_db
+from api.chat_websocket import (
+    _SingleWaitDiagramEvaluationChannel,
+    _origin_allowed,
+    _receive_object,
+)
+from config import settings
 from main import create_app
 from storage import runtime_state_store
 from storage.message_store import get_history
@@ -35,15 +42,128 @@ def _receive_until(socket, event_type: str, *, limit: int = 20) -> list[dict]:
     raise AssertionError(f"Did not receive {event_type}: {events}")
 
 
+@pytest.mark.asyncio
+async def test_diagram_evaluation_uses_one_correlated_wait_and_ignores_mismatched_id():
+    channel = _SingleWaitDiagramEvaluationChannel(
+        timeout_s=1,
+        max_screenshot_bytes=1_024,
+    )
+    graph = {"version": "graph-v1", "nodes": [], "edges": []}
+    candidate_events = []
+
+    async def send(event):
+        candidate_events.append(event)
+        evaluation_id = event["evaluation_id"]
+        wrong_id = "wrong-evaluation-id"
+        channel.accept({
+            "type": "diagram_evaluation_start",
+            "evaluation_id": wrong_id,
+            "graph_version": "graph-v1",
+            "total_chunks": 1,
+            "report": {},
+        })
+        channel.accept({
+            "type": "diagram_evaluation_chunk",
+            "evaluation_id": wrong_id,
+            "index": 0,
+            "data": base64.b64encode(b"wrong").decode(),
+        })
+        channel.accept({
+            "type": "diagram_evaluation_complete",
+            "evaluation_id": wrong_id,
+        })
+        assert not channel._waiters[evaluation_id].future.done()
+
+        encoded = base64.b64encode(b"browser-render").decode()
+        channel.accept({
+            "type": "diagram_evaluation_start",
+            "evaluation_id": evaluation_id,
+            "graph_version": "graph-v1",
+            "media_type": "image/jpeg",
+            "total_chunks": 1,
+            "report": {"overlap_count": 0},
+        })
+        channel.accept({
+            "type": "diagram_evaluation_chunk",
+            "evaluation_id": evaluation_id,
+            "index": 0,
+            "data": encoded,
+        })
+        channel.accept({
+            "type": "diagram_evaluation_complete",
+            "evaluation_id": evaluation_id,
+        })
+
+    result = await channel.request(graph, send)
+
+    assert result["report"] == {"overlap_count": 0}
+    assert len(candidate_events) == 1
+    assert channel._waiters == {}
+    assert channel._uploads == {}
+
+
+@pytest.mark.asyncio
+async def test_diagram_evaluation_cleans_pending_correlation_on_timeout_and_cancel():
+    timeout_channel = _SingleWaitDiagramEvaluationChannel(
+        timeout_s=0.001,
+        max_screenshot_bytes=1_024,
+    )
+
+    async def send_without_result(_event):
+        return None
+
+    with pytest.raises(TimeoutError):
+        await timeout_channel.request({"version": "timeout-v1"}, send_without_result)
+    assert timeout_channel._waiters == {}
+    assert timeout_channel._uploads == {}
+
+    cancel_channel = _SingleWaitDiagramEvaluationChannel(
+        timeout_s=30,
+        max_screenshot_bytes=1_024,
+    )
+    candidate_sent = asyncio.Event()
+    pending_future = None
+
+    async def send_then_block(event):
+        nonlocal pending_future
+        pending_future = cancel_channel._waiters[event["evaluation_id"]].future
+        candidate_sent.set()
+
+    request_task = asyncio.create_task(
+        cancel_channel.request({"version": "cancel-v1"}, send_then_block)
+    )
+    await candidate_sent.wait()
+    request_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await request_task
+
+    assert pending_future is not None and pending_future.cancelled()
+    assert cancel_channel._waiters == {}
+    assert cancel_channel._uploads == {}
+
+
 def test_websocket_steer_cancels_draft_restarts_and_persists_combined_turn(temp_data_dir, monkeypatch):
     app, user, thread = _ready_app(temp_data_dir, monkeypatch)
+    approved_graph = {"title": "Approved baseline", "nodes": [], "edges": [], "sequence": []}
+    monkeypatch.setattr(
+        "api.chat_websocket.thread_store.get_graph",
+        lambda _user_id, _thread_id: approved_graph,
+    )
     calls: list[str] = []
+    terminal_deadlines: list[float] = []
+    approved_baselines: list[dict] = []
     first_cancelled = False
 
     async def fake_run_agent(state, _rag_tools, _graph_tools, _detail_tools):
         nonlocal first_cancelled
         calls.append(state["user_message"])
+        terminal_deadlines.append(state["terminal_deadline_s"])
+        approved_baselines.append(state["approved_graph_data"])
         if len(calls) == 1:
+            await state["send"]({
+                "type": "graph_data",
+                "data": {"title": "Mutable draft", "nodes": [], "edges": [], "sequence": []},
+            })
             await state["send"]({"type": "response_delta", "content": "generic draft"})
             try:
                 await asyncio.sleep(30)
@@ -83,6 +203,11 @@ def test_websocket_steer_cancels_draft_restarts_and_persists_combined_turn(temp_
 
     assert first_cancelled is True
     assert len(calls) == 2
+    assert terminal_deadlines[0] == terminal_deadlines[1]
+    assert approved_baselines == [approved_graph, approved_graph]
+    assert approved_baselines[0] is not approved_graph
+    assert approved_baselines[1] is not approved_graph
+    assert approved_baselines[0] is not approved_baselines[1]
     assert any(event["type"] == "response_reset" for event in events)
     assert any(event["type"] == "steer_applied" for event in events)
     assert any(
@@ -240,3 +365,261 @@ def test_websocket_keeps_candidate_private_until_browser_evaluation(temp_data_di
 
     assert any(event.get("type") == "graph_data" for event in published)
     assert any(event.get("type") == "response_delta" and event.get("content") == "approved" for event in published)
+
+
+@pytest.mark.parametrize(
+    ("first_message", "expected_error"),
+    [
+        ({"type": "start"}, "Authentication must be the first message"),
+        ({"type": "auth", "access_token": "rejected"}, "Authentication failed"),
+    ],
+)
+def test_websocket_rejects_invalid_authentication_protocol(
+    temp_data_dir,
+    monkeypatch,
+    first_message,
+    expected_error,
+):
+    app, _user, _thread = _ready_app(temp_data_dir, monkeypatch)
+    if first_message["type"] == "auth":
+        def reject_auth(*_args, **_kwargs):
+            raise HTTPException(status_code=401)
+
+        monkeypatch.setattr("api.chat_websocket.get_current_user", reject_auth)
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/api/chat/ws",
+            headers={"origin": "http://localhost:5173"},
+        ) as socket:
+            socket.send_json(first_message)
+            assert socket.receive_json() == {
+                "type": "error",
+                "content": expected_error,
+            }
+
+
+@pytest.mark.parametrize(
+    ("start_message", "expected_error"),
+    [
+        ({"type": "unknown"}, "Expected a start message"),
+        ({"type": "start", "content": "missing thread"}, "Invalid chat request"),
+    ],
+)
+def test_websocket_rejects_invalid_start_protocol(
+    temp_data_dir,
+    monkeypatch,
+    start_message,
+    expected_error,
+):
+    app, _user, _thread = _ready_app(temp_data_dir, monkeypatch)
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/api/chat/ws",
+            headers={"origin": "http://localhost:5173"},
+        ) as socket:
+            socket.send_json({"type": "auth", "access_token": "test-token"})
+            assert socket.receive_json() == {"type": "ready"}
+            socket.send_json(start_message)
+            assert socket.receive_json() == {
+                "type": "error",
+                "content": expected_error,
+            }
+
+
+@pytest.mark.parametrize(
+    ("thread_id", "content", "expected_error"),
+    [
+        ("missing-thread", "hello", "Thread not found"),
+        (None, "", "Empty message"),
+        (None, "x" * 20, "Message too large"),
+    ],
+)
+def test_websocket_rejects_invalid_turns_before_model_work(
+    temp_data_dir,
+    monkeypatch,
+    thread_id,
+    content,
+    expected_error,
+):
+    app, _user, thread = _ready_app(temp_data_dir, monkeypatch)
+    monkeypatch.setattr(settings, "max_message_bytes", 10)
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/api/chat/ws",
+            headers={"origin": "http://localhost:5173"},
+        ) as socket:
+            socket.send_json({"type": "auth", "access_token": "test-token"})
+            assert socket.receive_json() == {"type": "ready"}
+            socket.send_json({
+                "type": "start",
+                "thread_id": thread_id or thread["id"],
+                "content": content,
+                "client_request_id": "client-invalid-turn",
+            })
+            events = _receive_until(socket, "done")
+
+    assert events[0]["type"] == "error"
+    assert expected_error in events[0]["content"]
+
+
+def test_websocket_reports_an_incomplete_idempotent_turn(temp_data_dir, monkeypatch):
+    app, _user, thread = _ready_app(temp_data_dir, monkeypatch)
+
+    def fail_incomplete(*_args, **_kwargs):
+        raise RuntimeError("stored user message has no assistant result")
+
+    monkeypatch.setattr(
+        "api.chat_websocket.thread_store.get_completed_turn",
+        fail_incomplete,
+    )
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/api/chat/ws",
+            headers={"origin": "http://localhost:5173"},
+        ) as socket:
+            socket.send_json({"type": "auth", "access_token": "test-token"})
+            assert socket.receive_json() == {"type": "ready"}
+            socket.send_json({
+                "type": "start",
+                "thread_id": thread["id"],
+                "content": "resume request",
+                "client_request_id": "client-incomplete",
+            })
+            events = _receive_until(socket, "done")
+
+    assert events[0]["type"] == "error"
+    assert events[0]["content"].startswith("Previous request is incomplete")
+    assert events[1:] == [{"type": "done"}]
+
+
+@pytest.mark.parametrize(
+    ("patch_target", "patch_value", "expected_error"),
+    [
+        (
+            "api.chat_websocket.message_store.count_messages",
+            lambda *_args, **_kwargs: settings.max_messages_per_thread,
+            "Thread message limit reached",
+        ),
+        (
+            "api.chat_websocket.check_rate_limit",
+            lambda *_args, **_kwargs: "Rate limit exceeded",
+            "Rate limit exceeded",
+        ),
+        (
+            "api.chat_websocket.knowledge_base_ready",
+            lambda *_args, **_kwargs: False,
+            "Knowledge base is still loading",
+        ),
+        (
+            "api.chat_websocket.check_prompt_injection",
+            lambda *_args, **_kwargs: False,
+            "Message blocked by security filter",
+        ),
+    ],
+)
+def test_websocket_preflight_failures_do_not_start_model_work(
+    temp_data_dir,
+    monkeypatch,
+    patch_target,
+    patch_value,
+    expected_error,
+):
+    app, _user, thread = _ready_app(temp_data_dir, monkeypatch)
+    monkeypatch.setattr(patch_target, patch_value)
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/api/chat/ws",
+            headers={"origin": "http://localhost:5173"},
+        ) as socket:
+            socket.send_json({"type": "auth", "access_token": "test-token"})
+            assert socket.receive_json() == {"type": "ready"}
+            socket.send_json({
+                "type": "start",
+                "thread_id": thread["id"],
+                "content": "bounded request",
+                "client_request_id": "client-preflight",
+            })
+            events = _receive_until(socket, "done")
+
+    assert events[0]["type"] == "error"
+    assert expected_error in events[0]["content"]
+
+
+def test_websocket_rejects_commands_then_stops_matching_work(temp_data_dir, monkeypatch):
+    app, _user, thread = _ready_app(temp_data_dir, monkeypatch)
+
+    async def blocked_agent(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("api.chat_websocket.run_agent", blocked_agent)
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/api/chat/ws",
+            headers={"origin": "http://localhost:5173"},
+        ) as socket:
+            socket.send_json({"type": "auth", "access_token": "test-token"})
+            assert socket.receive_json() == {"type": "ready"}
+            socket.send_json({
+                "type": "start",
+                "thread_id": thread["id"],
+                "content": "long architecture review",
+                "client_request_id": "client-command",
+            })
+            _receive_until(socket, "worker_status")
+
+            socket.send_json({"type": "unknown"})
+            assert socket.receive_json() == {
+                "type": "command_rejected",
+                "reason": "Unknown command",
+            }
+            socket.send_json({
+                "type": "steer",
+                "content": "wrong request",
+                "client_request_id": "other-request",
+            })
+            assert socket.receive_json() == {
+                "type": "command_rejected",
+                "reason": "Command does not match the active request",
+            }
+            socket.send_json({
+                "type": "steer",
+                "content": "   ",
+                "client_request_id": "client-command",
+            })
+            assert socket.receive_json() == {
+                "type": "command_rejected",
+                "reason": "Steering command was empty, unsafe, too large, or over the limit",
+            }
+            socket.send_json({
+                "type": "stop",
+                "client_request_id": "client-command",
+            })
+            assert socket.receive_json() == {"type": "stopped"}
+
+
+def test_websocket_frame_and_origin_boundaries(monkeypatch):
+    class FakeSocket:
+        def __init__(self, value):
+            self.value = value
+
+        async def receive_text(self):
+            return self.value
+
+    assert asyncio.run(_receive_object(FakeSocket('{"type":"auth"}'))) == {
+        "type": "auth"
+    }
+    with pytest.raises(ValueError, match="must be an object"):
+        asyncio.run(_receive_object(FakeSocket("[]")))
+    with pytest.raises(ValueError, match="frame too large"):
+        asyncio.run(_receive_object(FakeSocket("x" * 16_385)))
+
+    assert _origin_allowed(None) is True
+    assert _origin_allowed("http://localhost:5173") is True
+    monkeypatch.setattr(settings, "vercel_origin_regex", "[")
+    assert _origin_allowed("https://preview.example") is False

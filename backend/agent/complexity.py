@@ -117,6 +117,14 @@ _DESIGN_FOLLOWUP_PHRASES = (
     "subagent",
 )
 
+_OUTER_UNTRUSTED_EXPLANATION = re.compile(
+    r"^(?:please\s+)?treat\b"
+    r"(?=.{0,160}\b(?:quoted|untrusted)\b)"
+    r"(?=.{0,160}\b(?:explain|analy[sz]e|summari[sz]e|interpret)\b)",
+)
+
+_DIRECT_PRODUCT_SEED_MAX_WORDS = 12
+
 
 @dataclass(frozen=True)
 class ComplexityProfile:
@@ -126,6 +134,33 @@ class ComplexityProfile:
     min_graph_nodes: int
     max_graph_nodes: int
     answer_contract: str
+
+
+def _routing_intent_text(query: str) -> str:
+    """Remove quoted data so its vocabulary cannot select an application route."""
+    text = " ".join(query.lower().split())
+    visible: list[str] = []
+    quote = ""
+    escaped = False
+    for index, character in enumerate(text):
+        if quote:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = ""
+            continue
+
+        starts_single_quote = character == "'" and (
+            index == 0 or not text[index - 1].isalnum()
+        )
+        if character in {'"', "`"} or starts_single_quote:
+            quote = character
+            visible.append(" ")
+            continue
+        visible.append(character)
+    return " ".join("".join(visible).split())
 
 
 def resolve_design_query(
@@ -161,32 +196,38 @@ def resolve_design_query(
 def is_applied_system_design_request(query: str) -> bool:
     """Distinguish a requested system design from a book-concept explanation."""
     text = " ".join(query.lower().split())
-    if not text:
+    intent_text = _routing_intent_text(text)
+    if not intent_text:
         return False
     design_verb_present = any(
-        re.search(rf"\b{verb}\w*\b", text) for verb in _DESIGN_VERBS
+        re.search(rf"\b{verb}\w*\b", intent_text) for verb in _DESIGN_VERBS
     )
     # Explicit concept questions stay explanatory even when they contain a
     # product noun such as "agent" or "pipeline". "How to build ..." and
     # other direct design requests continue into the applied-design path.
-    if _CONCEPT_QUESTION.match(text) and not design_verb_present:
+    if (
+        _CONCEPT_QUESTION.match(intent_text)
+        or _OUTER_UNTRUSTED_EXPLANATION.match(intent_text)
+    ) and not design_verb_present:
         return False
     # A concept explanation can also contain an explicit request for its
     # implementable process diagram ("Explain RAG and draw the runtime flow").
     # Require both a visual-design verb and a flow target so ordinary questions
     # such as "What is control flow?" remain explanatory.
-    if design_verb_present and any(phrase in text for phrase in _DESIGN_FLOW_PHRASES):
+    if design_verb_present and any(
+        phrase in intent_text for phrase in _DESIGN_FLOW_PHRASES
+    ):
         return True
-    if any(phrase in text for phrase in _DESIGN_PHRASES):
+    if any(phrase in intent_text for phrase in _DESIGN_PHRASES):
         return True
     if re.search(
         r"\b(?:self[- ]improving|autonomous|automated)\b.{0,50}\b(?:ai|agent|platform|system|workflow)\b",
-        text,
+        intent_text,
     ):
         return True
     if re.search(
         r"\b(?:ai|agentic)\s+(?:platform|system|workflow)\b.{0,30}\b(?:for|that|to)\b",
-        text,
+        intent_text,
     ):
         return True
     if design_verb_present and any(
@@ -200,16 +241,21 @@ def is_applied_system_design_request(query: str) -> bool:
     product_nouns = {
         noun
         for noun in _DIRECT_PRODUCT_NOUNS
-        if re.search(rf"\b{re.escape(noun)}s?\b", text)
+        if re.search(rf"\b{re.escape(noun)}s?\b", intent_text)
     }
     meaningful_terms = {
         term
-        for term in re.findall(r"[a-z][a-z0-9-]{2,}", text)
+        for term in re.findall(r"[a-z][a-z0-9-]{2,}", intent_text)
         if term not in {"the", "and", "for", "with", "from", "into", "artificial", "intelligence"}
         and term.removesuffix("s") not in product_nouns
         and term not in {"ai", "agentic", "multi-agent"}
     }
-    if product_nouns and meaningful_terms:
+    seed_words = re.findall(r"[a-z][a-z0-9-]*", intent_text)
+    terse_noun_phrase = (
+        len(seed_words) <= _DIRECT_PRODUCT_SEED_MAX_WORDS
+        and not re.search(r"[.!?:;]", intent_text)
+    )
+    if terse_noun_phrase and product_nouns and meaningful_terms:
         return True
     # A request such as "agent that adjusts bids" describes an applied system;
     # "what is agent planning?" is a concept question. Require an explicit
@@ -217,7 +263,7 @@ def is_applied_system_design_request(query: str) -> bool:
     return any(
         re.search(
             rf"\bagents?\b.{{0,40}}\b(?:that|which|to)\b.{{0,30}}\b{re.escape(action)}\w*\b",
-            text,
+            intent_text,
         )
         for action in _AGENT_ACTIONS
     )
@@ -226,7 +272,7 @@ def is_applied_system_design_request(query: str) -> bool:
 def resolve_complexity(requested: str, query: str) -> ComplexityProfile:
     requested = requested if requested in {"auto", "low", "prototype", "production"} else "auto"
     if requested == "auto":
-        text = " ".join(query.lower().split())
+        text = _routing_intent_text(query)
         explanatory_flow = (
             bool(_CONCEPT_QUESTION.match(text))
             and any(phrase in text for phrase in _DESIGN_FLOW_PHRASES)
@@ -285,7 +331,9 @@ def resolve_complexity(requested: str, query: str) -> ComplexityProfile:
         min_graph_nodes=5,
         max_graph_nodes=7,
         answer_contract=(
-            "Low depth: answer directly and concretely. Cover the main design and one important "
-            "trade-off without expanding into a production review."
+            "Low depth: answer the user's actual question directly and concisely. For an explanation "
+            "or safety lesson, stop after the requested concept and necessary evidence; do not add "
+            "an unrequested architecture, operations plan, or rollout. For an actual design request, "
+            "cover the main design and one important trade-off without a production review."
         ),
     )

@@ -1,21 +1,34 @@
+from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+from anthropic import (
+    APIConnectionError as AnthropicAPIConnectionError,
+    APITimeoutError as AnthropicAPITimeoutError,
+    RateLimitError as AnthropicRateLimitError,
+)
+import httpx
 import pytest
 
 from eval.calibration import calculate_calibration
 from eval.judge_adapter import (
+    DEFAULT_ANTHROPIC_JUDGE_MODEL,
     JUDGE_PROMPT_RELEASE,
+    SemanticJudge,
     _RawJudgment,
+    _anthropic_response_schema,
     _artifact_sources,
     _judge_prompt,
     _response_schema,
     _validate_evidence,
+    estimated_judge_cost_usd,
     judge_with_transport_retry,
 )
 from eval.live_runner import (
     _assert_approved_judge_identity,
     _exit_code_for_statuses,
     _judge_payload,
+    _load_resume_evaluations,
     _write_outputs,
 )
 from eval.quality_corpus import corpus_sha256, load_corpus
@@ -213,6 +226,168 @@ def test_judge_prompt_excludes_human_approval_labels():
     assert '"artifact_sources"' in user
 
 
+@pytest.mark.asyncio
+async def test_anthropic_judge_uses_direct_structured_output_schema(monkeypatch):
+    corpus = load_corpus()
+    case = corpus.cases[0]
+    create = AsyncMock(return_value=SimpleNamespace(
+        content=[SimpleNamespace(type="text", text=__import__("json").dumps({
+            "dimensions": {
+                dimension: {
+                    "grade": "pass",
+                    "evidence": [{"source_id": "answer-1"}],
+                    "rationale": "The cited artifact satisfies the rubric.",
+                }
+                for dimension in case.rubric_dimensions
+            },
+        }))],
+        stop_reason="end_turn",
+        usage=SimpleNamespace(input_tokens=123, output_tokens=45),
+    ))
+    client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    constructor_calls = []
+
+    def fake_anthropic(**kwargs):
+        constructor_calls.append(kwargs)
+        return client
+
+    monkeypatch.setattr("eval.judge_adapter.AsyncAnthropic", fake_anthropic)
+    monkeypatch.setenv("EVAL_JUDGE_PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-test-key")
+    monkeypatch.delenv("EVAL_JUDGE_MODEL", raising=False)
+
+    judgment = await SemanticJudge().judge(corpus, case, {"answer": "Artifact text."})
+
+    assert constructor_calls == [{"api_key": "anthropic-test-key", "max_retries": 0}]
+    request = create.await_args.kwargs
+    assert request["model"] == DEFAULT_ANTHROPIC_JUDGE_MODEL
+    assert request["max_tokens"] == 8192
+    assert request["system"].startswith("You are an evaluation judge")
+    assert request["messages"][0]["role"] == "user"
+    assert request["output_config"] == {
+        "format": {
+            "type": "json_schema",
+            "schema": _anthropic_response_schema(
+                _response_schema(
+                    ("answer-1",),
+                    tuple(case.rubric_dimensions),
+                )
+            ),
+        }
+    }
+    anthropic_schema = request["output_config"]["format"]["schema"]
+    assert "minItems" not in __import__("json").dumps(anthropic_schema)
+    assert "maxItems" not in __import__("json").dumps(anthropic_schema)
+    assert "response_format" not in request
+    assert judgment.provider == "anthropic"
+    assert judgment.model == DEFAULT_ANTHROPIC_JUDGE_MODEL
+    assert judgment.input_tokens == 123
+    assert judgment.output_tokens == 45
+
+
+def test_semantic_replay_reuses_only_identity_bound_valid_judgments(tmp_path):
+    corpus = load_corpus()
+    case = corpus.cases[0]
+    target = "https://approved-evidence.example"
+    judgment = {
+        "provider": "anthropic",
+        "model": "claude-sonnet-5",
+        "prompt_release": JUDGE_PROMPT_RELEASE,
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "estimated_cost_usd": 0.000105,
+        "dimensions": [
+            {
+                "dimension": dimension,
+                "grade": "pass",
+                "critical": False,
+                "evidence": ["answer-1"],
+                "rationale": "Bounded rationale.",
+            }
+            for dimension in case.rubric_dimensions
+        ],
+    }
+    path = tmp_path / "resume.json"
+    path.write_text(
+        __import__("json").dumps({
+            "kind": "live_gate",
+            "execution_mode": "semantic_replay",
+            "suite": "full",
+            "target": target,
+            "corpus_version": corpus.corpus_version,
+            "corpus_sha256": corpus_sha256(),
+            "release_identity": corpus.release_identity,
+            "evaluations": [{
+                "id": case.id,
+                "decision": "pass",
+                "reason": "judge passed every dimension",
+                "deterministic_failures": [],
+                "judgments": [judgment],
+            }],
+        }),
+        encoding="utf-8",
+    )
+    args = SimpleNamespace(
+        resume_input=str(path),
+        capture_replay=True,
+        suite="full",
+        target=target,
+    )
+
+    resumed = _load_resume_evaluations(
+        args,
+        corpus,
+        SimpleNamespace(provider="anthropic", model="claude-sonnet-5"),
+        [case.id],
+    )
+
+    assert list(resumed) == [case.id]
+    assert resumed[case.id]["judgments"] == [judgment]
+
+
+def test_anthropic_judge_requires_its_provider_key(monkeypatch):
+    monkeypatch.setenv("EVAL_JUDGE_PROVIDER", "anthropic")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+        SemanticJudge()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stop_reason", "content", "message"),
+    [
+        ("refusal", [SimpleNamespace(type="text", text="{}")], "refused"),
+        ("max_tokens", [SimpleNamespace(type="text", text="{}")], "maximum output"),
+        ("end_turn", [SimpleNamespace(type="thinking")], "no text content"),
+    ],
+)
+async def test_anthropic_judge_rejects_non_structured_responses(
+    monkeypatch,
+    stop_reason,
+    content,
+    message,
+):
+    corpus = load_corpus()
+    case = corpus.cases[0]
+    create = AsyncMock(return_value=SimpleNamespace(
+        content=content,
+        stop_reason=stop_reason,
+        usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+    ))
+    client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    monkeypatch.setattr(
+        "eval.judge_adapter.AsyncAnthropic",
+        lambda **_kwargs: client,
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        await SemanticJudge(
+            provider="anthropic",
+            api_key="anthropic-test-key",
+        ).judge(corpus, case, {"answer": "Artifact text."})
+
+
 def test_judge_payload_removes_duplicate_graph_events_and_internal_graph_metadata():
     payload = _judge_payload({
         "answer": "answer",
@@ -324,6 +499,76 @@ async def test_judge_transport_retry_counts_every_provider_attempt(monkeypatch):
     assert budget.judge_calls == 2
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_error",
+    [
+        AnthropicAPIConnectionError(
+            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        ),
+        AnthropicAPITimeoutError(
+            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        ),
+        AnthropicRateLimitError(
+            "rate limited",
+            response=httpx.Response(
+                429,
+                request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+            ),
+            body=None,
+        ),
+    ],
+)
+async def test_judge_transport_retries_anthropic_errors_once(
+    monkeypatch,
+    provider_error,
+):
+    expected = result(("correctness", "pass", False))
+
+    class FlakyJudge:
+        calls = 0
+
+        async def judge(self, corpus, case, evidence):
+            self.calls += 1
+            if self.calls == 1:
+                raise provider_error
+            return expected
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("eval.judge_adapter.asyncio.sleep", no_sleep)
+    budget = EvaluationBudget(application_calls=1, judge_calls=2)
+    actual = await judge_with_transport_retry(
+        FlakyJudge(),
+        None,
+        None,
+        {},
+        on_attempt=budget.record_judge_call,
+    )
+
+    assert actual == expected
+    assert budget.judge_calls == 2
+
+
+def test_judge_cost_uses_exact_provider_and_model_pricing():
+    openai_result = replace(
+        result(("correctness", "pass", False)),
+        provider="openai",
+        model="gpt-5.4-mini-2026-03-17",
+    )
+    anthropic_result = replace(
+        openai_result,
+        provider="anthropic",
+        model="claude-sonnet-5",
+    )
+
+    assert estimated_judge_cost_usd(openai_result) == 0.00003
+    assert estimated_judge_cost_usd(anthropic_result) == 0.000105
+    with pytest.raises(RuntimeError, match="pricing is not configured"):
+        estimated_judge_cost_usd(replace(anthropic_result, model="unknown"))
+
+
 def test_calibration_report_uses_every_reviewed_case_and_dimension():
     corpus = load_corpus().model_copy(deep=True)
     corpus.approval.calibration.evidence_sha256 = "a" * 64
@@ -346,6 +591,7 @@ def test_calibration_report_uses_every_reviewed_case_and_dimension():
                 "decision": "pass",
                 "judgments": [
                     {
+                        "provider": "openai",
                         "prompt_release": JUDGE_PROMPT_RELEASE,
                         "model": "gpt-5.4-mini-2026-03-17",
                         "dimensions": [
@@ -370,6 +616,11 @@ def test_calibration_report_uses_every_reviewed_case_and_dimension():
         },
         evidence_sha256="a" * 64,
         source_context={"source_run_id": "123", "source_commit_sha": "b" * 40},
+        judge_selection={
+            "format_version": 1,
+            "provider": "openai",
+            "model": "gpt-5.4-mini-2026-03-17",
+        },
     )
 
     assert report["passed"] is True
@@ -403,6 +654,11 @@ def test_calibration_rejects_stale_corpus_or_judge_release():
                 "source_run_id": corpus.approval.calibration.evidence_run_id,
                 "source_commit_sha": corpus.approval.calibration.evidence_commit_sha,
             },
+            judge_selection={
+                "format_version": 1,
+                "provider": corpus.approval.calibration.judge_provider,
+                "model": corpus.approval.calibration.judge_model,
+            },
         )
 
 
@@ -427,6 +683,11 @@ def test_calibration_rejects_infrastructure_after_a_judgment():
                 "source_run_id": corpus.approval.calibration.evidence_run_id,
                 "source_commit_sha": corpus.approval.calibration.evidence_commit_sha,
             },
+            judge_selection={
+                "format_version": 1,
+                "provider": corpus.approval.calibration.judge_provider,
+                "model": corpus.approval.calibration.judge_model,
+            },
         )
 
 
@@ -436,7 +697,23 @@ def test_approved_gate_rejects_an_uncalibrated_judge_model():
     with pytest.raises(RuntimeError, match="judge model"):
         _assert_approved_judge_identity(
             corpus,
-            SimpleNamespace(model="different-judge-model"),
+            SimpleNamespace(
+                provider=corpus.approval.calibration.judge_provider,
+                model="different-judge-model",
+            ),
+        )
+
+
+def test_approved_gate_rejects_an_uncalibrated_judge_provider():
+    corpus = load_corpus()
+
+    with pytest.raises(RuntimeError, match="judge provider"):
+        _assert_approved_judge_identity(
+            corpus,
+            SimpleNamespace(
+                provider="openai",
+                model=corpus.approval.calibration.judge_model,
+            ),
         )
 
 

@@ -3,8 +3,23 @@ name: Live eval manual override
 on:
   workflow_dispatch:
     inputs:
+      scope:
+        description: Validate a PR required check or publish a production tree approval
+        required: true
+        default: pr-check
+        type: choice
+        options: [pr-check, production]
+      current_commit_sha:
+        description: Full commit SHA at the exact ref used to dispatch this workflow
+        required: true
+        type: string
+      pr_number:
+        description: Pull request number (required for pr-check, empty for production)
+        required: false
+        default: ''
+        type: string
       evidence_sources:
-        description: JSON array of run_id, artifact_name, cases, and legacy_risk_accepted
+        description: JSON sources with run/artifact/cases, browser_sha256, semantic_sha256, legacy_risk_accepted, and exactly one semantic_replay object
         required: true
         type: string
       applied_commit_sha:
@@ -42,17 +57,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.current_commit_sha }}
           fetch-depth: 1
       - name: Validate authenticated evidence request
         env:
+          APPROVAL_SCOPE: ${{ inputs.scope }}
+          CURRENT_COMMIT_SHA: ${{ inputs.current_commit_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
           EVIDENCE_SOURCES: ${{ inputs.evidence_sources }}
           APPLIED_COMMIT_SHA: ${{ inputs.applied_commit_sha }}
           IMAGE_DIGEST: ${{ inputs.image_digest }}
           OVERRIDE_REVIEWER: ${{ inputs.reviewer }}
           OVERRIDE_REASON: ${{ inputs.reason }}
         run: |
-          [ "$GITHUB_REF" = refs/heads/main ] || {
-            echo "Evidence approval must be dispatched from main." >&2
+          case "$APPROVAL_SCOPE" in
+            pr-check)
+              case "$PR_NUMBER" in ''|*[!0-9]*) echo "pr_number is required and must be numeric for pr-check." >&2; exit 1 ;; esac
+              ;;
+            production)
+              [ "$GITHUB_REF" = refs/heads/main ] || {
+                echo "Production evidence approval must be dispatched from main." >&2
+                exit 1
+              }
+              [ -z "$PR_NUMBER" ] || {
+                echo "pr_number must be empty for production approval." >&2
+                exit 1
+              }
+              ;;
+            *) echo "scope must be pr-check or production." >&2; exit 1 ;;
+          esac
+          [[ "$CURRENT_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "current_commit_sha must be a full lowercase commit SHA." >&2
+            exit 1
+          }
+          [ "$GITHUB_SHA" = "$CURRENT_COMMIT_SHA" ] || {
+            echo "Workflow must be dispatched on current_commit_sha, not merely check it out later." >&2
+            exit 1
+          }
+          [ "$(git rev-parse HEAD)" = "$CURRENT_COMMIT_SHA" ] || {
+            echo "Checked-out commit does not match current_commit_sha." >&2
             exit 1
           }
           [ "$OVERRIDE_REVIEWER" = "$GITHUB_ACTOR" ] || {
@@ -80,7 +123,9 @@ jobs:
           sources = json.loads(os.environ["EVIDENCE_SOURCES"])
           if not isinstance(sources, list) or not sources:
               raise SystemExit("evidence_sources must be a non-empty JSON array")
-          seen = set()
+          seen_run_ids = set()
+          seen_replay_run_ids = set()
+          replay_count = 0
           for source in sources:
               if not isinstance(source, dict):
                   raise SystemExit("Each evidence source must be an object")
@@ -88,7 +133,12 @@ jobs:
               artifact = str(source.get("artifact_name", ""))
               cases = source.get("cases")
               legacy = source.get("legacy_risk_accepted", False)
-              if not run_id.isdigit() or not re.fullmatch(r"[A-Za-z0-9_.-]+", artifact):
+              browser_sha256 = str(source.get("browser_sha256", ""))
+              semantic_sha256 = str(source.get("semantic_sha256", ""))
+              replay = source.get("semantic_replay")
+              if not re.fullmatch(r"[0-9]+", run_id) or not re.fullmatch(
+                  r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,253}[A-Za-z0-9])?", artifact
+              ):
                   raise SystemExit("Invalid evidence run_id or artifact_name")
               if not isinstance(cases, list) or not cases or any(
                   not isinstance(case_id, str) or not re.fullmatch(r"[a-z0-9-]+", case_id)
@@ -97,27 +147,72 @@ jobs:
                   raise SystemExit("Each source needs a non-empty valid cases array")
               if len(cases) != len(set(cases)) or not isinstance(legacy, bool):
                   raise SystemExit("Source cases must be unique and legacy_risk_accepted must be boolean")
-              key = (run_id, artifact)
-              if key in seen:
-                  raise SystemExit("Duplicate evidence source")
-              seen.add(key)
-              print(run_id, artifact, json.dumps(cases, separators=(",", ":")), str(legacy).lower(), sep="\t")
+              if not re.fullmatch(r"[0-9a-f]{64}", browser_sha256) or not re.fullmatch(
+                  r"[0-9a-f]{64}", semantic_sha256
+              ):
+                  raise SystemExit("Each source requires lowercase browser_sha256 and semantic_sha256")
+              replay_run_id = "-"
+              replay_artifact = "-"
+              replay_context_sha256 = "-"
+              if replay is not None:
+                  if not isinstance(replay, dict):
+                      raise SystemExit("semantic_replay must be an object")
+                  replay_run_id = str(replay.get("run_id", ""))
+                  replay_artifact = str(replay.get("artifact_name", ""))
+                  replay_context_sha256 = str(replay.get("replay_context_sha256", ""))
+                  if not re.fullmatch(r"[0-9]+", replay_run_id) or not re.fullmatch(
+                      r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,253}[A-Za-z0-9])?", replay_artifact
+                  ):
+                      raise SystemExit("Invalid semantic replay run_id or artifact_name")
+                  if not re.fullmatch(r"[0-9a-f]{64}", replay_context_sha256):
+                      raise SystemExit("semantic replay requires lowercase replay_context_sha256")
+                  if replay_run_id == run_id or replay_run_id in seen_replay_run_ids:
+                      raise SystemExit("Semantic replay run IDs must be distinct from every source and replay")
+                  seen_replay_run_ids.add(replay_run_id)
+                  replay_count += 1
+              if run_id in seen_run_ids:
+                  raise SystemExit("Each evidence source must use a distinct run_id")
+              seen_run_ids.add(run_id)
+              print(
+                  run_id,
+                  artifact,
+                  json.dumps(cases, separators=(",", ":")),
+                  str(legacy).lower(),
+                  browser_sha256,
+                  semantic_sha256,
+                  replay_run_id,
+                  replay_artifact,
+                  replay_context_sha256,
+                  sep="\t",
+              )
+          if replay_count != 1:
+              raise SystemExit("Evidence must contain exactly one source-linked semantic replay")
           PY
       - name: Download explicit evidence and source metadata
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          while IFS=$'\t' read -r run_id artifact_name cases legacy; do
+          while IFS=$'\t' read -r run_id artifact_name cases legacy browser_sha semantic_sha replay_run_id replay_artifact replay_context_sha; do
             source_dir="artifacts/evidence-sources/$run_id"
             mkdir -p "$source_dir/artifact"
             gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$source_dir/run.json"
             gh run download "$run_id" --name "$artifact_name" --dir "$source_dir/artifact"
             gh run view "$run_id" --log > "$source_dir/run.log"
-            printf '%s\t%s\t%s\t%s\n' "$run_id" "$artifact_name" "$cases" "$legacy" > "$source_dir/assignment.tsv"
+            if [ "$replay_run_id" != - ]; then
+              mkdir -p "$source_dir/replay-artifact"
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$replay_run_id" > "$source_dir/replay-run.json"
+              gh run download "$replay_run_id" --name "$replay_artifact" --dir "$source_dir/replay-artifact"
+            fi
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+              "$run_id" "$artifact_name" "$cases" "$legacy" "$browser_sha" "$semantic_sha" \
+              "$replay_run_id" "$replay_artifact" "$replay_context_sha" > "$source_dir/assignment.tsv"
           done < artifacts/evidence-sources/sources.tsv
       - name: Verify complete per-case evidence and exact release identity
         env:
           GH_TOKEN: ${{ github.token }}
+          APPROVAL_SCOPE: ${{ inputs.scope }}
+          CURRENT_COMMIT_SHA: ${{ inputs.current_commit_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
           EVIDENCE_SOURCES: ${{ inputs.evidence_sources }}
           APPLIED_COMMIT_SHA: ${{ inputs.applied_commit_sha }}
           IMAGE_DIGEST: ${{ inputs.image_digest }}
@@ -126,6 +221,7 @@ jobs:
         run: |
           python - <<'PY'
           import base64
+          import hashlib
           import json
           import os
           import re
@@ -145,10 +241,28 @@ jobs:
           allowed_post_evidence_changes = {
               ".github/workflows/live-eval-override.yml",
               "README.md",
+              "ci/tests/test_ci_system.py",
           }
+          legacy_replay_allowed_changes = {
+              ".github/workflows/live-eval-override.yml",
+              ".github/workflows/scheduled-eval.yml",
+              ".github/workflows/semantic-review-replay.yml",
+              "backend/agent/nodes/graph_critic.py",
+              "backend/agent/nodes/graph_worker.py",
+              "backend/eval/evidence_replay.py",
+              "backend/tests/test_graph_critic.py",
+              "backend/tests/test_graph_grounding_prompts.py",
+              "backend/tests/test_graph_patch.py",
+              "backend/tests/test_quality_corpus.py",
+              "ci/tests/test_ci_system.py",
+              "docs/quality-system.md",
+          }
+          replay_expected_cases = {"memory", "graph-off", "prompt-injection"}
           repository = os.environ["GITHUB_REPOSITORY"]
+          approval_scope = os.environ["APPROVAL_SCOPE"]
           applied_commit = os.environ["APPLIED_COMMIT_SHA"]
-          current_commit = os.environ["GITHUB_SHA"]
+          current_commit = os.environ["CURRENT_COMMIT_SHA"]
+          evidence_commit = applied_commit
           image_digest = os.environ["IMAGE_DIGEST"]
           sources = json.loads(os.environ["EVIDENCE_SOURCES"])
 
@@ -171,6 +285,9 @@ jobs:
                   raise SystemExit(f"Expected exactly one {name} under {root}, found {len(matches)}")
               return matches[0]
 
+          def file_sha256(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
           def identity_value(document, key):
               pending = [document]
               while pending:
@@ -182,6 +299,22 @@ jobs:
                   elif isinstance(value, list):
                       pending.extend(value)
               return None
+
+          def raw_case_results(document, key, label, run_id):
+              results = document.get(key)
+              if not isinstance(results, list):
+                  raise SystemExit(f"{label} evidence has no result list in run {run_id}")
+              case_ids = []
+              for result in results:
+                  if not isinstance(result, dict) or not isinstance(result.get("id"), str):
+                      raise SystemExit(f"{label} evidence has an invalid case result in run {run_id}")
+                  case_id = result["id"]
+                  if not re.fullmatch(r"[a-z0-9-]+", case_id):
+                      raise SystemExit(f"{label} evidence has an invalid case ID in run {run_id}")
+                  case_ids.append(case_id)
+              if len(case_ids) != len(set(case_ids)):
+                  raise SystemExit(f"{label} evidence has duplicate case IDs in run {run_id}")
+              return results, case_ids
 
           def tree_files(commit_sha):
               commit = api_json(f"repos/{repository}/git/commits/{commit_sha}")
@@ -204,6 +337,49 @@ jobs:
 
           applied_files = tree_files(applied_commit)
           current_files = tree_files(current_commit)
+          applied_metadata = api_json(f"repos/{repository}/git/commits/{applied_commit}")
+          current_metadata = api_json(f"repos/{repository}/git/commits/{current_commit}")
+          applied_tree_sha = applied_metadata["tree"]["sha"]
+          current_tree_sha = current_metadata["tree"]["sha"]
+          checked_out_tree = subprocess.run(
+              ["git", "rev-parse", "HEAD^{tree}"], check=True, capture_output=True, text=True
+          ).stdout.strip()
+          if checked_out_tree != current_tree_sha:
+              raise SystemExit("Checked-out tree does not match current_commit_sha")
+
+          pr_identity = None
+          if approval_scope == "pr-check":
+              pr_number = os.environ["PR_NUMBER"]
+              pull_request = api_json(f"repos/{repository}/pulls/{pr_number}")
+              head = pull_request.get("head") or {}
+              base = pull_request.get("base") or {}
+              head_repo = (head.get("repo") or {}).get("full_name")
+              base_repo = (base.get("repo") or {}).get("full_name")
+              head_sha = head.get("sha")
+              base_sha = base.get("sha")
+              head_ref = head.get("ref")
+              if pull_request.get("state") != "open":
+                  raise SystemExit("pr-check requires an open pull request")
+              if head_repo != repository or base_repo != repository:
+                  raise SystemExit("pr-check requires authenticated same-repository head and base refs")
+              if head_sha != current_commit:
+                  raise SystemExit("PR head and current_commit_sha must match exactly")
+              if not isinstance(base_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", base_sha):
+                  raise SystemExit("PR base SHA is invalid")
+              if base.get("ref") != "main":
+                  raise SystemExit("pr-check requires main as the authenticated base")
+              if os.environ["GITHUB_REF"] != f"refs/heads/{head_ref}":
+                  raise SystemExit("Workflow was not dispatched on the exact PR head ref")
+              if os.environ["GITHUB_SHA"] != head_sha:
+                  raise SystemExit("Workflow dispatch SHA does not match the authenticated PR head")
+              api_json(f"repos/{repository}/git/commits/{base_sha}")
+              pr_identity = {
+                  "number": int(pr_number),
+                  "head_ref": head_ref,
+                  "head_sha": head_sha,
+                  "base_ref": base.get("ref"),
+                  "base_sha": base_sha,
+              }
           changed_files = {
               path
               for path in applied_files.keys() | current_files.keys()
@@ -226,6 +402,9 @@ jobs:
               artifact_name = source["artifact_name"]
               selected = source["cases"]
               legacy = source.get("legacy_risk_accepted", False)
+              expected_browser_sha256 = source["browser_sha256"]
+              expected_semantic_sha256 = source["semantic_sha256"]
+              replay = source.get("semantic_replay")
               overlap = assigned.intersection(selected)
               if overlap:
                   raise SystemExit(f"Cases assigned more than once: {sorted(overlap)}")
@@ -238,12 +417,147 @@ jobs:
               source_commit = run.get("head_sha")
               if not isinstance(source_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", source_commit):
                   raise SystemExit(f"Evidence run {run_id} has no valid head SHA")
-              if source_commit != applied_commit and legacy is not True:
+              if source_commit != evidence_commit and legacy is not True:
                   raise SystemExit(f"Historical evidence run {run_id} requires explicit legacy risk acceptance")
+              if approval_scope == "pr-check" and legacy:
+                  raise SystemExit("pr-check cannot use legacy evidence")
+              if replay is not None:
+                  if (
+                      run.get("path") != ".github/workflows/live-eval.yml"
+                      or run.get("event") != "pull_request"
+                      or run.get("status") != "completed"
+                      or run.get("conclusion") != "failure"
+                  ):
+                      raise SystemExit(
+                          f"Replay source {run_id} must be one completed failed pull-request live evaluation"
+                      )
+                  jobs = api_json(
+                      f"repos/{repository}/actions/runs/{run_id}/jobs?per_page=100"
+                  ).get("jobs", [])
+                  required_jobs = [job for job in jobs if job.get("name") == "Live eval required"]
+                  if (
+                      len(required_jobs) != 1
+                      or required_jobs[0].get("status") != "completed"
+                      or required_jobs[0].get("conclusion") != "failure"
+                  ):
+                      raise SystemExit(
+                          f"Replay source {run_id} has no unique failed Live eval required job"
+                      )
+                  if set(selected) != replay_expected_cases or len(selected) != 3:
+                      raise SystemExit(
+                          "Semantic replay selection must be exactly memory, graph-off, and prompt-injection"
+                      )
+              else:
+                  if run.get("name") != "Scheduled evaluation" or run.get("path") != ".github/workflows/scheduled-eval.yml":
+                      raise SystemExit(f"Evidence run {run_id} is not a scheduled evaluation")
+                  if run.get("event") != "workflow_dispatch" or run.get("conclusion") != "success":
+                      raise SystemExit(f"Evidence run {run_id} must be a successful dispatched scheduled evaluation")
+              expected_pr_parents = None
+              if run.get("event") == "pull_request":
+                  pull_requests = run.get("pull_requests")
+                  if not isinstance(pull_requests, list) or len(pull_requests) != 1:
+                      raise SystemExit(f"Evidence run {run_id} has ambiguous pull-request metadata")
+                  pull_request = pull_requests[0]
+                  if not isinstance(pull_request, dict):
+                      raise SystemExit(f"Evidence run {run_id} has invalid pull-request metadata")
+                  head = pull_request.get("head")
+                  base = pull_request.get("base")
+                  if not isinstance(head, dict) or not isinstance(base, dict):
+                      raise SystemExit(f"Evidence run {run_id} has invalid pull-request refs")
+                  head_sha = head.get("sha")
+                  base_sha = base.get("sha")
+                  if not all(
+                      isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value)
+                      for value in (head_sha, base_sha)
+                  ):
+                      raise SystemExit(f"Evidence run {run_id} has invalid pull-request parent SHAs")
+                  if head_sha != source_commit:
+                      raise SystemExit(f"Evidence run {run_id} head SHA disagrees with pull-request metadata")
+                  expected_pr_parents = {head_sha, base_sha}
+                  if len(expected_pr_parents) != 2:
+                      raise SystemExit(f"Evidence run {run_id} has identical pull-request head and base SHAs")
+                  if replay is not None and approval_scope == "pr-check":
+                      if pr_identity is None or head_sha != applied_commit:
+                          raise SystemExit(f"Replay source {run_id} is not bound to applied_commit_sha")
+                      if base_sha != pr_identity["base_sha"]:
+                          raise SystemExit(f"Replay source {run_id} base SHA disagrees with the authenticated PR")
 
               artifact_root = root / "artifact"
-              browser = json.loads(only_file(artifact_root, "browser-results.json").read_text())
-              live = json.loads(only_file(artifact_root, "live-results.json").read_text())
+              browser_path = only_file(artifact_root, "browser-results.json")
+              if file_sha256(browser_path) != expected_browser_sha256:
+                  raise SystemExit(f"Browser artifact hash mismatch in run {run_id}")
+              browser = json.loads(browser_path.read_text())
+              replay_provenance = None
+              if replay is not None:
+                  replay_root = root / "replay-artifact"
+                  replay_run = json.loads((root / "replay-run.json").read_text())
+                  replay_run_id = str(replay["run_id"])
+                  if (
+                      str(replay_run.get("id")) != replay_run_id
+                      or replay_run.get("name") != "Semantic review replay"
+                      or replay_run.get("path") != ".github/workflows/semantic-review-replay.yml"
+                      or replay_run.get("event") != "workflow_dispatch"
+                      or replay_run.get("conclusion") != "success"
+                  ):
+                      raise SystemExit(f"Semantic replay run {replay_run_id} has invalid authenticated metadata")
+                  judge_commit = replay_run.get("head_sha")
+                  if not isinstance(judge_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", judge_commit):
+                      raise SystemExit(f"Semantic replay run {replay_run_id} has no valid judge commit")
+                  judge_files = tree_files(judge_commit)
+                  judge_changes = {
+                      path
+                      for path in judge_files.keys() | current_files.keys()
+                      if judge_files.get(path) != current_files.get(path)
+                  }
+                  if not judge_changes <= allowed_post_evidence_changes:
+                      raise SystemExit(
+                          f"Semantic replay judge tree differs from current code: {sorted(judge_changes - allowed_post_evidence_changes)}"
+                      )
+                  replay_context_path = only_file(replay_root, "replay-context.json")
+                  if file_sha256(replay_context_path) != replay["replay_context_sha256"]:
+                      raise SystemExit(f"Semantic replay context hash mismatch in run {replay_run_id}")
+                  replay_context = json.loads(replay_context_path.read_text())
+                  if (
+                      str(replay_context.get("source_run_id")) != run_id
+                      or replay_context.get("source_commit_sha") != source_commit
+                      or replay_context.get("judge_commit_sha") != replay_run.get("head_sha")
+                  ):
+                      raise SystemExit(f"Semantic replay {replay_run_id} is not linked to its original source")
+                  live_path = only_file(replay_root, "live-results.json")
+                  replay_provenance = {
+                      "run_id": replay_run_id,
+                      "artifact_name": replay["artifact_name"],
+                      "judge_commit_sha": judge_commit,
+                      "judge_tree_sha": api_json(
+                          f"repos/{repository}/git/commits/{judge_commit}"
+                      )["tree"]["sha"],
+                      "replay_context_sha256": replay["replay_context_sha256"],
+                  }
+              else:
+                  live_path = only_file(artifact_root, "live-results.json")
+              if file_sha256(live_path) != expected_semantic_sha256:
+                  raise SystemExit(f"Semantic artifact hash mismatch for source run {run_id}")
+              live = json.loads(live_path.read_text())
+              browser_results, browser_ids = raw_case_results(
+                  browser, "results", "Browser", run_id
+              )
+              live_results, live_ids = raw_case_results(
+                  live, "evaluations", "Semantic", run_id
+              )
+              if replay is None and browser_ids != live_ids:
+                  raise SystemExit(f"Browser and semantic case IDs disagree in run {run_id}")
+              if replay is not None:
+                  if browser.get("suite") != "pr":
+                      raise SystemExit(f"Replay source {run_id} must authenticate a PR browser capture")
+                  if set(browser_ids) != expected_cases or len(browser_ids) != len(expected_cases):
+                      raise SystemExit(f"Replay source {run_id} must contain the complete raw PR case set")
+                  if live_ids != selected or live.get("status") != "pass":
+                      raise SystemExit(f"Replay judge output must pass exactly the authenticated selection in run {run_id}")
+              else:
+                  if browser.get("suite") != "diagnostic" or live.get("suite") != "diagnostic":
+                      raise SystemExit(f"Scheduled source {run_id} must declare the diagnostic suite")
+                  if browser_ids != selected or live_ids != selected:
+                      raise SystemExit(f"Diagnostic raw IDs must exactly equal the authenticated selection in run {run_id}")
               context_matches = []
               deployment_commits = set()
               for context_name in ("run-context.json", "deployment.json"):
@@ -263,11 +577,22 @@ jobs:
                               if context_commit == source_commit:
                                   raise SystemExit(f"deployment.json does not record the tested PR merge for run {run_id}")
                               tested_parents = tested.get("parents", [])
-                              if len(tested_parents) != 2:
-                                  raise SystemExit(f"deployment.json does not record a two-parent PR merge for run {run_id}")
-                              parents = {parent["sha"] for parent in tested_parents}
-                              if source_commit not in parents:
-                                  raise SystemExit(f"deployment.json is not the tested PR merge for run {run_id}")
+                              tested_parent_shas = [
+                                  parent.get("sha") if isinstance(parent, dict) else None
+                                  for parent in tested_parents
+                              ]
+                              if (
+                                  len(tested_parent_shas) != 2
+                                  or any(
+                                      not isinstance(value, str)
+                                      or not re.fullmatch(r"[0-9a-f]{40}", value)
+                                      for value in tested_parent_shas
+                                  )
+                                  or len(set(tested_parent_shas)) != 2
+                              ):
+                                  raise SystemExit(f"deployment.json does not record two distinct PR merge parents for run {run_id}")
+                              if set(tested_parent_shas) != expected_pr_parents:
+                                  raise SystemExit(f"deployment.json PR merge parents do not match run metadata for run {run_id}")
                           elif context_commit != source_commit:
                               raise SystemExit(f"deployment.json commit mismatch for run {run_id}")
                           recorded_tree = context.get("tree_sha")
@@ -284,9 +609,69 @@ jobs:
               if len(deployment_commits) > 1:
                   raise SystemExit(f"Evidence run {run_id} records multiple tested commits")
               tested_commit = next(iter(deployment_commits), source_commit)
+              tested_metadata = api_json(f"repos/{repository}/git/commits/{tested_commit}")
+              tested_tree_sha = tested_metadata["tree"]["sha"]
+              legacy_replay_tree_changes = []
 
-              browser_by_id = {item.get("id"): item for item in browser.get("results", [])}
-              live_by_id = {item.get("id"): item for item in live.get("evaluations", [])}
+              browser_by_id = {item["id"]: item for item in browser_results}
+              live_by_id = {item["id"]: item for item in live_results}
+              replay_case_operations = None
+              if replay is not None:
+                  application_telemetry = browser.get("application_telemetry")
+                  if not isinstance(application_telemetry, list):
+                      raise SystemExit(f"Replay source {run_id} has no application telemetry provenance")
+                  replay_case_operations = {}
+                  for case_id in selected:
+                      browser_case = browser_by_id.get(case_id) or {}
+                      thread_ids = browser_case.get("thread_ids")
+                      if not isinstance(thread_ids, list) or not thread_ids or any(
+                          not isinstance(thread_id, str) or not thread_id for thread_id in thread_ids
+                      ):
+                          raise SystemExit(f"Replay case {case_id} has no authenticated thread provenance")
+                      operations = [
+                          str(item.get("operation") or "")
+                          for item in application_telemetry
+                          if isinstance(item, dict) and item.get("thread_id") in set(thread_ids)
+                      ]
+                      if not operations:
+                          raise SystemExit(f"Replay case {case_id} has no recorded application operations")
+                      graph_operations = [
+                          operation for operation in operations if operation.startswith("graph_")
+                      ]
+                      if graph_operations:
+                          raise SystemExit(
+                              f"Replay case {case_id} used forbidden graph operations: {graph_operations}"
+                          )
+                      replay_case_operations[case_id] = {
+                          "thread_ids": thread_ids,
+                          "operations": operations,
+                          "graph_operations": graph_operations,
+                      }
+                  replay_provenance["selection"] = selected
+                  replay_provenance["case_operations"] = replay_case_operations
+              if tested_tree_sha != applied_tree_sha:
+                  if replay is None or not legacy:
+                      raise SystemExit(f"Evidence tree mismatch in run {run_id}")
+                  if replay_case_operations is None or any(
+                      item["graph_operations"] for item in replay_case_operations.values()
+                  ):
+                      raise SystemExit(
+                          f"Legacy replay source {run_id} lacks authenticated graph-free telemetry"
+                      )
+                  tested_files = tree_files(tested_commit)
+                  replay_tree_changes = {
+                      path
+                      for path in tested_files.keys() | applied_files.keys()
+                      if tested_files.get(path) != applied_files.get(path)
+                  }
+                  if not replay_tree_changes <= legacy_replay_allowed_changes:
+                      unexpected = sorted(
+                          replay_tree_changes - legacy_replay_allowed_changes
+                      )
+                      raise SystemExit(
+                          f"Legacy replay source {run_id} has unapproved source-to-applied changes: {unexpected}"
+                      )
+                  legacy_replay_tree_changes = sorted(replay_tree_changes)
               for case_id in selected:
                   browser_case = browser_by_id.get(case_id)
                   live_case = live_by_id.get(case_id)
@@ -304,31 +689,58 @@ jobs:
 
               identity = {
                   "corpus_version": identity_value(browser, "corpus_version"),
-                  "corpus_hash": identity_value(browser, "corpus_hash"),
+                  "corpus_sha256": identity_value(browser, "corpus_sha256"),
                   "release_identity": identity_value(browser, "release_identity"),
               }
               live_identity = {
                   "corpus_version": identity_value(live, "corpus_version"),
-                  "corpus_hash": identity_value(live, "corpus_hash"),
+                  "corpus_sha256": identity_value(live, "corpus_sha256"),
                   "release_identity": identity_value(live, "release_identity"),
               }
               for key in ("corpus_version", "release_identity"):
                   if not identity[key] or live_identity[key] != identity[key]:
                       raise SystemExit(f"Evidence identity {key} is missing or inconsistent in run {run_id}")
-              if identity["corpus_hash"] and live_identity["corpus_hash"] not in (None, identity["corpus_hash"]):
-                  raise SystemExit(f"Browser/live corpus hashes disagree in run {run_id}")
-              if reference_identity is None and source_commit == applied_commit:
-                  reference_identity = identity
+              corpus_sha256_documents = {
+                  "browser": identity["corpus_sha256"],
+                  "live": live_identity["corpus_sha256"],
+              }
+              for document_name, corpus_sha256 in corpus_sha256_documents.items():
+                  if corpus_sha256 is not None and (
+                      not isinstance(corpus_sha256, str)
+                      or not re.fullmatch(r"[0-9a-f]{64}", corpus_sha256)
+                  ):
+                      raise SystemExit(
+                          f"{document_name} corpus_sha256 is invalid in run {run_id}"
+                      )
+              missing_corpus_sha256 = sorted(
+                  name for name, value in corpus_sha256_documents.items() if value is None
+              )
+              if missing_corpus_sha256 and not legacy:
+                  raise SystemExit(
+                      f"corpus_sha256 is missing from {missing_corpus_sha256} evidence in run {run_id}"
+                  )
+              present_corpus_sha256 = {
+                  value for value in corpus_sha256_documents.values() if value is not None
+              }
+              if len(present_corpus_sha256) > 1:
+                  raise SystemExit(f"Browser/live corpus_sha256 values disagree in run {run_id}")
+              identity["corpus_sha256"] = next(iter(present_corpus_sha256), None)
               provenance.append({
                   "run_id": run_id,
                   "artifact_name": artifact_name,
                   "source_commit_sha": source_commit,
                   "tested_commit_sha": tested_commit,
+                  "tested_tree_sha": tested_tree_sha,
                   "workflow": run.get("name"),
                   "event": run.get("event"),
                   "conclusion": run.get("conclusion"),
                   "cases": selected,
                   "identity": identity,
+                  "corpus_sha256_documents": corpus_sha256_documents,
+                  "browser_sha256": expected_browser_sha256,
+                  "semantic_sha256": expected_semantic_sha256,
+                  "semantic_replay": replay_provenance,
+                  "legacy_replay_tree_changes": legacy_replay_tree_changes,
                   "legacy_risk_accepted": legacy,
                   "identity_documents": sorted(context_matches),
               })
@@ -339,7 +751,20 @@ jobs:
                       raise SystemExit("applied-domain evidence must be exact and cannot use a legacy waiver")
                   if run.get("name") != "Scheduled evaluation" or run.get("event") != "workflow_dispatch" or run.get("conclusion") != "success":
                       raise SystemExit("applied-domain must come from a successful dispatched scheduled diagnostic")
+                  if browser.get("suite") != "diagnostic" or live.get("suite") != "diagnostic":
+                      raise SystemExit("applied-domain evidence must declare the diagnostic suite")
+                  if browser_ids != ["applied-domain"] or live_ids != ["applied-domain"]:
+                      raise SystemExit("applied-domain diagnostic artifact must contain exactly one applied-domain result")
                   applied_source = (run_id, root)
+                  reference_identity = identity
+
+              logged_digests = set(
+                  re.findall(r"IMAGE_DIGEST:\s*(sha256:[0-9a-f]{64})", (root / "run.log").read_text())
+              )
+              if logged_digests != {image_digest}:
+                  raise SystemExit(
+                      f"Evidence run {run_id} digest mismatch: expected {image_digest}, found {sorted(logged_digests)}"
+                  )
 
           if assigned != expected_cases:
               raise SystemExit(
@@ -347,8 +772,17 @@ jobs:
               )
           if applied_source is None or reference_identity is None:
               raise SystemExit("Exact applied-domain evidence is required")
+          replay_sources = [item for item in provenance if item["semantic_replay"] is not None]
+          if len(replay_sources) != 1:
+              raise SystemExit("Exactly one authenticated semantic replay source is required")
           for item in provenance:
-              for key in ("corpus_version", "release_identity"):
+              for key in ("corpus_version", "release_identity", "corpus_sha256"):
+                  if (
+                      key == "corpus_sha256"
+                      and item["identity"][key] is None
+                      and item["legacy_risk_accepted"]
+                  ):
+                      continue
                   if item["identity"][key] != reference_identity[key]:
                       raise SystemExit(f"Evidence release identity mismatch in run {item['run_id']}")
 
@@ -361,17 +795,17 @@ jobs:
                   f"Applied-domain run log digest mismatch: expected {image_digest}, found {sorted(logged_digests)}"
               )
 
-          current_tree = subprocess.run(
-              ["git", "rev-parse", "HEAD^{tree}"], check=True, capture_output=True, text=True
-          ).stdout.strip()
           record = {
               "schema_version": 1,
               "decision": "pass",
+              "scope": approval_scope,
               "current_commit_sha": current_commit,
-              "current_tree_sha": current_tree,
+              "current_tree_sha": current_tree_sha,
               "applied_commit_sha": applied_commit,
+              "applied_tree_sha": applied_tree_sha,
               "applied_run_id": applied_run_id,
               "image_digest": image_digest,
+              "pull_request": pr_identity,
               "allowed_post_evidence_changes": sorted(changed_files),
               "protected_cases": sorted(expected_cases),
               "reviewer": os.environ["OVERRIDE_REVIEWER"],
@@ -383,11 +817,14 @@ jobs:
           print(json.dumps(record, indent=2, sort_keys=True))
           PY
       - uses: google-github-actions/auth@v2
+        if: inputs.scope == 'production'
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
+        if: inputs.scope == 'production'
       - name: Publish the reviewed exact-tree approval
+        if: inputs.scope == 'production'
         env:
           IMAGE_DIGEST: ${{ inputs.image_digest }}
         run: |

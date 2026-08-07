@@ -514,6 +514,47 @@ def _failure_detail(
     }
 
 
+async def _node_followup_interaction_failure_details(
+    page: Any,
+    case: EvaluationCase,
+    graph: dict[str, Any] | None,
+    existing_failure_details: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if (
+        case.id != "node-followup"
+        or graph is None
+        or existing_failure_details
+    ):
+        return []
+
+    try:
+        # Use the same accessible activation path available to keyboard users
+        # and prove the optional refinement starts.
+        first_node = page.get_by_role(
+            "button", name=re.compile(r"^Explore ")
+        ).first
+        async with page.expect_request(
+            lambda request: (
+                request.method == "POST"
+                and request.url.rstrip("/").endswith("/api/node-selected")
+            ),
+            timeout=10_000,
+        ):
+            await first_node.press("Enter", timeout=10_000)
+        await page.locator('[data-testid="suggested-question"]').first.wait_for(
+            timeout=10_000
+        )
+    except Exception as exc:
+        return [
+            _failure_detail(
+                "quality",
+                "node_followup_interaction_failed",
+                f"node follow-up interaction failed: {type(exc).__name__}: {exc}",
+            )
+        ]
+    return []
+
+
 def _deterministic_failure_details(
     case: EvaluationCase,
     events: list[dict[str, Any]],
@@ -1105,33 +1146,6 @@ async def _run_browser_attempt(
         except Exception as exc:
             failure_details.append(_exception_failure_detail(exc))
 
-        if not failure_details and case.id == "node-followup":
-            try:
-                # Use the same accessible activation path available to
-                # keyboard users and prove the optional refinement starts.
-                first_node = page.get_by_role(
-                    "button", name=re.compile(r"^Explore ")
-                ).first
-                async with page.expect_request(
-                    lambda request: (
-                        request.method == "POST"
-                        and request.url.rstrip("/").endswith("/api/node-selected")
-                    ),
-                    timeout=10_000,
-                ):
-                    await first_node.press("Enter", timeout=10_000)
-                await page.locator('[data-testid="suggested-question"]').first.wait_for(
-                    timeout=10_000
-                )
-            except Exception as exc:
-                failure_details.append(
-                    _failure_detail(
-                        "quality",
-                        "node_followup_interaction_failed",
-                        f"node follow-up interaction failed: {type(exc).__name__}: {exc}",
-                    )
-                )
-
         graph = extract_graph_data(case_events)
         rendered_nodes = 0
         if not failure_details:
@@ -1151,6 +1165,14 @@ async def _run_browser_attempt(
             failure_details.extend(
                 _deterministic_failure_details(case, case_events, rendered_nodes)
             )
+        failure_details.extend(
+            await _node_followup_interaction_failure_details(
+                page,
+                case,
+                graph,
+                failure_details,
+            )
+        )
         evaluation_failed = bool(failure_details)
         screenshot = screenshot_dir / f"{artifact_stem}.png"
         screenshot_relative: str | None = None

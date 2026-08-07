@@ -72,11 +72,63 @@ jobs:
           echo "The reviewed semantic corpus is still pending. Protected PR model calls, browser installation, image builds, and staging mutation are intentionally skipped."
           echo "After this bootstrap change reaches main, manually dispatch the full Scheduled evaluation once to create the 20-case review artifacts."
 
-  evaluate:
-    name: Protected staging browser and LLM evaluation
+  resolve-approved-tree:
+    name: Resolve exact-tree approval
     runs-on: ubuntu-latest
     needs: classify
     if: needs.classify.outputs.ai-impact == 'true' && needs.classify.outputs.trusted == 'true' && needs.classify.outputs.corpus-status == 'approved'
+    environment: staging-eval
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      approved: ${{ steps.approval.outputs.approved }}
+      digest: ${{ steps.approval.outputs.digest }}
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - id: approval
+        name: Resolve immutable digest for the approved tree
+        env:
+          TREE_SHA: ${{ needs.classify.outputs.tree-sha }}
+        run: |
+          approval_tag="$IMAGE:approved-tree-$TREE_SHA"
+          error_file="$(mktemp)"
+          if ! matches="$(gcloud artifacts docker tags list "$IMAGE" --filter="tag=\"$approval_tag\"" --format='value(version)' 2>"$error_file")"; then
+            cat "$error_file" >&2
+            echo "Approved-tree lookup failed; refusing to bypass protected evaluation." >&2
+            exit 1
+          fi
+          rm -f "$error_file"
+          if [ -z "$matches" ]; then
+            echo "approved=false" >> "$GITHUB_OUTPUT"
+            echo "No approval exists for exact tree $TREE_SHA; protected evaluation is required."
+            exit 0
+          fi
+          mapfile -t versions < <(printf '%s\n' "$matches" | sed '/^$/d')
+          if [ "${#versions[@]}" -ne 1 ]; then
+            echo "Exact approved-tree tag resolved to ${#versions[@]} versions; expected exactly one." >&2
+            exit 1
+          fi
+          digest="${versions[0]##*/}"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Approved-tree tag returned a malformed digest: $digest" >&2
+            exit 1
+          fi
+          echo "approved=true" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+  evaluate:
+    name: Protected staging browser and LLM evaluation
+    runs-on: ubuntu-latest
+    needs: [classify, resolve-approved-tree]
+    if: needs.classify.outputs.ai-impact == 'true' && needs.classify.outputs.trusted == 'true' && needs.classify.outputs.corpus-status == 'approved' && needs.resolve-approved-tree.result == 'success' && needs.resolve-approved-tree.outputs.approved == 'false'
     # Browser time scales with reviewed corpus turns and is independently capped.
     # This outer timeout also covers setup, deployment, judging, and cleanup.
     timeout-minutes: 90
@@ -182,7 +234,7 @@ jobs:
             --no-traffic \
             --tag "$REVISION_TAG" \
             --timeout 420s \
-            --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4 \
+            --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4,GRAPH_REPAIR_MODEL=claude-sonnet-5 \
             --quiet
           candidate_url="$(gcloud run services describe "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json | python -c 'import json,os,sys; data=json.load(sys.stdin); tag=os.environ["REVISION_TAG"]; print(next((x.get("url", "") for x in data.get("status", {}).get("traffic", []) if x.get("tag") == tag), ""))')"
           if [ -z "$candidate_url" ]; then
@@ -225,7 +277,9 @@ jobs:
         if: always() && hashFiles('artifacts/live-eval/browser-results.json') != ''
         continue-on-error: true
         env:
-          OPENAI_API_KEY: ${{ secrets.EVAL_JUDGE_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EVAL_JUDGE_PROVIDER: anthropic
+          EVAL_JUDGE_MODEL: claude-sonnet-5
         run: ./scripts/ci live --suite pr --target "$CANDIDATE_URL" --input artifacts/live-eval/browser-results.json --output artifacts/live-eval/live-results.json --require-approved-corpus --manual-review-policy report-only
 
       - name: Record deployment identity
@@ -245,12 +299,6 @@ jobs:
               "digest": os.environ.get("IMAGE_DIGEST", ""),
           }, indent=2) + "\n")
           PY
-
-      - name: Publish exact-tree approval tag
-        if: steps.browser.outcome == 'success' && steps.semantic.outcome == 'success'
-        env:
-          TREE_SHA: ${{ needs.classify.outputs.tree-sha }}
-        run: gcloud artifacts docker tags add "$IMAGE@$IMAGE_DIGEST" "$IMAGE:approved-tree-$TREE_SHA" --quiet
 
       - name: Remove ephemeral revision and image tags
         if: always()
@@ -283,11 +331,16 @@ jobs:
             exit 1
           fi
 
+      - name: Publish exact-tree approval tag
+        env:
+          TREE_SHA: ${{ needs.classify.outputs.tree-sha }}
+        run: gcloud artifacts docker tags add "$IMAGE@$IMAGE_DIGEST" "$IMAGE:approved-tree-$TREE_SHA" --quiet
+
   live-eval-required:
     name: Live eval required
     runs-on: ubuntu-latest
     if: always()
-    needs: [classify, fork-guidance, corpus-bootstrap-guidance, evaluate]
+    needs: [classify, fork-guidance, corpus-bootstrap-guidance, resolve-approved-tree, evaluate]
     steps:
       - name: Resolve stable live-eval status
         env:
@@ -295,6 +348,8 @@ jobs:
           TRUSTED: ${{ needs.classify.outputs.trusted }}
           CORPUS_STATUS: ${{ needs.classify.outputs.corpus-status }}
           CLASSIFY_RESULT: ${{ needs.classify.result }}
+          APPROVAL_RESULT: ${{ needs.resolve-approved-tree.result }}
+          TREE_APPROVED: ${{ needs.resolve-approved-tree.outputs.approved }}
           EVAL_RESULT: ${{ needs.evaluate.result }}
         run: |
           if [ "$CLASSIFY_RESULT" != success ]; then
@@ -312,6 +367,22 @@ jobs:
           if [ "$CORPUS_STATUS" != approved ]; then
             echo "Semantic corpus is pending review; protected live work is intentionally deferred to the one-time main bootstrap."
             exit 0
+          fi
+          if [ "$APPROVAL_RESULT" != success ]; then
+            echo "Exact-tree approval lookup failed; protected evaluation cannot be bypassed." >&2
+            exit 1
+          fi
+          if [ "$TREE_APPROVED" = true ]; then
+            if [ "$EVAL_RESULT" != skipped ]; then
+              echo "Exact-tree approval was found, but protected evaluation was not skipped." >&2
+              exit 1
+            fi
+            echo "Exact tree already passed protected live evaluation; paid model calls intentionally skipped."
+            exit 0
+          fi
+          if [ "$TREE_APPROVED" != false ]; then
+            echo "Exact-tree approval lookup returned an invalid state." >&2
+            exit 1
           fi
           if [ "$EVAL_RESULT" != success ]; then
             echo "Protected staging evaluation did not pass." >&2

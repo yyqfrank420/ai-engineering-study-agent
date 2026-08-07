@@ -18,6 +18,9 @@ venv/
 dist/
 .pytest_cache/
 frontend/.vercel/
+frontend/coverage/
+.coverage
+.coverage.*
 
 # ── Data / Vector store ───────────────────────────────────────────────────────
 # data/faiss/ intentionally NOT ignored — bundled into Docker image (7MB static index)

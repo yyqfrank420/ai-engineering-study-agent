@@ -53,8 +53,6 @@ _FALLBACK_MODELS: dict[str, str] = {
 }
 if settings.worker_model != settings.orchestrator_model:
     _FALLBACK_MODELS[settings.worker_model] = settings.worker_fallback_model
-if settings.graph_repair_model not in _FALLBACK_MODELS:
-    _FALLBACK_MODELS[settings.graph_repair_model] = settings.orchestrator_fallback_model
 
 _anthropic_stream_semaphore: asyncio.Semaphore | None = None
 _anthropic_stream_limit: int | None = None
@@ -107,6 +105,9 @@ def stream_response_compat(streamer, **kwargs):
     optional = {
         "telemetry": kwargs.pop("telemetry", None),
         "effort": kwargs.pop("effort", None),
+        "max_output_tokens": kwargs.pop("max_output_tokens", None),
+        "response_schema": kwargs.pop("response_schema", None),
+        "allow_fallback": kwargs.pop("allow_fallback", None),
     }
     try:
         params = inspect.signature(streamer).parameters.values()
@@ -128,6 +129,7 @@ async def _openai_stream(
     reasoning_effort: str | None = None,
     temperature: float | None = None,
     top_p: float | None = None,
+    max_output_tokens: int | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
     """
     Stream a response from the OpenAI Chat Completions API.
@@ -163,24 +165,36 @@ async def _openai_stream(
             kwargs["temperature"] = temperature
         if top_p is not None:
             kwargs["top_p"] = top_p
+    if max_output_tokens is not None:
+        kwargs["max_completion_tokens"] = max_output_tokens
 
     stream = await openai_client.chat.completions.create(**kwargs)
-    async for chunk in stream:
-        usage = getattr(chunk, "usage", None)
-        if usage:
-            yield (
-                "usage",
-                json.dumps(
-                    {
-                        "input_tokens": int(usage.prompt_tokens or 0),
-                        "output_tokens": int(usage.completion_tokens or 0),
-                    }
-                ),
-            )
-        if chunk.choices:
-            delta = chunk.choices[0].delta
-            if delta.content:
-                yield ("text", delta.content)
+    try:
+        async for chunk in stream:
+            usage = getattr(chunk, "usage", None)
+            if usage:
+                yield (
+                    "usage",
+                    json.dumps(
+                        {
+                            "input_tokens": int(usage.prompt_tokens or 0),
+                            "output_tokens": int(usage.completion_tokens or 0),
+                        }
+                    ),
+                )
+            if chunk.choices:
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    yield ("text", delta.content)
+    finally:
+        try:
+            close = getattr(stream, "aclose", None) or getattr(stream, "close", None)
+            if close is not None:
+                close_result = close()
+                if inspect.isawaitable(close_result):
+                    await close_result
+        except Exception as exc:
+            logger.warning("OpenAI stream close failed: %s", type(exc).__name__)
 
     yield ("done", "")
 
@@ -216,6 +230,9 @@ async def stream_response(
     top_k: int | None = None,
     effort: str | None = None,
     telemetry: dict | None = None,
+    max_output_tokens: int | None = None,
+    response_schema: dict | None = None,
+    allow_fallback: bool = True,
 ) -> AsyncGenerator[tuple[str, str], None]:
     """
     Stream a response with automatic retry + OpenAI fallback.
@@ -237,10 +254,16 @@ async def stream_response(
     - ("done", "")                   — signals stream completion
     - ("provider_switch", provider)  — signals fallback to another provider
     """
+    if max_output_tokens is not None and max_output_tokens <= 0:
+        raise ValueError("max_output_tokens must be positive")
+    effective_max_output_tokens = min(
+        max_output_tokens if max_output_tokens is not None else settings.llm_max_tokens,
+        settings.llm_max_tokens,
+    )
     prompt_sha256 = hashlib.sha256(system.encode("utf-8")).hexdigest()
     kwargs: dict = {
         "model":      model,
-        "max_tokens": settings.llm_max_tokens,
+        "max_tokens": effective_max_output_tokens,
         "system":     system,
         "messages":   messages,
     }
@@ -264,6 +287,13 @@ async def stream_response(
                 "type":          "enabled",
                 "budget_tokens": max(thinking_budget, 1000),
             }
+    if response_schema is not None:
+        output_config = dict(kwargs.get("output_config") or {})
+        output_config["format"] = {
+            "type": "json_schema",
+            "schema": _anthropic_response_schema(response_schema),
+        }
+        kwargs["output_config"] = output_config
 
     last_exc: Exception | None = None
     started_at = time.perf_counter()
@@ -294,6 +324,8 @@ async def stream_response(
             "top_p": top_p,
             "top_k": top_k,
             "effort": effective_effort,
+            "max_output_tokens": effective_max_output_tokens,
+            "structured_output": response_schema is not None,
             "prompt_sha256": prompt_sha256,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
@@ -358,111 +390,23 @@ async def stream_response(
             status=status,
         )
 
-    for attempt in range(1, settings.llm_max_retries + 1):
-        tokens_yielded = False
+    async def _stream_openai_route(
+        openai_model: str,
+        *,
+        is_fallback: bool,
+    ) -> AsyncGenerator[tuple[str, str], None]:
+        nonlocal final_model, final_provider, input_tokens, output_chars
+        nonlocal output_tokens, provider_attempts, used_fallback
+
+        used_fallback = is_fallback
+        final_provider = "openai"
+        final_model = openai_model
         provider_attempts += 1
         attempt_started = time.perf_counter()
         attempt_usage: dict[str, object] = {
             "attempt": provider_attempts,
-            "provider": "anthropic",
-            "model": model,
-            "status": "started",
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "queue_wait_ms": 0,
-            "accepted": False,
-            "usage_complete": False,
-        }
-        attempts.append(attempt_usage)
-
-        def observe_queue_wait(queue_wait_ms: int) -> None:
-            attempt_usage["queue_wait_ms"] = queue_wait_ms
-
-        try:
-            async for event in _anthropic_stream_once(
-                {**kwargs, "_queue_wait_observer": observe_queue_wait}
-            ):
-                if event.type == "message_start":
-                    attempt_usage["accepted"] = True
-                    usage = getattr(getattr(event, "message", None), "usage", None)
-                    attempt_usage["input_tokens"] = int(
-                        getattr(usage, "input_tokens", 0) or 0
-                    )
-                    input_tokens = sum(
-                        int(item.get("input_tokens") or 0) for item in attempts
-                    )
-                elif event.type == "message_delta":
-                    attempt_usage["accepted"] = True
-                    attempt_usage["usage_complete"] = True
-                    usage = getattr(event, "usage", None)
-                    attempt_usage["output_tokens"] = int(
-                        getattr(usage, "output_tokens", 0) or 0
-                    )
-                    output_tokens = sum(
-                        int(item.get("output_tokens") or 0) for item in attempts
-                    )
-                if event.type == "content_block_delta":
-                    attempt_usage["accepted"] = True
-                    tokens_yielded = True
-                    delta = event.delta
-                    if delta.type == "thinking_delta":
-                        yield ("thinking", delta.thinking)
-                    elif delta.type == "text_delta":
-                        output_chars += len(delta.text)
-                        yield ("text", delta.text)
-            attempt_usage["status"] = (
-                "success_incomplete_usage"
-                if attempt_usage["accepted"]
-                and not attempt_usage["usage_complete"]
-                else "success"
-            )
-            attempt_usage["duration_ms"] = max(
-                1, int((time.perf_counter() - attempt_started) * 1000)
-            )
-            _record("success")
-            yield ("done", "")
-            return   # Anthropic succeeded
-
-        except Exception as exc:
-            last_exc = exc
-            attempt_usage["status"] = (
-                "error_incomplete_usage"
-                if attempt_usage["accepted"]
-                and not attempt_usage["usage_complete"]
-                else "error"
-            )
-            attempt_usage["error_type"] = type(exc).__name__
-            attempt_usage["duration_ms"] = max(
-                1, int((time.perf_counter() - attempt_started) * 1000)
-            )
-            if tokens_yielded:
-                # Already sent partial output — can't replay safely, surface the error
-                _record("error", error_type=type(exc).__name__)
-                raise
-            logger.warning(
-                "[llm] Anthropic attempt %s/%s failed: %s",
-                attempt,
-                settings.llm_max_retries,
-                type(exc).__name__,
-            )
-            if _is_non_retryable_anthropic_error(exc):
-                break
-            if attempt < settings.llm_max_retries:
-                await asyncio.sleep(settings.llm_retry_delay_s)
-
-    # All Anthropic attempts exhausted — try OpenAI fallback
-    fallback_model = _FALLBACK_MODELS.get(model)
-    if fallback_model and _get_openai_client():
-        logger.warning("Falling back to OpenAI model %s", fallback_model)
-        used_fallback = True
-        final_provider = "openai"
-        final_model = fallback_model
-        provider_attempts += 1
-        attempt_started = time.perf_counter()
-        attempt_usage = {
-            "attempt": provider_attempts,
             "provider": "openai",
-            "model": fallback_model,
+            "model": openai_model,
             "status": "started",
             "input_tokens": 0,
             "output_tokens": 0,
@@ -471,7 +415,8 @@ async def stream_response(
             "usage_complete": False,
         }
         attempts.append(attempt_usage)
-        yield ("provider_switch", "openai")
+        if is_fallback:
+            yield ("provider_switch", "openai")
         reasoning_effort = effective_effort
         if reasoning_effort is None and thinking_budget is not None:
             reasoning_effort = (
@@ -483,12 +428,13 @@ async def stream_response(
             reasoning_effort = settings.orchestrator_fallback_reasoning_effort
         try:
             async for event in _openai_stream(
-                fallback_model,
+                openai_model,
                 system,
                 messages,
                 reasoning_effort,
                 temperature,
                 top_p,
+                effective_max_output_tokens,
             ):
                 if event[0] == "text":
                     attempt_usage["accepted"] = True
@@ -534,10 +480,144 @@ async def stream_response(
             )
             _record("error", error_type=type(exc).__name__)
             raise
+
+    if _is_openai_model(model):
+        if response_schema is not None:
+            raise ValueError("structured stream_response requires an Anthropic model")
+        async for event in _stream_openai_route(model, is_fallback=False):
+            yield event
+        return
+
+    for attempt in range(1, settings.llm_max_retries + 1):
+        tokens_yielded = False
+        finish_reason: str | None = None
+        provider_attempts += 1
+        attempt_started = time.perf_counter()
+        attempt_usage: dict[str, object] = {
+            "attempt": provider_attempts,
+            "provider": "anthropic",
+            "model": model,
+            "status": "started",
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "queue_wait_ms": 0,
+            "accepted": False,
+            "usage_complete": False,
+        }
+        attempts.append(attempt_usage)
+
+        def observe_queue_wait(queue_wait_ms: int) -> None:
+            attempt_usage["queue_wait_ms"] = queue_wait_ms
+
+        try:
+            async for event in _anthropic_stream_once(
+                {**kwargs, "_queue_wait_observer": observe_queue_wait}
+            ):
+                if event.type == "message_start":
+                    attempt_usage["accepted"] = True
+                    usage = getattr(getattr(event, "message", None), "usage", None)
+                    attempt_usage["input_tokens"] = int(
+                        getattr(usage, "input_tokens", 0) or 0
+                    )
+                    input_tokens = sum(
+                        int(item.get("input_tokens") or 0) for item in attempts
+                    )
+                elif event.type == "message_delta":
+                    attempt_usage["accepted"] = True
+                    attempt_usage["usage_complete"] = True
+                    usage = getattr(event, "usage", None)
+                    attempt_usage["output_tokens"] = int(
+                        getattr(usage, "output_tokens", 0) or 0
+                    )
+                    output_tokens = sum(
+                        int(item.get("output_tokens") or 0) for item in attempts
+                    )
+                    stop_reason = getattr(getattr(event, "delta", None), "stop_reason", None)
+                    if isinstance(stop_reason, str):
+                        finish_reason = stop_reason
+                if event.type == "content_block_delta":
+                    attempt_usage["accepted"] = True
+                    tokens_yielded = True
+                    delta = event.delta
+                    if delta.type == "thinking_delta":
+                        yield ("thinking", delta.thinking)
+                    elif delta.type == "text_delta":
+                        output_chars += len(delta.text)
+                        yield ("text", delta.text)
+            attempt_usage["status"] = (
+                "success_incomplete_usage"
+                if attempt_usage["accepted"]
+                and not attempt_usage["usage_complete"]
+                else "success"
+            )
+            attempt_usage["duration_ms"] = max(
+                1, int((time.perf_counter() - attempt_started) * 1000)
+            )
+            _record("success")
+            if response_schema is not None:
+                yield (
+                    "response_metadata",
+                    json.dumps({
+                        "finish_reason": finish_reason,
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "provider": "anthropic",
+                        "model": model,
+                    }),
+                )
+            yield ("done", "")
+            return   # Anthropic succeeded
+
+        except Exception as exc:
+            last_exc = exc
+            attempt_usage["status"] = (
+                "error_incomplete_usage"
+                if attempt_usage["accepted"]
+                and not attempt_usage["usage_complete"]
+                else "error"
+            )
+            attempt_usage["error_type"] = type(exc).__name__
+            attempt_usage["duration_ms"] = max(
+                1, int((time.perf_counter() - attempt_started) * 1000)
+            )
+            if tokens_yielded:
+                # Already sent partial output — can't replay safely, surface the error
+                _record("error", error_type=type(exc).__name__)
+                raise
+            logger.warning(
+                "[llm] Anthropic attempt %s/%s failed: %s",
+                attempt,
+                settings.llm_max_retries,
+                type(exc).__name__,
+            )
+            if _is_non_retryable_anthropic_error(exc):
+                break
+            if attempt < settings.llm_max_retries:
+                await asyncio.sleep(settings.llm_retry_delay_s)
+
+    # All Anthropic attempts exhausted — try OpenAI fallback
+    fallback_model = _FALLBACK_MODELS.get(model)
+    if allow_fallback and fallback_model and _get_openai_client():
+        logger.warning("Falling back to OpenAI model %s", fallback_model)
+        async for event in _stream_openai_route(fallback_model, is_fallback=True):
+            yield event
+        return
     else:
         if last_exc is not None:
             _record("error", error_type=type(last_exc).__name__)
         raise last_exc  # type: ignore[misc]
+
+
+def _anthropic_response_schema(value):
+    if isinstance(value, dict):
+        return {
+            key: _anthropic_response_schema(child)
+            for key, child in value.items()
+            if key not in {"minItems", "maxItems"}
+        }
+    if isinstance(value, list):
+        return [_anthropic_response_schema(child) for child in value]
+    return value
 
 
 def _uses_adaptive_effort(model: str) -> bool:
@@ -546,6 +626,10 @@ def _uses_adaptive_effort(model: str) -> bool:
         "claude-opus-4-8",
         "claude-opus-5",
     ))
+
+
+def _is_openai_model(model: str) -> bool:
+    return model.startswith("gpt-") or model.startswith("o")
 
 
 def _effort_from_legacy_budget(thinking_budget: int | None) -> str | None:

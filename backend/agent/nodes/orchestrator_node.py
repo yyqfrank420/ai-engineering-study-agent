@@ -20,9 +20,10 @@ from agent.context_manager import maybe_condense_history
 from agent.explanation_blocks import stream_explanation_blocks
 from agent.state import AgentState
 from agent.stream_utils import stream_llm
+from agent.deadlines import synthesis_timeout_seconds
 from config import settings
 
-_SYNTHESIS_PROMPT_VERSION = "architecture_blocks_v9"
+_SYNTHESIS_PROMPT_VERSION = "architecture_blocks_v10"
 _QUICK_SYNTHESIS_PROMPT_VERSION = "quick_synthesis_v2"
 
 _ROUTER_SYSTEM = """<role>
@@ -100,6 +101,15 @@ Answer in the same language as the user's latest message unless they ask to swit
 
 <book_scope>
 - Treat the retrieved book sections in the current request as the complete citation allowlist.
+- Put every externally sourced factual claim into exactly one of two provenance lanes. A sourced
+  fact must be directly entailed by an exact current book passage or web snippet and immediately
+  followed by its citation. Preserve every material part of the source claim: subject, relation,
+  comparator, direction, degree, and scope. Otherwise label the statement "Engineering inference"
+  or "Recommendation" and leave it uncited.
+- A graph label or description, matching page number, unavailable or neighboring chunk, supporting
+  chunk identifier, retrieved co-occurrence, or model memory cannot fill a missing premise. If the
+  exact current passage or snippet lacks any material part, narrow the claim to what it says or move
+  the claim to the explicitly labeled uncited lane.
 - Cite only a claim directly supported by a supplied passage, using that passage's exact
   (Chapter N, p.X) label. Never infer a chapter, page, author attribution, or book claim from
   general knowledge, conversation history, graph metadata, or the app's subject area.
@@ -500,6 +510,7 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
             "prompt_version": _SYNTHESIS_PROMPT_VERSION,
         },
     )
+    synthesis_timeout_s = synthesis_timeout_seconds(state)
     if current_graph:
         await send({
             "type": "workflow_progress",
@@ -509,8 +520,17 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
             "detail": "The approved diagram stays private until its complete explanation is ready.",
         })
         buffered_blocks: list[dict] = []
+        synthesis_degraded = False
 
         async def explanation_send(event: dict) -> None:
+            nonlocal synthesis_degraded
+            if (
+                event.get("type") == "workflow_progress"
+                and event.get("phase") == "explain"
+                and event.get("status") == "degraded"
+            ):
+                synthesis_degraded = True
+                return
             if delay_changed_graph and event.get("type") == "explanation_block":
                 buffered_blocks.append(event)
                 return
@@ -520,6 +540,9 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
             model=settings.orchestrator_model,
             system=f"{_SYNTHESIS_SYSTEM}{_BLOCK_OUTPUT_CONTRACT}",
             messages=messages,
+            effort="low",
+            max_output_tokens=4500,
+            timeout_seconds=synthesis_timeout_s,
             telemetry=telemetry,
             send=explanation_send,
             graph_version=current_graph.get("version"),
@@ -532,16 +555,26 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
         await send({
             "type": "workflow_progress",
             "phase": "explain",
-            "status": "complete",
-            "title": "Design and walkthrough ready",
-            "detail": "The complete architecture is now available to explore and steer.",
+            "status": "degraded" if synthesis_degraded else "complete",
+            "title": (
+                "Design ready with a bounded walkthrough"
+                if synthesis_degraded
+                else "Design and walkthrough ready"
+            ),
+            "detail": (
+                "The architecture is available with the explanation completed before its latency budget."
+                if synthesis_degraded
+                else "The complete architecture is now available to explore and steer."
+            ),
         })
     else:
         response_text = await stream_llm(
             model=settings.orchestrator_model,
             system=_SYNTHESIS_SYSTEM,
             messages=messages,
-            effort="high",
+            effort="low",
+            max_output_tokens=4500,
+            timeout_seconds=synthesis_timeout_s,
             temperature=settings.synthesis_temperature,
             top_p=settings.synthesis_top_p,
             top_k=settings.synthesis_top_k,
@@ -589,6 +622,7 @@ def _format_graph_context(graph_data: dict) -> str:
         return "(no graph available)"
 
     title = graph_data.get("title") or "Untitled graph"
+    concept_graph = str(graph_data.get("graph_type") or "").strip().lower() == "concept"
     nodes = graph_data.get("nodes") or []
     edges = graph_data.get("edges") or []
     sequence = graph_data.get("sequence") or []
@@ -597,8 +631,8 @@ def _format_graph_context(graph_data: dict) -> str:
     for node in nodes:
         node_id = node.get("id", "?")
         label = node.get("label", "?")
-        description = node.get("description", "").strip()
-        tech = node.get("technology", "").strip()
+        description = "" if concept_graph else node.get("description", "").strip()
+        tech = "" if concept_graph else node.get("technology", "").strip()
         lane = node.get("lane")
         tier = node.get("tier")
         lane_text = "bottom lane" if lane == "bottom" else ""
@@ -611,8 +645,8 @@ def _format_graph_context(graph_data: dict) -> str:
         source = edge.get("source", "?")
         target = edge.get("target", "?")
         label = edge.get("label", "connects to")
-        technology = edge.get("technology", "").strip()
-        description = edge.get("description", "").strip()
+        technology = "" if concept_graph else edge.get("technology", "").strip()
+        description = "" if concept_graph else edge.get("description", "").strip()
         flow = edge.get("flow", "").strip()
         sync = edge.get("sync", "").strip()
         details = " | ".join(
@@ -636,7 +670,16 @@ def _format_graph_context(graph_data: dict) -> str:
         node_ids = ", ".join(group.get("nodeIds") or [])
         group_lines.append(f"- {label}: {node_ids}")
 
-    parts = [f"Title: {title}"]
+    artifact_role = (
+        "Artifact role: concept navigation only, not evidence. Node and relation labels describe "
+        "the UI canvas; they cannot support an external or book claim."
+        if concept_graph
+        else (
+            "Artifact role: proposed design. Descriptions and technology fields are proposal "
+            "context, not external or book evidence."
+        )
+    )
+    parts = [artifact_role, f"Title: {title}"]
     if node_lines:
         parts.append("Nodes:\n" + "\n".join(node_lines))
     if edge_lines:

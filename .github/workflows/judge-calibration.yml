@@ -4,9 +4,29 @@ on:
   schedule:
     - cron: '41 4 * * 1'
   workflow_dispatch:
+    inputs:
+      provider:
+        description: Calibration judge provider (Anthropic recommended)
+        required: true
+        default: anthropic
+        type: choice
+        options:
+          - anthropic
+          - openai
+      model:
+        description: Calibration judge model ID
+        required: true
+        default: claude-sonnet-5
+        type: string
+      resume_run_id:
+        description: Prior failed calibration run whose valid judgments should be reused
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
+  actions: read
   id-token: write
 
 env:
@@ -53,11 +73,13 @@ jobs:
           source_run_id = str(calibration.get("evidence_run_id") or "")
           source_commit_sha = str(calibration.get("evidence_commit_sha") or "")
           judge_model = str(calibration.get("judge_model") or "")
+          judge_provider = str(calibration.get("judge_provider") or "")
           if not (
               corpus["approval"].get("status") == "approved"
               and len(evidence_sha) == 64
               and source_run_id.isdigit()
               and len(source_commit_sha) == 40
+              and judge_provider in {"anthropic", "openai"}
               and judge_model
           ):
               raise SystemExit("approved corpus is missing its immutable calibration evidence identity")
@@ -65,8 +87,39 @@ jobs:
           print(f"evidence_sha={evidence_sha}")
           print(f"source_run_id={source_run_id}")
           print(f"source_commit_sha={source_commit_sha}")
+          print(f"judge_provider={judge_provider}")
           print(f"judge_model={judge_model}")
           PY
+      - id: judge_selection
+        name: Resolve the calibration-only judge selection
+        env:
+          DISPATCH_PROVIDER: ${{ inputs.provider }}
+          DISPATCH_MODEL: ${{ inputs.model }}
+          APPROVED_JUDGE_PROVIDER: ${{ steps.evidence.outputs.judge_provider }}
+          APPROVED_JUDGE_MODEL: ${{ steps.evidence.outputs.judge_model }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            provider="$DISPATCH_PROVIDER"
+            model="$DISPATCH_MODEL"
+          else
+            provider="$APPROVED_JUDGE_PROVIDER"
+            model="$APPROVED_JUDGE_MODEL"
+          fi
+          case "$provider" in
+            anthropic|openai) ;;
+            *) echo "Unsupported calibration judge provider: $provider" >&2; exit 1 ;;
+          esac
+          case "$model" in
+            ''|*[!A-Za-z0-9._:/-]*) echo "Invalid calibration judge model ID." >&2; exit 1 ;;
+          esac
+          echo "provider=$provider" >> "$GITHUB_OUTPUT"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
+          mkdir -p artifacts/calibration
+          jq -n \
+            --arg provider "$provider" \
+            --arg model "$model" \
+            '{format_version: 1, provider: $provider, model: $model}' \
+            > artifacts/calibration/judge-selection.json
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -81,16 +134,114 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v2
       - name: Download and authenticate the fixed evidence bundle
         env:
+          GH_TOKEN: ${{ github.token }}
           CORPUS_SHA: ${{ steps.evidence.outputs.corpus_sha }}
           EVIDENCE_SHA: ${{ steps.evidence.outputs.evidence_sha }}
           SOURCE_RUN_ID: ${{ steps.evidence.outputs.source_run_id }}
           SOURCE_COMMIT_SHA: ${{ steps.evidence.outputs.source_commit_sha }}
+          JUDGE_PROVIDER: ${{ steps.evidence.outputs.judge_provider }}
           JUDGE_MODEL: ${{ steps.evidence.outputs.judge_model }}
         run: |
           mkdir -p artifacts/calibration
           prefix="gs://$EVIDENCE_BUCKET/reviewed/$CORPUS_SHA"
-          gcloud storage cp "$prefix/browser-results-$EVIDENCE_SHA.json" artifacts/calibration/browser-results.json
-          gcloud storage cp "$prefix/promotion-$EVIDENCE_SHA.json" artifacts/calibration/promotion.json
+          browser_uri="$prefix/browser-results-$EVIDENCE_SHA.json"
+          promotion_uri="$prefix/promotion-$EVIDENCE_SHA.json"
+          if gcloud storage cp "$browser_uri" artifacts/calibration/browser-results.json \
+            && gcloud storage cp "$promotion_uri" artifacts/calibration/promotion.json; then
+            echo "Using immutable calibration evidence from GCS."
+          else
+            echo "GCS evidence unavailable; authenticating the approved GitHub Actions artifact."
+            rm -f artifacts/calibration/browser-results.json artifacts/calibration/promotion.json
+            source_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")"
+            [ "$(printf '%s' "$source_json" | jq -r .head_sha)" = "$SOURCE_COMMIT_SHA" ] \
+              || { echo "Source run SHA mismatch." >&2; exit 1; }
+            [ "$(printf '%s' "$source_json" | jq -r .head_branch)" = main ] \
+              || { echo "Reviewed evidence must come from main." >&2; exit 1; }
+            [ "$(printf '%s' "$source_json" | jq -r .conclusion)" = success ] \
+              || { echo "Source run was not successful." >&2; exit 1; }
+            [ "$(printf '%s' "$source_json" | jq -r .path)" = .github/workflows/scheduled-eval.yml ] \
+              || { echo "Source is not a scheduled evaluation." >&2; exit 1; }
+            rm -rf artifacts/source
+            mkdir -p artifacts/source
+            if ! gh run download "$SOURCE_RUN_ID" \
+              --name "scheduled-eval-replay-$SOURCE_RUN_ID" \
+              --dir artifacts/source; then
+              rm -rf artifacts/source
+              mkdir -p artifacts/source
+              gh run download "$SOURCE_RUN_ID" \
+                --name "scheduled-eval-$SOURCE_RUN_ID" \
+                --dir artifacts/source
+            fi
+            gh api \
+              -H "Accept: application/vnd.github.raw+json" \
+              "repos/$GITHUB_REPOSITORY/contents/backend/eval/corpus/v1/cases.json?ref=$SOURCE_COMMIT_SHA" \
+              > artifacts/source/source-cases.json
+            python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          def behavior_digest(value):
+              value = json.loads(json.dumps(value))
+              value.pop("approval", None)
+              for case in value["cases"]:
+                  case.pop("approval", None)
+              canonical = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+              return hashlib.sha256(canonical).hexdigest()
+
+          def legacy_digest(value):
+              value = json.loads(json.dumps(value))
+              value["approval"]["approved_manifest_sha256"] = None
+              canonical = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+              return hashlib.sha256(canonical).hexdigest()
+
+          current = json.loads(Path("backend/eval/corpus/v1/cases.json").read_text(encoding="utf-8"))
+          source_corpus = json.loads(Path("artifacts/source/source-cases.json").read_text(encoding="utf-8"))
+          corpus_sha = behavior_digest(current)
+          if corpus_sha != os.environ["CORPUS_SHA"] or behavior_digest(source_corpus) != corpus_sha:
+              raise SystemExit("reviewed source behavior does not match the approved corpus")
+          capture_path = Path("artifacts/source/browser-results.json")
+          capture = json.loads(capture_path.read_text(encoding="utf-8"))
+          context = json.loads(Path("artifacts/source/run-context.json").read_text(encoding="utf-8"))
+          if str(context.get("run_id") or "") != os.environ["SOURCE_RUN_ID"]:
+              raise SystemExit("source context run does not match the approved identity")
+          if context.get("commit_sha") != os.environ["SOURCE_COMMIT_SHA"]:
+              raise SystemExit("source context commit does not match the approved identity")
+          if capture.get("kind") != "browser_capture" or capture.get("suite") != "full":
+              raise SystemExit("source is not a full browser capture")
+          if capture.get("status") not in {None, "complete"}:
+              raise SystemExit("source browser capture did not complete")
+          expected_ids = [case["id"] for case in current["cases"]]
+          results = capture.get("results") or []
+          actual_ids = [item.get("id") for item in results]
+          failures = [item.get("id") for item in results if not item.get("passed")]
+          if actual_ids != expected_ids or failures:
+              raise SystemExit(f"source browser evidence is incomplete, reordered, duplicated, or failed: {failures}")
+          if capture.get("corpus_version") != current["corpus_version"]:
+              raise SystemExit("source browser evidence has the wrong corpus version")
+          if capture.get("corpus_sha256") not in {corpus_sha, legacy_digest(source_corpus)}:
+              raise SystemExit("source capture corpus digest is not valid for its source revision")
+          evidence_sha = hashlib.sha256(capture_path.read_bytes()).hexdigest()
+          if evidence_sha != os.environ["EVIDENCE_SHA"]:
+              raise SystemExit("source evidence digest does not match the approved identity")
+          promotion = {
+              "format_version": 1,
+              "source_run_id": os.environ["SOURCE_RUN_ID"],
+              "source_commit_sha": os.environ["SOURCE_COMMIT_SHA"],
+              "corpus_version": current["corpus_version"],
+              "corpus_sha256": corpus_sha,
+              "evidence_sha256": evidence_sha,
+              "judge_provider": os.environ["JUDGE_PROVIDER"],
+              "judge_model": os.environ["JUDGE_MODEL"],
+          }
+          Path("artifacts/calibration/browser-results.json").write_bytes(capture_path.read_bytes())
+          Path("artifacts/calibration/promotion.json").write_text(
+              json.dumps(promotion, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          fi
           actual_sha="$(sha256sum artifacts/calibration/browser-results.json | cut -d' ' -f1)"
           [ "$actual_sha" = "$EVIDENCE_SHA" ] || { echo "Calibration evidence digest mismatch." >&2; exit 1; }
           python - <<'PY'
@@ -104,7 +255,6 @@ jobs:
               "evidence_sha256": os.environ["EVIDENCE_SHA"],
               "source_run_id": os.environ["SOURCE_RUN_ID"],
               "source_commit_sha": os.environ["SOURCE_COMMIT_SHA"],
-              "judge_model": os.environ["JUDGE_MODEL"],
           }
           for key, value in expected.items():
               if str(promotion.get(key) or "") != value:
@@ -123,20 +273,71 @@ jobs:
               encoding="utf-8",
           )
           PY
+      - name: Authenticate prior valid judge results
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.resume_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+        run: |
+          case "$RESUME_RUN_ID" in
+            ''|*[!0-9]*) echo "Resume run ID must be numeric." >&2; exit 1 ;;
+          esac
+          run_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RESUME_RUN_ID")"
+          [ "$(printf '%s' "$run_json" | jq -r .event)" = workflow_dispatch ] \
+            || { echo "Resume source is not a manual calibration." >&2; exit 1; }
+          [ "$(printf '%s' "$run_json" | jq -r .path)" = .github/workflows/judge-calibration.yml ] \
+            || { echo "Resume source is not a judge calibration." >&2; exit 1; }
+          [ "$(printf '%s' "$run_json" | jq -r .head_branch)" = "$GITHUB_REF_NAME" ] \
+            || { echo "Resume source is from a different branch." >&2; exit 1; }
+          [ "$(printf '%s' "$run_json" | jq -r .conclusion)" = failure ] \
+            || { echo "Only a completed failed calibration can be resumed." >&2; exit 1; }
+          resume_sha="$(printf '%s' "$run_json" | jq -r .head_sha)"
+          comparison="$(gh api "repos/$GITHUB_REPOSITORY/compare/$resume_sha...$GITHUB_SHA")"
+          case "$(printf '%s' "$comparison" | jq -r .status)" in
+            ahead|identical) ;;
+            *) echo "Resume source is not an ancestor of this calibration." >&2; exit 1 ;;
+          esac
+          artifact_name="$(
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RESUME_RUN_ID/artifacts" \
+              --jq ".artifacts[] | select(.expired == false and (.name | startswith(\"judge-calibration-$RESUME_RUN_ID-\"))) | .name" \
+            | tail -n1
+          )"
+          [ -n "$artifact_name" ] || { echo "Resume calibration artifact is unavailable." >&2; exit 1; }
+          mkdir -p artifacts/resume
+          gh run download "$RESUME_RUN_ID" --name "$artifact_name" --dir artifacts/resume
+          for file in browser-results.json replay-context.json judge-selection.json; do
+            cmp -s "artifacts/calibration/$file" "artifacts/resume/$file" \
+              || { echo "Resume $file does not match this calibration." >&2; exit 1; }
+          done
+          [ -f artifacts/resume/live-results.json ] \
+            || { echo "Resume live results are missing." >&2; exit 1; }
+          cp artifacts/resume/live-results.json artifacts/calibration/resume-live-results.json
       - id: judge
         name: Replay the active judge without application calls
         continue-on-error: true
         env:
-          OPENAI_API_KEY: ${{ secrets.EVAL_JUDGE_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ steps.judge_selection.outputs.provider == 'anthropic' && secrets.ANTHROPIC_API_KEY || '' }}
+          OPENAI_API_KEY: ${{ steps.judge_selection.outputs.provider == 'openai' && secrets.EVAL_JUDGE_API_KEY || '' }}
+          EVAL_JUDGE_PROVIDER: ${{ steps.judge_selection.outputs.provider }}
+          EVAL_JUDGE_MODEL: ${{ steps.judge_selection.outputs.model }}
         run: |
           target="$(python -c 'import json; print(json.load(open("artifacts/calibration/browser-results-replay.json"))["backend_target"])')"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            identity_args=(--manual-review-policy blocking)
+          else
+            identity_args=(--require-approved-corpus --manual-review-policy report-only)
+          fi
+          resume_args=()
+          if [ -f artifacts/calibration/resume-live-results.json ]; then
+            resume_args=(--resume-input artifacts/calibration/resume-live-results.json)
+          fi
           ./scripts/ci live \
             --suite full \
             --target "$target" \
             --input artifacts/calibration/browser-results-replay.json \
             --output artifacts/calibration/live-results.json \
-            --require-approved-corpus \
-            --manual-review-policy report-only \
+            "${identity_args[@]}" \
+            "${resume_args[@]}" \
             --capture-replay
       - name: Compare active judge with human labels
         run: |
@@ -144,6 +345,7 @@ jobs:
             --input artifacts/calibration/live-results.json \
             --evidence artifacts/calibration/browser-results.json \
             --context artifacts/calibration/replay-context.json \
+            --judge-selection artifacts/calibration/judge-selection.json \
             --output artifacts/calibration/calibration.json
       - name: Preserve calibration history
         if: always()
@@ -151,8 +353,20 @@ jobs:
           CORPUS_SHA: ${{ steps.evidence.outputs.corpus_sha }}
         run: |
           [ -f artifacts/calibration/calibration.json ] || exit 0
-          gcloud storage cp artifacts/calibration/calibration.json \
-            "gs://$EVIDENCE_BUCKET/calibration-history/$CORPUS_SHA/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          error_log="$(mktemp)"
+          trap 'rm -f "$error_log"' EXIT
+          destination="gs://$EVIDENCE_BUCKET/calibration-history/$CORPUS_SHA/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          if gcloud storage cp artifacts/calibration/calibration.json "$destination" 2>"$error_log"; then
+            exit 0
+          else
+            result=$?
+          fi
+          if grep -Fq "gs://$EVIDENCE_BUCKET not found: 404" "$error_log"; then
+            echo "::warning::Optional calibration-history bucket is absent; the required GitHub artifact remains the durable record."
+            exit 0
+          fi
+          cat "$error_log" >&2
+          exit "$result"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

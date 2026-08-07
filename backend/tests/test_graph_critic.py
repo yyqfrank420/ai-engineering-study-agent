@@ -1,12 +1,16 @@
 import json
 
 import pytest
+from config import settings
 
 from agent.nodes.graph_critic import (
     _GRAPH_CRITIC_PROMPT_VERSION,
+    _GRAPH_CRITIC_PROTOCOL_RETRY_MIN_REMAINING_S,
     _GRAPH_CRITIC_SYSTEM,
+    _TOPOLOGY_PROOF_GUARANTEES,
     _critic_thinking_budget,
     _deterministic_render_review,
+    _validate_review_protocol,
     _deterministic_review,
     _merge_reviews,
     _normalise_review,
@@ -23,7 +27,7 @@ def test_revision_critic_uses_bounded_verification_budget():
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v20"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v21"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -1350,7 +1354,7 @@ def test_visual_revision_instruction_cannot_hide_a_remaining_semantic_failure():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("revision_count", "expected_effort"),
-    [(0, "medium"), (1, "low")],
+    [(0, "low"), (1, "low")],
 )
 async def test_semantic_critic_never_receives_the_rendered_image(
     monkeypatch,
@@ -1520,6 +1524,90 @@ async def test_hard_render_failure_skips_the_paid_semantic_critic(monkeypatch):
 
     assert result["graph_review"]["approved"] is False
     assert any("overlapping" in item for item in result["graph_review"]["missing"])
+    assert result["graph_review"].get("terminal") is not True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("semantic_approved", "expected_approved"),
+    [(True, True), (False, False)],
+)
+async def test_missing_browser_evaluation_fallback_requires_semantic_approval(
+    monkeypatch,
+    caplog,
+    semantic_approved,
+    expected_approved,
+):
+    calls = 0
+
+    async def fake_stream_llm(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return json.dumps({
+            "approved": semantic_approved,
+            "score": 0.9 if semantic_approved else 0.6,
+            "strengths": ["The runtime path is explicit."] if semantic_approved else [],
+            "blocking_failures": [] if semantic_approved else ["The approval boundary is missing."],
+            "advice": [],
+            "revision_instruction": "" if semantic_approved else "Add the approval boundary.",
+        })
+
+    async def await_diagram(_graph):
+        raise TimeoutError("browser did not respond")
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr("agent.nodes.graph_critic.stream_llm", fake_stream_llm)
+    graph = _domain_graph()
+    result = await graph_critic_node({
+        "graph_data": graph,
+        "graph_changed": True,
+        "user_message": "growth marketing multi-agent system",
+        "complexity": "prototype",
+        "send": send,
+        "await_diagram_evaluation": await_diagram,
+        "user_id": "user-1",
+        "session_id": "thread-1",
+    })
+
+    assert calls == 1
+    assert result["graph_review"]["approved"] is expected_approved
+    if expected_approved:
+        assert "diagram_evaluation_fallback_admit reason=timeout" in caplog.text
+        assert str(graph.get("title") or "missing-title") not in caplog.text
+    else:
+        assert "diagram_evaluation_fallback_admit" not in caplog.text
+        assert "approval boundary" in result["graph_review"]["missing"][0].lower()
+
+
+@pytest.mark.asyncio
+async def test_render_fallback_never_overrides_deterministic_domain_failure(monkeypatch, caplog):
+    async def fail_stream_llm(**_kwargs):
+        raise AssertionError("deterministic rejection must skip semantic review")
+
+    async def fail_await_diagram(_graph):
+        raise AssertionError("deterministic rejection must skip browser evaluation")
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr("agent.nodes.graph_critic.stream_llm", fail_stream_llm)
+    graph = _domain_graph()
+    graph["nodes"][0]["label"] = "Agent"
+    result = await graph_critic_node({
+        "graph_data": graph,
+        "graph_changed": True,
+        "user_message": "growth marketing multi-agent system",
+        "complexity": "prototype",
+        "send": send,
+        "await_diagram_evaluation": fail_await_diagram,
+        "user_id": "user-1",
+        "session_id": "thread-1",
+    })
+
+    assert result["graph_review"]["approved"] is False
+    assert "diagram_evaluation_fallback_admit" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -1574,11 +1662,397 @@ async def test_malformed_semantic_review_retries_once_then_accepts(monkeypatch):
 
     assert result["graph_review"]["approved"] is True
     assert len(calls) == 2
+    assert all(call["model"] == settings.graph_repair_model for call in calls)
+    assert all(call["timeout_seconds"] <= settings.graph_critic_initial_timeout_s for call in calls)
+    assert all(
+        call["max_output_tokens"]
+        == min(settings.graph_critic_initial_max_output_tokens, 2800)
+        for call in calls
+    )
+    assert all(call["thinking_budget"] is None for call in calls)
+    assert all(call["effort"] == "low" for call in calls)
     assert render_calls == 1
     assert [call["telemetry"]["metadata"]["semantic_attempt"] for call in calls] == [0, 1]
     assert calls[1]["effort"] == "low"
     assert "Protocol failure: ValueError" in calls[1]["messages"][0]["content"]
     assert "Prior response:" in calls[1]["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_browser_render_time_is_deducted_from_one_absolute_critic_deadline(
+    monkeypatch,
+):
+    clock = {"now": 100.0}
+    calls = []
+    events = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({
+            "approved": True,
+            "score": 0.9,
+            "strengths": ["The runtime path is explicit."],
+            "blocking_failures": [],
+            "advice": [],
+            "revision_instruction": "",
+        })
+
+    async def await_diagram(graph):
+        clock["now"] += 7.0
+        return {
+            "screenshot_base64": "private-render",
+            "report": {
+                "rendered_nodes": len(graph["nodes"]),
+                "rendered_edges": len(graph["edges"]),
+                "overlap_count": 0,
+                "clipped_nodes": 0,
+                "clipped_edges": 0,
+                "minimum_text_px": 8,
+            },
+        }
+
+    async def send(event):
+        events.append(event)
+
+    monkeypatch.setattr("agent.nodes.graph_critic.time.monotonic", lambda: clock["now"])
+    monkeypatch.setattr("agent.nodes.graph_critic.stream_llm", fake_stream_llm)
+    result = await graph_critic_node({
+        "graph_data": _domain_graph(),
+        "graph_changed": True,
+        "user_message": "growth marketing multi-agent system",
+        "complexity": "prototype",
+        "send": send,
+        "await_diagram_evaluation": await_diagram,
+        "user_id": "user-1",
+        "session_id": "thread-1",
+        "_graph_stage_deadline_s": 145.0,
+    })
+
+    assert result["graph_review"]["approved"] is True
+    assert len(calls) == 1
+    assert calls[0]["timeout_seconds"] == pytest.approx(37.0)
+    assert any(
+        event.get("phase") == "review" and event.get("status") == "complete"
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_payload",
+    [
+        {
+            "approved": "true",
+            "score": 0.9,
+            "strengths": ["The runtime path is explicit."],
+            "blocking_failures": [],
+            "advice": [],
+            "revision_instruction": "",
+        },
+        {
+            "score": 0.9,
+            "strengths": ["The runtime path is explicit."],
+            "blocking_failures": [],
+            "advice": [],
+            "revision_instruction": "",
+        },
+    ],
+)
+async def test_invalid_semantic_review_contract_retries_then_accepts(
+    monkeypatch,
+    invalid_payload,
+):
+    calls = []
+    render_calls = 0
+    responses = iter([
+        json.dumps(invalid_payload),
+        json.dumps({
+            "approved": True,
+            "score": 0.9,
+            "strengths": ["The runtime path is explicit."],
+            "blocking_failures": [],
+            "advice": [],
+            "revision_instruction": "",
+        }),
+    ])
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return next(responses)
+
+    async def await_diagram(graph):
+        nonlocal render_calls
+        render_calls += 1
+        return {
+            "screenshot_base64": "private-render",
+            "report": {
+                "rendered_nodes": len(graph["nodes"]),
+                "rendered_edges": len(graph["edges"]),
+                "overlap_count": 0,
+                "clipped_nodes": 0,
+                "clipped_edges": 0,
+                "minimum_text_px": 8,
+            },
+        }
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr("agent.nodes.graph_critic.stream_llm", fake_stream_llm)
+    result = await graph_critic_node({
+        "graph_data": _domain_graph(),
+        "graph_changed": True,
+        "user_message": "growth marketing multi-agent system",
+        "complexity": "prototype",
+        "send": send,
+        "await_diagram_evaluation": await_diagram,
+        "user_id": "user-1",
+        "session_id": "thread-1",
+    })
+
+    assert result["graph_review"]["approved"] is True
+    assert len(calls) == 2
+    assert render_calls == 1
+    assert "critic response protocol invalid" in calls[1]["messages"][0]["content"]
+
+
+def _valid_protocol_topology_proofs(edge=None):
+    edge = edge or {
+        "source": "source_node",
+        "target": "target_node",
+        "label": "carries typed payload",
+    }
+    return [
+        {
+            "guarantee": guarantee,
+            "status": "pass",
+            "edge_evidence": [edge],
+            "reason": "The cited directed edge proves this guarantee.",
+        }
+        for guarantee in sorted(_TOPOLOGY_PROOF_GUARANTEES)
+    ]
+
+
+def _protocol_review(topology_proofs):
+    return {
+        "approved": True,
+        "score": 0.9,
+        "strengths": ["The runtime path is explicit."],
+        "blocking_failures": [],
+        "advice": [],
+        "topology_proofs": topology_proofs,
+        "revision_instruction": "",
+    }
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "missing_proof",
+        "duplicate_guarantee",
+        "invalid_status",
+        "invalid_evidence",
+        "empty_pass_evidence",
+        "invalid_reason",
+    ],
+)
+def test_production_critic_protocol_rejects_malformed_topology_proofs(defect):
+    proofs = _valid_protocol_topology_proofs()
+    if defect == "missing_proof":
+        proofs.pop()
+    elif defect == "duplicate_guarantee":
+        proofs[-1]["guarantee"] = proofs[0]["guarantee"]
+    elif defect == "invalid_status":
+        proofs[0]["status"] = "approved"
+    elif defect == "invalid_evidence":
+        proofs[0]["edge_evidence"] = [{"source": "source_node"}]
+    elif defect == "empty_pass_evidence":
+        proofs[0]["edge_evidence"] = []
+    else:
+        proofs[0]["reason"] = ["not", "a", "string"]
+
+    with pytest.raises(ValueError, match="critic response protocol invalid"):
+        _validate_review_protocol(
+            _protocol_review(proofs),
+            require_topology_proofs=True,
+        )
+
+
+def test_production_critic_protocol_accepts_complete_topology_proofs():
+    _validate_review_protocol(
+        _protocol_review(_valid_protocol_topology_proofs()),
+        require_topology_proofs=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_malformed_topology_proofs_retry_as_protocol_defect(monkeypatch):
+    graph = _domain_graph()
+    edge = graph["edges"][0]
+    evidence_edge = {
+        "source": edge["source"],
+        "target": edge["target"],
+        "label": edge["label"],
+    }
+    malformed = _valid_protocol_topology_proofs(evidence_edge)
+    malformed[-1]["guarantee"] = malformed[0]["guarantee"]
+    responses = iter([
+        json.dumps(_protocol_review(malformed)),
+        json.dumps(_protocol_review(_valid_protocol_topology_proofs(evidence_edge))),
+    ])
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return next(responses)
+
+    async def await_diagram(candidate):
+        return {
+            "screenshot_base64": "private-render",
+            "report": {
+                "rendered_nodes": len(candidate["nodes"]),
+                "rendered_edges": len(candidate["edges"]),
+                "overlap_count": 0,
+                "clipped_nodes": 0,
+                "clipped_edges": 0,
+                "minimum_text_px": 8,
+            },
+        }
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr("agent.nodes.graph_critic.stream_llm", fake_stream_llm)
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic._deterministic_review",
+        lambda *_args, **_kwargs: {
+            "approved": True,
+            "score": 1.0,
+            "strengths": [],
+            "missing": [],
+            "advice": [],
+            "revision_instruction": "",
+        },
+    )
+    result = await graph_critic_node({
+        "graph_data": graph,
+        "graph_changed": True,
+        "user_message": "production growth marketing multi-agent system",
+        "complexity": "production",
+        "send": send,
+        "await_diagram_evaluation": await_diagram,
+        "user_id": "user-1",
+        "session_id": "thread-1",
+    })
+
+    assert result["graph_review"]["approved"] is True
+    assert len(calls) == 2
+    assert "topology_proofs" in calls[1]["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_protocol_retry_skips_when_remaining_budget_is_insufficient(monkeypatch):
+    calls = 0
+
+    async def fake_stream_llm(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return '{"approved": tru'
+
+    async def await_diagram(graph):
+        return {
+            "screenshot_base64": "private-render",
+            "report": {
+                "rendered_nodes": len(graph["nodes"]),
+                "rendered_edges": len(graph["edges"]),
+                "overlap_count": 0,
+                "clipped_nodes": 0,
+                "clipped_edges": 0,
+                "minimum_text_px": 8,
+            },
+        }
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr("agent.nodes.graph_critic.stream_llm", fake_stream_llm)
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic._remaining_protocol_retry_seconds",
+        lambda _deadline: _GRAPH_CRITIC_PROTOCOL_RETRY_MIN_REMAINING_S - 0.001,
+    )
+    result = await graph_critic_node({
+        "graph_data": _domain_graph(),
+        "graph_changed": True,
+        "user_message": "growth marketing multi-agent system",
+        "complexity": "prototype",
+        "send": send,
+        "await_diagram_evaluation": await_diagram,
+        "user_id": "user-1",
+        "session_id": "thread-1",
+    })
+
+    assert calls == 1
+    assert result["graph_review"]["approved"] is False
+    assert result["graph_review"]["terminal"] is True
+    assert any(
+        "semantic architecture review did not complete" in item
+        for item in result["graph_review"]["missing"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_protocol_retry_runs_at_minimum_remaining_budget(monkeypatch):
+    calls = []
+    responses = iter([
+        '{"approved": tru',
+        json.dumps({
+            "approved": True,
+            "score": 0.9,
+            "strengths": ["The runtime path is explicit."],
+            "blocking_failures": [],
+            "advice": [],
+            "revision_instruction": "",
+        }),
+    ])
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return next(responses)
+
+    async def await_diagram(graph):
+        return {
+            "screenshot_base64": "private-render",
+            "report": {
+                "rendered_nodes": len(graph["nodes"]),
+                "rendered_edges": len(graph["edges"]),
+                "overlap_count": 0,
+                "clipped_nodes": 0,
+                "clipped_edges": 0,
+                "minimum_text_px": 8,
+            },
+        }
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr("agent.nodes.graph_critic.stream_llm", fake_stream_llm)
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic._remaining_protocol_retry_seconds",
+        lambda _deadline: _GRAPH_CRITIC_PROTOCOL_RETRY_MIN_REMAINING_S,
+    )
+    result = await graph_critic_node({
+        "graph_data": _domain_graph(),
+        "graph_changed": True,
+        "user_message": "growth marketing multi-agent system",
+        "complexity": "prototype",
+        "send": send,
+        "await_diagram_evaluation": await_diagram,
+        "user_id": "user-1",
+        "session_id": "thread-1",
+    })
+
+    assert result["graph_review"]["approved"] is True
+    assert len(calls) == 2
 
 
 @pytest.mark.asyncio
@@ -1674,9 +2148,43 @@ async def test_valid_first_semantic_review_uses_one_call(monkeypatch):
     assert calls[0]["telemetry"]["metadata"]["semantic_attempt"] == 0
 
 
+def test_compact_semantic_review_keeps_only_bounded_feedback():
+    from agent.nodes.graph_critic import _compact_review_payload
+
+    payload = _compact_review_payload({
+        "approved": False,
+        "strengths": ["a" * 200, "second", "discarded"],
+        "missing": ["first", "second", "third", "discarded"],
+        "advice": ["a", "b", "discarded"],
+        "revision_instruction": "r" * 600,
+        "topology_proofs": {"approval": "preserved"},
+    })
+
+    assert len(payload["strengths"]) == 2
+    assert len(payload["strengths"][0]) == 160
+    assert payload["missing"] == ["first", "second", "third"]
+    assert payload["advice"] == ["a", "b"]
+    assert len(payload["revision_instruction"]) == 440
+    assert payload["topology_proofs"] == {"approval": "preserved"}
+
+
+def test_semantic_review_failure_classifies_truncated_protocol_output():
+    from agent.nodes.graph_critic import _semantic_review_failure_code
+
+    assert _semantic_review_failure_code(
+        ValueError("invalid JSON"),
+        '{"approved":false',
+    ) == "semantic_review_output_truncated"
+    assert _semantic_review_failure_code(
+        TimeoutError("provider unavailable"),
+        "",
+    ) == "semantic_review_timeout"
+
+
 @pytest.mark.asyncio
 async def test_semantic_critic_outage_fails_closed(monkeypatch):
     calls = 0
+    events = []
 
     async def fail_stream_llm(**_kwargs):
         nonlocal calls
@@ -1696,8 +2204,8 @@ async def test_semantic_critic_outage_fails_closed(monkeypatch):
             },
         }
 
-    async def send(_event):
-        return None
+    async def send(event):
+        events.append(event)
 
     monkeypatch.setattr("agent.nodes.graph_critic.stream_llm", fail_stream_llm)
     result = await graph_critic_node({
@@ -1714,6 +2222,10 @@ async def test_semantic_critic_outage_fails_closed(monkeypatch):
     assert calls == 1
     assert result["graph_review"]["approved"] is False
     assert result["graph_review"]["terminal"] is True
+    assert result["graph_review"]["failure_code"] == "semantic_review_timeout"
+    assert any(
+        event.get("failure_code") == "semantic_review_timeout" for event in events
+    )
     assert any(
         "semantic architecture review did not complete" in item
         for item in result["graph_review"]["missing"]

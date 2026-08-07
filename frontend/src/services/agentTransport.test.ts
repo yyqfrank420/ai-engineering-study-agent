@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AuthSession, ServerEvent } from '../types';
-import { AgentTransport } from './agentTransport';
+import { AgentTransport, createClientRequestId } from './agentTransport';
 
 
 class MockWebSocket {
@@ -274,5 +274,178 @@ describe('AgentTransport WebSocket protocol', () => {
       evaluation_id: 'eval-1',
     });
     socket.receive({ type: 'done' });
+  });
+
+  it('creates browser request ids and contains malformed WebSocket frames', async () => {
+    vi.stubGlobal('crypto', { randomUUID: vi.fn(() => 'browser-request-id') });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(createClientRequestId()).toBe('browser-request-id');
+
+    const transport = new AgentTransport();
+    const completed = transport.sendMessage(
+      session,
+      'thread-1',
+      'design',
+      undefined,
+      'client-malformed',
+    );
+    const socket = MockWebSocket.instances[0];
+    socket.open();
+    socket.receive({ type: 'ready' });
+    socket.onmessage?.({ data: '{invalid' });
+    expect(error).toHaveBeenCalledWith('[ws] Failed to parse event:', '{invalid');
+    socket.close();
+    await expect(completed).resolves.toBe(false);
+  });
+
+  it('rejects inactive diagram submissions and cancellation', () => {
+    const transport = new AgentTransport();
+    expect(transport.stopGeneration()).toBe(false);
+    expect(transport.steerGeneration('no active request')).toBe(false);
+    expect(transport.submitDiagramEvaluation(
+      'eval-1',
+      null,
+      {
+        viewport_width: 320,
+        viewport_height: 240,
+        rendered_nodes: 0,
+        rendered_edges: 0,
+        overlap_count: 0,
+        clipped_nodes: 0,
+        clipped_edges: 0,
+        minimum_text_px: 12,
+      },
+      'invalid-image',
+    )).toBe(false);
+
+    void transport.sendMessage(session, 'thread-1', 'design', undefined, 'client-image');
+    const socket = MockWebSocket.instances[0];
+    socket.open();
+    socket.receive({ type: 'ready' });
+    expect(transport.submitDiagramEvaluation(
+      'eval-1',
+      null,
+      {
+        viewport_width: 320,
+        viewport_height: 240,
+        rendered_nodes: 0,
+        rendered_edges: 0,
+        overlap_count: 0,
+        clipped_nodes: 0,
+        clipped_edges: 0,
+        minimum_text_px: 12,
+      },
+      'invalid-image',
+    )).toBe(false);
+    socket.receive({ type: 'done' });
+  });
+
+  it('streams node suggestions across chunk boundaries and supports unsubscribe', async () => {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('ignored\n\ndata: {"type":"suggested_questions","questions":["One"]}\r\n\r\n'));
+        controller.enqueue(encoder.encode('data: {invalid}\n\ndata: {"type":"done"}'));
+        controller.close();
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const transport = new AgentTransport();
+    const events: ServerEvent[] = [];
+    const unsubscribe = transport.onEvent(event => events.push(event));
+
+    await expect(transport.sendNodeSelected(
+      session,
+      'thread-1',
+      'node-1',
+      'Retrieval API',
+      'Finds evidence',
+      'client-node-1',
+    )).resolves.toBe(true);
+
+    expect(events).toEqual([
+      { type: 'suggested_questions', questions: ['One'] },
+      { type: 'done' },
+    ]);
+    expect(error).toHaveBeenCalledWith('[sse] Failed to parse event:', 'data: {invalid}');
+    expect(fetch).toHaveBeenCalledWith('/api/node-selected', expect.objectContaining({
+      method: 'POST',
+      headers: expect.objectContaining({ Authorization: 'Bearer secret-access-token' }),
+      signal: expect.any(AbortSignal),
+    }));
+
+    unsubscribe();
+    events.length = 0;
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(
+      'data: {"type":"done"}\n\n',
+      { status: 200 },
+    ));
+    await transport.sendNodeSelected(
+      session,
+      'thread-1',
+      'node-1',
+      'Retrieval API',
+      'Finds evidence',
+      'client-node-2',
+    );
+    expect(events).toEqual([]);
+  });
+
+  it('rejects failed or bodyless node streams', async () => {
+    const transport = new AgentTransport();
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 503, statusText: 'Unavailable' }))
+      .mockResolvedValueOnce({ ok: true, status: 200, statusText: 'OK', body: null }));
+
+    await expect(transport.sendNodeSelected(
+      session, 'thread-1', 'node-1', 'Node', 'Description', 'client-http-fail',
+    )).rejects.toThrow('HTTP 503: Unavailable');
+    await expect(transport.sendNodeSelected(
+      session, 'thread-1', 'node-1', 'Node', 'Description', 'client-no-body',
+    )).rejects.toThrow('Response has no body');
+  });
+
+  it('cancels only the matching node request and clears its controller', async () => {
+    let rejectFetch: ((error: Error) => void) | undefined;
+    vi.stubGlobal('fetch', vi.fn((_url, init: RequestInit) => new Promise((_resolve, reject) => {
+      rejectFetch = reject;
+      init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+    })));
+    const transport = new AgentTransport();
+    const request = transport.sendNodeSelected(
+      session, 'thread-1', 'node-1', 'Node', 'Description', 'client-cancel',
+    );
+
+    expect(transport.cancelNodeSelection('other-request')).toBe(false);
+    expect(transport.cancelNodeSelection('client-cancel')).toBe(true);
+    await expect(request).rejects.toThrow('aborted');
+    expect(rejectFetch).toBeDefined();
+    expect(transport.cancelNodeSelection()).toBe(false);
+  });
+
+  it('uses the authenticated search-tool boundary and reports HTTP failures', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: vi.fn().mockResolvedValue({ ok: true, status: 'requested' }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        statusText: 'Conflict',
+      }));
+    const transport = new AgentTransport();
+
+    await expect(transport.useSearchTool(session, 'thread-1', 'request-1')).resolves.toEqual({
+      ok: true,
+      status: 'requested',
+    });
+    expect(fetch).toHaveBeenCalledWith('/api/chat/use-search-tool', expect.objectContaining({
+      body: JSON.stringify({ thread_id: 'thread-1', request_id: 'request-1' }),
+    }));
+    await expect(transport.useSearchTool(session, 'thread-1', 'request-2')).rejects.toThrow(
+      'HTTP 409: Conflict',
+    );
   });
 });

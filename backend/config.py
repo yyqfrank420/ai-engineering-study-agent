@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     orchestrator_model: str = "claude-opus-5"
     worker_model: str = "claude-opus-5"
     # Retained as an independently configurable repair role.
-    graph_repair_model: str = "claude-opus-5"
+    graph_repair_model: str = "claude-sonnet-5"
     # Extended thinking budget per agent call (tokens)
     # Extended reasoning budgets used by prototype and production design paths.
     # max_tokens must leave room for both hidden reasoning and the final answer.
@@ -55,6 +55,18 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 12000
     # Hard timeout on the whole agent run (seconds); yields a timeout error event
     agent_timeout_s: int = 360
+    # Graph work must leave fixed synthesis, persistence, and transport headroom.
+    agent_terminal_headroom_s: float = 30.0
+    graph_design_timeout_s: float = 90.0
+    graph_design_max_output_tokens: int = 7000
+    graph_critic_initial_timeout_s: float = 45.0
+    graph_critic_revision_timeout_s: float = 35.0
+    graph_critic_initial_max_output_tokens: int = 4500
+    graph_critic_revision_max_output_tokens: int = 3500
+    graph_patch_timeout_s: float = 90.0
+    graph_patch_max_output_tokens: int = 7500
+    graph_synthesis_timeout_s: float = 55.0
+    graph_finalization_reserve_s: float = 8.0
     # A browser renders candidate graphs off-screen and returns a bounded image
     # plus layout metrics before an applied diagram may be published.
     diagram_evaluation_timeout_s: float = 15.0
@@ -294,6 +306,21 @@ class Settings(BaseSettings):
 
         positive_limits = {
             "AGENT_TIMEOUT_S": self.agent_timeout_s,
+            "AGENT_TERMINAL_HEADROOM_S": self.agent_terminal_headroom_s,
+            "GRAPH_DESIGN_TIMEOUT_S": self.graph_design_timeout_s,
+            "GRAPH_DESIGN_MAX_OUTPUT_TOKENS": self.graph_design_max_output_tokens,
+            "GRAPH_CRITIC_INITIAL_TIMEOUT_S": self.graph_critic_initial_timeout_s,
+            "GRAPH_CRITIC_REVISION_TIMEOUT_S": self.graph_critic_revision_timeout_s,
+            "GRAPH_CRITIC_INITIAL_MAX_OUTPUT_TOKENS": (
+                self.graph_critic_initial_max_output_tokens
+            ),
+            "GRAPH_CRITIC_REVISION_MAX_OUTPUT_TOKENS": (
+                self.graph_critic_revision_max_output_tokens
+            ),
+            "GRAPH_PATCH_TIMEOUT_S": self.graph_patch_timeout_s,
+            "GRAPH_PATCH_MAX_OUTPUT_TOKENS": self.graph_patch_max_output_tokens,
+            "GRAPH_SYNTHESIS_TIMEOUT_S": self.graph_synthesis_timeout_s,
+            "GRAPH_FINALIZATION_RESERVE_S": self.graph_finalization_reserve_s,
             "LLM_MAX_RETRIES": self.llm_max_retries,
             "LLM_MAX_TOKENS": self.llm_max_tokens,
             "THINKING_BUDGET_TOKENS": self.thinking_budget_tokens,
@@ -332,6 +359,8 @@ class Settings(BaseSettings):
         invalid = sorted(name for name, value in positive_limits.items() if value <= 0)
         if invalid:
             raise RuntimeError(f"Cloud Run limits must be positive: {', '.join(invalid)}")
+        if self.agent_terminal_headroom_s >= self.agent_timeout_s:
+            raise RuntimeError("AGENT_TERMINAL_HEADROOM_S must be below AGENT_TIMEOUT_S.")
         if self.llm_max_tokens <= self.production_thinking_budget_tokens:
             raise RuntimeError(
                 "LLM_MAX_TOKENS must be greater than PRODUCTION_THINKING_BUDGET_TOKENS."

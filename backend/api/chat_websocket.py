@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from contextlib import suppress
 import json
 import logging
@@ -15,6 +16,7 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
 from adapters.supabase_auth_adapter import get_current_user
+from agent.deadlines import WorkflowDeadlineExceeded
 from agent.graph import run_agent
 from agent.state import AgentState
 from analytics.events import enqueue_analytics_event
@@ -26,7 +28,7 @@ from api.chat_guards import (
     knowledge_base_ready,
     truncate_utf8,
 )
-from api.diagram_evaluation_channel import DiagramEvaluationChannel
+from api.diagram_evaluation_channel import DiagramEvaluationChannel, DiagramWaiter
 from api.sse_handler import ChatRequest, _make_agent_tools
 from config import settings
 from observability import change_active_chat_streams, record_agent_duration, record_cancel, record_timeout
@@ -42,6 +44,33 @@ _AUTH_TIMEOUT_S = 8.0
 _START_TIMEOUT_S = 20.0
 _MAX_STEERS_PER_RUN = 3
 _MAX_WS_FRAME_BYTES = 16_384
+
+
+class _SingleWaitDiagramEvaluationChannel(DiagramEvaluationChannel):
+    """Correlate one candidate with one bounded browser-evaluation wait."""
+
+    async def request(self, graph: dict[str, Any], send: Any) -> dict[str, Any]:
+        evaluation_id = str(uuid.uuid4())
+        graph_version_text = str(graph.get("version") or "").strip()
+        graph_version = graph_version_text or None
+        future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        self._waiters[evaluation_id] = DiagramWaiter(
+            graph_version=graph_version,
+            future=future,
+        )
+        try:
+            await send({
+                "type": "graph_candidate",
+                "evaluation_id": evaluation_id,
+                "graph_version": graph_version,
+                "data": graph,
+            })
+            return await asyncio.wait_for(future, timeout=self._timeout_s)
+        finally:
+            self._waiters.pop(evaluation_id, None)
+            self._uploads.pop(evaluation_id, None)
+            if not future.done():
+                future.cancel()
 
 
 @router.websocket("/chat/ws")
@@ -154,11 +183,12 @@ async def chat_websocket(websocket: WebSocket) -> None:
         rag_tools, graph_tools, node_detail_tools = _make_agent_tools(websocket)
         history = message_store.get_history(user_id, body.thread_id, limit=settings.max_messages_per_thread)
         base_graph = thread_store.get_graph(user_id, body.thread_id)
+        approved_graph_at_request_start = copy.deepcopy(base_graph)
         content = body.content
         latest_graph = base_graph
         command_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=8)
         send_lock = asyncio.Lock()
-        diagram_channel = DiagramEvaluationChannel(
+        diagram_channel = _SingleWaitDiagramEvaluationChannel(
             timeout_s=settings.diagram_evaluation_timeout_s,
             max_screenshot_bytes=settings.max_diagram_screenshot_bytes,
         )
@@ -248,6 +278,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 "retrieval_relevance": "strong",
                 "retrieval_notice": "",
                 "graph_data": latest_graph,
+                "approved_graph_data": copy.deepcopy(approved_graph_at_request_start),
                 "graph_changed": False,
                 "graph_notice_sent": False,
                 "graph_revision_count": 0,
@@ -256,6 +287,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 "send": send,
                 "await_search_tool_request": await_search_tool_request,
                 "await_diagram_evaluation": lambda graph: diagram_channel.request(graph, send),
+                "workflow_started_at_s": workflow_started_at,
+                "terminal_deadline_s": terminal_deadline,
             }
 
         enqueue_analytics_event(
@@ -275,10 +308,12 @@ async def chat_websocket(websocket: WebSocket) -> None:
         receiver_task = asyncio.create_task(receive_commands())
         change_active_chat_streams(1)
         active_metric_counted = True
-        deadline = asyncio.get_running_loop().time() + settings.agent_timeout_s
+        workflow_started_at = asyncio.get_running_loop().time()
+        outer_deadline = workflow_started_at + settings.agent_timeout_s
+        terminal_deadline = outer_deadline - settings.agent_terminal_headroom_s
 
         while True:
-            if asyncio.get_running_loop().time() >= deadline:
+            if asyncio.get_running_loop().time() >= terminal_deadline:
                 await send({"type": "error", "content": "Response timed out — please try again"})
                 record_timeout()
                 break
@@ -290,7 +325,9 @@ async def chat_websocket(websocket: WebSocket) -> None:
             while True:
                 command_task = asyncio.create_task(command_queue.get())
                 timeout_task = asyncio.create_task(
-                    asyncio.sleep(max(0.0, deadline - asyncio.get_running_loop().time()))
+                    asyncio.sleep(
+                        max(0.0, terminal_deadline - asyncio.get_running_loop().time())
+                    )
                 )
                 done, pending = await asyncio.wait(
                     {agent_task, command_task, timeout_task},
@@ -369,7 +406,12 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     restart_requested = True
                     break
 
-                final_state = agent_task.result()
+                try:
+                    final_state = agent_task.result()
+                except WorkflowDeadlineExceeded:
+                    await send({"type": "error", "content": "Response timed out — please try again"})
+                    record_timeout()
+                    final_state = None
                 break
 
             if restart_requested:

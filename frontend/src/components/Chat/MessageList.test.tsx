@@ -46,4 +46,61 @@ describe('MessageList', () => {
     expect(container.querySelector('img')).toBeNull();
     expect(screen.getByText('[Image omitted: tracking pixel]')).toBeTruthy();
   });
+
+  it('renders the supported study markdown, math, and explanation metadata', () => {
+    const { container } = render(
+      <MessageList
+        messages={[
+          {
+            id: 'user-rich',
+            role: 'user',
+            content: [
+              '# Architecture',
+              '## Retrieval',
+              '### Ranking',
+              '**Strong** and *grounded* with $x + y$.',
+              '- semantic search',
+              '1. retrieve',
+              '> Preserve evidence.',
+              '| Layer | Tool |\n| --- | --- |\n| API | FastAPI |',
+              '---',
+              '[Book](https://example.com/book)',
+              '$$z = x + y$$',
+            ].join('\n\n'),
+          },
+          {
+            id: 'assistant-explanation',
+            role: 'assistant',
+            kind: 'explanation',
+            title: 'Why retrieval matters',
+            content: 'Evidence reaches the answer.',
+            relatedNodeIds: ['retrieval_api', 'vector_store', 'ranker', 'answer', 'ignored'],
+            isStreaming: true,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { level: 1, name: 'Architecture' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 2, name: 'Retrieval' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 3, name: 'Ranking' })).toBeTruthy();
+    expect(screen.getByText('Strong').tagName).toBe('STRONG');
+    expect(screen.getByText('grounded').tagName).toBe('EM');
+    expect(container.querySelector('blockquote')).not.toBeNull();
+    expect(container.querySelector('table')).not.toBeNull();
+    expect(container.querySelector('hr')).not.toBeNull();
+    expect(screen.getByRole('link', { name: 'Book' })).toHaveProperty('target', '_blank');
+    expect(container.querySelectorAll('.katex')).not.toHaveLength(0);
+    expect(screen.getByText('Why retrieval matters')).toBeTruthy();
+    expect(screen.getByText('retrieval api')).toBeTruthy();
+    expect(screen.getByText('answer')).toBeTruthy();
+    expect(screen.queryByText('ignored')).toBeNull();
+    expect(screen.getAllByTestId(/message-/)).toHaveLength(2);
+  });
+
+  it('renders a stable empty state', () => {
+    render(<MessageList messages={[]} />);
+
+    expect(screen.getByText('Ask a question about AI Engineering…')).toBeTruthy();
+  });
 });
