@@ -66,6 +66,21 @@ _NON_RETRYABLE_ANTHROPIC_ERRORS = {
 }
 
 
+def _aggregate_attempt_token_usage(
+    attempts: list[dict[str, object]],
+) -> tuple[int, int, int, int]:
+    fields = (
+        "input_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+        "output_tokens",
+    )
+    return tuple(
+        sum(int(attempt.get(field) or 0) for attempt in attempts)
+        for field in fields
+    )
+
+
 def build_telemetry(
     operation: str,
     *,
@@ -264,7 +279,15 @@ async def stream_response(
     kwargs: dict = {
         "model":      model,
         "max_tokens": effective_max_output_tokens,
-        "system":     system,
+        # The protected system prompt is the stable prefix shared by calls.
+        # Anthropic skips caching when this block is below the model minimum.
+        "system":     [
+            {
+                "type": "text",
+                "text": system,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
         "messages":   messages,
     }
     uses_adaptive_effort = _uses_adaptive_effort(model)
@@ -299,6 +322,8 @@ async def stream_response(
     started_at = time.perf_counter()
     output_chars = 0
     input_tokens = 0
+    cache_creation_input_tokens = 0
+    cache_read_input_tokens = 0
     output_tokens = 0
     provider_attempts = 0
     attempts: list[dict[str, object]] = []
@@ -328,6 +353,8 @@ async def stream_response(
             "structured_output": response_schema is not None,
             "prompt_sha256": prompt_sha256,
             "input_tokens": input_tokens,
+            "cache_creation_input_tokens": cache_creation_input_tokens,
+            "cache_read_input_tokens": cache_read_input_tokens,
             "output_tokens": output_tokens,
             "provider_attempts": provider_attempts,
             "queue_wait_ms": sum(
@@ -396,6 +423,7 @@ async def stream_response(
         is_fallback: bool,
     ) -> AsyncGenerator[tuple[str, str], None]:
         nonlocal final_model, final_provider, input_tokens, output_chars
+        nonlocal cache_creation_input_tokens, cache_read_input_tokens
         nonlocal output_tokens, provider_attempts, used_fallback
 
         used_fallback = is_fallback
@@ -409,6 +437,8 @@ async def stream_response(
             "model": openai_model,
             "status": "started",
             "input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
             "output_tokens": 0,
             "queue_wait_ms": 0,
             "accepted": False,
@@ -449,12 +479,12 @@ async def stream_response(
                     attempt_usage["output_tokens"] = int(
                         usage.get("output_tokens") or 0
                     )
-                    input_tokens = sum(
-                        int(item.get("input_tokens") or 0) for item in attempts
-                    )
-                    output_tokens = sum(
-                        int(item.get("output_tokens") or 0) for item in attempts
-                    )
+                    (
+                        input_tokens,
+                        cache_creation_input_tokens,
+                        cache_read_input_tokens,
+                        output_tokens,
+                    ) = _aggregate_attempt_token_usage(attempts)
                     continue
                 yield event
             attempt_usage["status"] = (
@@ -499,6 +529,8 @@ async def stream_response(
             "model": model,
             "status": "started",
             "input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
             "output_tokens": 0,
             "queue_wait_ms": 0,
             "accepted": False,
@@ -519,9 +551,18 @@ async def stream_response(
                     attempt_usage["input_tokens"] = int(
                         getattr(usage, "input_tokens", 0) or 0
                     )
-                    input_tokens = sum(
-                        int(item.get("input_tokens") or 0) for item in attempts
+                    attempt_usage["cache_creation_input_tokens"] = int(
+                        getattr(usage, "cache_creation_input_tokens", 0) or 0
                     )
+                    attempt_usage["cache_read_input_tokens"] = int(
+                        getattr(usage, "cache_read_input_tokens", 0) or 0
+                    )
+                    (
+                        input_tokens,
+                        cache_creation_input_tokens,
+                        cache_read_input_tokens,
+                        output_tokens,
+                    ) = _aggregate_attempt_token_usage(attempts)
                 elif event.type == "message_delta":
                     attempt_usage["accepted"] = True
                     attempt_usage["usage_complete"] = True
@@ -529,9 +570,12 @@ async def stream_response(
                     attempt_usage["output_tokens"] = int(
                         getattr(usage, "output_tokens", 0) or 0
                     )
-                    output_tokens = sum(
-                        int(item.get("output_tokens") or 0) for item in attempts
-                    )
+                    (
+                        input_tokens,
+                        cache_creation_input_tokens,
+                        cache_read_input_tokens,
+                        output_tokens,
+                    ) = _aggregate_attempt_token_usage(attempts)
                     stop_reason = getattr(getattr(event, "delta", None), "stop_reason", None)
                     if isinstance(stop_reason, str):
                         finish_reason = stop_reason

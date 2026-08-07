@@ -282,7 +282,13 @@ async def test_stream_response_accounts_usage_for_every_anthropic_attempt(monkey
         kwargs["_queue_wait_observer"](attempts * 10)
         yield SimpleNamespace(
             type="message_start",
-            message=SimpleNamespace(usage=SimpleNamespace(input_tokens=100 * attempts)),
+            message=SimpleNamespace(
+                usage=SimpleNamespace(
+                    input_tokens=100 * attempts,
+                    cache_creation_input_tokens=1_000 if attempts == 1 else 0,
+                    cache_read_input_tokens=2_000 if attempts == 2 else 0,
+                )
+            ),
         )
         if attempts == 1:
             raise RuntimeError("retry after accepted request")
@@ -300,6 +306,8 @@ async def test_stream_response_accounts_usage_for_every_anthropic_attempt(monkey
     ]
     metadata = telemetry_records[0]["metadata"]
     assert metadata["input_tokens"] == 300
+    assert metadata["cache_creation_input_tokens"] == 1_000
+    assert metadata["cache_read_input_tokens"] == 2_000
     assert metadata["output_tokens"] == 25
     assert metadata["queue_wait_ms"] == 30
     assert [attempt["status"] for attempt in metadata["attempts"]] == [
@@ -615,6 +623,13 @@ async def test_anthropic_structured_output_merges_schema_effort_and_metadata(mon
     ))
 
     output_config = calls[0]["output_config"]
+    assert calls[0]["system"] == [
+        {
+            "type": "text",
+            "text": "system",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
     assert output_config["effort"] == "low"
     assert output_config["format"]["type"] == "json_schema"
     assert "minItems" not in json.dumps(output_config["format"]["schema"])
