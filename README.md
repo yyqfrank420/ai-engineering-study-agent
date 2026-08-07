@@ -120,8 +120,15 @@ no-traffic candidate, captures the real WebSocket/browser journey, and then appl
 deterministic invariants plus reviewed semantic rubrics. The protected corpus is
 approved; diagnostic runs can select individual unresolved cases, while the manual
 override fails closed unless its evidence covers every protected PR case exactly once.
-See
-[docs/quality-system.md](docs/quality-system.md) for activation and operations.
+Evaluation and release provenance binds the content commit, Git tree, and immutable
+image digest across synthetic PR merge refs and later squash merges. Selective semantic
+replay reuses only authenticated, successful graph-free cases; runtime-affected cases
+rerun as scheduled diagnostics. Scheduled evaluation now reports a missing image tag in
+preflight, while a manual diagnostic builds an ephemeral image from the exact requested
+tree. Graph repair has one bounded owner, and invalid generated output fails closed while
+preserving the approved graph. These controls do not imply that a pending production
+deployment has completed. See [docs/quality-system.md](docs/quality-system.md) for the
+full evidence, replay, and deployment procedures.
 
 ## Maintainer
 

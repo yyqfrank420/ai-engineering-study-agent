@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 import json
 from typing import Any
@@ -18,6 +19,9 @@ async def stream_explanation_blocks(
     model: str,
     system: str,
     messages: list[dict[str, Any]],
+    effort: str,
+    max_output_tokens: int,
+    timeout_seconds: float,
     telemetry: dict[str, Any],
     send: SendEvent,
     graph_version: str | None,
@@ -33,29 +37,50 @@ async def stream_explanation_blocks(
     emitted: list[dict[str, Any]] = []
     decoder = json.JSONDecoder()
 
-    async for event_type, content in stream_response_compat(
+    response_stream = stream_response_compat(
         stream_response,
         model=model,
         system=protect_system_prompt(system),
         messages=messages,
-        effort="high",
+        effort=effort,
+        max_output_tokens=max_output_tokens,
         temperature=None,
         top_p=None,
         top_k=None,
         telemetry=telemetry,
-    ):
-        if event_type == "provider_switch":
-            await send({"type": "provider_switch", "provider": content})
-            continue
-        if event_type != "text":
-            continue
-        raw_output += content
-        parse_buffer += content
-        parse_buffer, parsed = _decode_available(parse_buffer, decoder, allowed_node_ids)
-        for block in parsed:
-            emitted.append(block)
-            await send(_block_event(block, graph_version))
+    )
+    timed_out = False
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            async for event_type, content in response_stream:
+                if event_type == "provider_switch":
+                    await send({"type": "provider_switch", "provider": content})
+                    continue
+                if event_type != "text":
+                    continue
+                raw_output += content
+                parse_buffer += content
+                parse_buffer, parsed = _decode_available(
+                    parse_buffer,
+                    decoder,
+                    allowed_node_ids,
+                )
+                for block in parsed:
+                    emitted.append(block)
+                    await send(_block_event(block, graph_version))
+    except TimeoutError:
+        timed_out = True
+    finally:
+        await response_stream.aclose()
 
+    if timed_out:
+        await send({
+            "type": "workflow_progress",
+            "phase": "explain",
+            "status": "degraded",
+            "title": "Explanation latency budget reached",
+            "detail": "Returning the bounded explanation available before the stage deadline.",
+        })
     if not emitted:
         fallback = _fallback_block(raw_output)
         emitted.append(fallback)

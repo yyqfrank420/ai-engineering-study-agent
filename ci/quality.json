@@ -37,6 +37,7 @@
             "backend/tests/test_graph_critic.py",
             "backend/tests/test_graph_grounding_prompts.py",
             "backend/tests/test_graph_patch.py",
+            "backend/tests/test_applied_graph_spec.py",
             "backend/tests/test_llm_adapter.py",
             "backend/tests/test_mode_controls.py",
             "backend/tests/test_node_selected_service.py",
@@ -93,11 +94,20 @@
       ]
     },
     {
+      "name": "backend-coverage",
+      "runtime": "python",
+      "commands": [
+        {"name": "Reset backend coverage data", "argv": ["python", "-m", "coverage", "erase"]},
+        {"name": "Backend coverage tests", "argv": ["python", "-m", "coverage", "run", "-m", "pytest", "backend/tests", "--tb=short", "-q"]},
+        {"name": "Enforce backend coverage", "argv": ["python", "-m", "coverage", "report"]}
+      ]
+    },
+    {
       "name": "frontend",
       "runtime": "node",
       "commands": [
         {"name": "Frontend lint", "cwd": "frontend", "argv": ["npm", "run", "lint"]},
-        {"name": "Frontend tests", "cwd": "frontend", "argv": ["npm", "run", "test"]},
+        {"name": "Frontend tests and coverage", "cwd": "frontend", "argv": ["npm", "run", "test:coverage"]},
         {"name": "Frontend production build", "cwd": "frontend", "argv": ["npm", "run", "build"]},
         {"name": "Frontend production dependency audit", "cwd": "frontend", "argv": ["npm", "audit", "--omit=dev", "--audit-level=moderate"]}
       ]
@@ -180,6 +190,7 @@
         "backend/adapters/supabase_auth_adapter.py"
       ],
       "eval-quality": ["backend/eval/**", "scripts/run_staging_eval.py"],
+      "backend-coverage": ["backend/**/*.py"],
       "frontend": ["frontend/**"],
       "ingestion-artifacts": [
         "ingestion/**", "scripts/package_faiss_artifact.py",

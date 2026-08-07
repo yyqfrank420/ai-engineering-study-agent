@@ -8,6 +8,9 @@ streaming and transport backpressure remain inside the existing nodes.
 
 from __future__ import annotations
 
+import asyncio
+import copy
+import time
 from collections.abc import Awaitable, Callable
 from typing import Literal
 
@@ -15,6 +18,14 @@ from langgraph.graph import END, START, StateGraph
 
 from agent.architecture_playbook import build_evidence_bundle
 from agent.complexity import is_applied_system_design_request, resolve_design_query
+from agent.deadlines import (
+    StageAdmissionDenied,
+    WorkflowDeadlineExceeded,
+    critic_timeout_seconds,
+    design_timeout_seconds,
+    patch_timeout_seconds,
+    synthesis_timeout_seconds,
+)
 from agent.nodes.architecture_workers import architect_node, challenger_node
 from agent.nodes.graph_critic import graph_critic_node
 from agent.nodes.orchestrator_node import orchestrator_route, orchestrator_synthesise, quick_synthesise
@@ -31,6 +42,36 @@ from observability import start_span
 
 NodeResult = Awaitable[AgentState]
 AgentNode = Callable[[AgentState], NodeResult]
+
+_GRAPH_STAGE_DEADLINE_KEY = "_graph_stage_deadline_s"
+
+
+def _with_graph_stage_deadline(state: AgentState, timeout_s: float) -> AgentState:
+    return {
+        **state,
+        _GRAPH_STAGE_DEADLINE_KEY: time.monotonic() + timeout_s,
+    }  # type: ignore[typeddict-item]
+
+
+def _without_graph_stage_deadline(state: AgentState) -> AgentState:
+    cleaned = dict(state)
+    cleaned.pop(_GRAPH_STAGE_DEADLINE_KEY, None)
+    return cleaned  # type: ignore[return-value]
+
+
+def _repair_attempt_summary(revision_count: int) -> str:
+    if revision_count <= 0:
+        return "before a focused repair could complete"
+    suffix = "repair" if revision_count == 1 else "repairs"
+    return f"after {revision_count} focused {suffix}"
+
+
+def _restore_approved_graph_state(state: AgentState) -> AgentState:
+    return {
+        **state,
+        "graph_data": copy.deepcopy(state.get("approved_graph_data")),
+        "graph_changed": False,
+    }
 
 
 def _traced(name: str, node: AgentNode, **attributes) -> AgentNode:
@@ -115,25 +156,84 @@ def build_agent_workflow(
         return await challenger_node(state)  # type: ignore[return-value]
 
     async def draft_graph(state: AgentState) -> AgentState:
-        return await apply_graph_worker(state, graph_tools)
+        try:
+            timeout_s = design_timeout_seconds(state)
+            async with asyncio.timeout(timeout_s):
+                drafted = await apply_graph_worker(
+                    _with_graph_stage_deadline(state, timeout_s),
+                    graph_tools,
+                )
+                return _without_graph_stage_deadline(drafted)
+        except (TimeoutError, StageAdmissionDenied):
+            restored = _restore_approved_graph_state(state)
+            if not state.get("graph_notice_sent"):
+                await state["send"]({
+                    "type": "graph_notice",
+                    "message": (
+                        "The draft architecture did not meet the structural quality checks, so I "
+                        "kept the visual out rather than publishing a misleading graph. The written "
+                        "design is still available below."
+                    ),
+                })
+            return {**restored, "graph_notice_sent": True}
 
     async def revise_graph(state: AgentState) -> AgentState:
         revision_count = int(state.get("graph_revision_count", 0)) + 1
+        try:
+            timeout_s = patch_timeout_seconds(state)
+        except StageAdmissionDenied:
+            restored = _restore_approved_graph_state(state)
+            if not state.get("graph_notice_sent"):
+                await state["send"]({
+                    "type": "graph_notice",
+                    "message": (
+                        "I kept the approved diagram unchanged because there was not enough bounded "
+                        "time to repair and independently review another candidate."
+                    ),
+                })
+            return {
+                **restored,
+                "graph_notice_sent": True,
+                "graph_revision_count": revision_count,
+            }
         await state["send"]({
             "type": "workflow_progress",
             "phase": "revise",
             "status": "retry",
             "title": "Refining the diagram",
             "detail": (
-                f"Applying bounded clarity repair {revision_count} of 2, then checking "
+                f"Applying bounded clarity repair {revision_count} of 3, then checking "
                 "the real layout again."
             ),
         })
-        revised = await apply_graph_worker(
-            {**state, "graph_revision_count": revision_count},
-            graph_tools,
-        )
-        return {**revised, "graph_revision_count": revision_count}
+        try:
+            async with asyncio.timeout(timeout_s):
+                revised = await apply_graph_worker(
+                    _with_graph_stage_deadline(
+                        {**state, "graph_revision_count": revision_count},
+                        timeout_s,
+                    ),
+                    graph_tools,
+                )
+        except TimeoutError:
+            restored = _restore_approved_graph_state(state)
+            if not state.get("graph_notice_sent"):
+                await state["send"]({
+                    "type": "graph_notice",
+                    "message": (
+                        "I kept the approved diagram unchanged because the bounded repair did not "
+                        "finish in time for an independent review."
+                    ),
+                })
+            return {
+                **restored,
+                "graph_notice_sent": True,
+                "graph_revision_count": revision_count,
+            }
+        return {
+            **_without_graph_stage_deadline(revised),
+            "graph_revision_count": revision_count,
+        }
 
     async def expand_context(state: AgentState) -> AgentState:
         expanded = await maybe_expand_with_search_tool(
@@ -144,28 +244,60 @@ def build_agent_workflow(
         return {**expanded, "search_tool_wait_task": None}
 
     async def review_graph(state: AgentState) -> AgentState:
-        return await graph_critic_node(state)
+        if not state.get("graph_changed"):
+            return await graph_critic_node(state)
+        revision_count = int(state.get("graph_revision_count", 0))
+        try:
+            timeout_s = critic_timeout_seconds(state, revision_count)
+            async with asyncio.timeout(timeout_s):
+                reviewed = await graph_critic_node(
+                    _with_graph_stage_deadline(state, timeout_s)
+                )
+                return _without_graph_stage_deadline(reviewed)
+        except (TimeoutError, StageAdmissionDenied):
+            return {
+                **state,
+                "graph_review": {
+                    "approved": False,
+                    "terminal": True,
+                    "score": 0.0,
+                    "missing": ["The independent semantic architecture review did not complete."],
+                    "revision_instruction": "Keep the prior approved diagram unchanged.",
+                },
+            }
 
     async def reject_graph(state: AgentState) -> AgentState:
         review = state.get("graph_review") or {}
-        await state["send"]({
-            "type": "graph_notice",
-            "message": (
-                "I couldn't make this diagram clear enough after two focused repairs, so I kept "
-                "the visual out. The written architecture is still available below; ask me to "
-                "redraw it as a simpler diagram if you want another pass."
-            ),
-        })
+        approved_graph = state.get("approved_graph_data")
+        repair_summary = _repair_attempt_summary(int(state.get("graph_revision_count", 0)))
+        if not state.get("graph_notice_sent"):
+            await state["send"]({
+                "type": "graph_notice",
+                "message": (
+                    f"I couldn't make this diagram clear enough {repair_summary}, so I kept "
+                    + (
+                        "the prior approved visual unchanged."
+                        if approved_graph
+                        else "the visual out."
+                    )
+                    + " The written architecture is still available below; ask me to redraw it as "
+                    "a simpler diagram if you want another pass."
+                ),
+            })
+        restored = _restore_approved_graph_state(state)
         return {
-            **state,
-            "graph_data": None,
-            "graph_changed": False,
+            **restored,
             "graph_notice_sent": True,
             "graph_review": review,
         }
 
     async def synthesise(state: AgentState) -> AgentState:
-        return await orchestrator_synthesise(state)
+        try:
+            timeout_s = synthesis_timeout_seconds(state)
+            async with asyncio.timeout(timeout_s):
+                return await orchestrator_synthesise(state)
+        except (TimeoutError, StageAdmissionDenied) as exc:
+            raise WorkflowDeadlineExceeded("synthesis exceeded its reserved deadline") from exc
 
     async def enrich(state: AgentState) -> AgentState:
         await maybe_start_node_enrichment(state, node_detail_tools)
@@ -259,7 +391,7 @@ def _route_after_review(state: AgentState) -> Literal["accept", "revise", "rejec
     review = state.get("graph_review") or {}
     if review.get("approved"):
         return "accept"
-    if not review.get("terminal") and int(state.get("graph_revision_count", 0)) < 2:
+    if not review.get("terminal") and int(state.get("graph_revision_count", 0)) < 3:
         return "revise"
     return "reject"
 
@@ -278,6 +410,9 @@ async def run_agent(
     initial_state: AgentState = {
         **state,
         "graph_revision_count": state.get("graph_revision_count", 0),
+        "approved_graph_data": copy.deepcopy(
+            state.get("approved_graph_data", state.get("graph_data"))
+        ),
     }
     workflow = build_agent_workflow(rag_tools, graph_tools, node_detail_tools)
-    return await workflow.ainvoke(initial_state, config={"recursion_limit": 20})
+    return await workflow.ainvoke(initial_state, config={"recursion_limit": 24})

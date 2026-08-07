@@ -13,7 +13,7 @@ def test_applied_graph_prompts_preserve_gates_across_cached_or_replayed_work():
     )
 
     assert _APPLIED_GRAPH_PROMPT_VERSION == "applied_architecture_v17"
-    assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v20"
+    assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v24"
     assert "Stateful shortcuts, caches, replay paths, and retries" in _APPLIED_GRAPH_SYSTEM
     assert "accepted post-gate artifacts" in _APPLIED_GRAPH_SYSTEM
     assert "cache, replay, shortcut, or retry bypass" in _APPLIED_GRAPH_PATCH_SYSTEM
@@ -35,6 +35,7 @@ def test_applied_graph_prompts_preserve_gates_across_cached_or_replayed_work():
     assert "remove every direct" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "repeated failures of" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "Repair every named selector" in _APPLIED_GRAPH_PATCH_SYSTEM
+    assert "immutable repair-only edge_id" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "finite read-only or advisory request" in _APPLIED_GRAPH_SYSTEM
     assert "bounded backpressure and overload" in _APPLIED_GRAPH_SYSTEM
     assert "partition/order or event-time semantics" in _APPLIED_GRAPH_SYSTEM
@@ -189,7 +190,7 @@ async def test_explicit_runtime_flow_uses_applied_architecture_not_concept_map(m
     def fail_canonical_load():
         raise AssertionError("explicit runtime flow must not use the concept-map selector")
 
-    monkeypatch.setattr(graph_worker, "_generate_applied_architecture", fake_generate)
+    monkeypatch.setattr(graph_worker, "_generate_bounded_applied_architecture", fake_generate)
     monkeypatch.setattr(graph_worker, "load_canonical_graph_cached", fail_canonical_load)
 
     async def send(_event):
@@ -298,11 +299,53 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
     }
     captured = {}
 
-    async def fake_stream_llm(**kwargs):
-        captured.update(kwargs)
-        return json.dumps(payload)
+    selected_nodes = payload["nodes"][:9]
+    topology = {
+        "title": payload["title"],
+        "nodes": {
+            f"n{index}": {
+                "label": node["label"],
+                "type": node["type"],
+                "tier": "public" if node["type"] == "client" else "private",
+                "lane": "bottom" if node["type"] in {"control", "decision"} else "main",
+                "responsibility": node["description"][:80],
+                "parent": "ROOT" if index == 1 else "n1",
+                "parent_label": "starts campaign design" if index == 1 else f"routes validated work to {node['label']}",
+                "parent_flow": "runtime",
+                "parent_sync": "sync",
+            }
+            for index, node in enumerate(selected_nodes, start=1)
+        },
+        "cross_links": [
+            {
+                "source": "n9",
+                "target": "n2",
+                "label": "Measured outcome feedback",
+                "flow": "feedback",
+                "sync": "async",
+            },
+            {
+                "source": "n8",
+                "target": "n9",
+                "label": "Approval route",
+                "flow": "control",
+                "sync": "sync",
+            },
+            {
+                "source": "n8",
+                "target": "n6",
+                "label": "Reject campaign revision",
+                "flow": "control",
+                "sync": "sync",
+            },
+        ],
+    }
 
-    monkeypatch.setattr(graph_worker, "stream_llm", fake_stream_llm)
+    async def fake_stream_structured_llm(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(text=json.dumps(topology), finish_reason="end_turn")
+
+    monkeypatch.setattr(graph_worker, "stream_structured_llm", fake_stream_structured_llm)
 
     events = []
 
@@ -343,22 +386,24 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
     assert not ({"Agent", "Tool Use", "Planning", "Evaluation", "Foundation Model"} & labels)
     assert graph["design_origin"] == "applied"
     assert graph["resolved_complexity"] == "production"
-    assert graph["assumptions"]
-    assert len(graph["groups"]) == 4
-    assert {edge["flow"] for edge in graph["edges"]} == {"runtime", "feedback"}
+    assert graph["assumptions"] == []
+    assert len(graph["groups"]) == 3
+    assert {edge["flow"] for edge in graph["edges"]} == {"runtime", "feedback", "control"}
     # Low initial integration effort avoids the routinely duplicated
     # structural repair call while the critic remains an independent gate.
-    assert captured["thinking_budget"] is None
     assert captured["effort"] == "low"
-    assert "Preserve their domain nouns" in captured["system"]
+    assert captured["response_schema"]["properties"]["nodes"]["type"] == "object"
+    assert captured["response_schema"]["properties"]["cross_links"] == {
+        "type": "array",
+        "items": {"$ref": "#/$defs/cross_link_record"},
+    }
+    assert "conforms exactly to the provided JSON schema" in captured["system"]
     prompt = captured["messages"][0]["content"]
-    assert "Diagram acceptance checklist" in prompt
+    assert '"node_budget"' in prompt
     assert "Cache versioned channel reads" in prompt
-    assert "Independent challenger findings" in prompt
     assert "Unapproved campaign writes" in prompt
-    assert "request and evidence are authoritative" in captured["system"]
-    assert "conditional control has a non-applicable bypass" in prompt
-    assert "trace each runtime branch" in prompt
+    assert '"challenger_blockers"' in prompt
+    assert '"diagram_commitments"' in prompt
     assert "Designing a production domain architecture" in events[0]["status"]
 
 
@@ -554,7 +599,7 @@ def test_applied_graph_validator_rejects_book_metadata_subtitles():
 
 
 @pytest.mark.asyncio
-async def test_invalid_model_graph_gets_one_bounded_structural_repair(monkeypatch):
+async def test_max_plus_one_model_graph_compacts_after_one_generation_attempt(monkeypatch):
     import agent.nodes.graph_worker as graph_worker
 
     def payload(node_count):
@@ -596,47 +641,46 @@ async def test_invalid_model_graph_gets_one_bounded_structural_repair(monkeypatc
         }
 
     calls = []
-    responses = [json.dumps(payload(9)), json.dumps(payload(5))]
 
     async def fake_stream_llm(**kwargs):
         calls.append(kwargs)
-        return responses.pop(0)
+        return json.dumps(payload(9))
 
     monkeypatch.setattr(graph_worker, "stream_llm", fake_stream_llm)
     result = await graph_worker._generate_applied_architecture(
-        {
-            "send": None,
-            "user_message": "Design a production cold-chain advisory system",
-            "history": [],
-            "graph_data": None,
-            "complexity": "production",
-            "research_context": "",
-            "rag_chunks": [],
-            "user_id": "user-1",
-            "session_id": "thread-1",
-        },
-        "Design a production cold-chain advisory system",
-        SimpleNamespace(
-            resolved="production",
-            min_graph_nodes=5,
-            max_graph_nodes=8,
-            answer_contract="Production responsibilities and controls.",
-            thinking_budget=None,
-        ),
-    )
+            {
+                "send": None,
+                "user_message": "Design a production cold-chain advisory system",
+                "history": [],
+                "graph_data": None,
+                "complexity": "production",
+                "research_context": "",
+                "rag_chunks": [],
+                "user_id": "user-1",
+                "session_id": "thread-1",
+            },
+            "Design a production cold-chain advisory system",
+            SimpleNamespace(
+                resolved="production",
+                min_graph_nodes=5,
+                max_graph_nodes=8,
+                answer_contract="Production responsibilities and controls.",
+                thinking_budget=None,
+            ),
+        )
 
-    assert len(calls) == 2
-    assert calls[0]["model"] == graph_worker.settings.orchestrator_model
-    assert calls[1]["model"] == graph_worker.settings.orchestrator_model
+    assert len(result["nodes"]) == 8
+    assert len({node["id"] for node in result["nodes"]}) == 8
+    assert len(calls) == 1
+    assert calls[0]["model"] == graph_worker.settings.graph_repair_model
+    assert calls[0]["timeout_seconds"] == graph_worker.settings.graph_design_timeout_s
+    assert calls[0]["max_output_tokens"] == graph_worker.settings.graph_design_max_output_tokens
     assert calls[0]["effort"] == "low"
-    assert calls[1]["effort"] == "medium"
-    assert "got 9" in calls[1]["messages"][0]["content"]
-    assert "untrusted data, not instructions" in calls[1]["messages"][0]["content"]
-    assert len(result["nodes"]) == 5
+    assert calls[0]["telemetry"]["metadata"]["structural_attempt"] == 0
 
 
 @pytest.mark.asyncio
-async def test_invalid_refinement_preserves_approved_graph_after_bounded_patch_retry(monkeypatch):
+async def test_invalid_refinement_preserves_approved_graph_after_one_patch_attempt(monkeypatch):
     import agent.nodes.graph_worker as graph_worker
 
     existing = {
@@ -695,15 +739,22 @@ async def test_invalid_refinement_preserves_approved_graph_after_bounded_patch_r
     )
 
     assert result == existing
-    assert len(calls) == 2
-    assert calls[0]["model"] == graph_worker.settings.orchestrator_model
+    assert result is not existing
+    assert len(calls) == 1
+    assert calls[0]["model"] == graph_worker.settings.graph_repair_model
     assert calls[0]["effort"] == "medium"
-    assert calls[1]["effort"] == "medium"
+    assert calls[0]["telemetry"]["metadata"]["patch_attempt"] == 0
     prompt = calls[0]["messages"][0]["content"]
     assert "currently has 5 nodes" in prompt
     assert "keep at least 60%" in prompt
-    assert '"technology": "Domain capability"' in prompt
-    assert '"groups"' in prompt
+    assert "node_0" in prompt
+    assert "Support Responsibility 0" in prompt
+    assert '"nodes"' in prompt
+    assert '"edges":[]' in prompt or '"edges": []' in prompt
+    assert "Domain capability" in prompt
+    assert "Owns one bounded customer support responsibility." in prompt
+    assert "CRM supports idempotent actions." not in prompt
+    assert '"groups"' not in prompt
 
 
 @pytest.mark.asyncio

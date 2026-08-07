@@ -47,15 +47,13 @@ jobs:
               "source_run_id": str(calibration.get("evidence_run_id") or ""),
               "source_commit_sha": str(calibration.get("evidence_commit_sha") or ""),
               "evidence_sha": str(calibration.get("evidence_sha256") or ""),
-              "judge_model": str(calibration.get("judge_model") or ""),
           }
           if not (
               values["source_run_id"].isdigit()
               and len(values["source_commit_sha"]) == 40
               and len(values["evidence_sha"]) == 64
-              and values["judge_model"]
           ):
-              raise SystemExit("approved calibration identity is incomplete")
+              raise SystemExit("approved evidence identity is incomplete")
           for key, value in values.items():
               print(f"{key}={value}")
           PY
@@ -86,7 +84,6 @@ jobs:
           SOURCE_RUN_ID: ${{ steps.approved.outputs.source_run_id }}
           SOURCE_COMMIT_SHA: ${{ steps.approved.outputs.source_commit_sha }}
           EXPECTED_EVIDENCE_SHA: ${{ steps.approved.outputs.evidence_sha }}
-          JUDGE_MODEL: ${{ steps.approved.outputs.judge_model }}
         run: |
           python - <<'PY'
           import hashlib
@@ -142,7 +139,6 @@ jobs:
               "corpus_version": current["corpus_version"],
               "corpus_sha256": corpus_sha,
               "evidence_sha256": evidence_sha,
-              "judge_model": os.environ["JUDGE_MODEL"],
           }
           output = Path("artifacts/promotion")
           output.mkdir(parents=True, exist_ok=True)

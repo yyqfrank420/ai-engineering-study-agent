@@ -112,7 +112,7 @@ jobs:
           else
             lookup_status=$?
           fi
-          if ! grep -Fq "Image not found" "$lookup_error_file"; then
+          if ! grep -Eiq '^(ERROR: \(gcloud\.artifacts\.docker\.images\.describe\) (Docker image .+ not found\.?|Image not found\.)|Image not found\.)$' "$lookup_error_file"; then
             echo "Exact-tree approval lookup failed: commit=$commit_sha tree=$tree_sha image_tag=$IMAGE:$approval_tag" >&2
             sed 's/^/gcloud: /' "$lookup_error_file" >&2
             rm -f "$lookup_error_file"
@@ -208,7 +208,7 @@ jobs:
         run: |
           tag="scheduled-${GITHUB_RUN_ID}"
           echo "REVISION_TAG=$tag" >> "$GITHUB_ENV"
-          gcloud run deploy "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE@$IMAGE_DIGEST" --no-traffic --tag "$tag" --timeout 420s --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4 --quiet
+          gcloud run deploy "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE@$IMAGE_DIGEST" --no-traffic --tag "$tag" --timeout 420s --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4,GRAPH_REPAIR_MODEL=claude-sonnet-5 --quiet
           url="$(gcloud run services describe "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json | python -c 'import json,os,sys; d=json.load(sys.stdin); t="scheduled-"+os.environ["GITHUB_RUN_ID"]; print(next((x.get("url", "") for x in d.get("status",{}).get("traffic",[]) if x.get("tag")==t), ""))')"
           [ -n "$url" ] || { echo "Cloud Run did not expose the tagged evaluation URL." >&2; exit 1; }
           echo "CANDIDATE_URL=$url" >> "$GITHUB_ENV"
@@ -248,7 +248,9 @@ jobs:
         if: always() && hashFiles('artifacts/live-eval/browser-results.json') != ''
         continue-on-error: true
         env:
-          OPENAI_API_KEY: ${{ secrets.EVAL_JUDGE_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EVAL_JUDGE_PROVIDER: anthropic
+          EVAL_JUDGE_MODEL: claude-sonnet-5
           CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
         run: |
           approval_args=()

@@ -17,6 +17,7 @@ class JudgeCalibration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     judge_release: str
+    judge_provider: Literal["anthropic", "openai"]
     judge_model: str | None = Field(default=None, min_length=1)
     evidence_run_id: str | None = Field(default=None, pattern=r"^[0-9]+$")
     evidence_commit_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")

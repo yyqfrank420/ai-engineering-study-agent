@@ -110,6 +110,9 @@ class AgentState(TypedDict):
     graph_notice_sent: bool         # True when we've already warned that no graph could be produced
     graph_review: NotRequired[dict[str, Any]]
     graph_revision_count: NotRequired[int]
+    approved_graph_data: NotRequired[GraphData | None]
+    workflow_started_at_s: NotRequired[float]
+    terminal_deadline_s: NotRequired[float]
     search_tool_wait_task: NotRequired[Any]
     # Web search results from research_worker (empty string if not run)
     research_context: str

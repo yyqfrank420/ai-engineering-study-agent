@@ -1,4 +1,5 @@
 import pytest
+import time
 
 
 def _state(send):
@@ -38,8 +39,12 @@ def test_graph_off_skips_paid_applied_design_roles():
     assert _should_run_applied_design_roles(state) is False
 
 
-def test_failed_review_gets_at_most_two_bounded_revisions():
-    from agent.graph import _route_after_review, _route_after_revision
+def test_failed_review_gets_at_most_three_bounded_revisions():
+    from agent.graph import _repair_attempt_summary, _route_after_review, _route_after_revision
+
+    assert _repair_attempt_summary(0) == "before a focused repair could complete"
+    assert _repair_attempt_summary(1) == "after 1 focused repair"
+    assert _repair_attempt_summary(3) == "after 3 focused repairs"
 
     failed = {
         "graph_changed": True,
@@ -49,7 +54,8 @@ def test_failed_review_gets_at_most_two_bounded_revisions():
 
     assert _route_after_review({**failed, "graph_revision_count": 0}) == "revise"
     assert _route_after_review({**failed, "graph_revision_count": 1}) == "revise"
-    assert _route_after_review({**failed, "graph_revision_count": 2}) == "reject"
+    assert _route_after_review({**failed, "graph_revision_count": 2}) == "revise"
+    assert _route_after_review({**failed, "graph_revision_count": 3}) == "reject"
     assert _route_after_review({
         **failed,
         "graph_revision_count": 0,
@@ -59,8 +65,70 @@ def test_failed_review_gets_at_most_two_bounded_revisions():
     assert _route_after_revision({**failed, "graph_changed": False}) == "reject"
 
 
+def test_patch_admission_uses_available_time_after_following_reserve():
+    from agent.deadlines import StageAdmissionDenied, patch_timeout_seconds
+    from config import settings
+
+    following_reserve_s = (
+        settings.graph_critic_revision_timeout_s
+        + settings.graph_synthesis_timeout_s
+        + settings.graph_finalization_reserve_s
+    )
+    with pytest.raises(StageAdmissionDenied):
+        patch_timeout_seconds({
+            "terminal_deadline_s": time.monotonic() + following_reserve_s - 1,
+        })
+
+    timeout_s = patch_timeout_seconds({
+        "terminal_deadline_s": time.monotonic() + following_reserve_s + 10,
+    })
+    assert 0 < timeout_s <= 10
+
+    full_timeout_s = patch_timeout_seconds({
+        "terminal_deadline_s": (
+            time.monotonic()
+            + following_reserve_s
+            + settings.graph_patch_timeout_s
+            + 5
+        ),
+    })
+    assert full_timeout_s == settings.graph_patch_timeout_s
+
+
+def test_one_repair_path_stage_caps_fit_terminal_window():
+    from config import settings
+
+    stage_caps_s = (
+        settings.graph_design_timeout_s
+        + settings.graph_critic_initial_timeout_s
+        + settings.graph_patch_timeout_s
+        + settings.graph_critic_revision_timeout_s
+        + settings.graph_synthesis_timeout_s
+        + settings.graph_finalization_reserve_s
+    )
+    terminal_window_s = settings.agent_timeout_s - settings.agent_terminal_headroom_s
+
+    assert stage_caps_s <= terminal_window_s
+
+
+def test_rejected_candidate_restores_immutable_approved_graph_baseline():
+    from agent.graph import _restore_approved_graph_state
+
+    approved = {"title": "Approved", "nodes": [], "edges": [], "sequence": []}
+    rejected = {"title": "Rejected", "nodes": [], "edges": [], "sequence": []}
+    restored = _restore_approved_graph_state({
+        "approved_graph_data": approved,
+        "graph_data": rejected,
+        "graph_changed": True,
+    })
+
+    assert restored["graph_data"] == approved
+    assert restored["graph_data"] is not approved
+    assert restored["graph_changed"] is False
+
+
 @pytest.mark.asyncio
-async def test_langgraph_can_verify_two_bounded_repairs_then_publish(monkeypatch):
+async def test_langgraph_can_verify_three_bounded_repairs_then_publish(monkeypatch):
     import asyncio
     import agent.graph as agent_graph
 
@@ -82,6 +150,7 @@ async def test_langgraph_can_verify_two_bounded_repairs_then_publish(monkeypatch
     async def fake_apply(state, _tools):
         assert state["architect_plan"]["interpretation"] == "growth system"
         assert state["challenger_review"] == {"risks": []}
+        assert state["_graph_stage_deadline_s"] > time.monotonic()
         revision_count = state.get("graph_revision_count", 0)
         return {
             **state,
@@ -120,8 +189,9 @@ async def test_langgraph_can_verify_two_bounded_repairs_then_publish(monkeypatch
         return state
 
     async def fake_review(state):
+        assert state["_graph_stage_deadline_s"] > time.monotonic()
         reviews.append(state["graph_data"]["title"])
-        if state.get("graph_revision_count") == 2:
+        if state.get("graph_revision_count") == 3:
             return {
                 **state,
                 "graph_review": {"approved": True, "score": 0.9, "missing": []},
@@ -154,11 +224,20 @@ async def test_langgraph_can_verify_two_bounded_repairs_then_publish(monkeypatch
 
     result = await agent_graph.run_agent(_state(send), [], [], [])
 
-    assert reviews == ["First draft", "Repair 1", "Repair 2"]
-    assert result["graph_revision_count"] == 2
-    assert result["graph_data"]["title"] == "Repair 2"
+    assert reviews == ["First draft", "Repair 1", "Repair 2", "Repair 3"]
+    assert result["graph_revision_count"] == 3
+    assert result["graph_data"]["title"] == "Repair 3"
     assert result["graph_notice_sent"] is False
     assert result["response_text"] == "reviewed answer"
     assert set(role_order) == {"architect", "challenger"}
-    assert any(event.get("phase") == "revise" and event.get("status") == "retry" for event in events)
+    repair_events = [
+        event
+        for event in events
+        if event.get("phase") == "revise" and event.get("status") == "retry"
+    ]
+    assert [event["detail"].split(",", 1)[0] for event in repair_events] == [
+        "Applying bounded clarity repair 1 of 3",
+        "Applying bounded clarity repair 2 of 3",
+        "Applying bounded clarity repair 3 of 3",
+    ]
     assert not any(event.get("type") == "graph_notice" for event in events)

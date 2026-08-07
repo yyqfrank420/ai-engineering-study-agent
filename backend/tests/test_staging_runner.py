@@ -247,6 +247,22 @@ def test_pr_live_eval_is_globally_serial_and_reports_manual_review():
     assert "--require-approved-corpus" in workflow
     assert "--manual-review-policy report-only" in workflow
     assert "environment: staging-eval" in workflow
+    assert "resolve-approved-tree:" in workflow
+    assert 'needs: [classify, resolve-approved-tree]' in workflow
+    assert 'needs.resolve-approved-tree.outputs.approved == \'false\'' in workflow
+    assert 'needs.resolve-approved-tree.outputs.approved }}' in workflow
+    assert 'gcloud artifacts docker tags list "$IMAGE"' in workflow
+    assert '--filter="tag=\\"$approval_tag\\""' in workflow
+    assert 'if [ -z "$matches" ]; then' in workflow
+    assert 'if [ "${#versions[@]}" -ne 1 ]; then' in workflow
+    assert '[[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]' in workflow
+    assert 'if [ "$APPROVAL_RESULT" != success ]; then' in workflow
+    assert 'if [ "$TREE_APPROVED" = true ]; then' in workflow
+    assert 'if [ "$EVAL_RESULT" != skipped ]; then' in workflow
+    assert 'if [ "$TREE_APPROVED" != false ]; then' in workflow
+    assert workflow.index("Upload evaluation evidence") < workflow.index(
+        "Enforce evaluation result"
+    ) < workflow.index("Publish exact-tree approval tag")
 
 
 def test_scheduled_eval_reports_manual_review_without_masking_hard_failures():

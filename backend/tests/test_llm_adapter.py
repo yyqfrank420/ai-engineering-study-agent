@@ -1,6 +1,8 @@
 import pytest
 import sys
 import hashlib
+import asyncio
+import json
 from types import SimpleNamespace
 
 from config import Settings, settings
@@ -171,12 +173,15 @@ def test_opus_5_is_an_adaptive_effort_model():
     assert _uses_adaptive_effort("claude-opus-5") is True
 
 
-def test_application_model_roles_default_to_opus_5():
+def test_application_model_roles_default_to_calibrated_models():
+    import adapters.llm_adapter as llm
+
     configured = Settings(_env_file=None)
 
     assert configured.orchestrator_model == "claude-opus-5"
     assert configured.worker_model == "claude-opus-5"
-    assert configured.graph_repair_model == "claude-opus-5"
+    assert configured.graph_repair_model == "claude-sonnet-5"
+    assert configured.graph_repair_model not in llm._FALLBACK_MODELS
     assert configured.anthropic_max_concurrent_streams == 4
 
 
@@ -384,6 +389,7 @@ async def test_stream_response_falls_back_to_openai_after_anthropic_exhaustion(m
     import adapters.llm_adapter as llm
 
     monkeypatch.setattr(settings, "llm_max_retries", 1)
+    monkeypatch.setattr(settings, "llm_max_tokens", 400)
     monkeypatch.setattr(llm, "_FALLBACK_MODELS", {"anthropic-model": "openai-model"})
     monkeypatch.setattr(llm, "_get_openai_client", lambda: object())
     telemetry_records, _metric_records = _patch_llm_telemetry(monkeypatch)
@@ -409,11 +415,12 @@ async def test_stream_response_falls_back_to_openai_after_anthropic_exhaustion(m
             [{"role": "user", "content": "hi"}],
             temperature=0.4,
             top_p=0.9,
+            max_output_tokens=321,
         )
     )
 
     assert events == [("provider_switch", "openai"), ("text", "fallback"), ("done", "")]
-    assert openai_calls == [("openai-model", "system", [{"role": "user", "content": "hi"}], None, 0.4, 0.9)]
+    assert openai_calls == [("openai-model", "system", [{"role": "user", "content": "hi"}], None, 0.4, 0.9, 321)]
     assert telemetry_records[-1]["provider"] == "openai"
     assert telemetry_records[-1]["used_fallback"] is True
 
@@ -547,3 +554,372 @@ async def test_stream_response_records_openai_fallback_error(monkeypatch):
 
     assert telemetry_records[-1]["provider"] == "openai"
     assert telemetry_records[-1]["status"] == "error"
+
+
+def test_stream_response_compat_filters_max_output_tokens():
+    from adapters.llm_adapter import stream_response_compat
+
+    def legacy(model):
+        return {"model": model}
+
+    def current(model, max_output_tokens=None):
+        return {"model": model, "max_output_tokens": max_output_tokens}
+
+    assert stream_response_compat(
+        legacy, model="claude", max_output_tokens=123
+    ) == {"model": "claude"}
+    assert stream_response_compat(
+        current, model="claude", max_output_tokens=123
+    ) == {"model": "claude", "max_output_tokens": 123}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_structured_output_merges_schema_effort_and_metadata(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    monkeypatch.setattr(settings, "llm_max_retries", 1)
+    _patch_llm_telemetry(monkeypatch)
+    calls = []
+
+    async def fake_anthropic_stream_once(kwargs):
+        calls.append(kwargs)
+        yield SimpleNamespace(
+            type="message_start",
+            message=SimpleNamespace(usage=SimpleNamespace(input_tokens=12)),
+        )
+        yield _Event("content_block_delta", _Delta("text_delta", text='{"ok":true}'))
+        yield SimpleNamespace(
+            type="message_delta",
+            delta=SimpleNamespace(stop_reason="end_turn"),
+            usage=SimpleNamespace(output_tokens=5),
+        )
+
+    monkeypatch.setattr(llm, "_anthropic_stream_once", fake_anthropic_stream_once)
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["ok"],
+        "properties": {
+            "ok": {"type": "boolean"},
+            "items": {"type": "array", "minItems": 1, "maxItems": 2},
+        },
+    }
+
+    events = await _collect(llm.stream_response(
+        "claude-sonnet-5",
+        "system",
+        [],
+        effort="low",
+        response_schema=schema,
+        allow_fallback=False,
+    ))
+
+    output_config = calls[0]["output_config"]
+    assert output_config["effort"] == "low"
+    assert output_config["format"]["type"] == "json_schema"
+    assert "minItems" not in json.dumps(output_config["format"]["schema"])
+    assert "maxItems" not in json.dumps(output_config["format"]["schema"])
+    assert events[0] == ("text", '{"ok":true}')
+    metadata = json.loads(events[1][1])
+    assert metadata == {
+        "finish_reason": "end_turn",
+        "input_tokens": 12,
+        "output_tokens": 5,
+        "provider": "anthropic",
+        "model": "claude-sonnet-5",
+    }
+    assert events[2] == ("done", "")
+
+
+@pytest.mark.asyncio
+async def test_anthropic_output_cap_is_positive_and_clamped(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    monkeypatch.setattr(settings, "llm_max_retries", 1)
+    monkeypatch.setattr(settings, "llm_max_tokens", 100)
+    _patch_llm_telemetry(monkeypatch)
+    calls = []
+
+    async def fake_anthropic_stream_once(kwargs):
+        calls.append(kwargs)
+        if False:
+            yield
+
+    monkeypatch.setattr(llm, "_anthropic_stream_once", fake_anthropic_stream_once)
+
+    assert await _collect(
+        llm.stream_response(
+            "claude-test", "system", [], max_output_tokens=250
+        )
+    ) == [("done", "")]
+    assert calls[0]["max_tokens"] == 100
+
+    with pytest.raises(ValueError, match="max_output_tokens must be positive"):
+        await _collect(
+            llm.stream_response(
+                "claude-test", "system", [], max_output_tokens=0
+            )
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gpt-5.4", "o3"])
+async def test_explicit_openai_model_routes_directly_with_clamped_cap(
+    monkeypatch, model
+):
+    import adapters.llm_adapter as llm
+
+    monkeypatch.setattr(settings, "llm_max_tokens", 100)
+    _patch_llm_telemetry(monkeypatch)
+    calls = []
+    anthropic_calls = 0
+
+    class _ChoiceDelta:
+        content = "direct"
+
+    class _Choice:
+        delta = _ChoiceDelta()
+
+    class _Chunk:
+        usage = None
+        choices = [_Choice()]
+
+    class _Completions:
+        async def create(self, **kwargs):
+            calls.append(kwargs)
+
+            async def stream():
+                yield _Chunk()
+
+            return stream()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+    async def forbidden_anthropic(_kwargs):
+        nonlocal anthropic_calls
+        anthropic_calls += 1
+        if False:
+            yield
+
+    monkeypatch.setattr(llm, "_get_openai_client", lambda: _Client())
+    monkeypatch.setattr(llm, "_anthropic_stream_once", forbidden_anthropic)
+
+    events = await _collect(
+        llm.stream_response(model, "system", [], max_output_tokens=250)
+    )
+
+    assert events == [("text", "direct"), ("done", "")]
+    assert anthropic_calls == 0
+    assert calls[0]["model"] == model
+    assert calls[0]["max_completion_tokens"] == 100
+    assert "max_tokens" not in calls[0]
+
+
+@pytest.mark.asyncio
+async def test_stream_llm_timeout_closes_complete_provider_chain(monkeypatch):
+    import agent.stream_utils as stream_utils
+
+    closed = False
+
+    async def blocked_provider_chain(**_kwargs):
+        nonlocal closed
+        try:
+            yield ("text", "partial")
+            await asyncio.Event().wait()
+        finally:
+            closed = True
+
+    monkeypatch.setattr(stream_utils, "stream_response", blocked_provider_chain)
+
+    with pytest.raises(TimeoutError):
+        await stream_utils.stream_llm(
+            model="claude-test",
+            system="system",
+            messages=[],
+            temperature=0.0,
+            timeout_seconds=0.01,
+        )
+    assert closed is True
+
+
+@pytest.mark.asyncio
+async def test_stream_llm_external_cancellation_stays_cancelled(monkeypatch):
+    import agent.stream_utils as stream_utils
+
+    started = asyncio.Event()
+    closed = False
+
+    async def blocked_provider_chain(**_kwargs):
+        nonlocal closed
+        try:
+            started.set()
+            await asyncio.Event().wait()
+            yield ("done", "")
+        finally:
+            closed = True
+
+    monkeypatch.setattr(stream_utils, "stream_response", blocked_provider_chain)
+    task = asyncio.create_task(
+        stream_utils.stream_llm(
+            model="claude-test",
+            system="system",
+            messages=[],
+            temperature=0.0,
+            timeout_seconds=60,
+        )
+    )
+    await started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert closed is True
+
+
+@pytest.mark.asyncio
+async def test_stream_llm_translates_provider_events_without_network_calls(monkeypatch):
+    import agent.stream_utils as stream_utils
+
+    observed = {}
+
+    async def fake_stream_response(**kwargs):
+        observed.update(kwargs)
+        yield "provider_switch", "openai"
+        yield "thinking", "checking evidence"
+        yield "text", "Grounded "
+        yield "text", "answer"
+
+    sent = []
+
+    async def send(event):
+        sent.append(event)
+
+    monkeypatch.setattr(stream_utils, "stream_response", fake_stream_response)
+
+    result = await stream_utils.stream_llm(
+        model="test-model",
+        system="system boundary",
+        messages=[{"role": "user", "content": "question"}],
+        temperature=0,
+        send=send,
+        stream_deltas=True,
+        stream_thinking=True,
+        max_output_tokens=500,
+    )
+
+    assert result == "Grounded answer"
+    assert sent == [
+        {"type": "provider_switch", "provider": "openai"},
+        {"type": "thinking_delta", "content": "checking evidence"},
+        {"type": "response_delta", "content": "Grounded "},
+        {"type": "response_delta", "content": "answer"},
+    ]
+    assert observed["model"] == "test-model"
+    assert observed["max_output_tokens"] == 500
+    assert "system boundary" in observed["system"]
+
+
+@pytest.mark.asyncio
+async def test_stream_structured_llm_collects_text_and_usage_metadata(monkeypatch):
+    import agent.stream_utils as stream_utils
+
+    async def fake_stream_response(**_kwargs):
+        yield "text", '{"answer":'
+        yield "response_metadata", "[]"
+        yield "response_metadata", json.dumps({
+            "finish_reason": "end_turn",
+            "input_tokens": 42,
+            "output_tokens": 17,
+            "provider": "anthropic",
+            "model": "claude-test",
+        })
+        yield "text", '"ok"}'
+
+    monkeypatch.setattr(stream_utils, "stream_response", fake_stream_response)
+
+    response = await stream_utils.stream_structured_llm(
+        model="configured-model",
+        system="structured boundary",
+        messages=[{"role": "user", "content": "question"}],
+        response_schema={"type": "object"},
+        temperature=0,
+        effort="low",
+    )
+
+    assert response.text == '{"answer":"ok"}'
+    assert response.finish_reason == "end_turn"
+    assert response.input_tokens == 42
+    assert response.output_tokens == 17
+    assert response.provider == "anthropic"
+    assert response.model == "claude-test"
+
+
+@pytest.mark.asyncio
+async def test_stream_helpers_reject_non_positive_timeouts():
+    import agent.stream_utils as stream_utils
+
+    with pytest.raises(ValueError, match="timeout_seconds must be positive"):
+        await stream_utils.stream_llm(
+            model="test-model",
+            system="system",
+            messages=[],
+            temperature=0,
+            timeout_seconds=0,
+        )
+    with pytest.raises(ValueError, match="timeout_seconds must be positive"):
+        await stream_utils.stream_structured_llm(
+            model="test-model",
+            system="system",
+            messages=[],
+            response_schema={"type": "object"},
+            temperature=0,
+            effort="low",
+            timeout_seconds=-1,
+        )
+@pytest.mark.asyncio
+async def test_openai_stream_closes_sdk_stream_after_consumption(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    class _Chunk:
+        usage = None
+        choices = []
+
+    class _Stream:
+        def __init__(self):
+            self.sent = False
+            self.closed = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self.sent:
+                raise StopAsyncIteration
+            self.sent = True
+            return _Chunk()
+
+        async def aclose(self):
+            self.closed = True
+
+    sdk_stream = _Stream()
+
+    class _Completions:
+        async def create(self, **_kwargs):
+            return sdk_stream
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+    monkeypatch.setattr(llm, "_get_openai_client", lambda: _Client())
+
+    assert await _collect(llm._openai_stream("gpt", "system", [])) == [
+        ("done", "")
+    ]
+    assert sdk_stream.closed is True

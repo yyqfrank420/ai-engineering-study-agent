@@ -8,6 +8,121 @@ from agent.complexity import resolve_complexity
 from agent.nodes import graph_worker
 
 
+def test_patch_accepts_multiple_operations_when_final_graph_remains_bounded():
+    graph = _domain_graph(5)
+    patch = {
+        "update_nodes": [
+            {
+                "id": node["id"],
+                "set": {"description": f"Keeps bounded responsibility {index}."},
+            }
+            for index, node in enumerate(graph["nodes"])
+        ],
+        "update_edges": [
+            {
+                "edge_id": f"edge_{index}",
+                "set": {"description": f"Keeps bounded transition {index}."},
+            }
+            for index, _edge in enumerate(graph["edges"], start=1)
+        ],
+    }
+
+    result = graph_worker._apply_applied_graph_patch(
+        graph,
+        patch,
+        min_nodes=5,
+        max_nodes=7,
+        resolved_complexity="prototype",
+    )
+
+    assert len(result["nodes"]) == 5
+    assert len(result["edges"]) == 5
+
+
+def test_graph_design_json_failure_is_classified_as_truncated():
+    exc = json.JSONDecodeError("Unterminated string", "{", 1)
+
+    assert graph_worker._graph_design_failure_code(exc) == "graph_design_output_truncated"
+
+
+def test_graph_timeouts_and_invalid_patches_have_distinct_failure_codes():
+    assert graph_worker._graph_design_failure_code(
+        TimeoutError("deadline exhausted")
+    ) == "graph_design_timeout"
+    assert graph_worker._graph_patch_failure_code(
+        TimeoutError("deadline exhausted")
+    ) == "graph_patch_timeout_preserved_existing_graph"
+    assert graph_worker._graph_patch_failure_code(
+        ValueError("unknown graph patch field")
+    ) == "graph_patch_invalid_preserved_existing_graph"
+
+
+def test_repair_feedback_is_focused_without_weakening_the_next_gate():
+    review = {
+        "approved": False,
+        "missing": ["first blocker", "second blocker", "residual blocker"],
+        "revision_instruction": "repair everything",
+    }
+
+    focused = graph_worker._focused_repair_review(review)
+
+    assert focused["missing"] == ["first blocker", "second blocker"]
+    assert focused["revision_instruction"] == "first blocker second blocker"
+    assert review["missing"][-1] == "residual blocker"
+
+
+def test_compact_design_contract_prioritises_material_topology():
+    contract = graph_worker._compact_design_contract()
+
+    assert "prefer 9 nodes" in contract
+    assert "branch/rejoin" in contract
+    assert "untrusted-data boundary" in contract
+    assert "approval/rejection route" in contract
+    assert "accepted-only cache write" in contract
+
+
+def test_patch_topology_context_includes_mutable_fields_and_omits_graph_metadata():
+    context = json.loads(graph_worker._format_patch_topology({
+        "title": "Bounded graph",
+        "assumptions": ["not needed by the patch model"],
+        "groups": [{"id": "runtime"}],
+        "nodes": [{
+            "id": "gate",
+            "label": "Approval Gate",
+            "type": "decision",
+            "description": "Routes approved and rejected outcomes.",
+            "technology": "Policy rules engine",
+            "tier": "private",
+            "lane": "main",
+        }],
+        "edges": [{
+            "source": "gate",
+            "target": "ledger",
+            "label": "persist rejection",
+            "flow": "control",
+            "sync": "async",
+            "type": "loop",
+            "description": "Durable terminal outcome.",
+            "technology": "Signed decision record",
+        }],
+    }))
+
+    assert set(context) == {"title", "nodes", "edges"}
+    assert set(context["nodes"][0]) == {
+        "id", *graph_worker._PATCH_NODE_MUTABLE_FIELDS,
+    }
+    assert set(context["edges"][0]) == {
+        "edge_id", *graph_worker._PATCH_EDGE_MUTABLE_FIELDS,
+    }
+    assert context["nodes"][0]["technology"] == "Policy rules engine"
+    assert context["nodes"][0]["description"] == (
+        "Routes approved and rejected outcomes."
+    )
+    assert context["edges"][0]["technology"] == "Signed decision record"
+    assert context["edges"][0]["description"] == "Durable terminal outcome."
+    assert context["edges"][0]["edge_id"] == "edge_1"
+
+
 def _domain_graph(node_count: int, *, production: bool = False) -> dict:
     nodes = [
         {
@@ -237,7 +352,6 @@ def test_cache_node_patch_preserves_unrelated_production_graph_out_of_sample():
 def test_patch_updates_nodes_and_edges_and_removes_only_selected_edge():
     existing = _domain_graph(5)
     removed_edge = existing["edges"][-1]
-    updated_edge = existing["edges"][1]
     patch = {
         "update_nodes": [
             {
@@ -250,24 +364,14 @@ def test_patch_updates_nodes_and_edges_and_removes_only_selected_edge():
         ],
         "update_edges": [
             {
-                "match": {
-                    "source": updated_edge["source"],
-                    "target": updated_edge["target"],
-                    "label": updated_edge["label"],
-                },
+                "edge_id": "edge_2",
                 "set": {
                     "label": "passes customs-ready parcel state",
                     "technology": "Signed customs envelope",
                 },
             }
         ],
-        "remove_edges": [
-            {
-                "source": removed_edge["source"],
-                "target": removed_edge["target"],
-                "label": removed_edge["label"],
-            }
-        ],
+        "remove_edges": ["edge_5"],
     }
 
     result = graph_worker._apply_applied_graph_patch(
@@ -293,47 +397,45 @@ def test_patch_updates_nodes_and_edges_and_removes_only_selected_edge():
     )
 
 
-def test_patch_selector_accepts_copied_known_edge_metadata():
+def test_patch_edge_id_selects_one_of_two_parallel_edges():
     existing = _domain_graph(5)
-    removed_edge = existing["edges"][-1]
+    first = existing["edges"][0]
+    existing["edges"].append({
+        **copy.deepcopy(first),
+        "label": "distinct route over the same node pair",
+    })
 
     result = graph_worker._apply_applied_graph_patch(
         existing,
-        {"remove_edges": [{
-            key: removed_edge.get(key)
-            for key in graph_worker._PATCH_EDGE_FIELDS
-        }]},
+        {"remove_edges": ["edge_6"]},
         min_nodes=5,
         max_nodes=7,
         resolved_complexity="prototype",
     )
 
     assert len(result["edges"]) == len(existing["edges"]) - 1
+    assert first in result["edges"]
     assert not any(
-        edge["source"] == removed_edge["source"]
-        and edge["target"] == removed_edge["target"]
-        and edge["label"] == removed_edge["label"]
+        edge["label"] == "distinct route over the same node pair"
+        for edge in result["edges"]
+    )
+    assert all(
+        str(edge.get("edge_id") or "").startswith("applied:")
         for edge in result["edges"]
     )
 
 
-def test_patch_selector_accepts_unambiguous_match_wrapper():
+def test_patch_rejects_unknown_edge_id():
     existing = _domain_graph(5)
-    removed_edge = existing["edges"][-1]
 
-    result = graph_worker._apply_applied_graph_patch(
-        existing,
-        {"remove_edges": [{"match": {
-            "source": removed_edge["source"],
-            "target": removed_edge["target"],
-            "label": removed_edge["label"],
-        }}]},
-        min_nodes=5,
-        max_nodes=7,
-        resolved_complexity="prototype",
-    )
-
-    assert len(result["edges"]) == len(existing["edges"]) - 1
+    with pytest.raises(ValueError, match="cannot remove unknown edge"):
+        graph_worker._apply_applied_graph_patch(
+            existing,
+            {"remove_edges": ["edge_99"]},
+            min_nodes=5,
+            max_nodes=7,
+            resolved_complexity="prototype",
+        )
 
 
 def test_patch_ignores_top_level_null_optional_fields():
@@ -405,13 +507,9 @@ def test_invalid_patch_operations_are_rejected_without_mutation(patch, error):
 
 def test_patch_cannot_replace_most_of_an_approved_graph():
     existing = _domain_graph(5)
-    incident_edges = [
-        {
-            "source": edge["source"],
-            "target": edge["target"],
-            "label": edge["label"],
-        }
-        for edge in existing["edges"]
+    incident_edge_ids = [
+        graph_worker._patch_edge_id(index)
+        for index, edge in enumerate(existing["edges"])
         if edge["source"] in {"fulfilment_stage_2", "fulfilment_stage_3", "fulfilment_stage_4"}
         or edge["target"] in {"fulfilment_stage_2", "fulfilment_stage_3", "fulfilment_stage_4"}
     ]
@@ -425,7 +523,7 @@ def test_patch_cannot_replace_most_of_an_approved_graph():
                     "fulfilment_stage_3",
                     "fulfilment_stage_4",
                 ],
-                "remove_edges": incident_edges,
+                "remove_edges": incident_edge_ids,
             },
             min_nodes=2,
             max_nodes=7,
@@ -496,11 +594,7 @@ def test_at_cap_patch_updates_an_edge_in_place_instead_of_disappearing():
         existing,
         {
             "update_edges": [{
-                "match": {
-                    "source": target["source"],
-                    "target": target["target"],
-                    "label": target["label"],
-                },
+                "edge_id": "edge_1",
                 "set": {"flow": "feedback", "type": "loop"},
             }]
         },
@@ -630,208 +724,6 @@ def test_graph_parser_preserves_combined_deployment_edge_for_critic_repair():
     assert normalised["edges"][0]["technology"] == "Canary/promoted deployment"
 
 
-def _release_graph_for_completion():
-    graph = _domain_graph(9, production=True)
-    graph["nodes"][5].update({"label": "Release Controller", "type": "control"})
-    graph["nodes"][6].update({"label": "Campaign Runtime", "type": "service"})
-    graph["nodes"][7].update({"label": "Event Definition Registry", "type": "datastore"})
-    graph["edges"].extend([
-        {
-            "source": "fulfilment_stage_5",
-            "target": "fulfilment_stage_6",
-            "label": "deploy canary release",
-            "technology": "Immutable release manifest",
-            "sync": "async",
-            "flow": "deployment",
-            "description": "Activates the evaluated release in a bounded canary lane.",
-        },
-        {
-            "source": "fulfilment_stage_5",
-            "target": "fulfilment_stage_6",
-            "label": "promote full production release",
-            "technology": "Reviewed release decision",
-            "sync": "async",
-            "flow": "deployment",
-            "description": "Activates the canary-approved immutable release for all traffic.",
-        },
-        {
-            "source": "fulfilment_stage_7",
-            "target": "fulfilment_stage_5",
-            "label": "supply immutable evaluated release",
-            "technology": "Versioned release manifest",
-            "sync": "async",
-            "flow": "deployment",
-            "description": "Supplies the release controller with one immutable evaluated version.",
-        },
-    ])
-    return graph_worker._normalise_applied_graph(
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-
-def test_deterministic_completion_adds_only_missing_release_rollback():
-    graph = _release_graph_for_completion()
-
-    completed = graph_worker._complete_missing_release_rollback(
-        "Design a production model release workflow",
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-    assert completed is not None
-    assert len(completed["edges"]) == len(graph["edges"]) + 1
-    assert any(
-        edge["label"] == "rollback to prior approved release"
-        and edge["source"] == "fulfilment_stage_5"
-        and edge["target"] == "fulfilment_stage_7"
-        and edge["flow"] == "deployment"
-        for edge in completed["edges"]
-    )
-    graph_worker._validate_applied_architecture_patch(
-        "Design a production model release workflow",
-        completed,
-        "production",
-    )
-
-
-def test_deterministic_completion_allows_service_owner_without_registry():
-    graph = _release_graph_for_completion()
-    graph["nodes"][5].update({"label": "Evaluation Release Ops", "type": "service"})
-    graph["nodes"][7]["label"] = "Evaluated Release Archive"
-
-    completed = graph_worker._complete_missing_release_rollback(
-        "Design a production model release workflow",
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-    assert completed is not None
-    assert any(
-        edge["label"] == "rollback to prior approved release"
-        and edge["source"] == "fulfilment_stage_5"
-        and edge["target"] == "fulfilment_stage_6"
-        for edge in completed["edges"]
-    )
-
-
-def test_deterministic_completion_does_not_hide_other_review_failures():
-    graph = _domain_graph(9, production=True)
-
-    completed = graph_worker._complete_missing_release_rollback(
-        "Design a production model release workflow",
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-    assert completed is None
-
-
-def test_deterministic_completion_fails_closed_at_edge_budget():
-    graph = _release_graph_for_completion()
-    while len(graph["edges"]) < graph_worker._edge_budget(9):
-        index = len(graph["edges"])
-        graph["edges"].append({
-            "source": f"fulfilment_stage_{index % 9}",
-            "target": f"fulfilment_stage_{(index + 2) % 9}",
-            "label": f"carry bounded release evidence {index}",
-            "technology": "Typed release evidence",
-            "sync": "async",
-            "flow": "control",
-            "description": "Carries one bounded release observation to its review owner.",
-        })
-    graph = graph_worker._normalise_applied_graph(
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-    completed = graph_worker._complete_missing_release_rollback(
-        "Design a production model release workflow",
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-    assert completed is None
-
-
-@pytest.mark.parametrize("failure_mode", ["ambiguous_promotion", "non_deployment"])
-def test_deterministic_completion_requires_unique_typed_release_topology(failure_mode):
-    graph = _release_graph_for_completion()
-    promotion = next(
-        edge for edge in graph["edges"] if edge["label"] == "promote full production release"
-    )
-    if failure_mode == "ambiguous_promotion":
-        graph["edges"].append({
-            **promotion,
-            "label": "promote full production event definitions",
-        })
-    else:
-        promotion["flow"] = "control"
-    graph = graph_worker._normalise_applied_graph(
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-    completed = graph_worker._complete_missing_release_rollback(
-        "Design a production model release workflow",
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-    assert completed is None
-
-
-@pytest.mark.parametrize("failure_mode", ["ambiguous_owner", "different_targets"])
-def test_deterministic_completion_requires_one_owner_and_shared_target(failure_mode):
-    graph = _release_graph_for_completion()
-    promotion = next(
-        edge for edge in graph["edges"] if edge["label"] == "promote full production release"
-    )
-    if failure_mode == "ambiguous_owner":
-        canary = next(
-            edge for edge in graph["edges"] if edge["label"] == "deploy canary release"
-        )
-        graph["nodes"][4].update({"label": "Secondary Release Ops", "type": "service"})
-        graph["edges"].extend([
-            {**canary, "source": "fulfilment_stage_4"},
-            {**promotion, "source": "fulfilment_stage_4"},
-        ])
-    else:
-        promotion["target"] = "fulfilment_stage_8"
-    graph = graph_worker._normalise_applied_graph(
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-    completed = graph_worker._complete_missing_release_rollback(
-        "Design a production model release workflow",
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-    assert completed is None
-
-
 def test_graph_parser_keeps_independent_control_defects_for_one_critic_review():
     graph = _domain_graph(5)
     graph["edges"][0].update({
@@ -903,6 +795,8 @@ async def test_targeted_existing_graph_followup_uses_incremental_patch_lane(monk
     assert calls[0]["thinking_budget"] is None
     assert calls[0]["effort"] == "medium"
     assert "Source and target must be distinct" in calls[0]["system"]
+    assert "immutable repair-only edge_id" in calls[0]["system"]
+    assert '"remove_edges": ["edge_2"]' in calls[0]["system"]
 
 
 @pytest.mark.asyncio
@@ -947,7 +841,43 @@ async def test_current_production_profile_can_refine_legacy_nine_node_graph(monk
 
 
 @pytest.mark.asyncio
-async def test_invalid_patch_preserves_approved_graph_after_bounded_retry(monkeypatch):
+async def test_invalid_initial_design_fails_closed_without_duplicate_model_call(monkeypatch):
+    calls = []
+
+    async def fake_stream_structured_llm(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(text="not-json", finish_reason="end_turn")
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr(graph_worker, "stream_structured_llm", fake_stream_structured_llm)
+    result = await graph_worker.graph_worker_node(
+        {
+            "send": send,
+            "design_query": "Design an AI marketplace fulfilment system architecture",
+            "user_message": "Design an AI marketplace fulfilment system architecture",
+            "history": [],
+            "graph_data": None,
+            "graph_revision_count": 0,
+            "complexity": "prototype",
+            "research_context": "",
+            "rag_chunks": [],
+            "architect_plan": {},
+            "challenger_review": {},
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        },
+        [],
+    )
+
+    assert result["graph_data"] is None
+    assert len(calls) == 1
+    assert calls[0]["telemetry"]["metadata"]["model_role"] == "structured_topology"
+
+
+@pytest.mark.asyncio
+async def test_invalid_patch_preserves_approved_graph_without_duplicate_model_call(monkeypatch):
     existing = _domain_graph(5)
     approved = copy.deepcopy(existing)
     calls = []
@@ -986,11 +916,18 @@ async def test_invalid_patch_preserves_approved_graph_after_bounded_retry(monkey
 
     assert result == approved
     assert existing == approved
-    assert len(calls) == 2
-    assert calls[0]["model"] == graph_worker.settings.orchestrator_model
+    assert result is not existing
+    assert len(calls) == 1
+    assert calls[0]["model"] == graph_worker.settings.graph_repair_model
+    assert calls[0]["timeout_seconds"] == graph_worker.settings.graph_patch_timeout_s
+    assert (
+        calls[0]["max_output_tokens"]
+        == graph_worker.settings.graph_patch_max_output_tokens
+    )
     assert calls[0]["effort"] == "low"
-    assert calls[1]["effort"] == "medium"
     assert calls[0]["thinking_budget"] is None
+    assert "only the minimal patch" in calls[0]["messages"][0]["content"]
+    assert "at most 8 total operations" not in calls[0]["messages"][0]["content"]
     assert "Never return a replacement graph" in calls[0]["system"]
     assert "map every supplied blocking failure" in calls[0]["system"]
     assert "The approval-only route must explicitly say" in calls[0]["system"]
@@ -1002,32 +939,24 @@ async def test_invalid_patch_preserves_approved_graph_after_bounded_retry(monkey
 
 
 @pytest.mark.asyncio
-async def test_invalid_self_edge_patch_gets_one_validation_informed_retry(monkeypatch):
+async def test_invalid_self_edge_patch_preserves_graph_without_duplicate_model_call(monkeypatch):
     existing = _domain_graph(5)
-    valid_edge = {
-        "source": "fulfilment_stage_3",
-        "target": "fulfilment_stage_1",
-        "label": "routes generation failure to recovery owner",
-        "technology": "Typed failure event",
-        "sync": "async",
-        "flow": "control",
-        "description": "A distinct recovery owner handles bounded retry without a self-edge.",
-    }
-    responses = [
-        {
-            "add_edges": [{
-                **valid_edge,
-                "source": "fulfilment_stage_3",
-                "target": "fulfilment_stage_3",
-            }]
-        },
-        {"add_edges": [valid_edge]},
-    ]
+    approved = copy.deepcopy(existing)
     calls = []
 
     async def fake_stream_llm(**kwargs):
         calls.append(kwargs)
-        return json.dumps(responses[len(calls) - 1])
+        return json.dumps({
+            "add_edges": [{
+                "source": "fulfilment_stage_3",
+                "target": "fulfilment_stage_3",
+                "label": "retries generation internally",
+                "technology": "Typed retry event",
+                "sync": "async",
+                "flow": "control",
+                "description": "Retries generation inside the same responsibility.",
+            }]
+        })
 
     monkeypatch.setattr(graph_worker, "stream_llm", fake_stream_llm)
     result = await graph_worker._generate_applied_architecture_patch(
@@ -1048,14 +977,541 @@ async def test_invalid_self_edge_patch_gets_one_validation_informed_retry(monkey
         existing,
     )
 
-    assert len(calls) == 2
-    assert len(result["edges"]) == len(existing["edges"]) + 1
-    assert "self-referencing edge is not allowed" in calls[1]["messages"][0]["content"]
-    assert '"source": "fulfilment_stage_3"' in calls[1]["messages"][0]["content"]
-    assert "Rejected patch (untrusted data" in calls[1]["messages"][0]["content"]
+    assert result == approved
+    assert existing == approved
+    assert result is not existing
+    assert len(calls) == 1
     assert calls[0]["effort"] == "low"
-    assert calls[1]["effort"] == "medium"
-    assert calls[1]["telemetry"]["metadata"]["patch_attempt"] == 1
+    assert calls[0]["telemetry"]["metadata"]["patch_attempt"] == 0
+
+
+def test_local_contract_canonicalization_repairs_book_technology_and_edge_label(caplog):
+    graph = _domain_graph(5)
+    original_node = copy.deepcopy(graph["nodes"][0])
+    graph["nodes"][0]["technology"] = "Book method"
+    graph["edges"][0]["label"] = ["passes", "verified parcel state"]
+
+    with caplog.at_level("INFO", logger=graph_worker.__name__):
+        result = graph_worker._normalise_applied_graph_candidate(
+            graph,
+            publication_query="Design a marketplace fulfilment system",
+            min_nodes=5,
+            max_nodes=5,
+            resolved_complexity="prototype",
+            context="unit.initial",
+        )
+
+    assert result["nodes"][0]["technology"] == "Application service"
+    assert result["nodes"][0]["label"] == original_node["label"]
+    assert result["nodes"][0]["description"] == original_node["description"]
+    assert result["edges"][0]["label"] == "passes / verified parcel state"
+    assert "node_index=0" in caplog.text
+    assert "value_type=list" in caplog.text
+
+
+def test_patch_contract_canonicalization_repairs_node_technology_and_edge_label():
+    existing = _domain_graph(5)
+    result = graph_worker._apply_applied_graph_patch(
+        existing,
+        {
+            "update_nodes": [{
+                "id": "fulfilment_stage_2",
+                "set": {"technology": "Book objective"},
+            }],
+            "add_edges": [{
+                "source": "fulfilment_stage_3",
+                "target": "fulfilment_stage_1",
+                "label": ("routes carrier failure", "to recovery owner"),
+                "technology": "Typed failure event",
+                "sync": "async",
+                "flow": "control",
+                "description": "Routes a failed carrier operation to its distinct recovery owner.",
+            }],
+        },
+        min_nodes=5,
+        max_nodes=7,
+        resolved_complexity="prototype",
+    )
+
+    repaired_node = next(node for node in result["nodes"] if node["id"] == "fulfilment_stage_2")
+    assert repaired_node["technology"] == "Application service"
+    assert result["edges"][-1]["label"] == "routes carrier failure / to recovery owner"
+
+
+@pytest.mark.parametrize(
+    ("label", "expected", "action"),
+    [
+        (
+            "  routes  verified\nparcel\tstate  ",
+            "routes verified parcel state",
+            "normalize_whitespace",
+        ),
+        (
+            "routes verified parcel state to recovery owner after deterministic policy, "
+            "approval before execution with durable audit attribution",
+            "routes verified parcel state to recovery owner after deterministic policy, "
+            "approval before execution",
+            "truncate_word_boundary",
+        ),
+    ],
+)
+def test_string_edge_label_canonicalization_is_bounded_and_content_free(
+    label,
+    expected,
+    action,
+    caplog,
+):
+    graph = _domain_graph(5)
+    graph["edges"][0]["label"] = label
+
+    with caplog.at_level("INFO", logger=graph_worker.__name__):
+        result = graph_worker._normalise_applied_graph_candidate(
+            graph,
+            publication_query="Design a marketplace fulfilment system",
+            min_nodes=5,
+            max_nodes=5,
+            resolved_complexity="prototype",
+            context="unit.string-label",
+        )
+
+    assert result["edges"][0]["label"] == expected
+    assert f"original_length={len(label)}" in caplog.text
+    assert f"action={action}" in caplog.text
+    assert label not in caplog.text
+
+
+def test_patch_string_edge_label_canonicalization_changes_only_authored_values():
+    overlong = (
+        "routes verified parcel state to recovery owner after deterministic policy, "
+        "approval before execution with durable audit attribution"
+    )
+    result = graph_worker._canonicalise_applied_graph_patch({
+        "add_edges": [{"label": "  adds  verified route  "}],
+        "update_edges": [{
+            "edge_id": "edge_1",
+            "set": {"label": overlong},
+        }],
+        "remove_edges": ["edge_2"],
+    })
+
+    assert result["add_edges"][0]["label"] == "adds verified route"
+    assert result["update_edges"][0]["edge_id"] == "edge_1"
+    assert result["update_edges"][0]["set"]["label"] == (
+        "routes verified parcel state to recovery owner after deterministic policy, "
+        "approval before execution"
+    )
+    assert result["remove_edges"] == ["edge_2"]
+
+
+def test_blank_update_values_are_omitted_while_other_changes_remain():
+    result = graph_worker._canonicalise_applied_graph_patch({
+        "update_nodes": [{
+            "id": "gate",
+            "set": {"technology": None, "description": "Retains node detail."},
+        }],
+        "update_edges": [{
+            "edge_id": "edge_1",
+            "set": {
+                "label": " \t ",
+                "technology": "",
+                "description": "Retains the authored detail.",
+            },
+        }],
+    })
+
+    assert result["update_nodes"][0]["set"] == {
+        "description": "Retains node detail.",
+    }
+    assert result["update_edges"][0]["set"] == {
+        "description": "Retains the authored detail.",
+    }
+
+
+def test_new_patch_records_use_initial_topology_presentation_defaults():
+    result = graph_worker._canonicalise_applied_graph_patch({
+        "add_nodes": [{
+            "id": "policy_gate",
+            "label": "Policy Gate",
+            "type": "decision",
+            "technology": " ",
+            "description": None,
+        }],
+        "add_edges": [{
+            "source": "policy_gate",
+            "target": "audit_store",
+            "label": "records rejected decision",
+            "technology": "",
+            "description": None,
+            "flow": "feedback",
+        }],
+    })
+
+    assert result["add_nodes"][0]["technology"] == "Auditable decision gate"
+    assert result["add_nodes"][0]["description"] == "Policy Gate"
+    assert result["add_edges"][0]["technology"] == "Versioned feedback event"
+    assert result["add_edges"][0]["description"] == "records rejected decision"
+
+
+def test_patch_applies_new_edge_with_blank_presentation_fields():
+    graph = _domain_graph(5)
+
+    result = graph_worker._apply_applied_graph_patch(
+        graph,
+        {
+            "add_edges": [{
+                "source": "fulfilment_stage_2",
+                "target": "fulfilment_stage_0",
+                "label": "routes rejected parcel to intake",
+                "technology": " ",
+                "sync": "async",
+                "flow": "control",
+                "description": None,
+            }],
+        },
+        min_nodes=5,
+        max_nodes=7,
+        resolved_complexity="prototype",
+    )
+
+    added = next(
+        edge
+        for edge in result["edges"]
+        if edge["label"] == "routes rejected parcel to intake"
+    )
+    assert added["technology"] == "Typed control signal"
+    assert added["description"] == added["label"]
+
+
+def test_blank_update_label_that_empties_set_is_rejected():
+    graph = _domain_graph(5)
+
+    with pytest.raises(ValueError, match="edge update set must be a non-empty object"):
+        graph_worker._apply_applied_graph_patch(
+            graph,
+            {
+                "update_edges": [{
+                    "edge_id": "edge_1",
+                    "set": {"label": " "},
+                }],
+            },
+            min_nodes=5,
+            max_nodes=7,
+            resolved_complexity="prototype",
+        )
+
+
+def test_patch_preserves_existing_labels_at_graph_contract_limit():
+    graph = _domain_graph(5)
+    graph["edges"][0]["label"] = "x" * 100
+
+    result = graph_worker._apply_applied_graph_patch(
+        graph,
+        {
+            "update_nodes": [{
+                "id": "fulfilment_stage_0",
+                "set": {"description": "Owns the bounded marketplace intake."},
+            }],
+        },
+        min_nodes=5,
+        max_nodes=7,
+        resolved_complexity="prototype",
+    )
+
+    assert result["edges"][0]["label"] == "x" * 100
+
+
+@pytest.mark.parametrize("label", [" \t\n "])
+def test_string_edge_label_canonicalization_rejects_unsafe_values(label):
+    graph = _domain_graph(5)
+    graph["edges"][0]["label"] = label
+
+    with pytest.raises(ValueError, match="bounded exact string"):
+        graph_worker._normalise_applied_graph_candidate(
+            graph,
+            publication_query="Design a marketplace fulfilment system",
+            min_nodes=5,
+            max_nodes=5,
+            resolved_complexity="prototype",
+            context="unit.unsafe-string-label",
+        )
+
+
+def test_unbroken_authored_edge_label_uses_deterministic_hard_boundary():
+    result = graph_worker._canonicalise_applied_graph_patch({
+        "add_edges": [{"label": "x" * 101}],
+        "update_edges": [{
+            "edge_id": "edge_1",
+            "set": {"label": "y" * 101},
+        }],
+        "remove_edges": ["edge_2"],
+    })
+
+    assert result["add_edges"][0]["label"] == "x" * 100
+    assert result["update_edges"][0]["edge_id"] == "edge_1"
+    assert result["update_edges"][0]["set"]["label"] == "y" * 100
+    assert result["remove_edges"] == ["edge_2"]
+
+
+@pytest.mark.parametrize("label", [None, " \t "])
+def test_add_edge_missing_or_blank_label_recovers_only_from_description(label):
+    existing = _domain_graph(5)
+    edge = {
+        "source": "fulfilment_stage_3",
+        "target": "fulfilment_stage_1",
+        "technology": "Typed failure event",
+        "sync": "async",
+        "flow": "control",
+        "description": "routes carrier failure to the recovery owner",
+    }
+    if label is not None:
+        edge["label"] = label
+
+    result = graph_worker._apply_applied_graph_patch(
+        existing,
+        {"add_edges": [edge]},
+        min_nodes=5,
+        max_nodes=7,
+        resolved_complexity="prototype",
+    )
+
+    assert result["edges"][-1]["label"] == edge["description"]
+
+
+@pytest.mark.parametrize(
+    "edge",
+    [
+        {"source": "fulfilment_stage_3", "target": "fulfilment_stage_1"},
+        {
+            "source": "fulfilment_stage_3",
+            "target": "fulfilment_stage_1",
+            "label": " ",
+            "description": " \t ",
+        },
+    ],
+)
+def test_add_edge_without_authored_label_or_description_fails_closed(edge):
+    with pytest.raises(ValueError, match="non-empty label or non-empty description"):
+        graph_worker._canonicalise_applied_graph_patch({"add_edges": [edge]})
+
+
+@pytest.mark.parametrize("missing_field", ["source", "target"])
+def test_add_edge_requires_both_endpoints(missing_field):
+    existing = _domain_graph(5)
+    edge = {
+        "source": "fulfilment_stage_3",
+        "target": "fulfilment_stage_1",
+        "label": "routes carrier failure to recovery",
+        "technology": "Typed failure event",
+        "sync": "async",
+        "flow": "control",
+        "description": "Routes carrier failure to its recovery owner.",
+    }
+    edge.pop(missing_field)
+
+    with pytest.raises(ValueError, match="added edge requires source, target, and label"):
+        graph_worker._apply_applied_graph_patch(
+            existing,
+            {"add_edges": [edge]},
+            min_nodes=5,
+            max_nodes=7,
+            resolved_complexity="prototype",
+        )
+
+
+@pytest.mark.parametrize(
+    "invalid_label",
+    [
+        {},
+        42,
+        [],
+        ["valid", ""],
+        ["one", "two", "three", "four", "five"],
+    ],
+)
+def test_local_contract_canonicalization_rejects_other_edge_label_shapes(invalid_label):
+    graph = _domain_graph(5)
+    graph["edges"][0]["label"] = invalid_label
+
+    with pytest.raises(ValueError, match="bounded non-empty string list"):
+        graph_worker._normalise_applied_graph_candidate(
+            graph,
+            publication_query="Design a marketplace fulfilment system",
+            min_nodes=5,
+            max_nodes=5,
+            resolved_complexity="prototype",
+            context="unit.invalid-label",
+        )
+
+
+def _one_edge_over_budget_graph():
+    graph = _domain_graph(5)
+    budget = graph_worker._edge_budget(5)
+    index = 0
+    while len(graph["edges"]) < budget:
+        source = f"fulfilment_stage_{index % 5}"
+        target = f"fulfilment_stage_{(index + 2) % 5}"
+        graph["edges"].append({
+            "source": source,
+            "target": target,
+            "label": f"carries bounded auxiliary evidence {index}",
+            "technology": "Typed evidence event",
+            "sync": "async",
+            "flow": "feedback",
+            "description": "Carries one bounded auxiliary observation between existing responsibilities.",
+        })
+        index += 1
+    graph["edges"].append(copy.deepcopy(graph["edges"][0]))
+    return graph
+
+
+def test_one_edge_over_budget_compacts_only_after_strict_publication_validation(monkeypatch):
+    graph = _one_edge_over_budget_graph()
+    publication_checks = []
+
+    def accept_publication(query, candidate, resolved_complexity):
+        publication_checks.append((query, candidate, resolved_complexity))
+
+    monkeypatch.setattr(
+        graph_worker,
+        "_validate_applied_architecture_patch",
+        accept_publication,
+    )
+    result = graph_worker._normalise_applied_graph_candidate(
+        graph,
+        publication_query="Design a marketplace fulfilment system",
+        min_nodes=5,
+        max_nodes=5,
+        resolved_complexity="prototype",
+        context="unit.compaction",
+    )
+
+    assert len(result["edges"]) == graph_worker._edge_budget(5)
+    assert len(publication_checks) == 1
+    assert publication_checks[0][1] == result
+
+
+def test_one_edge_over_budget_fails_closed_without_safe_compaction(monkeypatch):
+    graph = _one_edge_over_budget_graph()
+
+    def reject_publication(_query, _candidate, _resolved_complexity):
+        raise ValueError("candidate fails strict publication validation")
+
+    monkeypatch.setattr(
+        graph_worker,
+        "_validate_applied_architecture_patch",
+        reject_publication,
+    )
+    with pytest.raises(ValueError, match="readability budget"):
+        graph_worker._normalise_applied_graph_candidate(
+            graph,
+            publication_query="Design a marketplace fulfilment system",
+            min_nodes=5,
+            max_nodes=5,
+            resolved_complexity="prototype",
+            context="unit.no-safe-compaction",
+        )
+
+
+def _one_node_over_budget_graph():
+    graph = _domain_graph(6)
+    graph["groups"] = [
+        {
+            "id": "intake",
+            "label": "Marketplace Intake",
+            "kind": "runtime",
+            "nodeIds": ["fulfilment_stage_0", "fulfilment_stage_1"],
+        },
+        {
+            "id": "execution",
+            "label": "Fulfilment Execution",
+            "kind": "runtime",
+            "nodeIds": [
+                "fulfilment_stage_2",
+                "fulfilment_stage_3",
+                "fulfilment_stage_4",
+                "fulfilment_stage_5",
+            ],
+        },
+    ]
+    graph["sequence"] = [
+        {
+            "step": 1,
+            "nodes": ["fulfilment_stage_0"],
+            "description": "Accepts the marketplace request.",
+        },
+        {
+            "step": 2,
+            "nodes": ["fulfilment_stage_0", "fulfilment_stage_1"],
+            "description": "Routes accepted marketplace work.",
+        },
+    ]
+    return graph
+
+
+def test_one_node_over_budget_compacts_only_after_publication_validation(monkeypatch):
+    graph = _one_node_over_budget_graph()
+    publication_checks = []
+
+    def accept_publication(query, candidate, resolved_complexity):
+        publication_checks.append((query, candidate, resolved_complexity))
+
+    monkeypatch.setattr(
+        graph_worker,
+        "_validate_applied_architecture_patch",
+        accept_publication,
+    )
+    result = graph_worker._normalise_applied_graph_candidate(
+        graph,
+        publication_query="Design a marketplace fulfilment system",
+        min_nodes=5,
+        max_nodes=5,
+        resolved_complexity="prototype",
+        context="unit.node-compaction",
+    )
+
+    assert len(publication_checks) == 1
+    assert publication_checks[0][1] == result
+    assert len(result["nodes"]) == 5
+    assert all(node["id"] != "fulfilment_stage_0" for node in result["nodes"])
+    assert all(
+        edge["source"] != "fulfilment_stage_0"
+        and edge["target"] != "fulfilment_stage_0"
+        for edge in result["edges"]
+    )
+    assert all(
+        "fulfilment_stage_0" not in group["nodeIds"]
+        for group in result["groups"]
+    )
+    assert all(
+        "fulfilment_stage_0" not in step["nodes"]
+        for step in result["sequence"]
+    )
+
+
+def test_one_node_over_budget_fails_closed_when_all_candidates_are_rejected(monkeypatch):
+    graph = _one_node_over_budget_graph()
+    publication_checks = []
+
+    def reject_publication(_query, candidate, _resolved_complexity):
+        publication_checks.append(candidate)
+        raise ValueError("candidate fails strict publication validation")
+
+    monkeypatch.setattr(
+        graph_worker,
+        "_validate_applied_architecture_patch",
+        reject_publication,
+    )
+    with pytest.raises(ValueError, match="contain 5-5 nodes; got 6"):
+        graph_worker._normalise_applied_graph_candidate(
+            graph,
+            publication_query="Design a marketplace fulfilment system",
+            min_nodes=5,
+            max_nodes=5,
+            resolved_complexity="prototype",
+            context="unit.no-safe-node-compaction",
+        )
+
+    assert len(publication_checks) == 6
 
 
 @pytest.mark.asyncio
@@ -1102,4 +1558,61 @@ async def test_semantically_ineffective_patch_reaches_canonical_workflow_review(
             "Make reconciliation branches explicit in this fulfilment system",
             result,
             "production",
+        )
+
+
+def test_self_loop_edges_are_removed_only_after_publication_validation(monkeypatch):
+    candidate = _domain_graph(5)
+    self_loop = copy.deepcopy(candidate["edges"][0])
+    self_loop["source"] = candidate["nodes"][0]["id"]
+    self_loop["target"] = candidate["nodes"][0]["id"]
+    candidate["edges"].append(self_loop)
+    validations: list[tuple[object, ...]] = []
+
+    def accept_publication(*args):
+        validations.append(args)
+
+    monkeypatch.setattr(
+        graph_worker,
+        "_validate_applied_architecture_patch",
+        accept_publication,
+    )
+
+    normalised = graph_worker._normalise_applied_graph_candidate(
+        candidate,
+        publication_query="Design a production architecture.",
+        min_nodes=5,
+        max_nodes=12,
+        resolved_complexity="standard",
+        context="self-loop removal test",
+    )
+
+    assert validations
+    assert all(edge["source"] != edge["target"] for edge in normalised["edges"])
+
+
+def test_self_loop_removal_fails_closed_when_publication_topology_is_invalid(monkeypatch):
+    candidate = _domain_graph(5)
+    self_loop = copy.deepcopy(candidate["edges"][0])
+    self_loop["source"] = candidate["nodes"][0]["id"]
+    self_loop["target"] = candidate["nodes"][0]["id"]
+    candidate["edges"].append(self_loop)
+
+    def reject_publication(*_args):
+        raise ValueError("topology remains invalid")
+
+    monkeypatch.setattr(
+        graph_worker,
+        "_validate_applied_architecture_patch",
+        reject_publication,
+    )
+
+    with pytest.raises(ValueError, match="graph edges cannot point a node to itself"):
+        graph_worker._normalise_applied_graph_candidate(
+            candidate,
+            publication_query="Design a production architecture.",
+            min_nodes=5,
+            max_nodes=12,
+            resolved_complexity="standard",
+            context="self-loop rejection test",
         )
