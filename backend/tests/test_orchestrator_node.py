@@ -46,7 +46,7 @@ def test_synthesis_prompts_enforce_evidence_bounded_attribution():
         _SYNTHESIS_SYSTEM,
     )
 
-    assert _SYNTHESIS_PROMPT_VERSION == "architecture_blocks_v11"
+    assert _SYNTHESIS_PROMPT_VERSION == "architecture_blocks_v12"
     assert _QUICK_SYNTHESIS_PROMPT_VERSION == "quick_synthesis_v2"
     assert "complete citation allowlist" in _SYNTHESIS_SYSTEM
     assert "exactly one of two provenance lanes" in _SYNTHESIS_SYSTEM
@@ -63,6 +63,8 @@ def test_synthesis_prompts_enforce_evidence_bounded_attribution():
     assert "cannot fill a missing premise" in _SYNTHESIS_SYSTEM
     assert "Never infer a chapter, page, author attribution, or book claim" in _SYNTHESIS_SYSTEM
     assert "A citation supports only the immediately preceding claim" in _SYNTHESIS_SYSTEM
+    assert "explicit scope, count, format, and brevity" in _SYNTHESIS_SYSTEM
+    assert "unless an earlier answer did so" in _SYNTHESIS_SYSTEM
     assert "does not prove a system-specific application" in _SYNTHESIS_SYSTEM
     assert "design artifacts, not evidence of what the book says" in _SYNTHESIS_SYSTEM
     assert 'Do not call something the "main" failure mode' in _SYNTHESIS_SYSTEM
@@ -112,6 +114,45 @@ async def test_orchestrator_routes_applied_agent_design_without_short_path(monke
         ),
         "graph_data": None,
     })
+
+    assert result["route"] == "search"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Fix the typo in the cache label",
+        "Rename the cache node",
+        "Remove the stale edge",
+        "Change the edge label",
+    ],
+)
+async def test_orchestrator_routes_existing_graph_edits_without_model_router(
+    monkeypatch, message
+):
+    import agent.nodes.orchestrator_node as orchestrator
+
+    async def fail_stream_llm(**_kwargs):
+        raise AssertionError("server-owned graph edit intent must force search")
+
+    monkeypatch.setattr(orchestrator, "stream_llm", fail_stream_llm)
+
+    async def send(_event):
+        return None
+
+    result = await orchestrator.orchestrator_route(
+        {
+            "send": send,
+            "history": [],
+            "user_message": message,
+            "graph_data": {
+                "design_origin": "applied",
+                "nodes": [{"id": "cache", "label": "Cache"}],
+                "groups": [],
+            },
+        }
+    )
 
     assert result["route"] == "search"
 
@@ -626,6 +667,7 @@ async def test_orchestrator_clamps_synthesis_and_releases_degraded_graph_blocks(
         "terminal_deadline_s": (
             time.monotonic()
             + settings.graph_finalization_reserve_s
+            + settings.agent_orchestration_reserve_s
             + available_synthesis_seconds
         ),
     })

@@ -339,7 +339,11 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
 
     is_pr_budget = args.suite in {"pr", "smoke", "diagnostic"}
     budget = EvaluationBudget(
-        application_calls=limits["application_calls"] if is_pr_budget else 150,
+        application_calls=(
+            limits["application_calls"]
+            if is_pr_budget
+            else limits["application_full_calls"]
+        ),
         judge_calls=limits["judge_calls"] if is_pr_budget else 40,
     )
     app_telemetry = capture.get("application_telemetry") or []

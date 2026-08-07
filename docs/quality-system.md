@@ -93,12 +93,9 @@ two-case graph lane remains the suite-level concurrency bound.
 
 Each attempt records received events, final answers, graph JSON, rendered-node
 counts, screenshots, redacted traces, persistence, cleanup, fallback, and typed
-blocking failures classified as `quality` or `infrastructure`. A case receives
-exactly one additional attempt only when every blocking failure from the first
-attempt is infrastructure-related. Quality and mixed failures are never retried.
-Both attempts remain in the capture with their thread IDs, timings, screenshots,
-traces, failures, and cleanup evidence; a successful retry does not erase the first
-attempt or its model usage.
+blocking failures classified as `quality` or `infrastructure`. Paid browser cases
+do not retry automatically. A whole-case retry repeats every model call made before
+an infrastructure fault, so a new protected run requires an explicit operator action.
 
 For the allowlisted internal identity on the isolated `staging` schema only, the
 retrieval workers also emit bounded book passages, external search snippets, and
@@ -140,16 +137,26 @@ original/derived hashes, source run/head/tested commit/tree/digest, selection,
 artifact digest, replay commit/actor, reviewer, and reason. Selective replay is
 review evidence only and does not itself publish an image approval or deploy.
 
-PR evaluation limits are eight cases, 50 application provider attempts, and 16
-judge provider attempts. The timeout chain is deliberately nested: the backend
-agent stops at 360 seconds, the Playwright turn waits at most 390 seconds so it can
-capture the typed terminal event, and Cloud Run accepts a request for at most 420
+PR evaluation limits are eight cases, 64 application provider attempts, and 16
+judge provider attempts. The current PR corpus has 54 logical application calls on
+its complete one-repair paths. Provider retry and fallback paths have a theoretical
+132-attempt first-pass ceiling. The tagged staging revision atomically reserves one
+shared quota record before each provider request and rejects attempt 65 before it is
+sent. This leaves ten attempts for transient provider failures while placing a hard
+cost boundary below the failure envelope. Production traffic does not set this
+evaluation-only quota. The timeout chain is deliberately nested: the backend
+agent envelope is 910 seconds, with model work stopping at 880 seconds to retain persistence
+headroom. The Playwright turn waits at most 940 seconds so it can capture the typed terminal event,
+and Cloud Run accepts a request for at most 970
 seconds. The browser-suite timeout scales with the number of turns and the two-wide
 graph lane, with a 60-minute hard ceiling. Semantic judging is capped at 20 minutes
 for PR/smoke/diagnostic suites and 60 minutes for full suites. The outer GitHub jobs
-allow 90 minutes for the PR gate and 130 minutes for scheduled evaluation, including
+allow 90 minutes for the PR gate and 150 minutes for scheduled evaluation, including
 installation, deployment, judging, artifact upload, and cleanup; the former 15/30
 minute limits no longer apply.
+
+Scheduled nightly and full suites use the same pre-request quota with a 150-attempt
+cap. Diagnostic dispatches use the 64-attempt PR cap.
 
 Each turn records total, first-event, and first-token latency plus client and server
 request IDs. Those IDs join browser evidence to per-operation model telemetry,
@@ -158,7 +165,7 @@ fallback, and every provider attempt. Reports publish deterministic nearest-rank
 p50/p95 summaries for case end-to-end, turn end-to-end, first event, and first token;
 final infrastructure-failed cases are excluded from those baselines. Latency remains
 report-only with no manifest thresholds while five clean runs are collected.
-Reviewed baselines can then add blocking thresholds without changing the 360-second
+Reviewed baselines can then add blocking thresholds without changing the 910-second
 correctness deadline. Stage durations may overlap and are reported independently
 rather than added into a false critical path.
 

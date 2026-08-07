@@ -28,67 +28,104 @@ def _remaining_seconds(state: dict[str, Any]) -> float | None:
 def _stage_timeout(
     state: dict[str, Any],
     *,
-    cap_s: float,
+    max_s: float,
     downstream_reserve_s: float,
     stage: str,
+    standalone_s: float | None = None,
 ) -> float:
     remaining = _remaining_seconds(state)
     if remaining is None:
-        return cap_s
-    available = remaining - downstream_reserve_s
+        return max_s if standalone_s is None else standalone_s
+    available = (
+        remaining
+        - downstream_reserve_s
+        - settings.agent_orchestration_reserve_s
+    )
     if available <= 0:
         raise StageAdmissionDenied(f"{stage} cannot preserve downstream deadline reserves")
-    return min(cap_s, available)
+    return min(max_s, available)
 
 
-def design_timeout_seconds(state: dict[str, Any]) -> float:
-    return _stage_timeout(
-        state,
-        cap_s=settings.graph_design_timeout_s,
-        downstream_reserve_s=(
-            settings.graph_critic_initial_timeout_s
-            + settings.graph_synthesis_timeout_s
-            + settings.graph_finalization_reserve_s
-        ),
-        stage="graph design",
-    )
-
-
-def critic_timeout_seconds(state: dict[str, Any], revision_count: int) -> float:
-    cap = (
-        settings.graph_critic_initial_timeout_s
-        if revision_count == 0
-        else settings.graph_critic_revision_timeout_s
-    )
-    return _stage_timeout(
-        state,
-        cap_s=cap,
-        downstream_reserve_s=(
-            settings.graph_synthesis_timeout_s
-            + settings.graph_finalization_reserve_s
-        ),
-        stage="graph critic",
-    )
-
-
-def patch_timeout_seconds(state: dict[str, Any]) -> float:
-    following_reserve = (
-        settings.graph_critic_revision_timeout_s
+def architecture_timeout_seconds(
+    state: dict[str, Any],
+    *,
+    review: bool,
+) -> float:
+    graph_reserve_s = (
+        settings.graph_design_timeout_s
+        + settings.graph_critic_timeout_s
+        + settings.graph_patch_timeout_s
+        + settings.graph_critic_timeout_s
         + settings.graph_synthesis_timeout_s
         + settings.graph_finalization_reserve_s
     )
     return _stage_timeout(
         state,
-        cap_s=settings.graph_patch_timeout_s,
+        max_s=settings.architecture_role_timeout_s,
+        downstream_reserve_s=(
+            graph_reserve_s
+            if review
+            else graph_reserve_s + settings.architecture_role_timeout_s
+        ),
+        stage="architecture review" if review else "architecture pass",
+    )
+
+
+def design_timeout_seconds(state: dict[str, Any]) -> float:
+    downstream_reserve_s = (
+        settings.graph_critic_timeout_s
+        + settings.graph_patch_timeout_s
+        + settings.graph_critic_timeout_s
+        + settings.graph_synthesis_timeout_s
+        + settings.graph_finalization_reserve_s
+    )
+    return _stage_timeout(
+        state,
+        max_s=settings.graph_builder_max_timeout_s,
+        downstream_reserve_s=downstream_reserve_s,
+        stage="graph design",
+        standalone_s=settings.graph_design_timeout_s,
+    )
+
+
+def critic_timeout_seconds(state: dict[str, Any], revision_count: int) -> float:
+    downstream_reserve_s = (
+        settings.graph_synthesis_timeout_s
+        + settings.graph_finalization_reserve_s
+    )
+    if revision_count == 0:
+        downstream_reserve_s += (
+            settings.graph_patch_timeout_s
+            + settings.graph_critic_timeout_s
+        )
+    return _stage_timeout(
+        state,
+        max_s=settings.graph_critic_max_timeout_s,
+        downstream_reserve_s=downstream_reserve_s,
+        stage="graph critic",
+        standalone_s=settings.graph_critic_timeout_s,
+    )
+
+
+def patch_timeout_seconds(state: dict[str, Any]) -> float:
+    following_reserve = (
+        settings.graph_critic_timeout_s
+        + settings.graph_synthesis_timeout_s
+        + settings.graph_finalization_reserve_s
+    )
+    return _stage_timeout(
+        state,
+        max_s=settings.graph_builder_max_timeout_s,
         downstream_reserve_s=following_reserve,
         stage="graph patch",
+        standalone_s=settings.graph_patch_timeout_s,
     )
 
 
 def synthesis_timeout_seconds(state: dict[str, Any]) -> float:
     return _stage_timeout(
         state,
-        cap_s=settings.graph_synthesis_timeout_s,
+        max_s=settings.graph_synthesis_timeout_s,
         downstream_reserve_s=settings.graph_finalization_reserve_s,
         stage="synthesis",
     )

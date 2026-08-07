@@ -7,11 +7,19 @@ import uuid
 from typing import Any
 
 from adapters.llm_adapter import build_telemetry
-from agent.complexity import is_applied_system_design_request, resolve_complexity
+from agent.complexity import (
+    is_existing_graph_edit_request,
+    is_new_applied_graph_request,
+    resolve_complexity,
+)
 from agent.deadlines import (
     design_timeout_seconds as _configured_design_timeout_seconds,
     optional_gateway_args,
     patch_timeout_seconds as _configured_patch_timeout_seconds,
+)
+from agent.graph_repair_contract import (
+    REPAIR_LAYER_PATCH_FIELDS,
+    validate_repair_contract,
 )
 from agent.nodes.architecture_workers import format_diagram_commitments
 from agent.state import AgentState, GraphData
@@ -34,19 +42,26 @@ from graph.runtime import select_canonical_graph
 
 logger = logging.getLogger(__name__)
 
-_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v26"
-_APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v8"
+_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v28"
+_APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v13"
+_APPLIED_GRAPH_TOPOLOGY_EFFORT = "low"
+_APPLIED_GRAPH_PATCH_EFFORT = "max"
 _MAX_GRAPH_PATCH_CHARS = 200_000
 _MAX_EDGE_LABEL_PARTS = 4
 _GRAPH_STAGE_DEADLINE_KEY = "_graph_stage_deadline_s"
 _GRAPH_STAGE_FINALIZATION_HEADROOM_S = 1.0
 _PATCH_NODE_MUTABLE_FIELDS = (
-    "label", "type", "technology", "description", "tier", "lane",
+    "label", "type", "technology", "description",
 )
 _PATCH_EDGE_MUTABLE_FIELDS = (
     "source", "target", "label", "technology", "sync", "flow", "description", "type",
 )
+
+
 def _repair_review(review: dict[str, Any]) -> dict[str, Any]:
+    contract = review.get("repair_contract")
+    if isinstance(contract, dict):
+        return copy.deepcopy(contract)
     missing = [
         str(item).strip()
         for item in (review.get("missing") or [])
@@ -92,7 +107,14 @@ def _format_patch_topology(graph: GraphData) -> str:
             },
         })
     return json.dumps(
-        {"title": graph.get("title"), "nodes": nodes, "edges": edges},
+        {
+            "title": graph.get("title"),
+            "nodes": nodes,
+            "edges": edges,
+            "groups": graph.get("groups") or [],
+            "sequence": graph.get("sequence") or [],
+            "assumptions": graph.get("assumptions") or [],
+        },
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -100,6 +122,56 @@ def _format_patch_topology(graph: GraphData) -> str:
 
 def _patch_edge_id(index: int) -> str:
     return f"edge_{index + 1}"
+
+
+def _validated_local_repair_contract(
+    review: dict[str, Any],
+    graph: GraphData,
+) -> dict[str, Any]:
+    contract = review.get("repair_contract")
+    if not isinstance(contract, dict):
+        raise ValueError("critic repair requires a repair_contract")
+    validate_repair_contract(contract, graph=graph)
+    if contract["repair_scope"] != "local":
+        raise ValueError("only a local repair_contract can enter the patch lane")
+    return contract
+
+
+def _repair_permissions(
+    graph: GraphData,
+    contract: dict[str, Any],
+) -> dict[str, Any]:
+    layers = contract["layers"]
+    selected_edges = {
+        (selector["source"], selector["target"], selector["label"])
+        for selector in layers["connections"]["edge_selectors"]
+    }
+    editable_edges = []
+    for index, edge in enumerate(graph.get("edges") or []):
+        selector = (
+            str(edge.get("source") or ""),
+            str(edge.get("target") or ""),
+            str(edge.get("label") or ""),
+        )
+        if selector in selected_edges:
+            editable_edges.append({
+                "edge_id": _patch_edge_id(index),
+                "source": selector[0],
+                "target": selector[1],
+                "label": selector[2],
+            })
+    if len(editable_edges) != len(selected_edges):
+        raise ValueError("repair contract edge selector mapping is incomplete")
+    return {
+        "editable_node_ids": layers["components"]["node_ids"],
+        "editable_edges": editable_edges,
+        "editable_composition_fields": layers["composition"]["composition_fields"],
+        "editable_group_ids": layers["composition"]["group_ids"],
+        "editable_sequence_indexes": layers["composition"]["sequence_indexes"],
+        "editable_assumption_indexes": layers["composition"]["assumption_indexes"],
+        "allow_node_additions": layers["components"]["status"] == "fail",
+        "allow_edge_additions": layers["connections"]["status"] == "fail",
+    }
 
 
 def _graph_design_failure_code(exc: Exception) -> str:
@@ -175,7 +247,11 @@ Return one JSON object and nothing else. Include every operation required to com
 this one patch. Do not invent references. A node removal must also remove or redirect every incident
 edge. Source and target must be distinct; express internal retry policy in the owning node or route
 to a distinct recovery owner. Omit keys that do not change. The optional groups, sequence, assumptions, and title fields
-are complete replacements, not partial edits.
+are complete replacements, not partial edits. The supplied repair contract is authoritative. Change
+only failed layers and cited existing records or composition fields. Preserve uncited group,
+sequence, and assumption records byte-for-byte. Sequence and assumption indexes are based on the
+supplied graph. Failed components and connections layers may add records while their selectors
+identify editable existing records. Passing layers are immutable.
 Never repair a flow by letting a cache, replay, shortcut, or retry bypass validation, authorization,
 policy, or approval. Store accepted post-gate artifacts or route reuse back through the required gate,
 scoped to the relevant identity and version.
@@ -196,15 +272,10 @@ rollback; every alternate outcome must visibly terminate and be audited.
 If a lifecycle store/outbox supplies reserved work to an executor, remove every direct
 approval/policy/compensation-to-executor bypass. Those controls write bound envelopes to the state
 store; only its lease/outbox edge feeds executable work.
-While resolving the supplied review, re-audit the complete candidate against this entire contract.
-Use the same bounded patch to fix any other blocking path defect you can observe, especially one
-that would become visible only after the requested repair. Do not spend a bounded revision on the
-first symptom while leaving another label-only guarantee, bypass, or incomplete branch behind.
 Privately map every supplied blocking failure to at least one concrete patch operation before
 returning. A structurally valid patch that leaves any supplied blocker unresolved is invalid.
-Treat every entry in review.missing as an independent conjunction, including repeated failures of
-the same class at different node or edge selectors. Repair every named selector in this one patch;
-never stop after fixing the first approval owner or collapsed release edge.
+Treat every blocking finding as an independent conjunction. Repair every cited selector in this one
+patch. The server rejects edits outside the contract before graph normalization.
 For each named approval decision, either draw two outbound edges (one approval-only and one
 rejection-only), or draw one combined approve/reject edge to durable lifecycle state whose complete
 edge text includes payload, target, policy version, expiry, and idempotency key. For release repair,
@@ -227,7 +298,7 @@ invent an edge_id, and never put edge_id on a newly added edge.
 
 <output_contract>
 {
-  "add_nodes": [{"id": "new_id", "label": "...", "type": "service", "technology": "...", "description": "...", "tier": "private", "lane": "main"}],
+  "add_nodes": [{"id": "new_id", "label": "...", "type": "service", "technology": "...", "description": "..."}],
   "update_nodes": [{"id": "existing_id", "set": {"label": "...", "description": "..."}}],
   "remove_nodes": ["existing_id"],
   "add_edges": [{"source": "node_id", "target": "node_id", "label": "...", "technology": "...", "sync": "sync", "flow": "runtime", "description": "..."}],
@@ -291,7 +362,13 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
     send = state["send"]
     query = state.get("design_query") or _graph_query(state)
 
-    if is_applied_system_design_request(query):
+    edits_existing_graph = is_existing_graph_edit_request(
+        state.get("user_message", ""), state.get("graph_data")
+    )
+    new_applied_graph = is_new_applied_graph_request(
+        state.get("user_message", ""), state.get("graph_data")
+    )
+    if edits_existing_graph or new_applied_graph:
         profile = resolve_complexity(state.get("complexity", "auto"), query)
         await send({
             "type": "worker_status",
@@ -316,10 +393,13 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
             })
             return {**state, "graph_data": _attach_graph_version(graph)}
         except Exception as exc:
-            # A missing graph is safer than silently replacing the user's domain
-            # with a generic textbook taxonomy.
             logger.warning("Applied architecture rejected: %s: %s", type(exc).__name__, exc)
             failure_code = _graph_design_failure_code(exc)
+            preserved_graph = (
+                copy.deepcopy(state.get("graph_data"))
+                if _has_approved_applied_graph(state)
+                else None
+            )
             await send({
                 "type": "workflow_progress",
                 "phase": "integrate",
@@ -327,9 +407,20 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
                 "failure_code": failure_code,
                 "node_count": getattr(exc, "node_count", None),
                 "edge_count": getattr(exc, "edge_count", None),
-                "detail": "The generated graph design was incomplete or invalid.",
+                "detail": (
+                    "The replacement was invalid; the approved architecture was preserved."
+                    if preserved_graph is not None
+                    else "The generated graph design was incomplete or invalid."
+                ),
             })
-            return {**state, "graph_data": None, "graph_failure_code": failure_code}
+            return {
+                **state,
+                "graph_data": preserved_graph,
+                "graph_failure_code": failure_code,
+            }
+
+    if _has_approved_applied_graph(state):
+        return {**state, "graph_data": copy.deepcopy(state.get("graph_data"))}
 
     await send({"type": "worker_status", "worker": "graph", "status": "Selecting grounded concepts…"})
     try:
@@ -350,35 +441,34 @@ async def _generate_applied_architecture(
     query: str,
     profile,
 ) -> GraphData:
-    if not state.get("architecture_ready", False):
-        raise AppliedGraphSpecError("graph_architecture_input_unavailable")
-    approved_graph = state.get("approved_graph_data")
     existing_graph = state.get("graph_data")
+    revision_count = int(state.get("graph_revision_count", 0))
     if (
-        approved_graph
+        revision_count > 0
         and existing_graph
-        and _looks_like_graph_followup(str(state.get("user_message") or ""))
+        and existing_graph.get("design_origin") == "applied"
     ):
         return await _generate_applied_architecture_patch(
             state, query, profile, existing_graph
         )
+    if (
+        _has_approved_applied_graph(state)
+        and existing_graph
+        and is_existing_graph_edit_request(
+            str(state.get("user_message") or ""), existing_graph
+        )
+    ):
+        return await _generate_applied_architecture_patch(
+            state, query, profile, existing_graph
+        )
+    if not state.get("architecture_ready", False):
+        raise AppliedGraphSpecError("graph_architecture_input_unavailable")
     spec = applied_graph_spec(profile.resolved)
     schema = applied_graph_topology_schema(spec)
-    review_context: dict[str, Any] = {
-        "architecture_review": state.get("challenger_review") or {},
-    }
-    if int(state.get("graph_revision_count", 0)) > 0:
-        review_context["publication_review"] = _repair_review(state.get("graph_review") or {})
-        review_context["rejected_candidate"] = existing_graph or {}
-        review_context["redraw_instruction"] = (
-            "Redraw the complete unpublished topology. Resolve every publication blocker. "
-            "The rejected candidate has no identity-retention requirement."
-        )
     prompt = applied_graph_topology_prompt(
         query=query,
         architect_plan=state.get("architect_plan") or {},
-        challenger_review=review_context,
-        commitments=format_diagram_commitments(state.get("architect_plan") or {}),
+        challenger_review=state.get("challenger_review") or {},
         spec=spec,
     )
     response = None
@@ -389,7 +479,7 @@ async def _generate_applied_architecture(
             messages=[{"role": "user", "content": prompt}],
             response_schema=schema,
             temperature=settings.graph_temperature,
-            effort="max",
+            effort=_APPLIED_GRAPH_TOPOLOGY_EFFORT,
             telemetry=build_telemetry(
                 "graph_worker_applied_design",
                 user_id=state.get("user_id"),
@@ -456,22 +546,39 @@ async def _generate_applied_architecture_patch(
     existing_graph: GraphData,
 ) -> GraphData:
     review = state.get("graph_review") or {}
+    revision_count = int(state.get("graph_revision_count", 0))
+    repair_contract: dict[str, Any] | None = None
+    if isinstance(review.get("repair_contract"), dict):
+        try:
+            repair_contract = _validated_local_repair_contract(review, existing_graph)
+        except ValueError as exc:
+            logger.warning("Graph repair suppressed by repair contract: %s", exc)
+            return copy.deepcopy(existing_graph)
+    elif revision_count > 0:
+        logger.warning("Graph repair suppressed because the critic supplied no repair contract")
+        return copy.deepcopy(existing_graph)
     checklist = format_diagram_commitments(state.get("architect_plan") or {})
     existing_node_count = len(existing_graph.get("nodes") or [])
+    permissions = (
+        _repair_permissions(existing_graph, repair_contract)
+        if repair_contract is not None
+        else None
+    )
     prompt = (
         f"Design request (context only):\n{query}\n\n"
         f"Existing validated graph (currently has {existing_node_count} nodes):\n"
         f"{_format_patch_topology(existing_graph)}\n\n"
         "Diagram acceptance checklist:\n"
         f"{checklist}\n\n"
-        "Review to resolve:\n"
+        "Validated repair contract or user follow-up context:\n"
         f"{json.dumps(_repair_review(review), ensure_ascii=False)}\n\n"
-        f"Keep at least 60% of existing node IDs at {profile.resolved} depth and return "
-        "only the minimal patch. Consolidate related fixes into existing-node updates and never "
-        "return a replacement graph. Keep every authored edge label within "
+        "Server-owned repair permissions:\n"
+        f"{json.dumps(permissions, ensure_ascii=False)}\n\n"
+        f"Return only the minimal patch at {profile.resolved} depth. Consolidate related fixes "
+        "into permitted existing-record updates and never return a replacement graph. Keep every "
+        "authored edge label within "
         f"{GRAPH_EDGE_LABEL_CHARS} characters."
     )
-    revision_count = int(state.get("graph_revision_count", 0))
     # Invalid patches preserve the approved graph immediately. The canonical
     # critic workflow is the only layer allowed to request another model repair.
     try:
@@ -483,7 +590,7 @@ async def _generate_applied_architecture_patch(
             temperature=settings.graph_temperature,
             top_p=settings.graph_top_p,
             top_k=settings.graph_top_k,
-            effort="max",
+            effort=_APPLIED_GRAPH_PATCH_EFFORT,
             telemetry=build_telemetry(
                 "graph_worker_applied_patch",
                 user_id=state.get("user_id"),
@@ -514,6 +621,7 @@ async def _generate_applied_architecture_patch(
             patch,
             safety_max_nodes=settings.graph_safety_max_nodes,
             resolved_complexity=profile.resolved,
+            repair_contract=repair_contract,
         )
         try:
             _validate_applied_architecture_patch(
@@ -571,17 +679,239 @@ def _validate_applied_architecture_patch(
     raise ValueError(f"patched graph still violates deterministic publication contract: {detail}")
 
 
+def _repair_edge_ids(
+    existing_graph: GraphData,
+    repair_contract: dict[str, Any],
+) -> set[str]:
+    return {
+        item["edge_id"]
+        for item in _repair_permissions(existing_graph, repair_contract)["editable_edges"]
+    }
+
+
+def _validate_group_replacement_scope(
+    existing_graph: GraphData,
+    replacement: Any,
+    editable_group_ids: set[str],
+) -> None:
+    existing_groups = existing_graph.get("groups") or []
+    if not isinstance(replacement, list) or not all(
+        isinstance(group, dict) for group in replacement
+    ):
+        raise ValueError("groups replacement must be an array of group records")
+    existing_by_id = {
+        _patch_reference(group.get("id"), "existing group id"): group
+        for group in existing_groups
+        if isinstance(group, dict)
+    }
+    replacement_by_id: dict[str, dict[str, Any]] = {}
+    for group in replacement:
+        group_id = _patch_reference(group.get("id"), "replacement group id")
+        if group_id in replacement_by_id:
+            raise ValueError(f"duplicate replacement group: {group_id}")
+        replacement_by_id[group_id] = group
+    for group_id, existing_group in existing_by_id.items():
+        if group_id in editable_group_ids:
+            continue
+        if replacement_by_id.get(group_id) != existing_group:
+            raise ValueError(f"graph patch changed locked group: {group_id}")
+
+
+def _validate_indexed_replacement_scope(
+    existing: Any,
+    replacement: Any,
+    editable_indexes: set[int],
+    *,
+    field: str,
+) -> None:
+    if not isinstance(existing, list) or not isinstance(replacement, list):
+        raise ValueError(f"{field} replacement must be an array")
+    for index, record in enumerate(existing):
+        if index in editable_indexes:
+            continue
+        if index >= len(replacement) or replacement[index] != record:
+            raise ValueError(f"graph patch changed locked {field} record: {index}")
+
+
+def _validate_patch_scope_before_normalization(
+    existing_graph: GraphData,
+    patch: dict[str, Any],
+    repair_contract: dict[str, Any],
+    *,
+    resolved_complexity: str,
+) -> None:
+    validate_repair_contract(repair_contract, graph=existing_graph)
+    if repair_contract["repair_scope"] != "local":
+        raise ValueError("graph patch requires a local repair contract")
+    layers = repair_contract["layers"]
+    unknown_keys = set(patch) - _GRAPH_PATCH_KEYS
+    if unknown_keys:
+        raise ValueError(f"unknown graph patch fields: {', '.join(sorted(unknown_keys))}")
+
+    for layer, fields in REPAIR_LAYER_PATCH_FIELDS.items():
+        if set(patch).intersection(fields) and layers[layer]["status"] != "fail":
+            raise ValueError(f"graph patch changed the locked {layer} layer")
+    editable_node_ids = set(layers["components"]["node_ids"])
+    for operation in _patch_list(patch, "update_nodes"):
+        if not isinstance(operation, dict):
+            raise ValueError("node update must be an object")
+        node_id = _patch_reference(operation.get("id"), "node update id")
+        if node_id not in editable_node_ids:
+            raise ValueError(f"graph patch changed locked node: {node_id}")
+    for value in _patch_list(patch, "remove_nodes"):
+        node_id = _patch_reference(value, "remove_nodes entry")
+        if node_id not in editable_node_ids:
+            raise ValueError(f"graph patch removed locked node: {node_id}")
+
+    editable_edge_ids = _repair_edge_ids(existing_graph, repair_contract)
+    for operation in _patch_list(patch, "update_edges"):
+        if not isinstance(operation, dict):
+            raise ValueError("edge update must be an object")
+        edge_id = _patch_reference(operation.get("edge_id"), "edge update ID")
+        if edge_id not in editable_edge_ids:
+            raise ValueError(f"graph patch changed locked edge: {edge_id}")
+    for value in _patch_list(patch, "remove_edges"):
+        edge_id = _patch_reference(value, "remove_edges entry")
+        if edge_id not in editable_edge_ids:
+            raise ValueError(f"graph patch removed locked edge: {edge_id}")
+
+    editable_fields = set(layers["composition"]["composition_fields"])
+    for field in ("title", "groups", "sequence", "assumptions"):
+        if field in patch and (
+            layers["composition"]["status"] != "fail"
+            or field not in editable_fields
+        ):
+            raise ValueError(f"graph patch changed locked composition field: {field}")
+    if "groups" in patch:
+        _validate_group_replacement_scope(
+            existing_graph,
+            patch["groups"],
+            set(layers["composition"]["group_ids"]),
+        )
+    if "sequence" in patch:
+        _validate_indexed_replacement_scope(
+            existing_graph.get("sequence") or [],
+            patch["sequence"],
+            set(layers["composition"]["sequence_indexes"]),
+            field="sequence",
+        )
+    if "assumptions" in patch:
+        _validate_indexed_replacement_scope(
+            existing_graph.get("assumptions") or [],
+            patch["assumptions"],
+            set(layers["composition"]["assumption_indexes"]),
+            field="assumptions",
+        )
+
+    changes_node_set = bool(
+        _patch_list(patch, "add_nodes") or _patch_list(patch, "remove_nodes")
+    )
+    if resolved_complexity == "production" and changes_node_set:
+        if not all(
+            layers[layer]["status"] == "fail"
+            for layer in ("components", "connections", "composition")
+        ):
+            raise ValueError(
+                "production node additions or removals require failed components, connections, and composition layers"
+            )
+        if "groups" not in editable_fields:
+            raise ValueError(
+                "production node additions or removals require editable groups"
+            )
+        if "groups" not in patch:
+            raise ValueError(
+                "production node additions or removals require a complete groups replacement"
+            )
+
+
+def _locked_component_fields(node: dict[str, Any]) -> tuple[Any, ...]:
+    return (node.get("id"), *(node.get(field) for field in _PATCH_NODE_MUTABLE_FIELDS))
+
+
+def _validate_locked_records_after_normalization(
+    existing_graph: GraphData,
+    candidate: GraphData,
+    repair_contract: dict[str, Any],
+) -> None:
+    layers = repair_contract["layers"]
+    editable_node_ids = set(layers["components"]["node_ids"])
+    candidate_nodes = {
+        str(node.get("id") or ""): node for node in (candidate.get("nodes") or [])
+    }
+    for node in existing_graph.get("nodes") or []:
+        node_id = str(node.get("id") or "")
+        candidate_node = candidate_nodes.get(node_id)
+        if node_id not in editable_node_ids and (
+            candidate_node is None
+            or _locked_component_fields(candidate_node) != _locked_component_fields(node)
+        ):
+            raise ValueError(f"normalization changed locked node: {node_id}")
+
+    editable_selectors = {
+        (selector["source"], selector["target"], selector["label"])
+        for selector in layers["connections"]["edge_selectors"]
+    }
+    candidate_edges = candidate.get("edges") or []
+    for edge in existing_graph.get("edges") or []:
+        selector = (
+            str(edge.get("source") or ""),
+            str(edge.get("target") or ""),
+            str(edge.get("label") or ""),
+        )
+        if selector not in editable_selectors and edge not in candidate_edges:
+            raise ValueError(
+                "normalization changed locked edge: " + " -> ".join(selector[:2])
+            )
+
+    editable_fields = set(layers["composition"]["composition_fields"])
+    if "title" not in editable_fields and candidate.get("title") != existing_graph.get("title"):
+        raise ValueError("normalization changed locked composition field: title")
+    for field, selector_field in (
+        ("sequence", "sequence_indexes"),
+        ("assumptions", "assumption_indexes"),
+    ):
+        if field not in editable_fields:
+            if candidate.get(field) != existing_graph.get(field):
+                raise ValueError(f"normalization changed locked composition field: {field}")
+            continue
+        _validate_indexed_replacement_scope(
+            existing_graph.get(field) or [],
+            candidate.get(field) or [],
+            set(layers["composition"][selector_field]),
+            field=field,
+        )
+    if "groups" not in editable_fields:
+        if candidate.get("groups") != existing_graph.get("groups"):
+            raise ValueError("normalization changed locked composition field: groups")
+    else:
+        _validate_group_replacement_scope(
+            existing_graph,
+            candidate.get("groups") or [],
+            set(layers["composition"]["group_ids"]),
+        )
+    if candidate.get("view_state") != existing_graph.get("view_state"):
+        raise ValueError("normalization changed locked render view state")
+
+
 def _apply_applied_graph_patch(
     existing_graph: GraphData,
     patch: dict[str, Any],
     *,
     safety_max_nodes: int,
     resolved_complexity: str,
+    repair_contract: dict[str, Any] | None = None,
 ) -> GraphData:
     # Models commonly preserve an optional patch key with JSON null to mean
     # "unchanged". New records receive the same deterministic presentation
     # enrichment as initial topology records before strict validation.
     patch = {key: value for key, value in patch.items() if value is not None}
+    if repair_contract is not None:
+        _validate_patch_scope_before_normalization(
+            existing_graph,
+            patch,
+            repair_contract,
+            resolved_complexity=resolved_complexity,
+        )
     patch = _canonicalise_applied_graph_patch(patch)
     unknown_keys = set(patch) - _GRAPH_PATCH_KEYS
     if unknown_keys:
@@ -606,7 +936,6 @@ def _apply_applied_graph_patch(
     node_by_id = {str(node.get("id") or ""): node for node in nodes}
     if "" in node_by_id or len(node_by_id) != len(nodes):
         raise ValueError("approved graph node IDs are malformed")
-    original_node_ids = set(node_by_id)
 
     removed_node_ids: set[str] = set()
     for value in remove_nodes:
@@ -705,9 +1034,6 @@ def _apply_applied_graph_patch(
         edges.append(copy.deepcopy(edge))
 
     final_node_ids = set(node_by_id)
-    minimum_retained = max(1, (len(original_node_ids) * 3 + 4) // 5)
-    if len(original_node_ids & final_node_ids) < minimum_retained:
-        raise ValueError("graph patch must preserve at least 60% of existing node IDs")
     _validate_patch_edge_references(edges, final_node_ids)
 
     for key in ("title", "assumptions", "sequence", "groups"):
@@ -721,6 +1047,12 @@ def _apply_applied_graph_patch(
         resolved_complexity=resolved_complexity,
         context="incremental_patch",
     )
+    if repair_contract is not None:
+        _validate_locked_records_after_normalization(
+            existing_graph,
+            normalised,
+            repair_contract,
+        )
     if _same_graph_payload(existing_graph, normalised):
         raise ValueError("graph patch produced no semantic change")
     return normalised
@@ -1081,16 +1413,14 @@ def _normalise_applied_graph(
         node_type = str(raw_node.get("type") or "service").lower()
         if node_type not in _ALLOWED_NODE_TYPES:
             raise ValueError(f"invalid node type: {node_type}")
-        tier = str(raw_node.get("tier") or ("public" if node_type == "client" else "private"))
-        lane = str(raw_node.get("lane") or ("bottom" if node_type == "control" else "main"))
         nodes.append({
             "id": node_id,
             "label": label,
             "type": node_type,
             "technology": _required_text(raw_node.get("technology"), "node technology", 60),
             "description": _required_text(raw_node.get("description"), "node description", 220),
-            "tier": tier if tier in {"public", "private"} else "private",
-            "lane": lane if lane in {"main", "bottom"} else "main",
+            "tier": None,
+            "lane": "main",
             "detail": None,
             "layer": "architecture",
             "design_origin": "applied",
@@ -1109,6 +1439,14 @@ def _normalise_applied_graph(
 
     sequence = _normalise_sequence(payload.get("sequence"), id_map)
     groups = _normalise_groups(payload.get("groups"), id_map)
+    operations_node_ids = {
+        node_id
+        for group in groups
+        if group.get("kind") == "operations"
+        for node_id in group["nodeIds"]
+    }
+    for node in nodes:
+        node["lane"] = "bottom" if node["id"] in operations_node_ids else "main"
     if resolved_complexity == "production":
         if not groups:
             raise ValueError("production architecture must contain authored responsibility groups")
@@ -1153,6 +1491,11 @@ def _normalise_applied_graph(
     }
     if groups:
         graph["groups"] = groups
+    if "view_state" in payload:
+        view_state = payload["view_state"]
+        if not isinstance(view_state, dict):
+            raise ValueError("graph view state must be an object")
+        graph["view_state"] = copy.deepcopy(view_state)
     return graph
 
 
@@ -1316,6 +1659,17 @@ def _attach_graph_version(graph: GraphData | None) -> GraphData | None:
     stamped = dict(graph)
     stamped["version"] = str(uuid.uuid4())
     return stamped
+
+
+def _has_approved_applied_graph(state: AgentState) -> bool:
+    current = state.get("graph_data")
+    approved = state.get("approved_graph_data")
+    return bool(
+        isinstance(current, dict)
+        and current.get("design_origin") == "applied"
+        and isinstance(approved, dict)
+        and approved.get("design_origin") == "applied"
+    )
 
 
 def _graph_query(state: AgentState) -> str:

@@ -1,20 +1,23 @@
 import { render } from '@testing-library/react';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { GraphData, GraphEdge, GraphNode } from '../../types';
 import { D3Graph } from './D3Graph';
 import { NODE_H, NODE_W } from './graphLayout';
 
 
-const VIEWPORT_WIDTH = 760;
-const VIEWPORT_HEIGHT = 500;
+const LEGACY_VIEWPORT = { width: 760, height: 500 };
+const DEEP_VIEWPORT = { width: 656, height: 848 };
 const NODE_TITLE_PX = 15.36;
 const MIN_PUBLISHED_TITLE_PX = 6;
+let viewport = LEGACY_VIEWPORT;
 
 const originalGetBBox = SVGGraphicsElement.prototype.getBBox;
 const originalElementGetBBox = Object.getOwnPropertyDescriptor(SVGElement.prototype, 'getBBox');
 const originalWidth = Object.getOwnPropertyDescriptor(SVGSVGElement.prototype, 'width');
 const originalHeight = Object.getOwnPropertyDescriptor(SVGSVGElement.prototype, 'height');
+const originalClientWidth = Object.getOwnPropertyDescriptor(SVGSVGElement.prototype, 'clientWidth');
+const originalClientHeight = Object.getOwnPropertyDescriptor(SVGSVGElement.prototype, 'clientHeight');
 
 beforeAll(() => {
   Object.defineProperty(SVGGraphicsElement.prototype, 'getBBox', {
@@ -27,12 +30,24 @@ beforeAll(() => {
   });
   Object.defineProperty(SVGSVGElement.prototype, 'width', {
     configurable: true,
-    get: () => ({ baseVal: { value: VIEWPORT_WIDTH } }),
+    get: () => ({ baseVal: { value: viewport.width } }),
   });
   Object.defineProperty(SVGSVGElement.prototype, 'height', {
     configurable: true,
-    get: () => ({ baseVal: { value: VIEWPORT_HEIGHT } }),
+    get: () => ({ baseVal: { value: viewport.height } }),
   });
+  Object.defineProperty(SVGSVGElement.prototype, 'clientWidth', {
+    configurable: true,
+    get: () => viewport.width,
+  });
+  Object.defineProperty(SVGSVGElement.prototype, 'clientHeight', {
+    configurable: true,
+    get: () => viewport.height,
+  });
+});
+
+beforeEach(() => {
+  viewport = LEGACY_VIEWPORT;
 });
 
 afterAll(() => {
@@ -46,6 +61,16 @@ afterAll(() => {
   else delete (SVGSVGElement.prototype as unknown as { width?: unknown }).width;
   if (originalHeight) Object.defineProperty(SVGSVGElement.prototype, 'height', originalHeight);
   else delete (SVGSVGElement.prototype as unknown as { height?: unknown }).height;
+  if (originalClientWidth) {
+    Object.defineProperty(SVGSVGElement.prototype, 'clientWidth', originalClientWidth);
+  } else {
+    delete (SVGSVGElement.prototype as unknown as { clientWidth?: unknown }).clientWidth;
+  }
+  if (originalClientHeight) {
+    Object.defineProperty(SVGSVGElement.prototype, 'clientHeight', originalClientHeight);
+  } else {
+    delete (SVGSVGElement.prototype as unknown as { clientHeight?: unknown }).clientHeight;
+  }
 });
 
 function node(
@@ -153,6 +178,54 @@ const capacityGraph: GraphData = {
   ],
 };
 
+function deepCapacityGraph(): GraphData {
+  const levelSizes = [3, 2, 3, 3, 1, 5, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 2, 1, 1];
+  const levelNodeIds = levelSizes.map((size, level) => (
+    Array.from({ length: size }, (_, index) => `level_${level + 1}_node_${index + 1}`)
+  ));
+  const nodeIds = levelNodeIds.flat();
+  const generatedNodes = nodeIds.map((id, index) => node(
+    id,
+    `Owned Capability ${index + 1}`,
+    index % 11 === 0 ? 'decision' : 'service',
+    index >= 31 ? 'bottom' : 'main',
+  ));
+  const generatedEdges = levelNodeIds.slice(1).flatMap((ids, levelIndex) => (
+    ids.map((target, index) => edge(
+      levelNodeIds[levelIndex][index % levelNodeIds[levelIndex].length],
+      target,
+      `advances stage ${levelIndex + 2}`,
+    ))
+  ));
+  for (let index = 0; generatedEdges.length < 65; index += 1) {
+    const source = nodeIds[nodeIds.length - 1 - (index % 12)];
+    const target = nodeIds[index % 12];
+    generatedEdges.push(edge(source, target, `reports outcome ${index + 1}`, 'feedback', 'loop'));
+  }
+  const groups = Array.from({ length: 18 }, (_, groupIndex) => ({
+    id: `zone_${groupIndex + 1}`,
+    label: `Responsibility Zone ${groupIndex + 1}`,
+    kind: groupIndex >= 14 ? 'operations' as const : 'runtime' as const,
+    nodeIds: nodeIds.filter((_id, nodeIndex) => (
+      Math.floor(nodeIndex * 18 / nodeIds.length) === groupIndex
+    )),
+  }));
+
+  return {
+    graph_type: 'architecture',
+    design_origin: 'applied',
+    title: 'Deep production architecture capacity regression',
+    nodes: generatedNodes,
+    edges: generatedEdges,
+    groups,
+    sequence: levelNodeIds.map((ids, index) => ({
+      step: index + 1,
+      nodes: ids,
+      description: `Complete stage ${index + 1}.`,
+    })),
+  };
+}
+
 function parseTransform(value: string | null): { x: number; y: number; scale: number } {
   const match = value?.match(/translate\(([-\d.]+),([-\d.]+)\) scale\(([-\d.]+)\)/);
   if (!match) throw new Error(`Unexpected graph transform: ${value}`);
@@ -179,7 +252,7 @@ describe('dense production graph rendering', () => {
     expect(capacityGraph.edges).toHaveLength(29);
 
     const { container } = render(
-      <div style={{ width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT }}>
+      <div style={{ width: viewport.width, height: viewport.height }}>
         <D3Graph
           graphData={capacityGraph}
           currentStep={-1}
@@ -200,6 +273,8 @@ describe('dense production graph rendering', () => {
     expect(paths.every(path => Boolean(path.getAttribute('d')))).toBe(true);
     expect(new Set(paths.map(path => path.getAttribute('d'))).size).toBe(paths.length);
     expect(container.querySelectorAll('text.node-group-label')).toHaveLength(13);
+    expect(nodes.every(node => Number(node.getAttribute('opacity')) === 1)).toBe(true);
+    expect(paths.every(path => Number(path.getAttribute('opacity')) > 0)).toBe(true);
     expect(NODE_TITLE_PX * transform.scale).toBeGreaterThanOrEqual(MIN_PUBLISHED_TITLE_PX);
 
     for (const renderedNode of nodes) {
@@ -209,9 +284,9 @@ describe('dense production graph rendering', () => {
       const top = transform.y + transform.scale * (position.y - NODE_H / 2);
       const bottom = transform.y + transform.scale * (position.y + NODE_H / 2);
       expect(left).toBeGreaterThanOrEqual(0);
-      expect(right).toBeLessThanOrEqual(VIEWPORT_WIDTH);
+      expect(right).toBeLessThanOrEqual(viewport.width);
       expect(top).toBeGreaterThanOrEqual(0);
-      expect(bottom).toBeLessThanOrEqual(VIEWPORT_HEIGHT);
+      expect(bottom).toBeLessThanOrEqual(viewport.height);
     }
 
     for (const path of paths) {
@@ -219,9 +294,9 @@ describe('dense production graph rendering', () => {
       expect(controlPoints.length).toBeGreaterThanOrEqual(2);
       for (const point of controlPoints) {
         expect(transform.x + transform.scale * point.x).toBeGreaterThanOrEqual(0);
-        expect(transform.x + transform.scale * point.x).toBeLessThanOrEqual(VIEWPORT_WIDTH);
+        expect(transform.x + transform.scale * point.x).toBeLessThanOrEqual(viewport.width);
         expect(transform.y + transform.scale * point.y).toBeGreaterThanOrEqual(0);
-        expect(transform.y + transform.scale * point.y).toBeLessThanOrEqual(VIEWPORT_HEIGHT);
+        expect(transform.y + transform.scale * point.y).toBeLessThanOrEqual(viewport.height);
       }
     }
 
@@ -236,5 +311,65 @@ describe('dense production graph rendering', () => {
       .map(marker => marker.textContent);
     expect(nodeMarkers).toContain('ENTRY');
     expect(nodeMarkers).toContain('OUTCOME');
+  });
+
+  it('keeps a 39-node, 65-edge deep architecture readable in the live viewport', () => {
+    viewport = DEEP_VIEWPORT;
+    const graph = deepCapacityGraph();
+    const { container } = render(
+      <div style={{ width: viewport.width, height: viewport.height }}>
+        <D3Graph
+          graphData={graph}
+          currentStep={-1}
+          activeNodeIds={new Set<string>()}
+          onNodeClick={() => undefined}
+        />
+      </div>,
+    );
+
+    const viewportGroup = container.querySelector('svg > g');
+    const transform = parseTransform(viewportGroup?.getAttribute('transform') ?? null);
+    const nodes = Array.from(container.querySelectorAll<SVGGElement>('g.node'));
+    const paths = Array.from(container.querySelectorAll<SVGPathElement>('path.edge-vis'));
+    const positions = nodes.map(renderedNode => parsePosition(renderedNode.getAttribute('transform')));
+
+    expect(nodes).toHaveLength(39);
+    expect(paths).toHaveLength(65);
+    expect(container.querySelectorAll('text.node-group-label')).toHaveLength(39);
+    expect(NODE_TITLE_PX * transform.scale).toBeGreaterThanOrEqual(MIN_PUBLISHED_TITLE_PX);
+    expect(nodes.every(renderedNode => Number(renderedNode.getAttribute('opacity')) === 1)).toBe(true);
+    expect(paths.every(path => Boolean(path.getAttribute('d')))).toBe(true);
+
+    for (let left = 0; left < positions.length; left += 1) {
+      for (let right = left + 1; right < positions.length; right += 1) {
+        const horizontalOverlap = Math.abs(positions[left].x - positions[right].x) < NODE_W;
+        const verticalOverlap = Math.abs(positions[left].y - positions[right].y) < NODE_H;
+        expect(horizontalOverlap && verticalOverlap).toBe(false);
+      }
+    }
+
+    for (const position of positions) {
+      expect(transform.x + transform.scale * (position.x - NODE_W / 2)).toBeGreaterThanOrEqual(0);
+      expect(transform.x + transform.scale * (position.x + NODE_W / 2)).toBeLessThanOrEqual(viewport.width);
+      expect(transform.y + transform.scale * (position.y - NODE_H / 2)).toBeGreaterThanOrEqual(0);
+      expect(transform.y + transform.scale * (position.y + NODE_H / 2)).toBeLessThanOrEqual(viewport.height);
+    }
+
+    for (const path of paths) {
+      const controlPoints = pathControlPoints(path.getAttribute('d'));
+      expect(controlPoints.length).toBeGreaterThanOrEqual(2);
+      for (const point of controlPoints) {
+        expect(transform.x + transform.scale * point.x).toBeGreaterThanOrEqual(0);
+        expect(transform.x + transform.scale * point.x).toBeLessThanOrEqual(viewport.width);
+        expect(transform.y + transform.scale * point.y).toBeGreaterThanOrEqual(0);
+        expect(transform.y + transform.scale * point.y).toBeLessThanOrEqual(viewport.height);
+      }
+    }
+
+    const requiredLabels = Array.from(
+      container.querySelectorAll<SVGGElement>('g.edge-label[data-overview-required="true"]'),
+    );
+    expect(requiredLabels).toHaveLength(8);
+    expect(requiredLabels.every(label => Number(label.getAttribute('opacity')) > 0)).toBe(true);
   });
 });

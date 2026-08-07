@@ -11,6 +11,7 @@
 from pathlib import Path
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -57,23 +58,39 @@ class Settings(BaseSettings):
     anthropic_prompt_cache_enabled: bool = False
     # Bound concurrent Anthropic streams within each application process.
     anthropic_max_concurrent_streams: int = 4
+    # Tagged evaluation revisions set both values. Production leaves them off.
+    evaluation_run_id: str = ""
+    evaluation_provider_attempt_limit: int = 0
     # Ordinary calls use the bounded default. Reasoning-heavy roles may request
     # more room up to the hard cap without changing their visible output contract.
     llm_default_max_tokens: int = 12000
     llm_max_tokens: int = 131072
-    architecture_max_completion_tokens: int = 64000
+    architecture_max_completion_tokens: int = 16000
     graph_builder_max_completion_tokens: int = 65536
     graph_qa_max_completion_tokens: int = 16384
     # Hard timeout on the whole agent run (seconds); yields a timeout error event
-    agent_timeout_s: int = 360
+    agent_timeout_s: int = 910
     # Graph work must leave fixed synthesis, persistence, and transport headroom.
     agent_terminal_headroom_s: float = 30.0
-    graph_design_timeout_s: float = 90.0
-    architecture_pass_timeout_s: float = 60.0
-    architecture_review_timeout_s: float = 60.0
-    graph_critic_initial_timeout_s: float = 45.0
-    graph_critic_revision_timeout_s: float = 35.0
-    graph_patch_timeout_s: float = 90.0
+    # Stage admission keeps this time inside the terminal window for orchestration.
+    agent_orchestration_reserve_s: float = 30.0
+    # Bound the initial Kimi topology build and one typed repair while preserving
+    # independent review inside the terminal window.
+    graph_design_timeout_s: float = 150.0
+    architecture_role_timeout_s: float = 150.0
+    graph_critic_timeout_s: float = 90.0
+    # Sonnet reviews may borrow saved upstream time up to this liveness ceiling.
+    graph_critic_max_timeout_s: float = 180.0
+    graph_patch_timeout_s: float = 150.0
+    # Kimi may use time saved by earlier stages up to this per-call ceiling.
+    # Deadline admission still preserves the complete downstream review path.
+    graph_builder_max_timeout_s: float = 240.0
+    # Keep removed names visible so stale deployment overrides fail at startup
+    # instead of disappearing through `extra="ignore"`.
+    architecture_pass_timeout_s: float | None = None
+    architecture_review_timeout_s: float | None = None
+    graph_critic_initial_timeout_s: float | None = None
+    graph_critic_revision_timeout_s: float | None = None
     graph_synthesis_timeout_s: float = 55.0
     graph_finalization_reserve_s: float = 8.0
     # A browser renders candidate graphs off-screen and returns a bounded image
@@ -241,6 +258,34 @@ class Settings(BaseSettings):
         "twitter.com", "facebook.com", "instagram.com", "tiktok.com",
     ]
 
+    @model_validator(mode="after")
+    def reject_removed_timeout_settings(self):
+        removed = {
+            "ARCHITECTURE_PASS_TIMEOUT_S": self.architecture_pass_timeout_s,
+            "ARCHITECTURE_REVIEW_TIMEOUT_S": self.architecture_review_timeout_s,
+            "GRAPH_CRITIC_INITIAL_TIMEOUT_S": self.graph_critic_initial_timeout_s,
+            "GRAPH_CRITIC_REVISION_TIMEOUT_S": self.graph_critic_revision_timeout_s,
+        }
+        configured = sorted(name for name, value in removed.items() if value is not None)
+        if configured:
+            raise ValueError(
+                "Removed timeout settings are configured: "
+                + ", ".join(configured)
+                + ". Use ARCHITECTURE_ROLE_TIMEOUT_S and GRAPH_CRITIC_TIMEOUT_S."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_evaluation_provider_attempt_limit(self):
+        run_id = self.evaluation_run_id.strip()
+        limit = self.evaluation_provider_attempt_limit
+        if limit < 0 or bool(run_id) != (limit > 0):
+            raise ValueError(
+                "EVALUATION_RUN_ID and a positive "
+                "EVALUATION_PROVIDER_ATTEMPT_LIMIT must be configured together."
+            )
+        return self
+
     @property
     def cors_allowed_origins(self) -> list[str]:
         return [self.frontend_origin, "http://localhost:5173"]
@@ -313,6 +358,14 @@ class Settings(BaseSettings):
         missing = sorted(name for name, value in required_strings.items() if not value.strip())
         if missing:
             raise RuntimeError(f"Cloud Run configuration is incomplete: {', '.join(missing)}")
+        values_with_surrounding_whitespace = sorted(
+            name for name, value in required_strings.items() if value != value.strip()
+        )
+        if values_with_surrounding_whitespace:
+            raise RuntimeError(
+                "Cloud Run configuration contains surrounding whitespace: "
+                + ", ".join(values_with_surrounding_whitespace)
+            )
 
         if not self.frontend_origin.startswith("https://"):
             raise RuntimeError("FRONTEND_ORIGIN must use HTTPS in Cloud Run.")
@@ -324,17 +377,18 @@ class Settings(BaseSettings):
         positive_limits = {
             "AGENT_TIMEOUT_S": self.agent_timeout_s,
             "AGENT_TERMINAL_HEADROOM_S": self.agent_terminal_headroom_s,
-            "ARCHITECTURE_PASS_TIMEOUT_S": self.architecture_pass_timeout_s,
-            "ARCHITECTURE_REVIEW_TIMEOUT_S": self.architecture_review_timeout_s,
+            "AGENT_ORCHESTRATION_RESERVE_S": self.agent_orchestration_reserve_s,
+            "ARCHITECTURE_ROLE_TIMEOUT_S": self.architecture_role_timeout_s,
             "ARCHITECTURE_MAX_COMPLETION_TOKENS": (
                 self.architecture_max_completion_tokens
             ),
             "GRAPH_DESIGN_TIMEOUT_S": self.graph_design_timeout_s,
+            "GRAPH_BUILDER_MAX_TIMEOUT_S": self.graph_builder_max_timeout_s,
             "GRAPH_BUILDER_MAX_COMPLETION_TOKENS": (
                 self.graph_builder_max_completion_tokens
             ),
-            "GRAPH_CRITIC_INITIAL_TIMEOUT_S": self.graph_critic_initial_timeout_s,
-            "GRAPH_CRITIC_REVISION_TIMEOUT_S": self.graph_critic_revision_timeout_s,
+            "GRAPH_CRITIC_TIMEOUT_S": self.graph_critic_timeout_s,
+            "GRAPH_CRITIC_MAX_TIMEOUT_S": self.graph_critic_max_timeout_s,
             "GRAPH_QA_MAX_COMPLETION_TOKENS": self.graph_qa_max_completion_tokens,
             "GRAPH_PATCH_TIMEOUT_S": self.graph_patch_timeout_s,
             "GRAPH_SYNTHESIS_TIMEOUT_S": self.graph_synthesis_timeout_s,
@@ -376,6 +430,35 @@ class Settings(BaseSettings):
             raise RuntimeError(f"Cloud Run limits must be positive: {', '.join(invalid)}")
         if self.agent_terminal_headroom_s >= self.agent_timeout_s:
             raise RuntimeError("AGENT_TERMINAL_HEADROOM_S must be below AGENT_TIMEOUT_S.")
+        if self.graph_builder_max_timeout_s < max(
+            self.graph_design_timeout_s,
+            self.graph_patch_timeout_s,
+        ):
+            raise RuntimeError(
+                "GRAPH_BUILDER_MAX_TIMEOUT_S cannot be below the reserved design or patch timeout."
+            )
+        if self.graph_critic_max_timeout_s < self.graph_critic_timeout_s:
+            raise RuntimeError(
+                "GRAPH_CRITIC_MAX_TIMEOUT_S cannot be below the reserved critic timeout."
+            )
+        complete_architecture_path_s = (
+            2 * self.architecture_role_timeout_s
+            + self.graph_design_timeout_s
+            + self.graph_critic_timeout_s
+            + self.graph_patch_timeout_s
+            + self.graph_critic_timeout_s
+            + self.graph_synthesis_timeout_s
+            + self.graph_finalization_reserve_s
+        )
+        terminal_window_s = self.agent_timeout_s - self.agent_terminal_headroom_s
+        if (
+            complete_architecture_path_s + self.agent_orchestration_reserve_s
+            > terminal_window_s
+        ):
+            raise RuntimeError(
+                "Agent terminal window cannot fit the complete architecture repair path "
+                "and orchestration reserve."
+            )
         if self.llm_max_tokens <= self.production_thinking_budget_tokens:
             raise RuntimeError(
                 "LLM_MAX_TOKENS must be greater than PRODUCTION_THINKING_BUDGET_TOKENS."

@@ -78,19 +78,18 @@ def test_topology_builder_delegates_size_to_material_design():
     assert "9 nodes" not in contract
 
 
-def test_patch_topology_context_includes_mutable_fields_and_omits_graph_metadata():
+def test_patch_topology_context_includes_every_mutable_graph_layer():
     context = json.loads(graph_worker._format_patch_topology({
         "title": "Bounded graph",
-        "assumptions": ["not needed by the patch model"],
+        "assumptions": ["The policy store supports version reads."],
         "groups": [{"id": "runtime"}],
+        "sequence": [{"step": 1, "nodes": ["gate"], "description": "Review."}],
         "nodes": [{
             "id": "gate",
             "label": "Approval Gate",
             "type": "decision",
             "description": "Routes approved and rejected outcomes.",
             "technology": "Policy rules engine",
-            "tier": "private",
-            "lane": "main",
         }],
         "edges": [{
             "source": "gate",
@@ -104,7 +103,12 @@ def test_patch_topology_context_includes_mutable_fields_and_omits_graph_metadata
         }],
     }))
 
-    assert set(context) == {"title", "nodes", "edges"}
+    assert set(context) == {
+        "title", "nodes", "edges", "groups", "sequence", "assumptions",
+    }
+    assert context["groups"] == [{"id": "runtime"}]
+    assert context["sequence"][0]["nodes"] == ["gate"]
+    assert context["assumptions"] == ["The policy store supports version reads."]
     assert set(context["nodes"][0]) == {
         "id", *graph_worker._PATCH_NODE_MUTABLE_FIELDS,
     }
@@ -202,6 +206,36 @@ def _domain_graph(node_count: int, *, production: bool = False) -> dict:
     )
 
 
+def _layer(status="pass", *, findings=None, **selectors):
+    return {
+        "status": status,
+        "score": 0.7 if status == "fail" else 0.9,
+        "blocking_findings": list(findings or []),
+        "deterministic_finding_ids": [],
+        "node_ids": list(selectors.get("node_ids") or []),
+        "edge_selectors": list(selectors.get("edge_selectors") or []),
+        "group_ids": list(selectors.get("group_ids") or []),
+        "composition_fields": list(selectors.get("composition_fields") or []),
+        "sequence_indexes": list(selectors.get("sequence_indexes") or []),
+        "assumption_indexes": list(selectors.get("assumption_indexes") or []),
+        "reason": "The layer was assessed against the requested architecture.",
+    }
+
+
+def _local_repair_contract(*, failed_layers):
+    layers = {
+        layer: _layer()
+        for layer in ("components", "connections", "composition", "render")
+    }
+    for layer, selectors in failed_layers.items():
+        layers[layer] = _layer(
+            "fail",
+            findings=[f"Repair the {layer} layer."],
+            **selectors,
+        )
+    return {"repair_scope": "local", "layers": layers}
+
+
 def test_hardest_branch_return_patch_bypasses_write_gate_and_preserves_eval_harness():
     existing = _domain_graph(5)
     renamed_ids = {
@@ -288,8 +322,6 @@ def test_cache_node_patch_preserves_unrelated_production_graph_out_of_sample():
                 "type": "datastore",
                 "technology": "Bounded TTL key-value cache",
                 "description": "Reuses fresh carrier quotes while preserving expiry provenance.",
-                "tier": "private",
-                "lane": "main",
             }
         ],
         "add_edges": [
@@ -340,6 +372,9 @@ def test_cache_node_patch_preserves_unrelated_production_graph_out_of_sample():
         and edge["target"] == "fulfilment_stage_8"
     )
     assert "carrier_quote_cache" in result["groups"][1]["nodeIds"]
+    cache = next(node for node in result["nodes"] if node["id"] == "carrier_quote_cache")
+    assert cache["tier"] is None
+    assert cache["lane"] == "main"
 
 
 def test_patch_updates_nodes_and_edges_and_removes_only_selected_edge():
@@ -493,7 +528,7 @@ def test_invalid_patch_operations_are_rejected_without_mutation(patch, error):
     assert existing == before
 
 
-def test_patch_cannot_replace_most_of_an_approved_graph():
+def test_patch_has_no_percentage_retention_heuristic():
     existing = _domain_graph(5)
     incident_edge_ids = [
         graph_worker._patch_edge_id(index)
@@ -502,19 +537,189 @@ def test_patch_cannot_replace_most_of_an_approved_graph():
         or edge["target"] in {"fulfilment_stage_2", "fulfilment_stage_3", "fulfilment_stage_4"}
     ]
 
-    with pytest.raises(ValueError, match="preserve at least 60%"):
+    result = graph_worker._apply_applied_graph_patch(
+        existing,
+        {
+            "remove_nodes": [
+                "fulfilment_stage_2",
+                "fulfilment_stage_3",
+                "fulfilment_stage_4",
+            ],
+            "remove_edges": incident_edge_ids,
+        },
+        safety_max_nodes=7,
+        resolved_complexity="prototype",
+    )
+
+    assert [node["id"] for node in result["nodes"]] == [
+        "fulfilment_stage_0", "fulfilment_stage_1",
+    ]
+
+
+def test_repair_contract_rejects_out_of_scope_node_mutation_before_normalization():
+    existing = _domain_graph(5)
+    before = copy.deepcopy(existing)
+    contract = _local_repair_contract(
+        failed_layers={"components": {"node_ids": ["fulfilment_stage_0"]}}
+    )
+
+    with pytest.raises(ValueError, match="changed locked node"):
         graph_worker._apply_applied_graph_patch(
             existing,
             {
-                "remove_nodes": [
-                    "fulfilment_stage_2",
-                    "fulfilment_stage_3",
-                    "fulfilment_stage_4",
-                ],
-                "remove_edges": incident_edge_ids,
+                "update_nodes": [{
+                    "id": "fulfilment_stage_1",
+                    "set": {"description": "Out-of-scope mutation."},
+                }],
             },
             safety_max_nodes=7,
             resolved_complexity="prototype",
+            repair_contract=contract,
+        )
+
+    assert existing == before
+
+
+def test_mixed_render_repair_keeps_passing_graph_layers_locked():
+    existing = _domain_graph(5)
+    before = copy.deepcopy(existing)
+    contract = _local_repair_contract(
+        failed_layers={
+            "components": {"node_ids": ["fulfilment_stage_0"]},
+            "render": {},
+        }
+    )
+
+    with pytest.raises(ValueError, match="locked connections layer"):
+        graph_worker._apply_applied_graph_patch(
+            existing,
+            {
+                "update_edges": [
+                    {
+                        "edge_id": "edge_1",
+                        "set": {"label": "unapproved visual shortcut"},
+                    }
+                ],
+            },
+            safety_max_nodes=7,
+            resolved_complexity="prototype",
+            repair_contract=contract,
+        )
+
+    assert existing == before
+
+
+def test_component_repair_preserves_persisted_render_view_state():
+    existing = _domain_graph(5)
+    existing["view_state"] = {
+        "layoutVersion": 1,
+        "nodePositions": {
+            "fulfilment_stage_0": {"x": 120.0, "y": 80.0},
+        },
+        "viewport": {"x": 10.0, "y": 20.0, "k": 0.8},
+    }
+    contract = _local_repair_contract(
+        failed_layers={"components": {"node_ids": ["fulfilment_stage_0"]}}
+    )
+
+    updated = graph_worker._apply_applied_graph_patch(
+        existing,
+        {
+            "update_nodes": [
+                {
+                    "id": "fulfilment_stage_0",
+                    "set": {"description": "Owns the corrected intake responsibility."},
+                }
+            ]
+        },
+        safety_max_nodes=7,
+        resolved_complexity="prototype",
+        repair_contract=contract,
+    )
+
+    assert updated["view_state"] == existing["view_state"]
+
+
+def test_group_only_repair_rederives_lane_without_unlocking_components():
+    existing = _domain_graph(9, production=True)
+    groups = copy.deepcopy(existing["groups"])
+    groups[0]["nodeIds"].remove("fulfilment_stage_0")
+    groups[2]["nodeIds"].append("fulfilment_stage_0")
+    contract = _local_repair_contract(
+        failed_layers={
+            "composition": {
+                "composition_fields": ["groups"],
+                "group_ids": ["intake", "outcomes"],
+            },
+        }
+    )
+
+    updated = graph_worker._apply_applied_graph_patch(
+        existing,
+        {"groups": groups},
+        safety_max_nodes=12,
+        resolved_complexity="production",
+        repair_contract=contract,
+    )
+
+    before = next(
+        node for node in existing["nodes"] if node["id"] == "fulfilment_stage_0"
+    )
+    after = next(
+        node for node in updated["nodes"] if node["id"] == "fulfilment_stage_0"
+    )
+    assert before["lane"] == "main"
+    assert after["lane"] == "bottom"
+    assert after["tier"] is None
+    assert {
+        field: after[field] for field in graph_worker._PATCH_NODE_MUTABLE_FIELDS
+    } == {
+        field: before[field] for field in graph_worker._PATCH_NODE_MUTABLE_FIELDS
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "selectors", "replacement"),
+    [
+        (
+            "sequence",
+            {"sequence_indexes": [0]},
+            [
+                {"step": 1, "nodes": ["fulfilment_stage_0"], "description": "Allowed."},
+                {"step": 2, "nodes": ["fulfilment_stage_1"], "description": "Locked edit."},
+                {"step": 3, "nodes": ["fulfilment_stage_2"], "description": "Runs observable marketplace step 3."},
+                {"step": 4, "nodes": ["fulfilment_stage_3"], "description": "Runs observable marketplace step 4."},
+            ],
+        ),
+        (
+            "assumptions",
+            {"assumption_indexes": []},
+            ["Changed locked assumption."],
+        ),
+    ],
+)
+def test_repair_contract_locks_uncited_composition_records(
+    field,
+    selectors,
+    replacement,
+):
+    existing = _domain_graph(9, production=True)
+    contract = _local_repair_contract(
+        failed_layers={
+            "composition": {
+                "composition_fields": [field],
+                **selectors,
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match=f"locked {field} record"):
+        graph_worker._apply_applied_graph_patch(
+            existing,
+            {field: replacement},
+            safety_max_nodes=12,
+            resolved_complexity="production",
+            repair_contract=contract,
         )
 
 
@@ -726,6 +931,177 @@ def test_graph_parser_keeps_independent_control_defects_for_one_critic_review():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Fix the typo in the cache label",
+        "Rename the cache node",
+        "Remove the stale edge",
+        "Change the edge label",
+        "Redesign this edge",
+        "Redesign the cache group",
+        "Redesign the whole architecture from scratch with a fraud node",
+        "Replace the entire diagram while keeping the title",
+        "Do not redesign the whole graph; only update this edge",
+        "Update this edge without redesigning the whole graph",
+        "Redesign this edge to show the complete architecture flow",
+        "Redesign the cache group so the whole graph remains clear",
+        "Rebuild the cache node",
+        "Start over with the graph",
+    ],
+)
+async def test_existing_applied_graph_local_edits_use_incremental_patch_lane(
+    monkeypatch,
+    message,
+):
+    existing = _domain_graph(5)
+    target_id = existing["nodes"][1]["id"]
+    topology_calls = []
+    patch_calls = []
+
+    async def fake_stream_structured_llm(**kwargs):
+        topology_calls.append(kwargs)
+        raise AssertionError("local graph edits must not redraw the full topology")
+
+    async def fake_stream_llm(**kwargs):
+        patch_calls.append(kwargs)
+        return json.dumps({
+            "update_nodes": [
+                {
+                    "id": target_id,
+                    "set": {"description": "Owns the corrected cache responsibility."},
+                }
+            ]
+        })
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr(graph_worker, "stream_structured_llm", fake_stream_structured_llm)
+    monkeypatch.setattr(graph_worker, "stream_llm", fake_stream_llm)
+
+    result = await graph_worker.graph_worker_node(
+        {
+            "architecture_ready": False,
+            "architect_plan": {},
+            "challenger_review": {},
+            "send": send,
+            "design_query": message,
+            "user_message": message,
+            "history": [],
+            "graph_data": existing,
+            "approved_graph_data": copy.deepcopy(existing),
+            "graph_revision_count": 0,
+            "complexity": "prototype",
+            "research_context": "",
+            "rag_chunks": [],
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        },
+        [],
+    )
+
+    assert topology_calls == []
+    assert len(patch_calls) == 1
+    assert patch_calls[0]["telemetry"]["metadata"]["model_role"] == "incremental_patch"
+    assert message in patch_calls[0]["messages"][0]["content"]
+    assert next(node for node in result["graph_data"]["nodes"] if node["id"] == target_id)[
+        "description"
+    ] == "Owns the corrected cache responsibility."
+
+
+@pytest.mark.asyncio
+async def test_new_applied_topic_replaces_instead_of_patching_existing_graph(monkeypatch):
+    existing = _domain_graph(5)
+    topology_calls = []
+
+    async def fake_stream_structured_llm(**kwargs):
+        topology_calls.append(kwargs)
+        return SimpleNamespace(text="not-json", finish_reason="end_turn")
+
+    async def fail_patch(**_kwargs):
+        raise AssertionError("a new system request must not patch the prior domain")
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr(graph_worker, "stream_structured_llm", fake_stream_structured_llm)
+    monkeypatch.setattr(graph_worker, "stream_llm", fail_patch)
+
+    result = await graph_worker.graph_worker_node(
+        {
+            "architecture_ready": True,
+            "architect_plan": {},
+            "challenger_review": {},
+            "send": send,
+            "design_query": "Design a fraud detection system",
+            "user_message": "Design a fraud detection system",
+            "history": [],
+            "graph_data": existing,
+            "approved_graph_data": copy.deepcopy(existing),
+            "graph_revision_count": 0,
+            "complexity": "prototype",
+            "research_context": "",
+            "rag_chunks": [],
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        },
+        [],
+    )
+
+    assert len(topology_calls) == 1
+    assert result["graph_data"] == existing
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Explain RAG",
+        "Do not update the current graph; explain RAG",
+        "Describe the architecture",
+    ],
+)
+async def test_unrelated_query_preserves_existing_applied_graph(monkeypatch, message):
+    existing = _domain_graph(5)
+
+    async def fail_model(**_kwargs):
+        raise AssertionError("an unrelated concept query must not call a graph model")
+
+    def fail_canonical_selection(**_kwargs):
+        raise AssertionError("an unrelated query must not replace an approved applied graph")
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr(graph_worker, "stream_structured_llm", fail_model)
+    monkeypatch.setattr(graph_worker, "stream_llm", fail_model)
+    monkeypatch.setattr(graph_worker, "load_canonical_graph_cached", lambda: object())
+    monkeypatch.setattr(graph_worker, "select_canonical_graph", fail_canonical_selection)
+
+    result = await graph_worker.graph_worker_node(
+        {
+            "architecture_ready": False,
+            "architect_plan": {},
+            "challenger_review": {},
+            "send": send,
+            "design_query": message,
+            "user_message": message,
+            "history": [],
+            "graph_data": existing,
+            "approved_graph_data": copy.deepcopy(existing),
+            "graph_revision_count": 0,
+            "complexity": "prototype",
+            "research_context": "",
+            "rag_chunks": [],
+        },
+        [],
+    )
+
+    assert result["graph_data"] == existing
+
+
+@pytest.mark.asyncio
 async def test_targeted_existing_graph_followup_uses_incremental_patch_lane(monkeypatch):
     existing = _domain_graph(5)
     added_edge = {
@@ -744,12 +1120,16 @@ async def test_targeted_existing_graph_followup_uses_incremental_patch_lane(monk
         return json.dumps({"add_edges": [added_edge]})
 
     monkeypatch.setattr(graph_worker, "stream_llm", fake_stream_llm)
-    result = await graph_worker._generate_applied_architecture_patch(
+    result = await graph_worker._generate_applied_architecture(
         {
+            "architecture_ready": True,
+            "architect_plan": {},
+            "challenger_review": {},
             "send": None,
-            "user_message": "Expand the exception return paths",
+            "user_message": "Expand the exception return edges",
             "history": [],
             "graph_data": existing,
+            "approved_graph_data": copy.deepcopy(existing),
             "graph_revision_count": 0,
             "complexity": "prototype",
             "research_context": "",
@@ -757,9 +1137,8 @@ async def test_targeted_existing_graph_followup_uses_incremental_patch_lane(monk
             "user_id": "user-1",
             "session_id": "thread-1",
         },
-        "marketplace fulfilment system expand the exception return paths",
+        "marketplace fulfilment system expand the exception return edges",
         SimpleNamespace(resolved="prototype"),
-        existing,
     )
 
     assert len(result["edges"]) == len(existing["edges"]) + 1
@@ -770,6 +1149,191 @@ async def test_targeted_existing_graph_followup_uses_incremental_patch_lane(monk
     assert "Source and target must be distinct" in calls[0]["system"]
     assert "immutable repair-only edge_id" in calls[0]["system"]
     assert '"remove_edges": ["edge_2"]' in calls[0]["system"]
+
+
+@pytest.mark.asyncio
+async def test_first_unpublished_critic_revision_uses_incremental_patch_lane(
+    monkeypatch,
+):
+    existing = _domain_graph(5)
+    original = copy.deepcopy(existing)
+    target_id = existing["nodes"][1]["id"]
+    topology_calls = []
+    patch_calls = []
+
+    async def fake_stream_structured_llm(**kwargs):
+        topology_calls.append(kwargs)
+        raise AssertionError("critic revisions must not redraw the full topology")
+
+    async def fake_stream_llm(**kwargs):
+        patch_calls.append(kwargs)
+        return json.dumps(
+            {
+                "update_nodes": [
+                    {
+                        "id": target_id,
+                        "set": {
+                            "description": (
+                                "Validates the request before the existing handoff."
+                            )
+                        },
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(graph_worker, "stream_structured_llm", fake_stream_structured_llm)
+    monkeypatch.setattr(graph_worker, "stream_llm", fake_stream_llm)
+
+    updated = await graph_worker._generate_applied_architecture(
+        {
+            "architecture_ready": True,
+            "architect_plan": {},
+            "challenger_review": {},
+            "complexity": "prototype",
+            "graph_data": existing,
+            "approved_graph_data": None,
+            "graph_revision_count": 1,
+            "graph_review": {
+                "approved": False,
+                "repair_contract": _local_repair_contract(
+                    failed_layers={"components": {"node_ids": [target_id]}}
+                ),
+            },
+            "send": None,
+            "session_id": "thread-1",
+            "user_id": "user-1",
+            "user_message": "Repair the current candidate.",
+        },
+        "Design a fulfilment workflow",
+        SimpleNamespace(resolved="prototype"),
+    )
+
+    assert topology_calls == []
+    assert len(patch_calls) == 1
+    assert patch_calls[0]["effort"] == "max"
+    assert patch_calls[0]["telemetry"]["metadata"]["model_role"] == "incremental_patch"
+    assert existing == original
+    assert [node["id"] for node in updated["nodes"]] == [
+        node["id"] for node in original["nodes"]
+    ]
+    assert next(node for node in updated["nodes"] if node["id"] == target_id)[
+        "description"
+    ] == "Validates the request before the existing handoff."
+    assert {
+        node["id"]: node for node in updated["nodes"] if node["id"] != target_id
+    } == {
+        node["id"]: node for node in original["nodes"] if node["id"] != target_id
+    }
+    assert updated.keys() == original.keys()
+    for key, value in original.items():
+        if key != "nodes":
+            assert updated[key] == value
+
+
+@pytest.mark.asyncio
+async def test_production_unpublished_repair_adds_node_and_group_without_changing_existing_groups(
+    monkeypatch,
+):
+    existing = _domain_graph(9, production=True)
+    before = copy.deepcopy(existing)
+    groups = copy.deepcopy(existing["groups"])
+    groups.append({
+        "id": "exception_reconciliation",
+        "label": "Exception reconciliation",
+        "kind": "operations",
+        "nodeIds": ["exception_reconciler"],
+    })
+    patch_calls = []
+    topology_calls = []
+
+    async def fake_stream_structured_llm(**kwargs):
+        topology_calls.append(kwargs)
+        raise AssertionError("critic repair must not regenerate the topology")
+
+    async def fake_stream_llm(**kwargs):
+        patch_calls.append(kwargs)
+        return json.dumps({
+            "add_nodes": [{
+                "id": "exception_reconciler",
+                "label": "Exception Reconciler",
+                "type": "service",
+                "technology": "Versioned reconciliation worker",
+                "description": "Owns bounded fulfilment exception reconciliation.",
+            }],
+            "add_edges": [
+                {
+                    "source": "fulfilment_stage_7",
+                    "target": "exception_reconciler",
+                    "label": "routes unresolved delivery exception",
+                    "technology": "Versioned exception event",
+                    "sync": "async",
+                    "flow": "control",
+                    "description": "Routes the unresolved exception to its bounded owner.",
+                },
+                {
+                    "source": "exception_reconciler",
+                    "target": "fulfilment_stage_2",
+                    "label": "returns reconciled parcel state",
+                    "technology": "Versioned parcel event",
+                    "sync": "async",
+                    "flow": "control",
+                    "description": "Returns reconciled state to the existing runtime path.",
+                },
+            ],
+            "groups": groups,
+        })
+
+    contract = _local_repair_contract(
+        failed_layers={
+            "components": {},
+            "connections": {},
+            "composition": {
+                "composition_fields": ["groups"],
+            },
+        }
+    )
+    monkeypatch.setattr(graph_worker, "stream_structured_llm", fake_stream_structured_llm)
+    monkeypatch.setattr(graph_worker, "stream_llm", fake_stream_llm)
+
+    updated = await graph_worker._generate_applied_architecture(
+        {
+            "architecture_ready": True,
+            "architect_plan": {},
+            "challenger_review": {},
+            "complexity": "production",
+            "graph_data": existing,
+            "approved_graph_data": None,
+            "graph_revision_count": 1,
+            "graph_review": {"approved": False, "repair_contract": contract},
+            "send": None,
+            "session_id": "thread-1",
+            "user_id": "user-1",
+            "user_message": "Repair the unpublished production candidate.",
+        },
+        "Design a production fulfilment workflow",
+        SimpleNamespace(resolved="production"),
+    )
+
+    assert topology_calls == []
+    assert len(patch_calls) == 1
+    assert existing == before
+    assert any(node["id"] == "exception_reconciler" for node in updated["nodes"])
+    reconciler = next(
+        node for node in updated["nodes"] if node["id"] == "exception_reconciler"
+    )
+    assert reconciler["tier"] is None
+    assert reconciler["lane"] == "bottom"
+    assert updated["groups"][: len(before["groups"])] == before["groups"]
+    assert updated["groups"][-1] == {
+        "id": "exception_reconciliation",
+        "label": "Exception reconciliation",
+        "kind": "operations",
+        "nodeIds": ["exception_reconciler"],
+    }
+    prompt = patch_calls[0]["messages"][0]["content"]
+    assert '"repair_scope": "local"' in prompt
+    assert "60%" not in prompt
 
 
 @pytest.mark.asyncio
@@ -870,7 +1434,11 @@ async def test_invalid_patch_preserves_approved_graph_without_duplicate_model_ca
             "graph_revision_count": 1,
             "graph_review": {
                 "approved": False,
-                "revision_instruction": "Close the exception branch without replacing the graph.",
+                "repair_contract": _local_repair_contract(
+                    failed_layers={
+                        "components": {"node_ids": ["fulfilment_stage_2"]},
+                    }
+                ),
             },
             "complexity": "prototype",
             "research_context": "",
@@ -934,7 +1502,9 @@ async def test_invalid_self_edge_patch_preserves_graph_without_duplicate_model_c
             "user_message": "Make failure recovery explicit",
             "graph_review": {
                 "approved": False,
-                "revision_instruction": "Separate generation failure from evaluation rejection.",
+                "repair_contract": _local_repair_contract(
+                    failed_layers={"connections": {}},
+                ),
             },
             "complexity": "prototype",
             "graph_revision_count": 1,

@@ -1,9 +1,13 @@
+import json
+
 import pytest
 
 from config import settings
 from agent.nodes.architecture_workers import (
     _ARCHITECT_PROMPT_VERSION,
+    _ARCHITECT_RESPONSE_SCHEMA,
     _ARCHITECT_SYSTEM,
+    _CHALLENGER_RESPONSE_SCHEMA,
     _CHALLENGER_SYSTEM,
     _is_complete_architect_plan,
     _normalise_architect,
@@ -12,10 +16,26 @@ from agent.nodes.architecture_workers import (
     challenger_node,
     format_diagram_commitments,
 )
+from agent.stream_utils import StructuredLLMResponse
+
+
+def _structured_response(
+    payload: dict | str,
+    *,
+    finish_reason: str | None = "end_turn",
+) -> StructuredLLMResponse:
+    return StructuredLLMResponse(
+        text=payload if isinstance(payload, str) else json.dumps(payload),
+        finish_reason=finish_reason,
+        input_tokens=1,
+        output_tokens=1,
+        provider="anthropic",
+        model="claude-opus-5",
+    )
 
 
 def test_architecture_roles_reason_about_enforced_control_paths():
-    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v12"
+    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v14"
     assert "production guarantees as directed paths" in _ARCHITECT_SYSTEM
     assert "timeout-after-commit as an unknown outcome" in _ARCHITECT_SYSTEM
     assert "retrieved content stays untrusted" in _ARCHITECT_SYSTEM
@@ -28,6 +48,22 @@ def test_architecture_roles_reason_about_enforced_control_paths():
     assert "partition/order or event-time semantics" in _ARCHITECT_SYSTEM
     assert "replay/checkpoint and deduplication ownership" in _ARCHITECT_SYSTEM
     assert "compatible schema evolution" in _ARCHITECT_SYSTEM
+    assert "complete JSON under 12,000 characters" in _ARCHITECT_SYSTEM
+    assert "complete JSON under 8,000 characters" in _CHALLENGER_SYSTEM
+
+
+def test_architecture_worker_schemas_require_every_declared_object_field():
+    schemas = (
+        _ARCHITECT_RESPONSE_SCHEMA,
+        _ARCHITECT_RESPONSE_SCHEMA["properties"]["evidence_basis"]["items"],
+        _ARCHITECT_RESPONSE_SCHEMA["properties"]["decisions"]["items"],
+        _CHALLENGER_RESPONSE_SCHEMA,
+        _CHALLENGER_RESPONSE_SCHEMA["properties"]["risks"]["items"],
+    )
+
+    for schema in schemas:
+        assert schema["additionalProperties"] is False
+        assert set(schema["required"]) == set(schema["properties"])
 
 
 def test_complete_architect_plan_may_have_no_material_assumptions():
@@ -174,13 +210,18 @@ def test_challenger_context_includes_the_primary_plan_for_the_second_pass():
 
 @pytest.mark.asyncio
 async def test_architect_failure_stops_graph_input_instead_of_inventing_a_plan(monkeypatch):
+    events = []
+
     async def fail_model(**_kwargs):
         raise TimeoutError("provider timeout")
 
-    async def send(_event):
-        return None
+    async def send(event):
+        events.append(event)
 
-    monkeypatch.setattr("agent.nodes.architecture_workers.stream_llm", fail_model)
+    monkeypatch.setattr(
+        "agent.nodes.architecture_workers.stream_structured_llm",
+        fail_model,
+    )
     result = await architect_node({
         "is_applied_design": True,
         "design_query": "customer support chatbot",
@@ -191,6 +232,7 @@ async def test_architect_failure_stops_graph_input_instead_of_inventing_a_plan(m
     })
 
     assert result == {"architect_plan": {}, "architecture_ready": False}
+    assert events[-1]["failure_code"] == "architecture_pass_timeout"
 
 
 @pytest.mark.asyncio
@@ -199,12 +241,15 @@ async def test_architect_empty_success_stops_graph_input(monkeypatch):
 
     async def empty_model(**kwargs):
         captured.update(kwargs)
-        return "{}"
+        return _structured_response({})
 
     async def send(_event):
         return None
 
-    monkeypatch.setattr("agent.nodes.architecture_workers.stream_llm", empty_model)
+    monkeypatch.setattr(
+        "agent.nodes.architecture_workers.stream_structured_llm",
+        empty_model,
+    )
     result = await architect_node({
         "is_applied_design": True,
         "design_query": "growth marketing multi-agent system",
@@ -217,9 +262,50 @@ async def test_architect_empty_success_stops_graph_input(monkeypatch):
     assert result == {"architect_plan": {}, "architecture_ready": False}
     assert captured["effort"] == "xhigh"
     assert captured["model"] == "claude-opus-5"
-    assert captured["timeout_seconds"] == settings.architecture_pass_timeout_s
+    assert captured["timeout_seconds"] == settings.architecture_role_timeout_s
     assert captured["max_output_tokens"] == settings.architecture_max_completion_tokens
-    assert captured["allow_fallback"] is False
+    assert captured["response_schema"] is _ARCHITECT_RESPONSE_SCHEMA
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("text", "finish_reason"),
+    [
+        ("prefix {}", "end_turn"),
+        ("{}", "max_tokens"),
+        ("{}", None),
+    ],
+)
+async def test_architect_rejects_malformed_or_incomplete_structured_output(
+    monkeypatch,
+    text,
+    finish_reason,
+):
+    events = []
+
+    async def invalid_model(**_kwargs):
+        return _structured_response(text, finish_reason=finish_reason)
+
+    async def send(event):
+        events.append(event)
+
+    monkeypatch.setattr(
+        "agent.nodes.architecture_workers.stream_structured_llm",
+        invalid_model,
+    )
+    result = await architect_node(
+        {
+            "is_applied_design": True,
+            "design_query": "customer support chatbot",
+            "user_message": "customer support chatbot",
+            "complexity": "auto",
+            "evidence_bundle": {},
+            "send": send,
+        }
+    )
+
+    assert result == {"architect_plan": {}, "architecture_ready": False}
+    assert events[-1]["failure_code"] == "architecture_pass_invalid"
 
 
 @pytest.mark.asyncio
@@ -233,7 +319,10 @@ async def test_challenger_failure_stops_graph_input(monkeypatch):
     async def send(_event):
         return None
 
-    monkeypatch.setattr("agent.nodes.architecture_workers.stream_llm", fail_model)
+    monkeypatch.setattr(
+        "agent.nodes.architecture_workers.stream_structured_llm",
+        fail_model,
+    )
     result = await challenger_node({
         "is_applied_design": True,
         "design_query": "airport baggage recovery system",
@@ -249,6 +338,6 @@ async def test_challenger_failure_stops_graph_input(monkeypatch):
     assert captured["effort"] == "xhigh"
     assert captured["model"] == "claude-opus-5"
     assert "Primary architect candidate" in captured["messages"][0]["content"]
-    assert captured["timeout_seconds"] == settings.architecture_review_timeout_s
+    assert captured["timeout_seconds"] == settings.architecture_role_timeout_s
     assert captured["max_output_tokens"] == settings.architecture_max_completion_tokens
-    assert captured["allow_fallback"] is False
+    assert captured["response_schema"] is _CHALLENGER_RESPONSE_SCHEMA

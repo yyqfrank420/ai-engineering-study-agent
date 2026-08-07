@@ -10,14 +10,98 @@ from typing import Any
 from adapters.llm_adapter import build_telemetry
 from agent.architecture_playbook import format_evidence_bundle
 from agent.complexity import resolve_complexity
+from agent.deadlines import architecture_timeout_seconds
 from agent.state import AgentState
-from agent.stream_utils import stream_llm
+from agent.stream_utils import StructuredLLMResponse, stream_structured_llm
 from config import settings
 
 
 logger = logging.getLogger(__name__)
 
-_ARCHITECT_PROMPT_VERSION = "architecture_roles_v12"
+_ARCHITECT_PROMPT_VERSION = "architecture_roles_v14"
+
+
+def _strict_object_schema(properties: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": list(properties),
+        "properties": properties,
+    }
+
+
+_ARCHITECT_RESPONSE_SCHEMA = _strict_object_schema(
+    {
+        "interpretation": {"type": "string"},
+        "actors": {"type": "array", "items": {"type": "string"}},
+        "inputs": {"type": "array", "items": {"type": "string"}},
+        "outputs": {"type": "array", "items": {"type": "string"}},
+        "required_capabilities": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "diagram_requirements": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "outcome_measures": {"type": "array", "items": {"type": "string"}},
+        "constraints": {"type": "array", "items": {"type": "string"}},
+        "assumptions": {"type": "array", "items": {"type": "string"}},
+        "open_questions": {"type": "array", "items": {"type": "string"}},
+        "evidence_basis": {
+            "type": "array",
+            "items": _strict_object_schema(
+                {
+                    "claim": {"type": "string"},
+                    "basis": {
+                        "type": "string",
+                        "enum": [
+                            "user",
+                            "book",
+                            "web",
+                            "engineering_recommendation",
+                        ],
+                    },
+                    "evidence_ref": {"type": "string"},
+                }
+            ),
+        },
+        "decisions": {
+            "type": "array",
+            "items": _strict_object_schema(
+                {
+                    "area": {"type": "string"},
+                    "decision": {"type": "string"},
+                    "why": {"type": "string"},
+                }
+            ),
+        },
+        "runtime_flow": {"type": "array", "items": {"type": "string"}},
+        "status_update": {"type": "string"},
+    }
+)
+
+
+_CHALLENGER_RESPONSE_SCHEMA = _strict_object_schema(
+    {
+        "risks": {
+            "type": "array",
+            "items": _strict_object_schema(
+                {
+                    "area": {"type": "string"},
+                    "risk": {"type": "string"},
+                    "mitigation": {"type": "string"},
+                }
+            ),
+        },
+        "missing_requirements": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "tradeoffs": {"type": "array", "items": {"type": "string"}},
+        "status_update": {"type": "string"},
+    }
+)
 
 
 _ARCHITECT_SYSTEM = """<role>
@@ -82,6 +166,9 @@ concern only when it materially affects this scenario.
 - Do not draw the final graph and do not expose private chain-of-thought.
 - For every book- or web-grounded decision, include the exact chapter/page or URL from the supplied
   bundle in evidence_ref. Never invent a source or imply that a snippet establishes more than it says.
+- Keep the complete JSON under 12,000 characters. Remove repeated rationale before dropping a
+  material actor, boundary, route, failure outcome, or decision. This is a planning response bound,
+  not a limit on the graph that the builder may produce.
 - Prefer precise domain nouns over prose. Include every material actor, input, output, capability,
   decision, diagram commitment, and runtime step needed by this design.
 </rules>
@@ -149,6 +236,8 @@ graph is produced. Return focused corrections rather than a replacement plan.
 - Distinguish a true requirement from an optional hardening measure.
 - Report every independent blocking risk another design pass must resolve. Do not expose private
   chain-of-thought.
+- Keep the complete JSON under 8,000 characters. Consolidate duplicate risks while retaining every
+  independent correction that could change the built architecture.
 </rules>
 
 <output_contract>
@@ -175,31 +264,37 @@ async def architect_node(state: AgentState) -> dict[str, Any]:
         detail="Mapping the runtime loop and the smallest useful boundaries.",
     )
     try:
-        raw = await stream_llm(
+        response = await stream_structured_llm(
             model=settings.architecture_model,
             system=_ARCHITECT_SYSTEM,
             messages=[{"role": "user", "content": _worker_context(state, profile.answer_contract)}],
+            response_schema=_ARCHITECT_RESPONSE_SCHEMA,
             effort="xhigh",
-            timeout_seconds=settings.architecture_pass_timeout_s,
+            timeout_seconds=architecture_timeout_seconds(state, review=False),
             max_output_tokens=settings.architecture_max_completion_tokens,
-            allow_fallback=False,
             temperature=settings.graph_temperature,
-            top_p=settings.graph_top_p,
-            top_k=settings.graph_top_k,
             telemetry=_telemetry(state, "architecture_architect", profile.resolved),
-            send=state.get("send"),
         )
-        plan = _normalise_architect(_parse_object(raw))
+        plan = _normalise_architect(_parse_complete_response(response))
         if not _is_complete_architect_plan(plan):
             raise ValueError("architecture worker returned an incomplete product brief")
     except Exception as exc:
-        logger.warning("Architect role unavailable; graph generation stopped: %s", type(exc).__name__)
+        failure_code = (
+            "architecture_pass_timeout"
+            if isinstance(exc, TimeoutError)
+            else "architecture_pass_invalid"
+        )
+        logger.warning(
+            "Architect role unavailable; graph generation stopped: %s",
+            type(exc).__name__,
+        )
         await _progress(
             state,
             phase="architect",
             status="rejected",
             title="Architecture pass did not complete",
             detail="The diagram will stay unpublished because its architecture plan is incomplete.",
+            failure_code=failure_code,
         )
         return {"architect_plan": {}, "architecture_ready": False}
     await _progress(
@@ -227,7 +322,7 @@ async def challenger_node(state: AgentState) -> dict[str, Any]:
         detail="Looking for missing evals, unsafe actions, and production assumptions.",
     )
     try:
-        raw = await stream_llm(
+        response = await stream_structured_llm(
             model=settings.architecture_model,
             system=_CHALLENGER_SYSTEM,
             messages=[{
@@ -238,27 +333,33 @@ async def challenger_node(state: AgentState) -> dict[str, Any]:
                     primary_plan=state.get("architect_plan") or {},
                 ),
             }],
+            response_schema=_CHALLENGER_RESPONSE_SCHEMA,
             effort="xhigh",
-            timeout_seconds=settings.architecture_review_timeout_s,
+            timeout_seconds=architecture_timeout_seconds(state, review=True),
             max_output_tokens=settings.architecture_max_completion_tokens,
-            allow_fallback=False,
             temperature=settings.graph_temperature,
-            top_p=settings.graph_top_p,
-            top_k=settings.graph_top_k,
             telemetry=_telemetry(state, "architecture_challenger", profile.resolved),
-            send=state.get("send"),
         )
-        review = _normalise_challenger(_parse_object(raw))
+        review = _normalise_challenger(_parse_complete_response(response))
         if not any(review.get(field) for field in ("risks", "missing_requirements", "tradeoffs")):
             raise ValueError("challenger returned an empty review")
     except Exception as exc:
-        logger.warning("Architecture review unavailable; graph generation stopped: %s", type(exc).__name__)
+        failure_code = (
+            "architecture_review_timeout"
+            if isinstance(exc, TimeoutError)
+            else "architecture_review_invalid"
+        )
+        logger.warning(
+            "Architecture review unavailable; graph generation stopped: %s",
+            type(exc).__name__,
+        )
         await _progress(
             state,
             phase="challenger",
             status="rejected",
             title="Architecture review did not complete",
             detail="The diagram will stay unpublished because its independent review is incomplete.",
+            failure_code=failure_code,
         )
         return {"challenger_review": {}, "architecture_ready": False}
     await _progress(
@@ -290,11 +391,12 @@ def _worker_context(
     )
 
 
-def _parse_object(raw: str) -> dict[str, Any]:
-    start, end = raw.find("{"), raw.rfind("}")
-    if start < 0 or end <= start:
-        raise ValueError("architecture worker did not return a JSON object")
-    value = json.loads(raw[start : end + 1])
+def _parse_complete_response(response: StructuredLLMResponse) -> dict[str, Any]:
+    if response.finish_reason == "max_tokens":
+        raise ValueError("architecture worker output was truncated")
+    if response.finish_reason != "end_turn":
+        raise ValueError("architecture worker provider response was incomplete")
+    value = json.loads(response.text)
     if not isinstance(value, dict):
         raise ValueError("architecture worker payload must be an object")
     return value
@@ -455,11 +557,15 @@ async def _progress(
     status: str,
     title: str,
     detail: str,
+    failure_code: str | None = None,
 ) -> None:
-    await state["send"]({
+    event = {
         "type": "workflow_progress",
         "phase": phase,
         "status": status,
         "title": title,
         "detail": detail,
-    })
+    }
+    if failure_code is not None:
+        event["failure_code"] = failure_code
+    await state["send"](event)

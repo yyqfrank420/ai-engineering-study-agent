@@ -12,18 +12,17 @@ def test_applied_graph_prompts_preserve_gates_across_cached_or_replayed_work():
         _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION,
     )
 
-    assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v26"
-    assert _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION == "applied_topology_v8"
+    assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v28"
+    assert _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION == "applied_topology_v13"
     assert "Choose graph size from the material design" in _APPLIED_GRAPH_TOPOLOGY_SYSTEM
     assert "presentation metadata" in _APPLIED_GRAPH_TOPOLOGY_SYSTEM
     assert "cache, replay, shortcut, or retry bypass" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "Guarantees must remain enforced by directed topology" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "return the complete groups replacement" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "cache lookup separate from" in _APPLIED_GRAPH_PATCH_SYSTEM
-    assert "re-audit the complete candidate" in _APPLIED_GRAPH_PATCH_SYSTEM
+    assert "complete patched graph must pass" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "remove every direct" in _APPLIED_GRAPH_PATCH_SYSTEM
-    assert "repeated failures of" in _APPLIED_GRAPH_PATCH_SYSTEM
-    assert "Repair every named selector" in _APPLIED_GRAPH_PATCH_SYSTEM
+    assert "Repair every cited selector" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "immutable repair-only edge_id" in _APPLIED_GRAPH_PATCH_SYSTEM
 
 
@@ -246,58 +245,66 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
     }
     captured = {}
 
-    group_by_node = {
-        node_id: (group["label"], group.get("kind", "runtime"))
+    type_codes = {
+        "client": 100,
+        "service": 101,
+        "datastore": 102,
+        "queue": 103,
+        "gateway": 104,
+        "network": 105,
+        "external": 106,
+        "control": 107,
+        "decision": 108,
+    }
+    group_codes = {
+        "runtime": 600,
+        "data": 601,
+        "operations": 602,
+        "delivery": 603,
+        "external": 604,
+    }
+    group_definitions = [
+        [group["label"], group_codes[group.get("kind", "runtime")]]
         for group in payload["groups"]
+    ]
+    node_group_indexes = {
+        node_id: group_index
+        for group_index, group in enumerate(payload["groups"])
         for node_id in group["nodeIds"]
     }
-    sequence_by_node = {
-        node_id: step["step"]
-        for step in payload["sequence"]
-        for node_id in step["nodes"]
-    }
     topology = {
-        "title": payload["title"],
-        "nodes": [
-            {
-                "label": node["label"],
-                "type": node["type"],
-                "tier": "public" if node["type"] == "client" else "private",
-                "lane": "bottom" if node["type"] in {"control", "decision"} else "main",
-                "responsibility": node["description"][:80],
-                "group": group_by_node[node["id"]][0],
-                "group_kind": group_by_node[node["id"]][1],
-                "parent_index": -1 if index == 0 else index - 1,
-                "parent_label": "" if index == 0 else f"routes validated work to {node['label']}",
-                "parent_flow": "runtime",
-                "parent_sync": "sync",
-                "sequence_step": sequence_by_node.get(node["id"], 0),
-            }
+        "root": [
+            payload["nodes"][0]["label"],
+            type_codes[payload["nodes"][0]["type"]],
+            payload["nodes"][0]["description"][:80],
+            node_group_indexes[payload["nodes"][0]["id"]],
+        ],
+        "components": [
+            [
+                index - 1,
+                node["label"],
+                type_codes[node["type"]],
+                node["description"][:80],
+                node_group_indexes[node["id"]],
+                f"routes validated work to {node['label']}",
+                400,
+                500,
+            ]
             for index, node in enumerate(payload["nodes"])
+            if index > 0
         ],
-        "cross_links": [
-            {
-                "source_index": 9,
-                "target_index": 4,
-                "label": "Measured outcome feedback",
-                "flow": "feedback",
-                "sync": "async",
-            },
-            {
-                "source_index": 10,
-                "target_index": 4,
-                "label": "Promotes evaluated strategy version",
-                "flow": "deployment",
-                "sync": "async",
-            },
-            {
-                "source_index": 7,
-                "target_index": 5,
-                "label": "Reject campaign revision",
-                "flow": "control",
-                "sync": "sync",
-            },
-        ],
+        "connections": {
+            "links": [
+                [9, 4, "Measured outcome feedback", 402, 501],
+                [10, 4, "Promotes evaluated strategy version", 403, 501],
+                [7, 5, "Reject campaign revision", 401, 500],
+            ],
+        },
+        "composition": {
+            "title": payload["title"],
+            "groups": group_definitions,
+            "steps": [[index] for index in range(1, len(payload["nodes"]))],
+        },
     }
 
     async def fake_stream_structured_llm(**kwargs):
@@ -359,13 +366,17 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
     assert {edge["flow"] for edge in graph["edges"]} == {
         "runtime", "feedback", "control", "deployment",
     }
-    # Low initial integration effort avoids the routinely duplicated
-    # structural repair call while the critic remains an independent gate.
-    assert captured["effort"] == "max"
-    assert captured["response_schema"]["properties"]["nodes"]["type"] == "array"
-    cross_links = captured["response_schema"]["properties"]["cross_links"]
-    assert cross_links["type"] == "array"
-    assert cross_links["items"]["additionalProperties"] is False
+    # Low effort leaves room for the independent critic without letting
+    # unbounded private reasoning consume the complete request deadline.
+    assert captured["effort"] == "low"
+    assert captured["response_schema"]["properties"]["components"]["type"] == "array"
+    links = captured["response_schema"]["properties"]["connections"]["properties"][
+        "links"
+    ]
+    assert links["type"] == "array"
+    assert links["items"]["items"] == {
+        "anyOf": [{"type": "integer"}, {"type": "string"}],
+    }
     assert "$ref" not in json.dumps(captured["response_schema"])
     assert "schema-constrained object" in captured["system"]
     prompt = captured["messages"][0]["content"]
@@ -373,7 +384,7 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
     assert "Cache versioned channel reads" in prompt
     assert "Unapproved campaign writes" in prompt
     assert '"challenger_review"' in prompt
-    assert '"diagram_commitments"' in prompt
+    assert '"diagram_commitments"' not in prompt
     assert "Designing a production domain architecture" in events[0]["status"]
 
 
@@ -700,15 +711,16 @@ async def test_invalid_refinement_preserves_approved_graph_after_one_patch_attem
     assert calls[0]["telemetry"]["metadata"]["patch_attempt"] == 0
     prompt = calls[0]["messages"][0]["content"]
     assert "currently has 5 nodes" in prompt
-    assert "Keep at least 60%" in prompt
+    assert "minimal patch" in prompt
+    assert "60%" not in prompt
     assert "node_0" in prompt
     assert "Support Responsibility 0" in prompt
     assert '"nodes"' in prompt
     assert '"edges":[]' in prompt or '"edges": []' in prompt
     assert "Domain capability" in prompt
     assert "Owns one bounded customer support responsibility." in prompt
-    assert "CRM supports idempotent actions." not in prompt
-    assert '"groups"' not in prompt
+    assert "CRM supports idempotent actions." in prompt
+    assert '"groups"' in prompt
 
 
 @pytest.mark.asyncio

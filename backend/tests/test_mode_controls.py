@@ -206,6 +206,224 @@ def test_terse_graph_followup_restores_the_original_design_context():
     assert query.endswith("expand the approval path")
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Fix the typo in the cache label",
+        "Rename the cache node",
+        "Remove the stale edge",
+        "Change the edge label",
+        "Expand monitoring",
+    ],
+)
+def test_existing_applied_graph_edits_have_server_owned_intent(message):
+    from agent.complexity import is_existing_graph_edit_request
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [
+            {"id": "cache", "label": "Cache"},
+            {"id": "monitoring", "label": "Monitoring"},
+        ],
+        "groups": [{"id": "runtime", "label": "Runtime"}],
+    }
+
+    assert is_existing_graph_edit_request(message, graph)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Design a fraud detection system",
+        "Explain RAG",
+        "What is prompt caching?",
+        "Change the subject to retrieval",
+        "Add citations to the answer",
+        "Fix your explanation",
+        "Address the tradeoffs",
+        "Move on to RAG",
+        "How do I fix hallucinations?",
+        "Explain how to add prompt caching",
+        "How do I update a graph database?",
+        "Replace the graph database with Postgres",
+    ],
+)
+def test_new_topics_are_not_existing_graph_edits(message):
+    from agent.complexity import is_existing_graph_edit_request
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "cache", "label": "Cache"}],
+        "groups": [],
+    }
+
+    assert not is_existing_graph_edit_request(message, graph)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Update nodes",
+        "Change labels",
+        "Remove edges",
+    ],
+)
+def test_plural_graph_targets_are_existing_graph_edits(message):
+    from agent.complexity import is_existing_graph_edit_request
+
+    graph = {"design_origin": "applied", "nodes": [], "groups": []}
+
+    assert is_existing_graph_edit_request(message, graph)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Changing edge labels",
+        "Moving nodes",
+        "Removing edges",
+        "Renaming Cache",
+        "Replacing the graph",
+        "Updating nodes",
+        "Regenerating the diagram",
+    ],
+)
+def test_inflected_graph_edits_keep_their_intent(message):
+    from agent.complexity import is_existing_graph_edit_request
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "cache", "label": "Cache"}],
+        "groups": [],
+    }
+
+    assert is_existing_graph_edit_request(message, graph)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "How do I fix gradient flow?",
+        "Explain how to update model layers",
+        "How do I remove a preprocessing step?",
+    ],
+)
+def test_concept_nouns_do_not_grant_graph_edit_intent(message):
+    from agent.complexity import is_existing_graph_edit_request
+
+    graph = {"design_origin": "applied", "nodes": [], "groups": []}
+
+    assert not is_existing_graph_edit_request(message, graph)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Delete the Cache node",
+        "Connect the Cache node to the API node",
+        "Modify the Cache label",
+        "Revise the Cache description",
+    ],
+)
+def test_common_imperative_graph_edits_enter_the_patch_lane(message):
+    from agent.complexity import is_existing_graph_edit_request
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [
+            {"id": "cache", "label": "Cache"},
+            {"id": "api", "label": "API"},
+        ],
+        "groups": [],
+    }
+
+    assert is_existing_graph_edit_request(message, graph)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Do not update the current graph; explain RAG",
+        "Never remove the edge or add a node",
+        "Add labels to training data",
+        "Update React components",
+        "When should I add labels to training data?",
+        "Should I update React components?",
+        "Describe the architecture",
+        "How does system design work?",
+        "Tell me what's new in system design",
+        "Summarize new developments in agent system design",
+        "I read a new article about system design",
+        "Design patterns for multi-agent systems",
+        "Build vs buy for an AI system",
+        "Map vs flatMap in agent workflows",
+    ],
+)
+def test_non_graph_requests_do_not_mutate_an_existing_graph(message):
+    from agent.complexity import (
+        is_existing_graph_edit_request,
+        is_new_applied_graph_request,
+    )
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "cache", "label": "Cache"}],
+        "groups": [],
+    }
+
+    assert not is_existing_graph_edit_request(message, graph)
+    assert not is_new_applied_graph_request(message, graph)
+
+
+def test_existing_graph_intent_separates_local_edit_and_new_artifact():
+    from agent.complexity import (
+        is_existing_graph_edit_request,
+        is_new_applied_graph_request,
+    )
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "cache", "label": "Cache"}],
+        "groups": [],
+    }
+
+    assert is_existing_graph_edit_request("Redesign the whole architecture", graph)
+    assert not is_new_applied_graph_request("Redesign the whole architecture", graph)
+    assert not is_existing_graph_edit_request("Design a fraud detection system", graph)
+    assert is_new_applied_graph_request("Design a fraud detection system", graph)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Could you design a fraud detection system?",
+        "Can you create a fraud detection system?",
+        "Can you please draw a fraud detection system?",
+        "I want to design a fraud detection system",
+        "I'd like you to build a fraud detection system",
+        "Help me architect a fraud detection system",
+        "Can we design a fraud detection system?",
+        "Could we build an invoice reconciliation system?",
+        "We need to design a fraud detection system",
+        "Please build a new fraud detection system",
+    ],
+)
+def test_explicit_new_artifact_requests_replace_the_prior_domain(message):
+    from agent.complexity import (
+        is_existing_graph_edit_request,
+        is_new_applied_graph_request,
+    )
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "cache", "label": "Cache"}],
+        "groups": [],
+    }
+
+    assert not is_existing_graph_edit_request(message, graph)
+    assert is_new_applied_graph_request(message, graph)
+
+
 # ── research_worker._format_results ──────────────────────────────────────────
 
 class TestFormatResults:

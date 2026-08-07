@@ -17,7 +17,11 @@ from typing import Literal
 from langgraph.graph import END, START, StateGraph
 
 from agent.architecture_playbook import build_evidence_bundle
-from agent.complexity import is_applied_system_design_request, resolve_design_query
+from agent.complexity import (
+    is_existing_graph_edit_request,
+    is_new_applied_graph_request,
+    resolve_design_query,
+)
 from agent.deadlines import (
     StageAdmissionDenied,
     WorkflowDeadlineExceeded,
@@ -62,9 +66,9 @@ def _without_graph_stage_deadline(state: AgentState) -> AgentState:
 
 def _repair_attempt_summary(revision_count: int) -> str:
     if revision_count <= 0:
-        return "before a focused repair could complete"
-    suffix = "repair" if revision_count == 1 else "repairs"
-    return f"after {revision_count} focused {suffix}"
+        return "before a reviewed revision could complete"
+    suffix = "revision" if revision_count == 1 else "revisions"
+    return f"after {revision_count} reviewed {suffix}"
 
 
 def _restore_approved_graph_state(state: AgentState) -> AgentState:
@@ -180,8 +184,9 @@ def build_agent_workflow(
 
     async def revise_graph(state: AgentState) -> AgentState:
         revision_count = int(state.get("graph_revision_count", 0)) + 1
+        revision_state = {**state, "graph_revision_count": revision_count}
         try:
-            timeout_s = patch_timeout_seconds(state)
+            timeout_s = patch_timeout_seconds(revision_state)
         except StageAdmissionDenied:
             restored = _restore_approved_graph_state(state)
             if not state.get("graph_notice_sent"):
@@ -203,7 +208,7 @@ def build_agent_workflow(
             "status": "retry",
             "title": "Refining the diagram",
             "detail": (
-                f"Applying bounded clarity repair {revision_count} of "
+                f"Reworking the diagram {revision_count} of "
                 f"{_MAX_GRAPH_REVISIONS}, then checking "
                 "the real layout again."
             ),
@@ -212,7 +217,7 @@ def build_agent_workflow(
             async with asyncio.timeout(timeout_s):
                 revised = await apply_graph_worker(
                     _with_graph_stage_deadline(
-                        {**state, "graph_revision_count": revision_count},
+                        revision_state,
                         timeout_s,
                     ),
                     graph_tools,
@@ -377,11 +382,13 @@ def _route_after_routing(state: AgentState) -> Literal["quick", "context"]:
 
 def _should_run_applied_design_roles(state: AgentState) -> bool:
     """Avoid paid design roles when the user explicitly disabled diagrams."""
+    user_message = state.get("user_message", "")
+    graph_data = state.get("graph_data")
+    local_edit = is_existing_graph_edit_request(user_message, graph_data)
     return (
         state.get("graph_mode", "auto") != "off"
-        and is_applied_system_design_request(
-            state.get("design_query") or state.get("user_message", "")
-        )
+        and not local_edit
+        and is_new_applied_graph_request(user_message, graph_data)
     )
 
 
@@ -390,6 +397,15 @@ def _route_after_review(state: AgentState) -> Literal["accept", "revise", "rejec
     if not state.get("graph_changed") or graph.get("design_origin") != "applied":
         return "accept"
     review = state.get("graph_review") or {}
+    repair_contract = review.get("repair_contract")
+    if isinstance(repair_contract, dict):
+        repair_scope = repair_contract.get("repair_scope")
+        if repair_scope == "none":
+            return "accept" if review.get("approved") else "reject"
+        if repair_scope == "global":
+            return "reject"
+        if repair_scope != "local":
+            return "reject"
     if review.get("approved"):
         return "accept"
     if (

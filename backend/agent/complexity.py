@@ -117,6 +117,48 @@ _DESIGN_FOLLOWUP_PHRASES = (
     "subagent",
 )
 
+_GRAPH_EDIT_ACTION = re.compile(
+    r"\b(?:"
+    r"add(?:s|ed|ing)?|adjust(?:s|ed|ing)?|chang(?:e|es|ed|ing)|"
+    r"connect(?:s|ed|ing)?|correct(?:s|ed|ing)?|delet(?:e|es|ed|ing)|"
+    r"disconnect(?:s|ed|ing)?|edit(?:s|ed|ing)?|expand(?:s|ed|ing)?|"
+    r"fix(?:es|ed|ing)?|link(?:s|ed|ing)?|modify|modifies|modified|modifying|"
+    r"mov(?:e|es|ed|ing)|remov(?:e|es|ed|ing)|renam(?:e|es|ed|ing)|"
+    r"rebuild(?:s|ing)?|redesign(?:s|ed|ing)?|redraw(?:s|n|ing)?|"
+    r"regenerat(?:e|es|ed|ing)|replac(?:e|es|ed|ing)|"
+    r"revis(?:e|es|ed|ing)|rework(?:s|ed|ing)?|start\s+over|"
+    r"unlink(?:s|ed|ing)?|updat(?:e|es|ed|ing)"
+    r")\b"
+)
+_GRAPH_EDIT_TARGET = re.compile(
+    r"\b(?:arrows?|edges?|groups?|lanes?|nodes?|sequences?|"
+    r"labels?(?=\s*(?:$|[.!?]))|titles?(?=\s*(?:$|[.!?])))\b"
+)
+_CURRENT_GRAPH_ARTIFACT = re.compile(
+    r"\b(?:the|this|current|existing|my|our|whole|entire|complete)\s+"
+    r"(?:architectures?|diagrams?|graphs?)"
+    r"(?!\s+(?:database|db|index|store)\b)"
+)
+_GRAPH_ARTIFACT_FIELD = re.compile(
+    r"\b(?:diagrams?|graphs?)\s+(?:components?|connections?|labels?|titles?)\b"
+)
+_NON_MUTATING_QUESTION = re.compile(
+    r"^(?:what|when|where|why|how|should|do(?!\s+not\b)|does|is|are|"
+    r"can\s+i|could\s+i|would\s+i)\b"
+)
+_NEW_APPLIED_GRAPH_ACTION = re.compile(
+    r"^(?:please\s+)?"
+    r"(?:(?:(?:can|could|would)\s+(?:you(?:\s+please)?|we)|let(?:'s|\s+us)|"
+    r"i\s+(?:want|need)(?:\s+you)?\s+to|"
+    r"i(?:'d|\s+would)\s+like(?:\s+you)?\s+to|help\s+me)\s+)?"
+    r"(?:we\s+(?:want|need)\s+to\s+)?"
+    r"(?:architect|build|create|design|draw|implement|map|rebuild|redesign|replace)\b"
+    r"(?!\s+(?:patterns?|principles?|theory|tradeoffs?|versus|vs)\b)"
+)
+_NEGATED_GRAPH_EDIT_CLAUSE = re.compile(
+    r"^\s*(?:please\s+)?(?:do\s+not|don't|never|without)\b"
+)
+
 _OUTER_UNTRUSTED_EXPLANATION = re.compile(
     r"^(?:please\s+)?treat\b"
     r"(?=.{0,160}\b(?:quoted|untrusted)\b)"
@@ -189,6 +231,53 @@ def resolve_design_query(
         )
     parts = [*prior_user_messages[-3:], *graph_parts, message]
     return " ".join(part for part in parts if part).strip() or message
+
+
+def is_existing_graph_edit_request(query: str, graph_data: dict | None) -> bool:
+    """Classify an imperative mutation of the current applied graph."""
+    if not isinstance(graph_data, dict) or graph_data.get("design_origin") != "applied":
+        return False
+    text = _routing_intent_text(query)
+    if not text or _NON_MUTATING_QUESTION.match(text):
+        return False
+    authored_labels = (
+        str(record.get("label") or "").strip().lower()
+        for collection in (graph_data.get("nodes") or [], graph_data.get("groups") or [])
+        for record in collection
+        if isinstance(record, dict)
+    )
+    references_authored_label = any(
+        label and re.search(rf"(?<!\w){re.escape(label)}(?!\w)", text)
+        for label in authored_labels
+    )
+    if _CONCEPT_QUESTION.match(text):
+        return False
+    references_graph = bool(
+        _GRAPH_EDIT_TARGET.search(text)
+        or _CURRENT_GRAPH_ARTIFACT.search(text)
+        or _GRAPH_ARTIFACT_FIELD.search(text)
+        or references_authored_label
+    )
+    if not references_graph:
+        return False
+    return any(
+        _GRAPH_EDIT_ACTION.search(clause)
+        and not _NEGATED_GRAPH_EDIT_CLAUSE.match(clause)
+        for clause in re.split(r"[,.;\n]|\bbut\b", text)
+    )
+
+
+def is_new_applied_graph_request(query: str, graph_data: dict | None) -> bool:
+    """Require explicit new-artifact intent before replacing an applied graph."""
+    if not isinstance(graph_data, dict) or graph_data.get("design_origin") != "applied":
+        return is_applied_system_design_request(query)
+    if is_existing_graph_edit_request(query, graph_data):
+        return False
+    text = _routing_intent_text(query)
+    if not text or _NON_MUTATING_QUESTION.match(text):
+        return False
+    explicit_new_artifact = bool(_NEW_APPLIED_GRAPH_ACTION.search(text))
+    return explicit_new_artifact and is_applied_system_design_request(query)
 
 
 def is_applied_system_design_request(query: str) -> bool:

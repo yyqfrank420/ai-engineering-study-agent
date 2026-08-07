@@ -85,6 +85,33 @@ _NON_RETRYABLE_ANTHROPIC_ERRORS = {
 }
 
 
+class EvaluationProviderAttemptLimitExceeded(RuntimeError):
+    pass
+
+
+def _reserve_evaluation_provider_attempt() -> None:
+    run_id = settings.evaluation_run_id.strip()
+    limit = settings.evaluation_provider_attempt_limit
+    if not run_id and limit == 0:
+        return
+    if not run_id or limit <= 0:
+        raise RuntimeError("Evaluation provider-attempt quota is misconfigured")
+
+    from storage.rate_limit_store import RateLimitDimension, reserve_rate_limit
+
+    reservation = reserve_rate_limit((RateLimitDimension(
+        scope="evaluation_run",
+        identifier=run_id,
+        event_type="llm_provider_attempt",
+        limit=limit,
+        window_s=24 * 60 * 60,
+    ),))
+    if reservation is None:
+        raise EvaluationProviderAttemptLimitExceeded(
+            "Evaluation provider-attempt limit exhausted before the next request"
+        )
+
+
 def _field(value: object, name: str, default=0):
     if isinstance(value, dict):
         return value.get(name, default)
@@ -139,6 +166,38 @@ def _is_non_retryable_anthropic_error(exc: Exception) -> bool:
     if type(exc).__name__ in _NON_RETRYABLE_ANTHROPIC_ERRORS:
         return True
     return getattr(exc, "status_code", None) in {400, 401, 403, 404, 422}
+
+
+def _anthropic_error_diagnostics(
+    exc: Exception,
+) -> tuple[object, object, object, str | None]:
+    # Provider error messages are untrusted. Return only stable fields and known
+    # structural diagnoses so logs cannot copy request content.
+    error_body = getattr(exc, "body", None)
+    error_payload = error_body.get("error") if isinstance(error_body, dict) else None
+    provider_error = (
+        error_payload.get("type") if isinstance(error_payload, dict) else None
+    )
+    provider_message = (
+        error_payload.get("message") if isinstance(error_payload, dict) else None
+    )
+    normalized_message = (
+        " ".join(provider_message.lower().split())
+        if isinstance(provider_message, str)
+        else ""
+    )
+    diagnostic = (
+        "schema_compilation_too_large"
+        if "compiled grammar is too large" in normalized_message
+        or "schema is too complex for compilation" in normalized_message
+        else None
+    )
+    return (
+        getattr(exc, "status_code", None),
+        getattr(exc, "request_id", None),
+        provider_error,
+        diagnostic,
+    )
 
 
 def _is_non_retryable_chat_error(exc: Exception) -> bool:
@@ -548,6 +607,22 @@ async def stream_response(
             status=status,
         )
 
+    def _record_cancellation(
+        attempt_usage: dict[str, object],
+        attempt_started: float,
+    ) -> None:
+        attempt_usage["status"] = (
+            "cancelled_incomplete_usage"
+            if attempt_usage["accepted"]
+            and not attempt_usage["usage_complete"]
+            else "cancelled"
+        )
+        attempt_usage["error_type"] = "CancelledError"
+        attempt_usage["duration_ms"] = max(
+            1, int((time.perf_counter() - attempt_started) * 1000)
+        )
+        _record("error", error_type="CancelledError")
+
     async def _stream_chat_completions_route(
         chat_model: str,
         *,
@@ -584,6 +659,7 @@ async def stream_response(
             else 1
         )
         for route_attempt in range(1, attempt_limit + 1):
+            _reserve_evaluation_provider_attempt()
             provider_attempts += 1
             attempt_started = time.perf_counter()
             attempt_usage: dict[str, object] = {
@@ -653,6 +729,9 @@ async def stream_response(
                 )
                 _record("success")
                 return
+            except asyncio.CancelledError:
+                _record_cancellation(attempt_usage, attempt_started)
+                raise
             except Exception as exc:
                 accepted = bool(attempt_usage["accepted"])
                 attempt_usage["status"] = (
@@ -696,6 +775,7 @@ async def stream_response(
     for attempt in range(1, settings.llm_max_retries + 1):
         tokens_yielded = False
         finish_reason: str | None = None
+        _reserve_evaluation_provider_attempt()
         provider_attempts += 1
         attempt_started = time.perf_counter()
         attempt_usage: dict[str, object] = {
@@ -787,6 +867,9 @@ async def stream_response(
             yield ("done", "")
             return   # Anthropic succeeded
 
+        except asyncio.CancelledError:
+            _record_cancellation(attempt_usage, attempt_started)
+            raise
         except Exception as exc:
             last_exc = exc
             attempt_usage["status"] = (
@@ -803,11 +886,19 @@ async def stream_response(
                 # Already sent partial output — can't replay safely, surface the error
                 _record("error", error_type=type(exc).__name__)
                 raise
+            status, request_id, provider_error, diagnostic = (
+                _anthropic_error_diagnostics(exc)
+            )
             logger.warning(
-                "[llm] Anthropic attempt %s/%s failed: %s",
+                "[llm] Anthropic attempt %s/%s failed: %s status=%s "
+                "request_id=%s provider_error=%s diagnostic=%s",
                 attempt,
                 settings.llm_max_retries,
                 type(exc).__name__,
+                status,
+                request_id,
+                provider_error,
+                diagnostic,
             )
             if _is_non_retryable_anthropic_error(exc):
                 break
@@ -831,12 +922,41 @@ async def stream_response(
         raise last_exc  # type: ignore[misc]
 
 
-def _anthropic_response_schema(value):
+_JSON_SCHEMA_NAMED_SCHEMA_MAPS = {
+    "$defs",
+    "definitions",
+    "dependentSchemas",
+    "patternProperties",
+    "properties",
+}
+_ANTHROPIC_UNSUPPORTED_SCHEMA_CONSTRAINTS = {
+    "minimum",
+    "maximum",
+    "minItems",
+    "maxItems",
+    "minLength",
+    "maxLength",
+}
+
+
+def _anthropic_response_schema(value, *, named_schema_map: bool = False):
+    # Raw output_config schemas bypass the SDK's Pydantic transformer. Anthropic
+    # does not compile these constraints, so callers enforce them after parsing.
+    # Names inside `properties` and other schema maps are user-defined and must
+    # survive even when a field happens to share an unsupported keyword's name.
     if isinstance(value, dict):
+        if named_schema_map:
+            return {
+                key: _anthropic_response_schema(child)
+                for key, child in value.items()
+            }
         return {
-            key: _anthropic_response_schema(child)
+            key: _anthropic_response_schema(
+                child,
+                named_schema_map=key in _JSON_SCHEMA_NAMED_SCHEMA_MAPS,
+            )
             for key, child in value.items()
-            if key not in {"minItems", "maxItems"}
+            if key not in _ANTHROPIC_UNSUPPORTED_SCHEMA_CONSTRAINTS
         }
     if isinstance(value, list):
         return [_anthropic_response_schema(child) for child in value]

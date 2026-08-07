@@ -4,6 +4,7 @@ import {
   filterRenderableEdges,
   initialFitScale,
   overviewEdgeLabelOpacity,
+  planVerticalLayout,
   selectOverviewEdgeIndices,
   selectGraphOrientation,
   VERTICAL_LEVEL_H,
@@ -26,6 +27,19 @@ describe('graph layout policy', () => {
     const tenLevelLayoutHeight = 2 * VERTICAL_PAD + 10 * VERTICAL_LEVEL_H;
 
     expect(initialFitScale(760, 500, 760, tenLevelLayoutHeight)).toBeGreaterThanOrEqual(0.5);
+  });
+
+  it.each([
+    ['25-node mixed topology', [2, 2, 3, 2, 1, 3, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1]],
+    ['37-node deep topology', [4, 2, 2, 2, 4, 3, 1, 1, 1, 1, 2, 1, 1, 1, 2, 1, 1, 1, 1, 3, 1, 1]],
+    ['39-node deep topology', [3, 2, 3, 3, 1, 5, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 2, 1, 1]],
+    ['40-node mixed topology', [5, 5, 4, 4, 3, ...Array.from({ length: 19 }, () => 1)]],
+  ])('plans a readable virtual canvas for a %s', (_name, levelSizes) => {
+    const plan = planVerticalLayout(656, 848, levelSizes as number[]);
+
+    expect((levelSizes as number[]).reduce((total, size) => total + size, 0)).toBeGreaterThanOrEqual(25);
+    expect(15.36 * plan.scale).toBeGreaterThanOrEqual(6);
+    expect(plan.nodesPerRow).toBeGreaterThan(1);
   });
 
   it('keeps backward edges when both endpoints exist', () => {

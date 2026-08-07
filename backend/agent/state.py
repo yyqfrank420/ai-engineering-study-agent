@@ -68,6 +68,7 @@ class GraphData(TypedDict):
     design_origin: NotRequired[str]        # "applied" for user-specific generated designs
     resolved_complexity: NotRequired[str]
     assumptions: NotRequired[list[str]]
+    view_state: NotRequired[dict[str, Any]]
 
 
 class Chunk(TypedDict):

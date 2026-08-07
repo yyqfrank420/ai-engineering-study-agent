@@ -9,8 +9,9 @@ export const V_PAD = 72;
 export const MIN_COL_W = NODE_W + 84;
 export const VERTICAL_PAD = 32;
 export const VERTICAL_LEVEL_H = NODE_H + 12;
+export const VERTICAL_NODE_GAP = 24;
 export const INITIAL_FIT_PADDING = 32;
-export const GRAPH_LAYOUT_VERSION = 7;
+export const GRAPH_LAYOUT_VERSION = 8;
 
 export type GraphOrientation = 'horizontal' | 'vertical';
 
@@ -43,6 +44,61 @@ export function initialFitScale(
     (viewportWidth - 2 * INITIAL_FIT_PADDING) / layoutWidth,
     (viewportHeight - 2 * INITIAL_FIT_PADDING) / layoutHeight,
   );
+}
+
+export interface VerticalLayoutPlan {
+  layoutWidth: number;
+  layoutHeight: number;
+  nodesPerRow: number;
+  scale: number;
+}
+
+/**
+ * Use the two-dimensional canvas for wide topology levels before shrinking the
+ * whole diagram. The virtual canvas may be wider than the visible viewport;
+ * auto-fit then chooses the largest readable scale across both dimensions.
+ */
+export function planVerticalLayout(
+  viewportWidth: number,
+  viewportHeight: number,
+  levelSizes: number[],
+): VerticalLayoutPlan {
+  const normalizedLevelSizes = levelSizes.map(size => Math.max(1, Math.floor(size)));
+  const widestLevel = Math.max(1, ...normalizedLevelSizes);
+  let best: VerticalLayoutPlan | null = null;
+
+  for (let nodesPerRow = 1; nodesPerRow <= widestLevel; nodesPerRow += 1) {
+    const populatedColumns = Math.min(nodesPerRow, widestLevel);
+    const contentWidth = populatedColumns * NODE_W
+      + Math.max(0, populatedColumns - 1) * VERTICAL_NODE_GAP;
+    const layoutWidth = Math.max(viewportWidth, contentWidth + 2 * H_PAD);
+    const rowCount = normalizedLevelSizes.reduce(
+      (total, size) => total + Math.ceil(size / nodesPerRow),
+      0,
+    );
+    const layoutHeight = 2 * VERTICAL_PAD + Math.max(1, rowCount) * VERTICAL_LEVEL_H;
+    const scale = initialFitScale(
+      viewportWidth,
+      viewportHeight,
+      layoutWidth,
+      layoutHeight,
+    );
+    if (best === null || scale > best.scale) {
+      best = { layoutWidth, layoutHeight, nodesPerRow, scale };
+    }
+  }
+
+  return best ?? {
+    layoutWidth: viewportWidth,
+    layoutHeight: 2 * VERTICAL_PAD + VERTICAL_LEVEL_H,
+    nodesPerRow: 1,
+    scale: initialFitScale(
+      viewportWidth,
+      viewportHeight,
+      viewportWidth,
+      2 * VERTICAL_PAD + VERTICAL_LEVEL_H,
+    ),
+  };
 }
 
 export function filterRenderableEdges(

@@ -15,7 +15,11 @@
 import json
 
 from adapters.llm_adapter import build_telemetry
-from agent.complexity import is_applied_system_design_request, resolve_complexity
+from agent.complexity import (
+    is_applied_system_design_request,
+    is_existing_graph_edit_request,
+    resolve_complexity,
+)
 from agent.context_manager import maybe_condense_history
 from agent.explanation_blocks import stream_explanation_blocks
 from agent.state import AgentState
@@ -23,7 +27,7 @@ from agent.stream_utils import stream_llm
 from agent.deadlines import synthesis_timeout_seconds
 from config import settings
 
-_SYNTHESIS_PROMPT_VERSION = "architecture_blocks_v11"
+_SYNTHESIS_PROMPT_VERSION = "architecture_blocks_v12"
 _QUICK_SYNTHESIS_PROMPT_VERSION = "quick_synthesis_v2"
 
 _ROUTER_SYSTEM = """<role>
@@ -176,6 +180,10 @@ Answer in the same language as the user's latest message unless they ask to swit
 </design_claim_integrity>
 
 <style>
+- Treat the user's explicit scope, count, format, and brevity instructions as hard constraints.
+  The depth contract fills unspecified detail; it never overrides phrases such as "plain English"
+  or "without re-explaining". Never claim the history ranked, selected, or committed to something
+  unless an earlier answer did so.
 - Do not force every answer into the same template. Choose the clearest structure for this request.
 - For an applied design, start with your interpretation and material assumptions, then walk the
   primary runtime loop using exact graph node and edge names. Cover inputs, decisions, actions,
@@ -256,6 +264,11 @@ async def orchestrator_route(state: AgentState) -> AgentState:
     """
     send = state["send"]
     await send({"type": "worker_status", "worker": "orchestrator", "status": "Routing…"})
+
+    if is_existing_graph_edit_request(
+        state.get("user_message", ""), state.get("graph_data")
+    ):
+        return {**state, "route": "search"}
 
     if _is_memory_followup(state.get("user_message", ""), state.get("history") or []):
         return {**state, "route": "memory"}

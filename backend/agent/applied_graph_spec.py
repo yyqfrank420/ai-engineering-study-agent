@@ -20,18 +20,24 @@ _NODE_TYPES = (
     "control",
     "decision",
 )
-_TIERS = ("public", "private")
-_LANES = ("main", "bottom")
 _FLOWS = ("runtime", "control", "feedback", "deployment")
 _SYNC_MODES = ("sync", "async")
 _GROUP_KINDS = ("runtime", "data", "operations", "delivery", "external")
-_ROOT_PARENT_INDEX = -1
+_NODE_TYPE_CODES = {100 + index: token for index, token in enumerate(_NODE_TYPES)}
+_FLOW_CODES = {400 + index: token for index, token in enumerate(_FLOWS)}
+_SYNC_CODES = {500 + index: token for index, token in enumerate(_SYNC_MODES)}
+_GROUP_KIND_CODES = {600 + index: token for index, token in enumerate(_GROUP_KINDS)}
+_ROOT_FIELD_COUNT = 4
+_COMPONENT_FIELD_COUNT = 8
+_LINK_FIELD_COUNT = 5
+_GROUP_FIELD_COUNT = 2
 GRAPH_EDGE_LABEL_CHARS = 100
 
 logger = logging.getLogger(__name__)
 
 _ERROR_RULES = frozenset({
     "blank_required",
+    "bounded_identity_collision",
     "container_type",
     "duplicate",
     "invalid_enum",
@@ -41,6 +47,7 @@ _ERROR_RULES = frozenset({
     "provider_finish",
     "safety_limit",
     "topology",
+    "tuple_arity",
     "value_type",
 })
 
@@ -87,6 +94,10 @@ class AppliedGraphSpecError(ValueError):
 
 
 def applied_graph_spec(depth: str) -> AppliedGraphSpec:
+    if settings.graph_safety_max_nodes > min(_NODE_TYPE_CODES):
+        raise RuntimeError(
+            "GRAPH_SAFETY_MAX_NODES must stay below the wire category namespace"
+        )
     return AppliedGraphSpec(
         depth=depth if depth in {"low", "prototype", "production"} else "production",
         safety_max_nodes=settings.graph_safety_max_nodes,
@@ -95,58 +106,41 @@ def applied_graph_spec(depth: str) -> AppliedGraphSpec:
 
 
 def applied_graph_topology_schema(_spec: AppliedGraphSpec) -> dict[str, Any]:
-    node_record = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": [
-            "label",
-            "type",
-            "tier",
-            "lane",
-            "responsibility",
-            "group",
-            "group_kind",
-            "parent_index",
-            "parent_label",
-            "parent_flow",
-            "parent_sync",
-            "sequence_step",
-        ],
-        "properties": {
-            "label": {"type": "string"},
-            "type": {"type": "string", "enum": list(_NODE_TYPES)},
-            "tier": {"type": "string", "enum": list(_TIERS)},
-            "lane": {"type": "string", "enum": list(_LANES)},
-            "responsibility": {"type": "string"},
-            "group": {"type": "string"},
-            "group_kind": {"type": "string", "enum": list(_GROUP_KINDS)},
-            "parent_index": {"type": "integer"},
-            "parent_label": {"type": "string"},
-            "parent_flow": {"type": "string", "enum": list(_FLOWS)},
-            "parent_sync": {"type": "string", "enum": list(_SYNC_MODES)},
-            "sequence_step": {"type": "integer"},
-        },
+    integer_or_string = {
+        "anyOf": [{"type": "integer"}, {"type": "string"}],
     }
-    cross_link_record = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["source_index", "target_index", "label", "flow", "sync"],
-        "properties": {
-            "source_index": {"type": "integer"},
-            "target_index": {"type": "integer"},
-            "label": {"type": "string"},
-            "flow": {"type": "string", "enum": list(_FLOWS)},
-            "sync": {"type": "string", "enum": list(_SYNC_MODES)},
-        },
-    }
+    root_record = {"type": "array", "items": integer_or_string}
+    component_record = {"type": "array", "items": integer_or_string}
+    link_record = {"type": "array", "items": integer_or_string}
+    group_record = {"type": "array", "items": integer_or_string}
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["title", "nodes", "cross_links"],
+        "required": ["root", "components", "connections", "composition"],
         "properties": {
-            "title": {"type": "string"},
-            "nodes": {"type": "array", "items": node_record},
-            "cross_links": {"type": "array", "items": cross_link_record},
+            "root": root_record,
+            "components": {"type": "array", "items": component_record},
+            "connections": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["links"],
+                "properties": {
+                    "links": {"type": "array", "items": link_record},
+                },
+            },
+            "composition": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["title", "groups", "steps"],
+                "properties": {
+                    "title": {"type": "string"},
+                    "groups": {"type": "array", "items": group_record},
+                    "steps": {
+                        "type": "array",
+                        "items": {"type": "array", "items": {"type": "integer"}},
+                    },
+                },
+            },
         },
     }
 
@@ -156,34 +150,56 @@ def _bounded_input(value: Any, limit: int) -> str:
     return text[:limit]
 
 
+def _without_status_update(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    return {key: item for key, item in value.items() if key != "status_update"}
+
+
 def applied_graph_topology_prompt(
     *,
     query: str,
     architect_plan: Any,
     challenger_review: Any,
-    commitments: str,
     spec: AppliedGraphSpec,
 ) -> str:
+    codebook = " ".join(
+        f"{name}: " + ",".join(f"{code}={token}" for code, token in codes.items()) + "."
+        for name, codes in (
+            ("Type", _NODE_TYPE_CODES),
+            ("Flow", _FLOW_CODES),
+            ("Sync", _SYNC_CODES),
+            ("Group kind", _GROUP_KIND_CODES),
+        )
+    )
     design_input = {
         "request": _bounded_input(query, spec.query_chars),
         "depth": spec.depth,
-        "architect_plan": architect_plan,
-        "challenger_review": challenger_review,
-        "diagram_commitments": commitments,
+        "architect_plan": _without_status_update(architect_plan),
+        "challenger_review": _without_status_update(challenger_review),
     }
     return (
         "Build the complete architecture topology from the supplied design input. Include every "
         "material responsibility, ownership boundary, runtime branch, control path, data store, "
-        "delivery path, and failure outcome needed by this specific system. Choose the number of "
-        "nodes, groups, and cross-links from the design. Never merge distinct owners, trust "
+        "delivery path, and failure outcome needed by this specific system. Use these exact tuple "
+        "layouts: root is [label,type,responsibility,group_index]; every remaining component is "
+        "[parent_index,label,type,responsibility,group_index,incoming_edge_label,flow,sync]; link "
+        "rows are [source_index,target_index,label,flow,sync]; group definition rows are "
+        "[label,kind]. Categorical tuple fields and group kind use "
+        f"integer codes. {codebook} Use the integer, never its name, in the wire object. Choose the "
+        "number of components, groups, and "
+        "links from the design. Never merge distinct owners, trust "
         "boundaries, authoritative stores, decisions, or failure outcomes to make the diagram "
-        "smaller. Every node belongs to one authored responsibility group. Use the same group label "
-        "and kind on nodes that share a visual zone. Order nodes in a stable visual reading order. "
-        "The first node is the root and uses parent_index -1. Every later node uses the zero-based "
-        "index of one non-self parent. Parent links must form one rooted acyclic topology. Set "
-        "sequence_step to a positive runtime order for nodes on the primary observable flow and 0 "
-        "for supporting nodes. Parallel nodes may share a step. Cross-links use zero-based source "
-        "and target indexes. Include all material non-tree connections. Every approval decision "
+        "smaller. Order components in a stable visual reading order. The root is component 0. A row "
+        "at components[i] defines component i+1 and its one incoming tree edge. Parent indexes are "
+        "zero-based and must be smaller than the component index, which makes one rooted acyclic "
+        "topology. Define groups before assigning their zero-based indexes in the root and "
+        "component rows. Every component must reference exactly one group. Links use component "
+        "indexes starting with root 0. "
+        "Composition steps use the same indexes but allow only non-root components 1 through the "
+        "final component. Put parallel incoming edges in the same step, keep each component "
+        "in at most one step, and omit supporting edges from steps. Include all material "
+        "non-tree links. Every approval decision "
         "needs distinct approved and rejected routes. Rejection is a no-effect outcome. A failure "
         "after an effect uses a separate bounded compensation route through the normal controls. "
         "Retry exhaustion, success, COMMITTED, NOT_FOUND, and STILL_UNKNOWN remain distinct outcomes "
@@ -193,12 +209,12 @@ def applied_graph_topology_prompt(
         "responsibilities when those boundaries apply. Keep the title at most 100 characters, node "
         "labels at most 60 characters, group labels at most 80 characters, responsibilities at most "
         f"220 characters, and edge labels at most {spec.edge_label_chars} characters. Return only "
-        "the schema-constrained object.\n"
+        "the schema-constrained object as compact JSON without indentation or line breaks.\n"
         + json.dumps(design_input, ensure_ascii=False, separators=(",", ":"))
     )
 
 
-def _required_text(value: Any, limit: int, *, path: str) -> str:
+def _normalised_required_text(value: Any, *, path: str) -> str:
     if not isinstance(value, str):
         raise AppliedGraphSpecError(
             "graph_design_schema_invalid", path=path, rule="value_type"
@@ -208,24 +224,45 @@ def _required_text(value: Any, limit: int, *, path: str) -> str:
         raise AppliedGraphSpecError(
             "graph_design_schema_invalid", path=path, rule="blank_required"
         )
-    if len(normalized) > limit:
-        raise AppliedGraphSpecError(
-            "graph_design_schema_invalid", path=path, rule="safety_limit"
-        )
     return normalized
 
 
-def _canonical_token(value: Any, allowed: tuple[str, ...], *, path: str) -> str:
-    if not isinstance(value, str):
+def _bounded_text(normalized: str, limit: int, *, path: str) -> str:
+    if len(normalized) > limit:
+        logger.info(
+            "Bounded applied graph text: path=%s original_chars=%s limit=%s",
+            path,
+            len(normalized),
+            limit,
+        )
+        prefix = normalized[:limit]
+        if normalized[limit] != " ":
+            word_boundary = prefix.rfind(" ")
+            if word_boundary >= limit // 2:
+                return prefix[:word_boundary]
+        return prefix
+    return normalized
+
+
+def _required_text(value: Any, limit: int, *, path: str) -> str:
+    return _bounded_text(
+        _normalised_required_text(value, path=path),
+        limit,
+        path=path,
+    )
+
+
+def _coded_token(value: Any, codes: dict[int, str], *, path: str) -> str:
+    if isinstance(value, bool) or not isinstance(value, int):
         raise AppliedGraphSpecError(
             "graph_design_schema_invalid", path=path, rule="value_type"
         )
-    canonical = {token.lower(): token for token in allowed}.get(value.strip().lower())
-    if canonical is None:
+    token = codes.get(value)
+    if token is None:
         raise AppliedGraphSpecError(
             "graph_design_schema_invalid", path=path, rule="invalid_enum"
         )
-    return canonical
+    return token
 
 
 def _required_index(value: Any, *, path: str) -> int:
@@ -236,181 +273,161 @@ def _required_index(value: Any, *, path: str) -> int:
     return value
 
 
+def _required_tuple(value: Any, size: int, *, path: str) -> list[Any]:
+    if not isinstance(value, list):
+        raise AppliedGraphSpecError(
+            "graph_design_schema_invalid", path=path, rule="container_type"
+        )
+    if len(value) != size:
+        raise AppliedGraphSpecError(
+            "graph_design_schema_invalid", path=path, rule="tuple_arity"
+        )
+    return value
+
+
 def _raise_topology(path: str) -> None:
     raise AppliedGraphSpecError(
         "graph_design_topology_invalid", path=path, rule="topology"
     )
 
 
-def validate_applied_graph_topology(
-    payload: Any,
+def _validate_component(
+    component: list[Any],
+    *,
+    node_index: int,
+    field_offset: int,
+    path: str,
     spec: AppliedGraphSpec,
 ) -> dict[str, Any]:
-    if not isinstance(payload, dict) or set(payload) != {
-        "title",
-        "nodes",
-        "cross_links",
-    }:
-        raise AppliedGraphSpecError(
-            "graph_design_schema_invalid", path="$", rule="key_set"
-        )
-
-    title = _required_text(payload["title"], spec.title_chars, path="title")
-    raw_nodes = payload["nodes"]
-    raw_cross_links = payload["cross_links"]
-    if not isinstance(raw_nodes, list):
-        raise AppliedGraphSpecError(
-            "graph_design_schema_invalid", path="nodes", rule="container_type"
-        )
-    if not raw_nodes:
-        raise AppliedGraphSpecError(
-            "graph_design_topology_invalid", node_count=0, path="nodes", rule="topology"
-        )
-    if len(raw_nodes) > spec.safety_max_nodes:
-        raise AppliedGraphSpecError(
-            "graph_design_node_safety_limit",
-            node_count=len(raw_nodes),
-            path="nodes",
-            rule="safety_limit",
-        )
-    if not isinstance(raw_cross_links, list):
-        raise AppliedGraphSpecError(
-            "graph_design_schema_invalid", path="cross_links", rule="container_type"
-        )
-    if len(raw_nodes) - 1 + len(raw_cross_links) > spec.safety_max_edges:
-        raise AppliedGraphSpecError(
-            "graph_design_edge_safety_limit",
-            node_count=len(raw_nodes),
-            edge_count=len(raw_nodes) - 1 + len(raw_cross_links),
-            path="cross_links",
-            rule="safety_limit",
-        )
-
-    node_keys = {
-        "label",
-        "type",
-        "tier",
-        "lane",
-        "responsibility",
-        "group",
-        "group_kind",
-        "parent_index",
-        "parent_label",
-        "parent_flow",
-        "parent_sync",
-        "sequence_step",
+    return {
+        "id": f"n{node_index + 1}",
+        "label": _required_text(
+            component[field_offset],
+            spec.node_label_chars,
+            path=f"{path}[{field_offset}]",
+        ),
+        "type": _coded_token(
+            component[field_offset + 1],
+            _NODE_TYPE_CODES,
+            path=f"{path}[{field_offset + 1}]",
+        ),
+        "responsibility": _required_text(
+            component[field_offset + 2],
+            spec.responsibility_chars,
+            path=f"{path}[{field_offset + 2}]",
+        ),
     }
-    nodes: list[dict[str, Any]] = []
-    parents: list[int] = []
-    parent_metadata: list[dict[str, str]] = []
-    for index, raw_node in enumerate(raw_nodes):
-        path = f"nodes[{index}]"
-        if not isinstance(raw_node, dict) or set(raw_node) != node_keys:
-            raise AppliedGraphSpecError(
-                "graph_design_schema_invalid", path=path, rule="key_set"
-            )
-        parent_index = _required_index(
-            raw_node["parent_index"], path=f"{path}.parent_index"
-        )
-        sequence_step = _required_index(
-            raw_node["sequence_step"], path=f"{path}.sequence_step"
-        )
-        if sequence_step < 0:
-            _raise_topology(f"{path}.sequence_step")
-        if index == 0:
-            if parent_index != _ROOT_PARENT_INDEX:
-                _raise_topology(path)
-        elif parent_index < 0 or parent_index >= len(raw_nodes) or parent_index == index:
-            _raise_topology(f"{path}.parent_index")
 
-        node_type = _canonical_token(raw_node["type"], _NODE_TYPES, path=f"{path}.type")
-        nodes.append({
-            "id": f"n{index + 1}",
-            "label": _required_text(
-                raw_node["label"], spec.node_label_chars, path=f"{path}.label"
-            ),
-            "type": node_type,
-            "tier": _canonical_token(raw_node["tier"], _TIERS, path=f"{path}.tier"),
-            "lane": _canonical_token(raw_node["lane"], _LANES, path=f"{path}.lane"),
-            "responsibility": _required_text(
-                raw_node["responsibility"],
-                spec.responsibility_chars,
-                path=f"{path}.responsibility",
-            ),
-            "group": _required_text(
-                raw_node["group"], spec.group_label_chars, path=f"{path}.group"
-            ),
-            "group_kind": _canonical_token(
-                raw_node["group_kind"], _GROUP_KINDS, path=f"{path}.group_kind"
-            ),
-            "sequence_step": sequence_step,
-        })
-        parents.append(parent_index)
-        parent_metadata.append({
-            "label": (
-                ""
-                if index == 0
-                else _required_text(
-                    raw_node["parent_label"],
-                    spec.edge_label_chars,
-                    path=f"{path}.parent_label",
-                )
-            ),
-            "flow": _canonical_token(
-                raw_node["parent_flow"], _FLOWS, path=f"{path}.parent_flow"
-            ),
-            "sync": _canonical_token(
-                raw_node["parent_sync"], _SYNC_MODES, path=f"{path}.parent_sync"
-            ),
-        })
-        if index == 0 and not isinstance(raw_node["parent_label"], str):
+
+def _validate_components(
+    raw_root: Any,
+    raw_components: list[Any],
+    spec: AppliedGraphSpec,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], list[int]]:
+    root = _required_tuple(raw_root, _ROOT_FIELD_COUNT, path="root")
+    components = [
+        _validate_component(
+            root,
+            node_index=0,
+            field_offset=0,
+            path="root",
+            spec=spec,
+        )
+    ]
+    group_indexes = [_required_index(root[3], path="root[3]")]
+    tree_edges: list[dict[str, str]] = []
+    for component_index, raw_component in enumerate(raw_components, start=1):
+        path = f"components[{component_index - 1}]"
+        component = _required_tuple(raw_component, _COMPONENT_FIELD_COUNT, path=path)
+        parent_index = _required_index(component[0], path=f"{path}[0]")
+        if parent_index < 0 or parent_index >= component_index:
+            _raise_topology(f"{path}[0]")
+        components.append(
+            _validate_component(
+                component,
+                node_index=component_index,
+                field_offset=1,
+                path=path,
+                spec=spec,
+            )
+        )
+        group_indexes.append(_required_index(component[4], path=f"{path}[4]"))
+        tree_edges.append(
+            {
+                "source": f"n{parent_index + 1}",
+                "target": f"n{component_index + 1}",
+                "label": _required_text(
+                    component[5], spec.edge_label_chars, path=f"{path}[5]"
+                ),
+                "flow": _coded_token(component[6], _FLOW_CODES, path=f"{path}[6]"),
+                "sync": _coded_token(component[7], _SYNC_CODES, path=f"{path}[7]"),
+            }
+        )
+    return components, tree_edges, group_indexes
+
+
+def _validate_group_memberships(
+    raw_groups: list[Any], group_indexes: list[int], spec: AppliedGraphSpec
+) -> list[tuple[str, str]]:
+    group_sources: dict[tuple[str, str], str] = {}
+    groups: list[tuple[str, str]] = []
+    for group_index, raw_group in enumerate(raw_groups):
+        path = f"composition.groups[{group_index}]"
+        group_record = _required_tuple(raw_group, _GROUP_FIELD_COUNT, path=path)
+        full_group = _normalised_required_text(
+            group_record[0], path=f"{path}[0]"
+        )
+        group = _bounded_text(
+            full_group, spec.group_label_chars, path=f"{path}[0]"
+        )
+        group_kind = _coded_token(
+            group_record[1], _GROUP_KIND_CODES, path=f"{path}[1]"
+        )
+        group_key = (group, group_kind)
+        prior_group = group_sources.get(group_key)
+        if prior_group is not None and prior_group != full_group:
             raise AppliedGraphSpecError(
                 "graph_design_schema_invalid",
-                path=f"{path}.parent_label",
-                rule="value_type",
+                path=f"{path}[0]",
+                rule="bounded_identity_collision",
             )
+        group_sources[group_key] = full_group
+        groups.append(group_key)
 
-    for index in range(1, len(nodes)):
-        seen: set[int] = set()
-        current = index
-        while current != 0:
-            if current in seen:
-                _raise_topology(f"nodes[{index}].parent_index")
-            seen.add(current)
-            current = parents[current]
-
-    edges: list[dict[str, str]] = []
-    seen_edges: set[tuple[str, str, str]] = set()
-    for index in range(1, len(nodes)):
-        metadata = parent_metadata[index]
-        edge = {
-            "source": f"n{parents[index] + 1}",
-            "target": f"n{index + 1}",
-            "label": metadata["label"],
-            "flow": metadata["flow"],
-            "sync": metadata["sync"],
-        }
-        edges.append(edge)
-        seen_edges.add((edge["source"], edge["target"], edge["label"].lower()))
-
-    edge_keys = {"source_index", "target_index", "label", "flow", "sync"}
-    for index, raw_edge in enumerate(raw_cross_links):
-        path = f"cross_links[{index}]"
-        if not isinstance(raw_edge, dict) or set(raw_edge) != edge_keys:
-            raise AppliedGraphSpecError(
-                "graph_design_schema_invalid", path=path, rule="key_set"
-            )
-        source_index = _required_index(
-            raw_edge["source_index"], path=f"{path}.source_index"
+    memberships: list[tuple[str, str]] = []
+    for component_index, group_index in enumerate(group_indexes):
+        path = (
+            "root[3]"
+            if component_index == 0
+            else f"components[{component_index - 1}][4]"
         )
-        target_index = _required_index(
-            raw_edge["target_index"], path=f"{path}.target_index"
-        )
+        if group_index < 0 or group_index >= len(groups):
+            _raise_topology(path)
+        memberships.append(groups[group_index])
+    return memberships
+
+
+def _validate_links(
+    raw_links: list[Any],
+    node_count: int,
+    tree_edges: list[dict[str, str]],
+    spec: AppliedGraphSpec,
+) -> list[dict[str, str]]:
+    edges = list(tree_edges)
+    seen_edges = {
+        (edge["source"], edge["target"], edge["label"].lower())
+        for edge in tree_edges
+    }
+    for link_index, raw_edge in enumerate(raw_links):
+        path = f"connections.links[{link_index}]"
+        edge_record = _required_tuple(raw_edge, _LINK_FIELD_COUNT, path=path)
+        source_index = _required_index(edge_record[0], path=f"{path}[0]")
+        target_index = _required_index(edge_record[1], path=f"{path}[1]")
         if (
             source_index < 0
-            or source_index >= len(nodes)
+            or source_index >= node_count
             or target_index < 0
-            or target_index >= len(nodes)
+            or target_index >= node_count
             or source_index == target_index
         ):
             _raise_topology(path)
@@ -418,10 +435,12 @@ def validate_applied_graph_topology(
             "source": f"n{source_index + 1}",
             "target": f"n{target_index + 1}",
             "label": _required_text(
-                raw_edge["label"], spec.edge_label_chars, path=f"{path}.label"
+                edge_record[2], spec.edge_label_chars, path=f"{path}[2]"
             ),
-            "flow": _canonical_token(raw_edge["flow"], _FLOWS, path=f"{path}.flow"),
-            "sync": _canonical_token(raw_edge["sync"], _SYNC_MODES, path=f"{path}.sync"),
+            "flow": _coded_token(edge_record[3], _FLOW_CODES, path=f"{path}[3]"),
+            "sync": _coded_token(
+                edge_record[4], _SYNC_CODES, path=f"{path}[4]"
+            ),
         }
         identity = (edge["source"], edge["target"], edge["label"].lower())
         if identity in seen_edges:
@@ -430,7 +449,123 @@ def validate_applied_graph_topology(
             )
         seen_edges.add(identity)
         edges.append(edge)
+    return edges
 
+
+def _validate_sequence_steps(raw_steps: list[Any], tree_count: int) -> list[int]:
+    sequence_steps = [0] * (tree_count + 1)
+    seen_components: set[int] = set()
+    for step_index, raw_step in enumerate(raw_steps):
+        path = f"composition.steps[{step_index}]"
+        if not isinstance(raw_step, list):
+            raise AppliedGraphSpecError(
+                "graph_design_schema_invalid", path=path, rule="container_type"
+            )
+        if not raw_step:
+            _raise_topology(path)
+        for item_index, value in enumerate(raw_step):
+            component_path = f"{path}[{item_index}]"
+            component_index = _required_index(value, path=component_path)
+            if component_index <= 0 or component_index > tree_count:
+                _raise_topology(component_path)
+            if component_index in seen_components:
+                raise AppliedGraphSpecError(
+                    "graph_design_topology_invalid",
+                    path=component_path,
+                    rule="duplicate",
+                )
+            seen_components.add(component_index)
+            sequence_steps[component_index] = step_index + 1
+    return sequence_steps
+
+
+def validate_applied_graph_topology(
+    payload: Any,
+    spec: AppliedGraphSpec,
+) -> dict[str, Any]:
+    if not isinstance(payload, dict) or set(payload) != {
+        "root",
+        "components",
+        "connections",
+        "composition",
+    }:
+        raise AppliedGraphSpecError(
+            "graph_design_schema_invalid", path="$", rule="key_set"
+        )
+
+    raw_root = payload["root"]
+    raw_components = payload["components"]
+    raw_connections = payload["connections"]
+    raw_composition = payload["composition"]
+    if not isinstance(raw_connections, dict) or set(raw_connections) != {"links"}:
+        raise AppliedGraphSpecError(
+            "graph_design_schema_invalid", path="connections", rule="key_set"
+        )
+    if not isinstance(raw_composition, dict) or set(raw_composition) != {
+        "title",
+        "groups",
+        "steps",
+    }:
+        raise AppliedGraphSpecError(
+            "graph_design_schema_invalid", path="composition", rule="key_set"
+        )
+    if not isinstance(raw_components, list):
+        raise AppliedGraphSpecError(
+            "graph_design_schema_invalid", path="components", rule="container_type"
+        )
+    node_count = len(raw_components) + 1
+    if node_count > spec.safety_max_nodes:
+        raise AppliedGraphSpecError(
+            "graph_design_node_safety_limit",
+            node_count=node_count,
+            path="components",
+            rule="safety_limit",
+        )
+    raw_links = raw_connections["links"]
+    raw_groups = raw_composition["groups"]
+    raw_steps = raw_composition["steps"]
+    for value, path in (
+        (raw_links, "connections.links"),
+        (raw_groups, "composition.groups"),
+        (raw_steps, "composition.steps"),
+    ):
+        if isinstance(value, list):
+            continue
+        raise AppliedGraphSpecError(
+            "graph_design_schema_invalid", path=path, rule="container_type"
+        )
+    edge_count = len(raw_components) + len(raw_links)
+    if edge_count > spec.safety_max_edges:
+        raise AppliedGraphSpecError(
+            "graph_design_edge_safety_limit",
+            node_count=node_count,
+            edge_count=edge_count,
+            path="connections",
+            rule="safety_limit",
+        )
+    components, tree_edges, group_indexes = _validate_components(
+        raw_root, raw_components, spec
+    )
+    memberships = _validate_group_memberships(raw_groups, group_indexes, spec)
+    sequence_steps = _validate_sequence_steps(raw_steps, len(raw_components))
+    nodes = [
+        {
+            **component,
+            "group": group,
+            "group_kind": group_kind,
+            "tier": None,
+            "lane": "bottom" if group_kind == "operations" else "main",
+            "sequence_step": sequence_step,
+        }
+        for component, (group, group_kind), sequence_step in zip(
+            components, memberships, sequence_steps, strict=True
+        )
+    ]
+    edges = _validate_links(raw_links, node_count, tree_edges, spec)
+
+    title = _required_text(
+        raw_composition["title"], spec.title_chars, path="composition.title"
+    )
     return {"title": title, "nodes": nodes, "edges": edges}
 
 
@@ -562,32 +697,60 @@ def enrich_applied_graph_topology(
 
 
 def worst_case_topology_chars(spec: AppliedGraphSpec) -> int:
-    nodes = [
-        {
-            "label": "l" * spec.node_label_chars,
-            "type": "service",
-            "tier": "private",
-            "lane": "main",
-            "responsibility": "r" * spec.responsibility_chars,
-            "group": "g" * spec.group_label_chars,
-            "group_kind": "runtime",
-            "parent_index": _ROOT_PARENT_INDEX if index == 0 else 0,
-            "parent_label": "" if index == 0 else "e" * spec.edge_label_chars,
-            "parent_flow": "runtime",
-            "parent_sync": "sync",
-            "sequence_step": index,
-        }
-        for index in range(spec.safety_max_nodes)
+    node_count = max(0, spec.safety_max_nodes)
+    root = [
+        "l" * spec.node_label_chars,
+        max(_NODE_TYPE_CODES),
+        "r" * spec.responsibility_chars,
+        0,
     ]
-    tree_edge_count = max(0, len(nodes) - 1)
-    cross_links = [
-        {
-            "source_index": index % len(nodes),
-            "target_index": (index + 1) % len(nodes),
-            "label": "e" * spec.edge_label_chars,
-            "flow": "runtime",
-            "sync": "sync",
-        }
-        for index in range(max(0, spec.safety_max_edges - tree_edge_count))
+    components = [
+        [
+            index,
+            "l" * spec.node_label_chars,
+            max(_NODE_TYPE_CODES),
+            "r" * spec.responsibility_chars,
+            index + 1,
+            "e" * spec.edge_label_chars,
+            max(_FLOW_CODES),
+            max(_SYNC_CODES),
+        ]
+        for index in range(max(0, node_count - 1))
     ]
-    return len(json.dumps({"title": "t" * spec.title_chars, "nodes": nodes, "cross_links": cross_links}))
+    link_count = (
+        max(0, spec.safety_max_edges - len(components)) if node_count > 1 else 0
+    )
+    link_endpoints = [
+        (source, target)
+        for source in reversed(range(node_count))
+        for target in reversed(range(node_count))
+        if source != target and target != source + 1
+    ][:link_count]
+    links = [
+        [
+            source,
+            target,
+            "e" * spec.edge_label_chars,
+            max(_FLOW_CODES),
+            max(_SYNC_CODES),
+        ]
+        for source, target in link_endpoints
+    ]
+    groups = [
+        [
+            f"{index:02d}" + "g" * max(0, spec.group_label_chars - 2),
+            max(_GROUP_KIND_CODES),
+        ]
+        for index in range(node_count)
+    ]
+    payload = {
+        "root": root,
+        "components": components,
+        "connections": {"links": links},
+        "composition": {
+            "title": "t" * spec.title_chars,
+            "groups": groups,
+            "steps": [[index] for index in range(1, len(components) + 1)],
+        },
+    }
+    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))

@@ -23,9 +23,11 @@ import {
   NODE_RX,
   NODE_W,
   overviewEdgeLabelOpacity,
+  planVerticalLayout,
   selectOverviewEdgeIndices,
   selectGraphOrientation,
   VERTICAL_LEVEL_H,
+  VERTICAL_NODE_GAP,
   VERTICAL_PAD,
   V_PAD,
   wrapNodeLabel,
@@ -475,15 +477,15 @@ export function D3Graph({
     const canvasMainH    = height - 2 * V_PAD - BOTTOM_BAND_H;
     const effectiveMainH = Math.max(canvasMainH, totalMainSlots * MIN_ROW_H);
 
-    // Keep parallel fan-out readable by wrapping a wide topology level. The
-    // previous layout widened the virtual canvas for every peer, then shrank
-    // all titles below the publication threshold to fit the viewport.
-    const VERTICAL_NODE_GAP = 24;
-    const verticalNodesPerRow = Math.max(
-      1,
-      Math.floor((width - 2 * H_PAD + VERTICAL_NODE_GAP) / (NODE_W + VERTICAL_NODE_GAP)),
+    // Choose wrapping and virtual width together so wide levels can use both
+    // viewport dimensions without forcing every level into the same narrow row.
+    const verticalPlan = planVerticalLayout(
+      width,
+      height,
+      sortedColumns.map(columnIndex => colBuckets.get(columnIndex)?.length ?? 0),
     );
-    const verticalLayoutW = width;
+    const verticalNodesPerRow = verticalPlan.nodesPerRow;
+    const verticalLayoutW = verticalPlan.layoutWidth;
     const verticalLevelStart = new Map<number, number>();
     let verticalCursor = VERTICAL_PAD;
     for (const columnIndex of sortedColumns) {
@@ -500,7 +502,9 @@ export function D3Graph({
           const rowStart = wrappedRow * verticalNodesPerRow;
           const nodesInRow = Math.min(verticalNodesPerRow, bucket.length - rowStart);
           const rowWidth = nodesInRow * NODE_W + (nodesInRow - 1) * VERTICAL_NODE_GAP;
-          node.x = (width - rowWidth) / 2 + NODE_W / 2 + indexInRow * (NODE_W + VERTICAL_NODE_GAP);
+          node.x = (verticalLayoutW - rowWidth) / 2
+            + NODE_W / 2
+            + indexInRow * (NODE_W + VERTICAL_NODE_GAP);
           node.y = (verticalLevelStart.get(c) ?? VERTICAL_PAD)
             + (wrappedRow + 0.5) * VERTICAL_LEVEL_H;
         });
@@ -543,7 +547,7 @@ export function D3Graph({
       ? verticalLayoutW
       : numCols * colWidth + 2 * H_PAD;
     const layoutH = orientation === 'vertical'
-      ? verticalCursor + VERTICAL_PAD
+      ? verticalPlan.layoutHeight
       : V_PAD + effectiveMainH + BOTTOM_BAND_H + V_PAD;
 
     // ── Resolve edges to node object references ───────────────────────────────
@@ -736,7 +740,7 @@ export function D3Graph({
         return d.sync === 'async' ? '6,4' : 'none';
       })
       .attr('marker-end', (d: RenderLink) => (d.edgeType === 'loop' || !isForward(d)) ? 'url(#arrow-ret)' : 'url(#arrow-fwd)')
-      .attr('opacity', (d: RenderLink) => d.edgeType === 'loop' ? 0.42 : 0);
+      .attr('opacity', (d: RenderLink) => d.edgeType === 'loop' ? 0.42 : 1);
 
     // Wide invisible hit area for easier hover targeting
     const linkHit = linkGroup.selectAll('path.edge-hit')
@@ -823,7 +827,7 @@ export function D3Graph({
       .attr('tabindex', 0)
       .attr('aria-label', (d: RenderNode) => `Explore ${d.label}`)
       .attr('data-grouped', (d: RenderNode) => groupStyleByNodeId.has(d.id) ? 'true' : null)
-      .attr('opacity', 0)
+      .attr('opacity', 1)
       .style('cursor', 'pointer')
       .call(
         // Drag: move node, re-render all edges (no simulation needed)
@@ -1199,7 +1203,7 @@ export function D3Graph({
           ? centerY
           : centerY - (d.stepNum !== null ? 20 : isForward(d) ? 12 : 20);
         const sideOffset = NODE_W / 2 + labelWidth / 2 + 14;
-        const preferredSide = centerX < width / 2 ? -1 : 1;
+        const preferredSide = centerX < layoutW / 2 ? -1 : 1;
         const candidates = verticalForward
           ? Array.from({ length: 7 }, (_, distanceIndex) => (
               [preferredSide, -preferredSide].map(side => ({
