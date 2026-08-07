@@ -1,8 +1,8 @@
 # Live Evaluation Stabilization: Intermediate Record
 
-Last updated: 2026-08-06
+Last updated: 2026-08-07
 
-This document records the work performed on draft PR #37 (`codex/critic-json-retry`), the evidence from protected and diagnostic evaluations, and the remaining production exit criteria. It is intentionally intermediate: production is not considered fixed until the exact approved tree is squash-merged and both Cloud Run and Vercel are verified on `main`.
+This document records the work performed on PR #37 (`codex/critic-json-retry`), the evidence from protected and diagnostic evaluations, and the remaining production exit criteria. PR #37 merged its two reviewed commits on 2026-08-07. Production is not considered fixed until the follow-up contract correction passes protected evaluation, merges, and is verified on Cloud Run and Vercel.
 
 ## Objective and operating rules
 
@@ -12,7 +12,7 @@ This document records the work performed on draft PR #37 (`codex/critic-json-ret
 - Require free offline CI before any paid diagnostic.
 - Cancel automatically triggered live workflows while a newly pushed head is not CI-verified.
 - Publish/consume approval by Git tree identity so squash commits and synthetic PR merge refs cannot invalidate equivalent content.
-- Squash-merge the final exact approved PR head.
+- Preserve PR #37's two reviewed commits and merge the focused contract correction.
 - Verify the deployed Cloud Run backend and Vercel frontend after merge.
 
 ## Starting failure state
@@ -52,13 +52,12 @@ The original provider boundary relied on array `maxItems`. Anthropic structured 
 - Normalized provider-valid blank strings, enum casing, internal slot casing, and optional invalid cross-links.
 - Added safe validation telemetry using field paths and categorical rules/actions without logging model-authored content.
 
-### Mutation controls
+### Topology authority
 
-- Kept `mutation_control` as enrichment metadata rather than publication proof.
-- Cleared irrelevant role placeholders when `external_mutation=false`.
-- Added deterministic global assignment of four distinct mutation roles when `external_mutation=true`, using fixed semantic/type scoring and stable slot tie-breaking while preserving valid supplied hints.
-- Tightened compensation re-entry detection to require the selected authoritative-state source and validator target.
-- Left the graph critic and deterministic publication contract as the authoritative safety gates.
+- Removed the unused `mutation_control` side channel and its heuristic role assignment.
+- Stopped server code from inventing compensation and rollback edges from inferred topology.
+- Kept safety controls in one representation: authored nodes and edges reviewed by the deterministic and semantic publication gates.
+- Reduced the structured-output grammar and removed the prior `mutation_control.semantic_roles` failure boundary.
 
 ### Focused graph repair
 
@@ -97,6 +96,16 @@ That failure exposed one broader patch-boundary inconsistency:
 
 The patch boundary now serializes every mutable node and edge field. It applies one omission rule to all blank/null update values and enriches every new node or edge with the same shared presentation defaults as initial topology generation. Strict reference, topology, semantic, and publication validation still run after this normalization. This is one provider-to-domain representation boundary rather than separate field-value exceptions.
 
+The canonical eight-case run `31161384348` on the rewritten two-commit branch exposed five shared contract conflicts after the earlier patch-boundary work:
+
+- Graph generation admitted edge labels up to 100 characters while repair pre-validation rejected unchanged labels above 80. The failed RAG candidate contained an 87-character valid label.
+- Server enrichment synthesized a 98-character compensation edge from heuristic role assignments. The same inferred route was semantically wrong in the model-serving candidate.
+- The repair layer rejected a 14-operation candidate before final node, edge, structural, and semantic validation, even though those lower gates already bound the resulting graph.
+- A structurally valid initial graph was rejected by deterministic semantic checks inside generation, before the canonical critic could return focused repair feedback.
+- Repair admission required the full 90-second timeout allowance rather than using the available bounded interval after reserving critic, synthesis, and finalization time.
+
+The correction removes the unused role side channel and synthesized edges, gives edge labels one 100-character owner, removes the redundant aggregate patch-operation cap, routes structurally valid drafts through the canonical critic, and treats stage timeouts as caps. The final topology and publication validators remain unchanged.
+
 ### Research, citations, and latency
 
 - Separated sourced facts from explicitly labeled inference in evaluation behavior.
@@ -126,15 +135,15 @@ The chronology is important: these were not repetitions of one identical defect.
 
 ## Current checkpoint
 
-Repair-ID implementation commit: `f3b6659`. Root-cause record commit: `f4c65e8`.
+PR #37 preserved `87c9012` and `cbbc892` as its two reviewed commits. The post-merge contract correction is isolated in one follow-up commit.
 
 Current implementation state:
 
 - Immutable repair-only edge IDs replace prose selectors and endpoint-pair recovery.
 - The focused repair call uses its configured 7,500-token allowance and a 90-second deadline.
 - Patch context includes every mutable field; additions share initial-topology presentation enrichment; updates use one blank/null omission rule.
-- Regression coverage includes exact selection among parallel edges, unknown IDs, complete mutable context, shared addition defaults, update omission semantics, authored label normalization, and patch prompt identity.
-- The complete patch-boundary correction passed the full local offline gate and awaits one targeted diagnostic.
+- Regression coverage includes exact selection among parallel edges, unknown IDs, complete mutable context, shared addition defaults, update omission semantics, the 100-character label contract, larger bounded patches, partial repair windows, authored-only topology, and patch prompt identity.
+- The latest topology-authority correction passes 198 focused graph, critic, workflow, and prompt tests.
 
 Most recent authoritative evidence:
 
@@ -142,10 +151,10 @@ Most recent authoritative evidence:
 - Diagnostic `31056353630`: initial graph and critic both executed; failure is isolated to focused repair validation.
 - Diagnostic `31127543972`: edge IDs were accepted; the patch call hit exactly 3,200 output tokens and the server preserved the existing graph because no JSON object was emitted.
 - Diagnostic `31127721414`: the first repair published a valid candidate; the second repair failed because the patch protocol omitted and inconsistently required presentation fields.
-- Focused local patch/spec/graph/critic/workflow verification after the complete boundary correction: 209 tests passed.
-- The exact working tree passed the full local offline gate under the CI Node 20 runtime. This covered all backend groups, 141 frontend tests and build, static/security, ingestion, migrations, Terraform validation, policy checks, and the production container build.
+- Focused local patch/spec/graph/critic/workflow verification after the complete boundary correction: 198 tests passed.
+- The exact working tree passed the full local offline gate under the CI Node 20 arm64 runtime. Backend coverage passed with 735 tests and 91% total coverage. Frontend coverage passed with 200 tests, 90.89% statements, 78.57% branches, 93% functions, and 93.34% lines. Static/security, ingestion, migrations, Terraform validation, policy checks, and the production container build also passed.
 - Backend/frontend staging readiness, dashboard smoke, capture, cleanup, artifact upload, latency accounting, and cost accounting all passed.
-- Production remains on stale `main`; no production-success claim is made.
+- `main` contains PR #37 and still lacks the follow-up contract correction; no production-success claim is made.
 
 ## Evaluation workflow lessons
 
@@ -162,17 +171,12 @@ Most recent authoritative evidence:
 
 ## Remaining execution order
 
-1. Pass required GitHub offline CI on the exact repair-ID tree.
-2. Rerun only `rag-grounding`.
-3. If it passes, run only `node-followup`.
-4. If it passes, run only `graph-expansion`.
-5. Run `applied-domain` separately because its diagnostic provenance rules require a standalone successful dispatch for override evidence.
-6. Address `graph-off` only if a current targeted or final run still returns manual review.
-7. Run one uninterrupted canonical eight-case protected evaluation on the final exact tree.
-8. Verify the exact-tree approval tag and required PR checks.
-9. Mark PR #37 ready and squash-merge with the exact final head guard.
-10. Monitor the `main` production workflow through immutable backend deployment, smoke/promotion, and Vercel deployment.
-11. Verify Cloud Run revision/digest/traffic and the public backend and Vercel frontend URLs.
+1. Pass required GitHub offline CI on the exact final tree.
+2. Pass one uninterrupted canonical eight-case protected evaluation on that tree.
+3. Verify the exact-tree approval tag and required PR checks.
+4. Merge the focused follow-up PR with the exact final head guard.
+5. Monitor the `main` production workflow through immutable backend deployment, smoke/promotion, and Vercel deployment.
+6. Verify Cloud Run revision/digest/traffic and the public backend and Vercel frontend URLs.
 
 ## Repository and contributor notes
 
@@ -185,10 +189,10 @@ Most recent authoritative evidence:
 This effort is complete only when all of the following are true on authoritative current evidence:
 
 - Exact final PR head has required offline CI success.
-- Targeted unresolved cases pass.
+- The final canonical run resolves every previously failing case.
 - One final canonical eight-case protected evaluation passes without manual review or infrastructure failure.
 - The exact Git tree has a valid protected-evaluation approval.
-- PR #37 is squash-merged, not merge-committed or rebased into multiple production commits.
+- PR #37 is merged with the branch's two reviewed commits preserved.
 - `main` deployment completes for the tested tree/digest.
 - Cloud Run serves the promoted revision and passes public health/smoke checks.
 - Vercel serves the current frontend deployment at the production alias.

@@ -33,13 +33,6 @@ def _draft() -> dict:
         "title": "Bounded architecture",
         "nodes": nodes,
         "cross_links": [],
-        "mutation_control": {
-            "external_mutation": False,
-            "validator": "",
-            "approver": "",
-            "executor": "",
-            "authoritative_state": "",
-        },
     }
 
 
@@ -95,9 +88,8 @@ def test_topology_schema_has_exact_closed_slots_without_unsupported_bounds():
     assert cross_link_record["required"] == [
         "source", "target", "label", "flow", "sync",
     ]
-    mutation_properties = schema["properties"]["mutation_control"]["properties"]
-    for role in ("validator", "approver", "executor", "authoritative_state"):
-        assert mutation_properties[role] == {"type": "string"}
+    assert schema["required"] == ["title", "nodes", "cross_links"]
+    assert set(schema["properties"]) == set(schema["required"])
     serialized = json.dumps(schema)
     assert "minItems" not in serialized
     assert "maxItems" not in serialized
@@ -224,83 +216,6 @@ def test_optional_cross_links_canonicalize_endpoints_and_drop_invalid_or_blank()
     }]
 
 
-def test_false_mutation_clears_all_string_role_placeholders():
-    payload = _draft()
-    payload["mutation_control"] = {
-        "external_mutation": False,
-        "validator": "ROOT",
-        "approver": "none",
-        "executor": "n1",
-        "authoritative_state": "N/A",
-    }
-    draft = validate_applied_graph_topology(payload, applied_graph_spec("prototype"))
-    assert draft["mutation_control"] == {
-        "external_mutation": False,
-        "validator": "",
-        "approver": "",
-        "executor": "",
-        "authoritative_state": "",
-    }
-
-
-def test_true_mutation_roles_repair_invalid_and_duplicate_hints_semantically():
-    payload = _draft()
-    payload["nodes"]["n2"].update({"label": "Schema Validator", "type": "control"})
-    payload["nodes"]["n3"].update({"label": "Policy Approval Gate", "type": "decision"})
-    payload["nodes"]["n4"].update({"label": "Mutation Executor", "type": "service"})
-    payload["nodes"]["n5"].update({"label": "Authoritative State Registry", "type": "datastore"})
-    payload["mutation_control"] = {
-        "external_mutation": True,
-        "validator": "n2",
-        "approver": "N2",
-        "executor": "missing",
-        "authoritative_state": "",
-    }
-    draft = validate_applied_graph_topology(payload, applied_graph_spec("prototype"))
-    assert draft["mutation_control"] == {
-        "external_mutation": True,
-        "validator": "n2",
-        "approver": "n3",
-        "executor": "n4",
-        "authoritative_state": "n5",
-    }
-
-
-def test_true_mutation_roles_preserve_valid_distinct_hints():
-    payload = _draft()
-    expected = {
-        "external_mutation": True,
-        "validator": "n9",
-        "approver": "n8",
-        "executor": "n7",
-        "authoritative_state": "n6",
-    }
-    payload["mutation_control"] = dict(expected)
-    draft = validate_applied_graph_topology(payload, applied_graph_spec("prototype"))
-    assert draft["mutation_control"] == expected
-
-
-def test_true_mutation_role_ties_use_numeric_slot_order():
-    payload = _draft()
-    for node in payload["nodes"].values():
-        node.update({
-            "type": "service",
-            "label": "Neutral component",
-            "responsibility": "Handles neutral work.",
-        })
-    payload["mutation_control"] = {
-        "external_mutation": True,
-        "validator": "",
-        "approver": "",
-        "executor": "",
-        "authoritative_state": "",
-    }
-    draft = validate_applied_graph_topology(payload, applied_graph_spec("prototype"))
-    assert tuple(draft["mutation_control"][role] for role in (
-        "validator", "approver", "executor", "authoritative_state",
-    )) == ("n1", "n2", "n3", "n4")
-
-
 def test_structural_string_failure_exposes_safe_path_and_rule_only():
     payload = _draft()
     payload["nodes"]["n2"]["label"] = None
@@ -330,19 +245,12 @@ def test_more_than_ten_cross_links_after_dedupe_keep_first_ten():
     ]
 
 
-def test_enrichment_reserves_compensation_and_builds_three_groups():
+def test_enrichment_builds_three_groups_without_inventing_edges():
     spec = applied_graph_spec("prototype")
     payload = _draft()
-    payload["mutation_control"] = {
-        "external_mutation": True,
-        "validator": "n1",
-        "approver": "n2",
-        "executor": "n3",
-        "authoritative_state": "n4",
-    }
     draft = validate_applied_graph_topology(payload, spec)
     graph = enrich_applied_graph_topology(draft, spec=spec, architect_plan={})
-    assert len(graph["edges"]) == 9
+    assert len(graph["edges"]) == 8
     assert len(graph["groups"]) == 3
     assert len(graph["sequence"]) == 5
     assert {node_id for group in graph["groups"] for node_id in group["nodeIds"]} == {
@@ -350,7 +258,7 @@ def test_enrichment_reserves_compensation_and_builds_three_groups():
     }
 
 
-def test_compensation_reentry_requires_authoritative_source_and_validator_target():
+def test_enrichment_preserves_only_authored_compensation_edges():
     spec = applied_graph_spec("prototype")
     payload = _draft()
     payload["cross_links"] = [{
@@ -360,13 +268,6 @@ def test_compensation_reentry_requires_authoritative_source_and_validator_target
         "flow": "control",
         "sync": "async",
     }]
-    payload["mutation_control"] = {
-        "external_mutation": True,
-        "validator": "n1",
-        "approver": "n2",
-        "executor": "n3",
-        "authoritative_state": "n4",
-    }
     graph = enrich_applied_graph_topology(
         validate_applied_graph_topology(payload, spec), spec=spec, architect_plan={}
     )
@@ -374,10 +275,10 @@ def test_compensation_reentry_requires_authoritative_source_and_validator_target
         edge for edge in graph["edges"]
         if "compensat" in edge["label"].lower() and edge["target"] == "n1"
     ]
-    assert {edge["source"] for edge in compensation_edges} == {"n2", "n4"}
+    assert {edge["source"] for edge in compensation_edges} == {"n2"}
 
 
-def test_ten_cross_links_remain_inside_nine_node_render_budget_with_compensation():
+def test_ten_cross_links_remain_inside_nine_node_render_budget():
     spec = applied_graph_spec("production")
     payload = _draft()
     payload["cross_links"] = [
@@ -390,17 +291,10 @@ def test_ten_cross_links_remain_inside_nine_node_render_budget_with_compensation
         }
         for index in range(1, 11)
     ]
-    payload["mutation_control"] = {
-        "external_mutation": True,
-        "validator": "n1",
-        "approver": "n2",
-        "executor": "n3",
-        "authoritative_state": "n4",
-    }
     graph = enrich_applied_graph_topology(
         validate_applied_graph_topology(payload, spec), spec=spec, architect_plan={}
     )
-    assert len(graph["edges"]) <= 19
+    assert len(graph["edges"]) == 18
 
 
 def test_worst_case_topology_serialization_fits_generation_budget():
@@ -427,11 +321,10 @@ def test_prompt_names_fixed_slots_parent_depth_and_semantic_identity():
     assert "title at most 100 characters" in prompt
     assert "node label at most 60 characters" in prompt
     assert "one sentence of at most 140 characters" in prompt
-    assert "parent or cross-link label at most 80 characters" in prompt
+    assert "parent or cross-link label at most 100 characters" in prompt
     assert "material cross-links only" in prompt
     assert "no prose outside the schema fields" in prompt
-    assert "semantic hints normalized server-side" in prompt
-    assert "visible topology must still prove" in prompt
+    assert "visible topology must identify distinct validation" in prompt
 
 
 @pytest.mark.asyncio
@@ -452,7 +345,15 @@ async def test_bounded_generator_uses_schema_once(monkeypatch):
 
     monkeypatch.setattr(graph_worker, "stream_structured_llm", fake_stream_structured_llm)
     monkeypatch.setattr(graph_worker, "_normalise_applied_graph", lambda graph, **_kwargs: graph)
-    monkeypatch.setattr(graph_worker, "_validate_applied_architecture_patch", lambda *_args: None)
+
+    def reject_if_called(*_args):
+        raise AssertionError("the canonical workflow owns semantic review")
+
+    monkeypatch.setattr(
+        graph_worker,
+        "_validate_applied_architecture_patch",
+        reject_if_called,
+    )
     result = await graph_worker._generate_bounded_applied_architecture(
         {"graph_data": None, "architect_plan": {}, "challenger_review": {}, "complexity": "prototype"},
         "Build a bounded runtime", SimpleNamespace(resolved="prototype"),

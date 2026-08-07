@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from itertools import permutations
 import json
 import logging
 from typing import Any
@@ -28,6 +27,7 @@ _SYNC_MODES = ("sync", "async")
 _NODE_SLOT_COUNT = 9
 _MAX_CROSS_LINK_SLOTS = 10
 _ROOT_PARENT = "ROOT"
+GRAPH_EDGE_LABEL_CHARS = 100
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,6 @@ _ERROR_RULES = frozenset({
     "json_decode",
     "key_set",
     "provider_finish",
-    "semantic_roles",
     "value_type",
 })
 _NORMALIZATION_RULES = frozenset({
@@ -61,34 +60,6 @@ _NORMALIZATION_RULES = frozenset({
 _NORMALIZATION_ACTIONS = frozenset({
     "canonicalized", "defaulted", "dropped", "ignored", "reparented", "truncated",
 })
-_MUTATION_ROLE_ORDER = ("validator", "approver", "executor", "authoritative_state")
-_MUTATION_ROLE_KEYWORDS = {
-    "validator": frozenset({
-        "validate", "validation", "validator", "verify", "verification", "verifier",
-        "guard", "interlock", "safety", "schema", "policy", "check",
-    }),
-    "approver": frozenset({
-        "approve", "approval", "approver", "authorize", "authorization", "review",
-        "gate", "signoff",
-    }),
-    "executor": frozenset({
-        "execute", "execution", "executor", "adapter", "sender", "dispatcher", "writer",
-        "delivery", "deploy", "deployment", "publisher",
-    }),
-    "authoritative_state": frozenset({
-        "authoritative", "canonical", "ledger", "state", "store", "registry", "database",
-        "record", "source",
-    }),
-}
-_MUTATION_ROLE_TYPE_SCORES = {
-    "validator": {"control": 30, "decision": 25, "gateway": 15, "service": 5},
-    "approver": {"decision": 30, "control": 25, "gateway": 10, "service": 5},
-    "executor": {"service": 30, "gateway": 25, "external": 20, "control": 5},
-    "authoritative_state": {"datastore": 30, "external": 25, "control": 10},
-}
-_MUTATION_ROLE_PRESERVATION_BONUS = 10_000
-
-
 @dataclass(frozen=True)
 class AppliedGraphSpec:
     depth: str
@@ -103,7 +74,7 @@ class AppliedGraphSpec:
     id_chars: int = 80
     node_label_chars: int = 60
     responsibility_chars: int = 220
-    edge_label_chars: int = 100
+    edge_label_chars: int = GRAPH_EDGE_LABEL_CHARS
     assumption_chars: int = 160
     query_chars: int = 2000
     projected_item_chars: int = 280
@@ -176,30 +147,6 @@ def _record_normalization(path: str, rule: str, action: str) -> None:
     )
 
 
-def _record_mutation_role(
-    role: str,
-    category: str,
-    *,
-    score: int,
-    preservation_count: int,
-) -> None:
-    if role not in _MUTATION_ROLE_ORDER or category not in {
-        "inactive_clear", "inferred", "preserved", "reassigned",
-    }:
-        return
-    logger.info(
-        "Applied topology mutation role normalized",
-        extra={
-            "graph_mutation_role": role,
-            "graph_mutation_category": category,
-            "graph_mutation_score": max(0, min(int(score), 100_000)),
-            "graph_mutation_preservation_count": max(
-                0, min(int(preservation_count), len(_MUTATION_ROLE_ORDER))
-            ),
-        },
-    )
-
-
 def applied_graph_spec(depth: str) -> AppliedGraphSpec:
     return _SPECS["production" if depth == "production" else "prototype"]
 
@@ -250,24 +197,6 @@ def applied_graph_topology_schema(spec: AppliedGraphSpec) -> dict[str, Any]:
             "sync": {"type": "string", "enum": list(_SYNC_MODES)},
         },
     }
-    mutation_control = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": [
-            "external_mutation",
-            "validator",
-            "approver",
-            "executor",
-            "authoritative_state",
-        ],
-        "properties": {
-            "external_mutation": {"type": "boolean"},
-            "validator": {"type": "string"},
-            "approver": {"type": "string"},
-            "executor": {"type": "string"},
-            "authoritative_state": {"type": "string"},
-        },
-    }
     return {
         "$defs": {
             "node_record": node_record,
@@ -275,7 +204,7 @@ def applied_graph_topology_schema(spec: AppliedGraphSpec) -> dict[str, Any]:
         },
         "type": "object",
         "additionalProperties": False,
-        "required": ["title", "nodes", "cross_links", "mutation_control"],
+        "required": ["title", "nodes", "cross_links"],
         "properties": {
             "title": {"type": "string"},
             "nodes": {
@@ -290,7 +219,6 @@ def applied_graph_topology_schema(spec: AppliedGraphSpec) -> dict[str, Any]:
                 "type": "array",
                 "items": {"$ref": "#/$defs/cross_link_record"},
             },
-            "mutation_control": mutation_control,
         },
     }
 
@@ -388,7 +316,7 @@ def applied_graph_topology_prompt(
             "node_label_chars": 60,
             "responsibility_chars": 140,
             "responsibility_sentences": 1,
-            "parent_or_cross_link_label_chars": 80,
+            "parent_or_cross_link_label_chars": spec.edge_label_chars,
         },
         "architect": project_architect_plan(architect_plan, spec),
         "challenger_blockers": project_challenger_blockers(challenger_review, spec),
@@ -400,7 +328,8 @@ def applied_graph_topology_prompt(
         "allowed non-self fixed-slot parent and authors the label, flow, and sync for that parent edge. Keep "
         "the title at most 100 characters and every node label at most 60 characters. Write each "
         "responsibility as one sentence of at most 140 characters and every parent or cross-link "
-        "label at most 80 characters. Put no prose outside the schema fields. Keep parent depth at "
+        f"label at most {spec.edge_label_chars} characters. Put no prose outside the schema fields. "
+        "Keep parent depth at "
         "or below five. A slot's label and responsibility are its semantic identity; "
         "keep that identity stable in every link and later expansion. Return cross_links as an "
         "array with at most ten distinct material non-tree links; include material cross-links only. "
@@ -415,13 +344,9 @@ def applied_graph_topology_prompt(
         "STILL_UNKNOWN escalation distinct when reconciliation applies; keep canary, full promotion, "
         "and rollback as distinct edges when release applies. Every edge label must state the complete "
         "visible action or control contract; never use a self-loop. The parent links must form a "
-        "rooted, acyclic n1 tree before cross-links. Set mutation_control.external_mutation "
-        "true whenever any path can change an external or authoritative system, then identify four "
-        "distinct fixed slot IDs from n1 through n9 for its validator, approver, executor, and "
-        "authoritative state. These required role IDs are semantic hints normalized server-side; "
-        "the visible topology must still prove the control contract. "
-        "Set it false with four empty IDs only for a genuinely no-external-effect design. Return only "
-        "the schema-constrained object.\n"
+        "rooted, acyclic n1 tree before cross-links. For any external mutation, the visible topology "
+        "must identify distinct validation, approval, execution, and authoritative-state owners and "
+        "the edges that enforce their control contract. Return only the schema-constrained object.\n"
         + json.dumps(projection, ensure_ascii=False, separators=(",", ":"))
     )
 
@@ -481,88 +406,12 @@ def _canonical_token(
     return canonical
 
 
-def _semantic_tokens(value: str) -> frozenset[str]:
-    normalized = "".join(
-        char.lower() if char.isascii() and char.isalnum() else " "
-        for char in value
-    )
-    return frozenset(normalized.split())
-
-
-def _mutation_role_semantic_score(role: str, node: dict[str, str]) -> int:
-    keywords = _MUTATION_ROLE_KEYWORDS[role]
-    label_hits = len(_semantic_tokens(node["label"]) & keywords)
-    responsibility_hits = len(_semantic_tokens(node["responsibility"]) & keywords)
-    return (
-        (100 * label_hits)
-        + (50 * responsibility_hits)
-        + _MUTATION_ROLE_TYPE_SCORES[role].get(node["type"], 0)
-    )
-
-
-def _assign_mutation_roles(
-    nodes: list[dict[str, str]],
-    provided: dict[str, str | None],
-) -> dict[str, str]:
-    nodes_by_id = {node["id"]: node for node in nodes}
-    slot_order = {node_id: index for index, node_id in enumerate(_node_slots(), start=1)}
-    best_assignment: tuple[str, ...] | None = None
-    best_role_scores: tuple[int, ...] | None = None
-    best_key: tuple[Any, ...] | None = None
-    for assignment in permutations(_node_slots(), len(_MUTATION_ROLE_ORDER)):
-        role_scores = tuple(
-            _mutation_role_semantic_score(role, nodes_by_id[node_id])
-            + (
-                _MUTATION_ROLE_PRESERVATION_BONUS
-                if provided.get(role) == node_id
-                else 0
-            )
-            for role, node_id in zip(_MUTATION_ROLE_ORDER, assignment)
-        )
-        preservation_count = sum(
-            provided.get(role) == node_id
-            for role, node_id in zip(_MUTATION_ROLE_ORDER, assignment)
-        )
-        key = (
-            sum(role_scores),
-            preservation_count,
-            role_scores,
-            tuple(-slot_order[node_id] for node_id in assignment),
-        )
-        if best_key is None or key > best_key:
-            best_key = key
-            best_assignment = assignment
-            best_role_scores = role_scores
-    assert best_assignment is not None and best_role_scores is not None
-    preservation_count = sum(
-        provided.get(role) == node_id
-        for role, node_id in zip(_MUTATION_ROLE_ORDER, best_assignment)
-    )
-    assigned = dict(zip(_MUTATION_ROLE_ORDER, best_assignment))
-    for role, node_id, score in zip(
-        _MUTATION_ROLE_ORDER, best_assignment, best_role_scores
-    ):
-        if provided.get(role) == node_id:
-            category = "preserved"
-        elif provided.get(role) is not None:
-            category = "reassigned"
-        else:
-            category = "inferred"
-        _record_mutation_role(
-            role,
-            category,
-            score=score,
-            preservation_count=preservation_count,
-        )
-    return assigned
-
-
 def validate_applied_graph_topology(
     payload: Any,
     spec: AppliedGraphSpec,
 ) -> dict[str, Any]:
     if not isinstance(payload, dict) or set(payload) != {
-        "title", "nodes", "cross_links", "mutation_control",
+        "title", "nodes", "cross_links",
     }:
         raise AppliedGraphSpecError(
             "graph_design_schema_invalid", path="$", rule="key_set",
@@ -782,63 +631,10 @@ def validate_applied_graph_topology(
             "graph_design_edge_budget_invalid",
             node_count=len(node_slots), edge_count=len(normalized_edges),
         )
-    mutation_control = payload.get("mutation_control")
-    control_keys = {
-        "external_mutation", "validator", "approver", "executor", "authoritative_state",
-    }
-    if not isinstance(mutation_control, dict) or set(mutation_control) != control_keys:
-        raise AppliedGraphSpecError(
-            "graph_design_schema_invalid", path="mutation_control", rule="key_set",
-        )
-    external_mutation = mutation_control.get("external_mutation")
-    if not isinstance(external_mutation, bool):
-        raise AppliedGraphSpecError(
-            "graph_design_schema_invalid", path="mutation_control.external_mutation",
-            rule="value_type",
-        )
-    raw_roles: dict[str, str] = {}
-    for key in _MUTATION_ROLE_ORDER:
-        value = mutation_control.get(key)
-        path = f"mutation_control.{key}"
-        if not isinstance(value, str):
-            raise AppliedGraphSpecError(
-                "graph_design_schema_invalid", path=path, rule="value_type",
-            )
-        raw_roles[key] = value
-    if not external_mutation:
-        role_ids = {role: "" for role in _MUTATION_ROLE_ORDER}
-        for role, value in raw_roles.items():
-            if value:
-                _record_mutation_role(
-                    role, "inactive_clear", score=0, preservation_count=0,
-                )
-    else:
-        provided = {
-            role: _canonical_token(
-                value,
-                node_slots,
-                path=f"mutation_control.{role}",
-                invalid_is_none=True,
-            )
-            for role, value in raw_roles.items()
-        }
-        role_ids = _assign_mutation_roles(normalized_nodes, provided)
-        if (
-            any(value not in node_slots for value in role_ids.values())
-            or len(set(role_ids.values())) != len(_MUTATION_ROLE_ORDER)
-        ):
-            raise AppliedGraphSpecError(
-                "graph_design_mutation_control_invalid",
-                path="mutation_control", rule="semantic_roles",
-            )
     return {
         "title": title,
         "nodes": normalized_nodes,
         "edges": normalized_edges,
-        "mutation_control": {
-            "external_mutation": external_mutation,
-            **role_ids,
-        },
     }
 
 
@@ -903,36 +699,6 @@ def enrich_applied_graph_topology(
         }
         for edge in draft["edges"]
     ]
-    mutation_control = draft["mutation_control"]
-    if mutation_control["external_mutation"]:
-        validator_id = mutation_control["validator"]
-        authoritative_state_id = mutation_control["authoritative_state"]
-        has_compensation_reentry = any(
-            edge["source"] == authoritative_state_id
-            and edge["target"] == validator_id
-            and "compensat" in str(edge["label"]).lower()
-            for edge in edges
-        )
-        if not has_compensation_reentry:
-            if len(edges) >= spec.max_edges:
-                raise AppliedGraphSpecError(
-                    "graph_design_edge_budget_invalid",
-                    node_count=len(nodes),
-                    edge_count=len(edges) + 1,
-                )
-            label = (
-                "Late anomaly creates a new typed compensation proposal with a new operation "
-                "identity; never retry the original"
-            )
-            edges.append({
-                "source": authoritative_state_id,
-                "target": validator_id,
-                "label": label,
-                "technology": applied_graph_edge_technology("control"),
-                "sync": "async",
-                "description": label,
-                "flow": "control",
-            })
     node_ids = [node["id"] for node in draft["nodes"]]
     groups = [
         {"id": "runtime", "label": "Runtime", "kind": "runtime", "nodeIds": node_ids[:3]},
@@ -992,12 +758,5 @@ def worst_case_topology_chars(spec: AppliedGraphSpec) -> int:
             }
             for index in range(_MAX_CROSS_LINK_SLOTS)
         ],
-        "mutation_control": {
-            "external_mutation": False,
-            "validator": "",
-            "approver": "",
-            "executor": "",
-            "authoritative_state": "",
-        },
     }
     return len(json.dumps(payload, separators=(",", ":")))

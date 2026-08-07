@@ -8,16 +8,35 @@ from agent.complexity import resolve_complexity
 from agent.nodes import graph_worker
 
 
-def test_patch_operation_budget_rejects_more_than_eight_minimal_operations():
-    payload = {
+def test_patch_accepts_multiple_operations_when_final_graph_remains_bounded():
+    graph = _domain_graph(5)
+    patch = {
         "update_nodes": [
-            {"id": f"node-{index}", "description": "focused correction"}
-            for index in range(9)
-        ]
+            {
+                "id": node["id"],
+                "set": {"description": f"Keeps bounded responsibility {index}."},
+            }
+            for index, node in enumerate(graph["nodes"])
+        ],
+        "update_edges": [
+            {
+                "edge_id": f"edge_{index}",
+                "set": {"description": f"Keeps bounded transition {index}."},
+            }
+            for index, _edge in enumerate(graph["edges"], start=1)
+        ],
     }
 
-    with pytest.raises(ValueError, match="at most 8"):
-        graph_worker._validate_patch_operation_budget(payload)
+    result = graph_worker._apply_applied_graph_patch(
+        graph,
+        patch,
+        min_nodes=5,
+        max_nodes=7,
+        resolved_complexity="prototype",
+    )
+
+    assert len(result["nodes"]) == 5
+    assert len(result["edges"]) == 5
 
 
 def test_graph_design_json_failure_is_classified_as_truncated():
@@ -705,208 +724,6 @@ def test_graph_parser_preserves_combined_deployment_edge_for_critic_repair():
     assert normalised["edges"][0]["technology"] == "Canary/promoted deployment"
 
 
-def _release_graph_for_completion():
-    graph = _domain_graph(9, production=True)
-    graph["nodes"][5].update({"label": "Release Controller", "type": "control"})
-    graph["nodes"][6].update({"label": "Campaign Runtime", "type": "service"})
-    graph["nodes"][7].update({"label": "Event Definition Registry", "type": "datastore"})
-    graph["edges"].extend([
-        {
-            "source": "fulfilment_stage_5",
-            "target": "fulfilment_stage_6",
-            "label": "deploy canary release",
-            "technology": "Immutable release manifest",
-            "sync": "async",
-            "flow": "deployment",
-            "description": "Activates the evaluated release in a bounded canary lane.",
-        },
-        {
-            "source": "fulfilment_stage_5",
-            "target": "fulfilment_stage_6",
-            "label": "promote full production release",
-            "technology": "Reviewed release decision",
-            "sync": "async",
-            "flow": "deployment",
-            "description": "Activates the canary-approved immutable release for all traffic.",
-        },
-        {
-            "source": "fulfilment_stage_7",
-            "target": "fulfilment_stage_5",
-            "label": "supply immutable evaluated release",
-            "technology": "Versioned release manifest",
-            "sync": "async",
-            "flow": "deployment",
-            "description": "Supplies the release controller with one immutable evaluated version.",
-        },
-    ])
-    return graph_worker._normalise_applied_graph(
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-
-def test_deterministic_completion_adds_only_missing_release_rollback():
-    graph = _release_graph_for_completion()
-
-    completed = graph_worker._complete_missing_release_rollback(
-        "Design a production model release workflow",
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-    assert completed is not None
-    assert len(completed["edges"]) == len(graph["edges"]) + 1
-    assert any(
-        edge["label"] == "rollback to prior approved release"
-        and edge["source"] == "fulfilment_stage_5"
-        and edge["target"] == "fulfilment_stage_7"
-        and edge["flow"] == "deployment"
-        for edge in completed["edges"]
-    )
-    graph_worker._validate_applied_architecture_patch(
-        "Design a production model release workflow",
-        completed,
-        "production",
-    )
-
-
-def test_deterministic_completion_allows_service_owner_without_registry():
-    graph = _release_graph_for_completion()
-    graph["nodes"][5].update({"label": "Evaluation Release Ops", "type": "service"})
-    graph["nodes"][7]["label"] = "Evaluated Release Archive"
-
-    completed = graph_worker._complete_missing_release_rollback(
-        "Design a production model release workflow",
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-    assert completed is not None
-    assert any(
-        edge["label"] == "rollback to prior approved release"
-        and edge["source"] == "fulfilment_stage_5"
-        and edge["target"] == "fulfilment_stage_6"
-        for edge in completed["edges"]
-    )
-
-
-def test_deterministic_completion_does_not_hide_other_review_failures():
-    graph = _domain_graph(9, production=True)
-
-    completed = graph_worker._complete_missing_release_rollback(
-        "Design a production model release workflow",
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-    assert completed is None
-
-
-def test_deterministic_completion_fails_closed_at_edge_budget():
-    graph = _release_graph_for_completion()
-    while len(graph["edges"]) < graph_worker._edge_budget(9):
-        index = len(graph["edges"])
-        graph["edges"].append({
-            "source": f"fulfilment_stage_{index % 9}",
-            "target": f"fulfilment_stage_{(index + 2) % 9}",
-            "label": f"carry bounded release evidence {index}",
-            "technology": "Typed release evidence",
-            "sync": "async",
-            "flow": "control",
-            "description": "Carries one bounded release observation to its review owner.",
-        })
-    graph = graph_worker._normalise_applied_graph(
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-    completed = graph_worker._complete_missing_release_rollback(
-        "Design a production model release workflow",
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-    assert completed is None
-
-
-@pytest.mark.parametrize("failure_mode", ["ambiguous_promotion", "non_deployment"])
-def test_deterministic_completion_requires_unique_typed_release_topology(failure_mode):
-    graph = _release_graph_for_completion()
-    promotion = next(
-        edge for edge in graph["edges"] if edge["label"] == "promote full production release"
-    )
-    if failure_mode == "ambiguous_promotion":
-        graph["edges"].append({
-            **promotion,
-            "label": "promote full production event definitions",
-        })
-    else:
-        promotion["flow"] = "control"
-    graph = graph_worker._normalise_applied_graph(
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-    completed = graph_worker._complete_missing_release_rollback(
-        "Design a production model release workflow",
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-    assert completed is None
-
-
-@pytest.mark.parametrize("failure_mode", ["ambiguous_owner", "different_targets"])
-def test_deterministic_completion_requires_one_owner_and_shared_target(failure_mode):
-    graph = _release_graph_for_completion()
-    promotion = next(
-        edge for edge in graph["edges"] if edge["label"] == "promote full production release"
-    )
-    if failure_mode == "ambiguous_owner":
-        canary = next(
-            edge for edge in graph["edges"] if edge["label"] == "deploy canary release"
-        )
-        graph["nodes"][4].update({"label": "Secondary Release Ops", "type": "service"})
-        graph["edges"].extend([
-            {**canary, "source": "fulfilment_stage_4"},
-            {**promotion, "source": "fulfilment_stage_4"},
-        ])
-    else:
-        promotion["target"] = "fulfilment_stage_8"
-    graph = graph_worker._normalise_applied_graph(
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-    completed = graph_worker._complete_missing_release_rollback(
-        "Design a production model release workflow",
-        graph,
-        min_nodes=9,
-        max_nodes=9,
-        resolved_complexity="production",
-    )
-
-    assert completed is None
-
-
 def test_graph_parser_keeps_independent_control_defects_for_one_critic_review():
     graph = _domain_graph(5)
     graph["edges"][0].update({
@@ -1109,7 +926,8 @@ async def test_invalid_patch_preserves_approved_graph_without_duplicate_model_ca
     )
     assert calls[0]["effort"] == "low"
     assert calls[0]["thinking_budget"] is None
-    assert "at most 8 total operations" in calls[0]["messages"][0]["content"]
+    assert "only the minimal patch" in calls[0]["messages"][0]["content"]
+    assert "at most 8 total operations" not in calls[0]["messages"][0]["content"]
     assert "Never return a replacement graph" in calls[0]["system"]
     assert "map every supplied blocking failure" in calls[0]["system"]
     assert "The approval-only route must explicitly say" in calls[0]["system"]
@@ -1230,8 +1048,9 @@ def test_patch_contract_canonicalization_repairs_node_technology_and_edge_label(
         ),
         (
             "routes verified parcel state to recovery owner after deterministic policy, "
+            "approval before execution with durable audit attribution",
+            "routes verified parcel state to recovery owner after deterministic policy, "
             "approval before execution",
-            "routes verified parcel state to recovery owner after deterministic policy",
             "truncate_word_boundary",
         ),
     ],
@@ -1264,7 +1083,7 @@ def test_string_edge_label_canonicalization_is_bounded_and_content_free(
 def test_patch_string_edge_label_canonicalization_changes_only_authored_values():
     overlong = (
         "routes verified parcel state to recovery owner after deterministic policy, "
-        "approval before execution"
+        "approval before execution with durable audit attribution"
     )
     result = graph_worker._canonicalise_applied_graph_patch({
         "add_edges": [{"label": "  adds  verified route  "}],
@@ -1278,7 +1097,8 @@ def test_patch_string_edge_label_canonicalization_changes_only_authored_values()
     assert result["add_edges"][0]["label"] == "adds verified route"
     assert result["update_edges"][0]["edge_id"] == "edge_1"
     assert result["update_edges"][0]["set"]["label"] == (
-        "routes verified parcel state to recovery owner after deterministic policy"
+        "routes verified parcel state to recovery owner after deterministic policy, "
+        "approval before execution"
     )
     assert result["remove_edges"] == ["edge_2"]
 
@@ -1380,6 +1200,26 @@ def test_blank_update_label_that_empties_set_is_rejected():
         )
 
 
+def test_patch_preserves_existing_labels_at_graph_contract_limit():
+    graph = _domain_graph(5)
+    graph["edges"][0]["label"] = "x" * 100
+
+    result = graph_worker._apply_applied_graph_patch(
+        graph,
+        {
+            "update_nodes": [{
+                "id": "fulfilment_stage_0",
+                "set": {"description": "Owns the bounded marketplace intake."},
+            }],
+        },
+        min_nodes=5,
+        max_nodes=7,
+        resolved_complexity="prototype",
+    )
+
+    assert result["edges"][0]["label"] == "x" * 100
+
+
 @pytest.mark.parametrize("label", [" \t\n "])
 def test_string_edge_label_canonicalization_rejects_unsafe_values(label):
     graph = _domain_graph(5)
@@ -1398,17 +1238,17 @@ def test_string_edge_label_canonicalization_rejects_unsafe_values(label):
 
 def test_unbroken_authored_edge_label_uses_deterministic_hard_boundary():
     result = graph_worker._canonicalise_applied_graph_patch({
-        "add_edges": [{"label": "x" * 81}],
+        "add_edges": [{"label": "x" * 101}],
         "update_edges": [{
             "edge_id": "edge_1",
-            "set": {"label": "y" * 81},
+            "set": {"label": "y" * 101},
         }],
         "remove_edges": ["edge_2"],
     })
 
-    assert result["add_edges"][0]["label"] == "x" * 80
+    assert result["add_edges"][0]["label"] == "x" * 100
     assert result["update_edges"][0]["edge_id"] == "edge_1"
-    assert result["update_edges"][0]["set"]["label"] == "y" * 80
+    assert result["update_edges"][0]["set"]["label"] == "y" * 100
     assert result["remove_edges"] == ["edge_2"]
 
 

@@ -18,6 +18,7 @@ from agent.state import AgentState, GraphData
 from agent.stream_utils import stream_llm, stream_structured_llm
 from agent.applied_graph_spec import (
     AppliedGraphSpecError,
+    GRAPH_EDGE_LABEL_CHARS,
     applied_graph_edge_technology,
     applied_graph_node_technology,
     applied_graph_spec,
@@ -34,31 +35,18 @@ from graph.runtime import select_canonical_graph
 logger = logging.getLogger(__name__)
 
 _APPLIED_GRAPH_PROMPT_VERSION = "applied_architecture_v17"
-_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v23"
-_APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v4"
+_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v24"
+_APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v5"
 _MAX_GRAPH_PATCH_CHARS = 20_000
-_MISSING_RELEASE_ROLLBACK = "Draw release rollback as its own directed edge."
 _MAX_EDGE_LABEL_PARTS = 4
-_MAX_CANONICAL_EDGE_LABEL_CHARS = 80
 _GRAPH_STAGE_DEADLINE_KEY = "_graph_stage_deadline_s"
 _GRAPH_STAGE_FINALIZATION_HEADROOM_S = 1.0
-_GRAPH_PATCH_MAX_OPERATIONS = 8
 _PATCH_NODE_MUTABLE_FIELDS = (
     "label", "type", "technology", "description", "tier", "lane",
 )
 _PATCH_EDGE_MUTABLE_FIELDS = (
     "source", "target", "label", "technology", "sync", "flow", "description", "type",
 )
-_PATCH_OPERATION_FIELDS = (
-    "add_nodes",
-    "update_nodes",
-    "remove_nodes",
-    "add_edges",
-    "update_edges",
-    "remove_edges",
-)
-
-
 def _compact_design_contract() -> str:
     return (
         "Compactness contract: prefer 9 nodes and at most 18 edges. Exceed 9 nodes only "
@@ -124,24 +112,6 @@ def _format_patch_topology(graph: GraphData) -> str:
 
 def _patch_edge_id(index: int) -> str:
     return f"edge_{index + 1}"
-
-
-def _validate_patch_operation_budget(payload: dict[str, Any]) -> None:
-    operation_count = sum(
-        len(value) if isinstance(value, list) else 0
-        for field in _PATCH_OPERATION_FIELDS
-        for value in (payload.get(field),)
-    )
-    operation_count += sum(
-        1
-        for field in ("title", "assumptions", "groups", "sequence")
-        if payload.get(field) is not None
-    )
-    if operation_count > _GRAPH_PATCH_MAX_OPERATIONS:
-        raise ValueError(
-            f"Graph patch contains {operation_count} operations; "
-            f"at most {_GRAPH_PATCH_MAX_OPERATIONS} are allowed"
-        )
 
 
 def _graph_design_failure_code(exc: Exception) -> str:
@@ -440,9 +410,9 @@ edges. Audit each edge's label, technology, and description: the promotion edge 
 rollback, and the rollback edge must not mention promotion. Do not leave the old combined edge.
 The complete patched graph must pass the deterministic publication contract; validation feedback
 will identify any residual collapsed branch, approval route, bypass, or release transition.
-Every add_edges record must include source, target, and a non-empty natural-language label of at
-most 80 characters. Newly authored add_edges labels and update_edges set labels may be compacted to
-that bound. Existing edges have immutable repair-only edge_id values. Select an edge for update or
+Every add_edges record must include source, target, and a non-empty natural-language label within
+the graph edge-label contract. Newly authored add_edges labels and update_edges set labels may be
+compacted to that bound. Existing edges have immutable repair-only edge_id values. Select an edge for update or
 removal only by that exact edge_id, including when two edges share source and target. Never copy or
 invent an edge_id, and never put edge_id on a newly added edge.
 </trust_and_bounds>
@@ -770,7 +740,6 @@ async def _generate_bounded_applied_architecture(
             max_nodes=spec.max_nodes,
             resolved_complexity=spec.depth,
         )
-        _validate_applied_architecture_patch(query, normalized, spec.depth)
         return normalized
     except AppliedGraphSpecError as exc:
         logger.warning(
@@ -814,8 +783,9 @@ async def _generate_applied_architecture_patch(
         f"{json.dumps(_focused_repair_review(review), ensure_ascii=False)[:1800]}\n\n"
         f"Keep the finished graph within {effective_min_nodes}-{profile.max_graph_nodes} "
         f"nodes at {profile.resolved} depth, keep at least 60% of existing node IDs, and return "
-        "only the minimal patch. Use at most 8 total operations, consolidate related fixes into "
-        "existing-node updates, and never return a replacement graph."
+        "only the minimal patch. Consolidate related fixes into existing-node updates and never "
+        "return a replacement graph. Keep every authored edge label within "
+        f"{GRAPH_EDGE_LABEL_CHARS} characters."
     )
     revision_count = int(state.get("graph_revision_count", 0))
     # A workflow semantic revision applies exact critic feedback, so its first
@@ -862,9 +832,9 @@ async def _generate_applied_architecture_patch(
             existing_graph,
             patch,
             publication_query=query,
-                min_nodes=effective_min_nodes,
-                max_nodes=profile.max_graph_nodes,
-                resolved_complexity=profile.resolved,
+            min_nodes=effective_min_nodes,
+            max_nodes=profile.max_graph_nodes,
+            resolved_complexity=profile.resolved,
         )
         try:
             _validate_applied_architecture_patch(
@@ -873,15 +843,6 @@ async def _generate_applied_architecture_patch(
                 profile.resolved,
             )
         except ValueError as exc:
-            completed = _complete_missing_release_rollback(
-                query,
-                candidate,
-            min_nodes=effective_min_nodes,
-            max_nodes=profile.max_graph_nodes,
-            resolved_complexity=profile.resolved,
-        )
-            if completed is not None:
-                return completed
             # This candidate is not publishable yet, but it is structurally
             # valid and may contain useful partial repairs. Preserve it for
             # the canonical critic so the next workflow revision operates on
@@ -931,130 +892,6 @@ def _validate_applied_architecture_patch(
     raise ValueError(f"patched graph still violates deterministic publication contract: {detail}")
 
 
-def _complete_missing_release_rollback(
-    query: str,
-    candidate: GraphData,
-    *,
-    min_nodes: int,
-    max_nodes: int,
-    resolved_complexity: str,
-) -> GraphData | None:
-    """Complete the one mechanical release edge that needs no model judgment."""
-    from agent.nodes.graph_critic import _deterministic_review
-
-    review = _deterministic_review(query, candidate, resolved_complexity)
-    if review.get("missing") != [_MISSING_RELEASE_ROLLBACK]:
-        return None
-    edges = candidate.get("edges") or []
-    if len(edges) >= _edge_budget(max_nodes):
-        return None
-    deployment_edges = [edge for edge in edges if edge.get("flow") == "deployment"]
-
-    def is_promotion(edge: dict[str, Any]) -> bool:
-        label = str(edge.get("label") or "")
-        return (
-            "full production" in label.lower()
-            or "canary-approved" in label.lower()
-            or bool(re.search(r"\bpromotes?\b", label, re.I))
-        )
-
-    release_owners: list[
-        tuple[str, list[dict[str, Any]], list[dict[str, Any]]]
-    ] = []
-    for source in {str(edge.get("source") or "") for edge in deployment_edges}:
-        canary_edges = [
-            edge
-            for edge in deployment_edges
-            if str(edge.get("source") or "") == source
-            and "canary" in str(edge.get("label") or "").lower()
-            and not is_promotion(edge)
-        ]
-        promotion_edges = [
-            edge
-            for edge in deployment_edges
-            if str(edge.get("source") or "") == source and is_promotion(edge)
-        ]
-        if canary_edges and promotion_edges:
-            release_owners.append((source, canary_edges, promotion_edges))
-    if len(release_owners) != 1:
-        return None
-    source, canary_edges, promotion_edges = release_owners[0]
-    if len(canary_edges) != 1 or len(promotion_edges) != 1:
-        return None
-    promotion_edge = promotion_edges[0]
-    release_targets = {
-        str(edge.get("target") or "")
-        for edge in (canary_edges + promotion_edges)
-    }
-    if len(release_targets) != 1:
-        return None
-    release_target = next(iter(release_targets))
-    node_by_id = {
-        str(node.get("id") or ""): node
-        for node in (candidate.get("nodes") or [])
-        if node.get("id")
-    }
-    source_node = node_by_id.get(source) or {}
-    if str(source_node.get("type") or "") not in {
-        "control",
-        "decision",
-        "datastore",
-        "service",
-    }:
-        return None
-    if release_target not in node_by_id or release_target == source:
-        return None
-    connected_node_ids = {
-        str(edge.get("target") or "")
-        for edge in edges
-        if edge.get("source") == source
-    } | {
-        str(edge.get("source") or "")
-        for edge in edges
-        if edge.get("target") == source
-    }
-    registry_ids = [
-        node_id
-        for node_id, node in node_by_id.items()
-        if node_id in connected_node_ids
-        and "registry" in str(node.get("label") or "").lower()
-    ]
-    if len(registry_ids) > 1:
-        return None
-    rollback_target = registry_ids[0] if registry_ids else release_target
-    if not rollback_target or rollback_target == source:
-        return None
-    try:
-        completed = _apply_applied_graph_patch(
-            candidate,
-            {
-                "add_edges": [{
-                    "source": source,
-                    "target": rollback_target,
-                    "label": "rollback to prior approved release",
-                    "technology": "Versioned release control",
-                    "sync": promotion_edge.get("sync", "async"),
-                    "flow": "deployment",
-                    "description": (
-                        "Reactivates the prior immutable release when canary or production "
-                        "checks fail."
-                    ),
-                }]
-            },
-            min_nodes=min_nodes,
-            max_nodes=max_nodes,
-            resolved_complexity=resolved_complexity,
-        )
-        _validate_applied_architecture_patch(
-            query,
-            completed,
-            resolved_complexity,
-        )
-    except ValueError:
-        return None
-    return completed
-
-
 def _apply_applied_graph_patch(
     existing_graph: GraphData,
     patch: dict[str, Any],
@@ -1064,7 +901,6 @@ def _apply_applied_graph_patch(
     max_nodes: int,
     resolved_complexity: str,
 ) -> GraphData:
-    _validate_patch_operation_budget(patch)
     # Models commonly preserve an optional patch key with JSON null to mean
     # "unchanged". New records receive the same deterministic presentation
     # enrichment as initial topology records before strict validation.
@@ -1231,8 +1067,13 @@ def _patch_list(patch: dict[str, Any], key: str, limit: int) -> list[Any]:
     return value
 
 
-def _patch_reference(value: Any, field: str) -> str:
-    if not isinstance(value, str) or not value or value != value.strip() or len(value) > 80:
+def _patch_reference(value: Any, field: str, *, max_length: int = 80) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or len(value) > max_length
+    ):
         raise ValueError(f"{field} must be a bounded exact string")
     return value
 
@@ -1245,7 +1086,11 @@ def _validate_patch_edge_references(
     for edge in edges:
         source = _patch_reference(edge.get("source"), "edge source")
         target = _patch_reference(edge.get("target"), "edge target")
-        label = _patch_reference(edge.get("label"), "edge label")
+        label = _patch_reference(
+            edge.get("label"),
+            "edge label",
+            max_length=GRAPH_EDGE_LABEL_CHARS,
+        )
         if source not in node_ids or target not in node_ids:
             raise ValueError(f"edge references unknown node: {source}->{target}")
         if source == target:
@@ -1346,7 +1191,7 @@ def _canonicalise_edge_label_value(value: Any, *, context: str) -> Any:
                 "reject_blank",
             )
             raise ValueError("edge label must be a bounded exact string")
-        if len(label) <= _MAX_CANONICAL_EDGE_LABEL_CHARS:
+        if len(label) <= GRAPH_EDGE_LABEL_CHARS:
             if label != value:
                 logger.info(
                     "Canonicalized graph edge label: context=%s value_type=%s "
@@ -1358,11 +1203,11 @@ def _canonicalise_edge_label_value(value: Any, *, context: str) -> Any:
                 )
             return label
 
-        word_boundary = label.rfind(" ", 0, _MAX_CANONICAL_EDGE_LABEL_CHARS + 1)
+        word_boundary = label.rfind(" ", 0, GRAPH_EDGE_LABEL_CHARS + 1)
         prefix = (
             label[:word_boundary]
             if word_boundary > 0
-            else label[:_MAX_CANONICAL_EDGE_LABEL_CHARS]
+            else label[:GRAPH_EDGE_LABEL_CHARS]
         )
         alphanumeric_boundary = max(
             (index + 1 for index, character in enumerate(prefix) if character.isalnum()),
@@ -1396,7 +1241,7 @@ def _canonicalise_edge_label_value(value: Any, *, context: str) -> Any:
             and all(parts)
         ):
             label = " / ".join(parts)
-            if len(label) <= _MAX_CANONICAL_EDGE_LABEL_CHARS:
+            if len(label) <= GRAPH_EDGE_LABEL_CHARS:
                 logger.info(
                     "Canonicalized graph edge label: context=%s value_type=%s "
                     "original_length=%d action=%s",
