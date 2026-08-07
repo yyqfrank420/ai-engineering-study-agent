@@ -5,7 +5,7 @@ import re
 from typing import Any, Literal
 
 
-PRICE_RELEASE = "2026-07-18"
+PRICE_RELEASE = "2026-08-07"
 APPLICATION_PRICES_USD_PER_MILLION = {
     # Keep prior models so saved captures remain account-able after a model change.
     "claude-sonnet-5": (2.00, 10.00),
@@ -14,6 +14,9 @@ APPLICATION_PRICES_USD_PER_MILLION = {
     "gpt-5.4": (2.50, 15.00),
     "gpt-5.4-mini": (0.75, 4.50),
 }
+# Anthropic's default ephemeral cache uses a five-minute lifetime.
+CACHE_WRITE_5M_INPUT_PRICE_MULTIPLIER = 1.25
+CACHE_READ_INPUT_PRICE_MULTIPLIER = 0.10
 CostPolicyMode = Literal["blocking", "report-only"]
 _MODEL_VERSION_SUFFIX = re.compile(r"(?:-\d{8}|-\d{4}-\d{2}-\d{2})$")
 
@@ -75,6 +78,10 @@ def _usage_attempts(call: dict[str, Any]) -> list[dict[str, Any]]:
             "model": call.get("model"),
             "status": call.get("status"),
             "input_tokens": call.get("input_tokens"),
+            "cache_creation_input_tokens": call.get(
+                "cache_creation_input_tokens"
+            ),
+            "cache_read_input_tokens": call.get("cache_read_input_tokens"),
             "output_tokens": call.get("output_tokens"),
             "queue_wait_ms": call.get("queue_wait_ms"),
         }
@@ -84,6 +91,8 @@ def _usage_attempts(call: dict[str, Any]) -> list[dict[str, Any]]:
 def _empty_usage() -> dict[str, Any]:
     return {
         "input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
         "output_tokens": 0,
         "queue_wait_ms": 0,
         "estimated_usd": 0.0,
@@ -145,6 +154,12 @@ def account_application_cost(
                 continue
             try:
                 input_tokens = int(attempt.get("input_tokens") or 0)
+                cache_creation_input_tokens = int(
+                    attempt.get("cache_creation_input_tokens") or 0
+                )
+                cache_read_input_tokens = int(
+                    attempt.get("cache_read_input_tokens") or 0
+                )
                 output_tokens = int(attempt.get("output_tokens") or 0)
                 queue_wait_ms = int(attempt.get("queue_wait_ms") or 0)
             except (TypeError, ValueError):
@@ -154,20 +169,46 @@ def account_application_cost(
                 invalid_cases.add(case_id)
                 invalid_operations.add((case_id, operation))
                 continue
-            if min(input_tokens, output_tokens, queue_wait_ms) < 0:
+            if min(
+                input_tokens,
+                cache_creation_input_tokens,
+                cache_read_input_tokens,
+                output_tokens,
+                queue_wait_ms,
+            ) < 0:
                 errors.append(
                     f"application call {call_index} attempt {attempt_index} has negative usage"
                 )
                 invalid_cases.add(case_id)
                 invalid_operations.add((case_id, operation))
                 continue
+            if (
+                cache_creation_input_tokens or cache_read_input_tokens
+            ) and not model.startswith("claude-"):
+                errors.append(
+                    f"application call {call_index} attempt {attempt_index} has "
+                    f"unsupported prompt-cache pricing for model {model!r}"
+                )
+                invalid_cases.add(case_id)
+                invalid_operations.add((case_id, operation))
+                continue
             estimated_usd = (
                 input_tokens * price[0] / 1_000_000
+                + cache_creation_input_tokens
+                * price[0]
+                * CACHE_WRITE_5M_INPUT_PRICE_MULTIPLIER
+                / 1_000_000
+                + cache_read_input_tokens
+                * price[0]
+                * CACHE_READ_INPUT_PRICE_MULTIPLIER
+                / 1_000_000
                 + output_tokens * price[1] / 1_000_000
             )
             operation_usage["provider_attempts"] += 1
             for target in (operation_usage, per_case[case_id], total):
                 target["input_tokens"] += input_tokens
+                target["cache_creation_input_tokens"] += cache_creation_input_tokens
+                target["cache_read_input_tokens"] += cache_read_input_tokens
                 target["output_tokens"] += output_tokens
                 target["queue_wait_ms"] += queue_wait_ms
                 target["estimated_usd"] += estimated_usd

@@ -52,6 +52,8 @@ def test_application_cost_is_attributed_by_attempt_thread_and_operation():
     assert accounting["status"] == "pass"
     assert accounting["total"] == {
         "input_tokens": 1_600,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
         "output_tokens": 160,
         "queue_wait_ms": 35,
         "estimated_usd": 0.0098,
@@ -60,6 +62,51 @@ def test_application_cost_is_attributed_by_attempt_thread_and_operation():
     assert graph["input_tokens"] == 1_500
     assert graph["operations"][0]["provider_attempts"] == 2
     assert graph["operations"][0]["estimated_usd"] == 0.0095
+
+
+def test_application_cost_prices_anthropic_cache_writes_and_reads():
+    accounting = account_application_cost(
+        [{"id": "case", "thread_id": "thread"}],
+        [
+            {
+                "thread_id": "thread",
+                "operation": "synthesis",
+                "model": "claude-opus-5",
+                "input_tokens": 1_000,
+                "cache_creation_input_tokens": 1_000,
+                "cache_read_input_tokens": 1_000,
+                "output_tokens": 100,
+            }
+        ],
+    )
+
+    assert accounting["status"] == "pass"
+    assert accounting["total"] == {
+        "input_tokens": 1_000,
+        "cache_creation_input_tokens": 1_000,
+        "cache_read_input_tokens": 1_000,
+        "output_tokens": 100,
+        "queue_wait_ms": 0,
+        "estimated_usd": 0.01425,
+    }
+
+
+def test_application_cost_rejects_cache_usage_without_provider_pricing():
+    accounting = account_application_cost(
+        [{"id": "case", "thread_id": "thread"}],
+        [
+            {
+                "thread_id": "thread",
+                "operation": "synthesis",
+                "model": "gpt-5.4",
+                "cache_read_input_tokens": 1_000,
+            }
+        ],
+    )
+
+    assert accounting["status"] == "infrastructure"
+    assert "unsupported prompt-cache pricing" in accounting["reason"]
+    assert accounting["total"]["estimated_usd"] is None
 
 
 def test_unpriced_model_is_infrastructure_and_never_zero_cost():

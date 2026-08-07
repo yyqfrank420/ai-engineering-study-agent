@@ -362,6 +362,12 @@ async def dashboard_eval_telemetry(
                     "model": str(attempt.get("model") or "unknown")[:128],
                     "status": str(attempt.get("status") or "unknown")[:32],
                     "input_tokens": _nonnegative_int(attempt.get("input_tokens")),
+                    "cache_creation_input_tokens": _nonnegative_int(
+                        attempt.get("cache_creation_input_tokens")
+                    ),
+                    "cache_read_input_tokens": _nonnegative_int(
+                        attempt.get("cache_read_input_tokens")
+                    ),
                     "output_tokens": _nonnegative_int(attempt.get("output_tokens")),
                     "queue_wait_ms": _nonnegative_int(attempt.get("queue_wait_ms")),
                     "duration_ms": _nonnegative_int(attempt.get("duration_ms")),
@@ -377,6 +383,12 @@ async def dashboard_eval_telemetry(
                 "latency_ms": row["duration_ms"],
                 "fallback": row["used_fallback"],
                 "input_tokens": _nonnegative_int(metadata.get("input_tokens")),
+                "cache_creation_input_tokens": _nonnegative_int(
+                    metadata.get("cache_creation_input_tokens")
+                ),
+                "cache_read_input_tokens": _nonnegative_int(
+                    metadata.get("cache_read_input_tokens")
+                ),
                 "output_tokens": _nonnegative_int(metadata.get("output_tokens")),
                 "provider_attempts": max(
                     1,
