@@ -65,7 +65,7 @@ def test_failed_review_gets_at_most_three_bounded_revisions():
     assert _route_after_revision({**failed, "graph_changed": False}) == "reject"
 
 
-def test_patch_admission_requires_patch_critic_and_synthesis_reserve():
+def test_patch_admission_uses_available_time_after_following_reserve():
     from agent.deadlines import StageAdmissionDenied, patch_timeout_seconds
     from config import settings
 
@@ -74,17 +74,25 @@ def test_patch_admission_requires_patch_critic_and_synthesis_reserve():
         + settings.graph_synthesis_timeout_s
         + settings.graph_finalization_reserve_s
     )
-    required_s = settings.graph_patch_timeout_s + following_reserve_s
-
     with pytest.raises(StageAdmissionDenied):
         patch_timeout_seconds({
-            "terminal_deadline_s": time.monotonic() + required_s - 1,
+            "terminal_deadline_s": time.monotonic() + following_reserve_s - 1,
         })
 
     timeout_s = patch_timeout_seconds({
-        "terminal_deadline_s": time.monotonic() + required_s + 5,
+        "terminal_deadline_s": time.monotonic() + following_reserve_s + 10,
     })
-    assert 0 < timeout_s <= settings.graph_patch_timeout_s
+    assert 0 < timeout_s <= 10
+
+    full_timeout_s = patch_timeout_seconds({
+        "terminal_deadline_s": (
+            time.monotonic()
+            + following_reserve_s
+            + settings.graph_patch_timeout_s
+            + 5
+        ),
+    })
+    assert full_timeout_s == settings.graph_patch_timeout_s
 
 
 def test_one_repair_path_stage_caps_fit_terminal_window():

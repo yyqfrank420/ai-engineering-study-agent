@@ -85,12 +85,6 @@ def patch_timeout_seconds(state: dict[str, Any]) -> float:
         + settings.graph_synthesis_timeout_s
         + settings.graph_finalization_reserve_s
     )
-    remaining = _remaining_seconds(state)
-    required = settings.graph_patch_timeout_s + following_reserve
-    if remaining is not None and remaining < required:
-        raise StageAdmissionDenied(
-            "graph patch cannot reserve its following critic and synthesis/finalization"
-        )
     return _stage_timeout(
         state,
         cap_s=settings.graph_patch_timeout_s,

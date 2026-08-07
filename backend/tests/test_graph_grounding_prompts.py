@@ -13,7 +13,7 @@ def test_applied_graph_prompts_preserve_gates_across_cached_or_replayed_work():
     )
 
     assert _APPLIED_GRAPH_PROMPT_VERSION == "applied_architecture_v17"
-    assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v23"
+    assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v24"
     assert "Stateful shortcuts, caches, replay paths, and retries" in _APPLIED_GRAPH_SYSTEM
     assert "accepted post-gate artifacts" in _APPLIED_GRAPH_SYSTEM
     assert "cache, replay, shortcut, or retry bypass" in _APPLIED_GRAPH_PATCH_SYSTEM
@@ -339,13 +339,6 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
                 "sync": "sync",
             },
         ],
-        "mutation_control": {
-            "external_mutation": False,
-            "validator": "",
-            "approver": "",
-            "executor": "",
-            "authoritative_state": "",
-        },
     }
 
     async def fake_stream_structured_llm(**kwargs):
