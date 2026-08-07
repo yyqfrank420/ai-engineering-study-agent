@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { GraphCandidate } from '../../types';
 import { agentTransport } from '../../services/agentTransport';
 import { D3Graph } from './D3Graph';
@@ -14,14 +14,19 @@ interface HiddenGraphEvaluatorProps {
 export function HiddenGraphEvaluator({ candidate, viewport }: HiddenGraphEvaluatorProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const submittedRef = useRef<string | null>(null);
+  const [layoutReadyEvaluationId, setLayoutReadyEvaluationId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!candidate || submittedRef.current === candidate.evaluationId) return;
+    if (
+      !candidate
+      || layoutReadyEvaluationId !== candidate.evaluationId
+      || submittedRef.current === candidate.evaluationId
+    ) return;
     let cancelled = false;
-    const timer = window.setTimeout(async () => {
+    const evaluate = async () => {
       const svg = rootRef.current?.querySelector('svg');
       if (!svg || cancelled) return;
-      const report = measureDiagram(svg, candidate.data.edges.length);
+      const report = measureDiagram(svg);
       try {
         const screenshot = await rasteriseSvg(svg, viewport);
         if (cancelled) return;
@@ -46,12 +51,12 @@ export function HiddenGraphEvaluator({ candidate, viewport }: HiddenGraphEvaluat
         );
       }
       if (!cancelled) submittedRef.current = candidate.evaluationId;
-    }, 520);
+    };
+    void evaluate();
     return () => {
       cancelled = true;
-      window.clearTimeout(timer);
     };
-  }, [candidate, viewport]);
+  }, [candidate, layoutReadyEvaluationId, viewport]);
 
   if (!candidate) return null;
   return (
@@ -75,6 +80,7 @@ export function HiddenGraphEvaluator({ candidate, viewport }: HiddenGraphEvaluat
         currentStep={-1}
         activeNodeIds={new Set<string>()}
         onNodeClick={() => undefined}
+        onLayoutReady={() => setLayoutReadyEvaluationId(candidate.evaluationId)}
       />
     </div>
   );

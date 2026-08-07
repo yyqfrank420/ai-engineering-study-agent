@@ -8,7 +8,7 @@ from agent.complexity import resolve_complexity
 from agent.nodes import graph_worker
 
 
-def test_patch_accepts_multiple_operations_when_final_graph_remains_bounded():
+def test_patch_accepts_multiple_operations_when_final_graph_remains_safe():
     graph = _domain_graph(5)
     patch = {
         "update_nodes": [
@@ -30,8 +30,7 @@ def test_patch_accepts_multiple_operations_when_final_graph_remains_bounded():
     result = graph_worker._apply_applied_graph_patch(
         graph,
         patch,
-        min_nodes=5,
-        max_nodes=7,
+        safety_max_nodes=7,
         resolved_complexity="prototype",
     )
 
@@ -57,28 +56,26 @@ def test_graph_timeouts_and_invalid_patches_have_distinct_failure_codes():
     ) == "graph_patch_invalid_preserved_existing_graph"
 
 
-def test_repair_feedback_is_focused_without_weakening_the_next_gate():
+def test_repair_feedback_preserves_every_known_blocker():
     review = {
         "approved": False,
         "missing": ["first blocker", "second blocker", "residual blocker"],
         "revision_instruction": "repair everything",
     }
 
-    focused = graph_worker._focused_repair_review(review)
+    complete = graph_worker._repair_review(review)
 
-    assert focused["missing"] == ["first blocker", "second blocker"]
-    assert focused["revision_instruction"] == "first blocker second blocker"
-    assert review["missing"][-1] == "residual blocker"
+    assert complete["missing"] == review["missing"]
+    assert complete["revision_instruction"] == "repair everything"
 
 
-def test_compact_design_contract_prioritises_material_topology():
-    contract = graph_worker._compact_design_contract()
+def test_topology_builder_delegates_size_to_material_design():
+    contract = graph_worker._APPLIED_GRAPH_TOPOLOGY_SYSTEM
 
-    assert "prefer 9 nodes" in contract
-    assert "branch/rejoin" in contract
-    assert "untrusted-data boundary" in contract
-    assert "approval/rejection route" in contract
-    assert "accepted-only cache write" in contract
+    assert "Choose graph size from the material design" in contract
+    assert "trust boundaries" in contract
+    assert "failure outcomes" in contract
+    assert "9 nodes" not in contract
 
 
 def test_patch_topology_context_includes_mutable_fields_and_omits_graph_metadata():
@@ -200,8 +197,7 @@ def _domain_graph(node_count: int, *, production: bool = False) -> dict:
             "groups": groups,
             "sequence": sequence,
         },
-        min_nodes=node_count,
-        max_nodes=node_count,
+        safety_max_nodes=node_count,
         resolved_complexity="production" if production else "prototype",
     )
 
@@ -222,8 +218,7 @@ def test_hardest_branch_return_patch_bypasses_write_gate_and_preserves_eval_harn
         edge["target"] = renamed_ids[edge["target"]]
     existing = graph_worker._normalise_applied_graph(
         existing,
-        min_nodes=5,
-        max_nodes=5,
+        safety_max_nodes=5,
         resolved_complexity="prototype",
     )
     before = copy.deepcopy(existing)
@@ -251,8 +246,7 @@ def test_hardest_branch_return_patch_bypasses_write_gate_and_preserves_eval_harn
     result = graph_worker._apply_applied_graph_patch(
         existing,
         {"add_edges": branch_edges},
-        min_nodes=5,
-        max_nodes=7,
+        safety_max_nodes=7,
         resolved_complexity="prototype",
     )
 
@@ -324,8 +318,7 @@ def test_cache_node_patch_preserves_unrelated_production_graph_out_of_sample():
     result = graph_worker._apply_applied_graph_patch(
         existing,
         patch,
-        min_nodes=9,
-        max_nodes=12,
+        safety_max_nodes=12,
         resolved_complexity="production",
     )
 
@@ -377,8 +370,7 @@ def test_patch_updates_nodes_and_edges_and_removes_only_selected_edge():
     result = graph_worker._apply_applied_graph_patch(
         existing,
         patch,
-        min_nodes=5,
-        max_nodes=7,
+        safety_max_nodes=7,
         resolved_complexity="prototype",
     )
 
@@ -408,8 +400,7 @@ def test_patch_edge_id_selects_one_of_two_parallel_edges():
     result = graph_worker._apply_applied_graph_patch(
         existing,
         {"remove_edges": ["edge_6"]},
-        min_nodes=5,
-        max_nodes=7,
+        safety_max_nodes=7,
         resolved_complexity="prototype",
     )
 
@@ -432,8 +423,7 @@ def test_patch_rejects_unknown_edge_id():
         graph_worker._apply_applied_graph_patch(
             existing,
             {"remove_edges": ["edge_99"]},
-            min_nodes=5,
-            max_nodes=7,
+            safety_max_nodes=7,
             resolved_complexity="prototype",
         )
 
@@ -451,8 +441,7 @@ def test_patch_ignores_top_level_null_optional_fields():
             "add_edges": None,
             "title": None,
         },
-        min_nodes=5,
-        max_nodes=7,
+        safety_max_nodes=7,
         resolved_complexity="prototype",
     )
 
@@ -497,8 +486,7 @@ def test_invalid_patch_operations_are_rejected_without_mutation(patch, error):
         graph_worker._apply_applied_graph_patch(
             existing,
             patch,
-            min_nodes=5,
-            max_nodes=7,
+            safety_max_nodes=7,
             resolved_complexity="prototype",
         )
 
@@ -525,13 +513,12 @@ def test_patch_cannot_replace_most_of_an_approved_graph():
                 ],
                 "remove_edges": incident_edge_ids,
             },
-            min_nodes=2,
-            max_nodes=7,
+            safety_max_nodes=7,
             resolved_complexity="prototype",
         )
 
 
-def test_over_budget_edges_are_rejected_before_position_can_manufacture_isolation():
+def test_over_resource_safety_edges_are_rejected_before_position_can_hide_isolation(monkeypatch):
     existing = _domain_graph(9, production=True)
     payload = copy.deepcopy(existing)
     payload["edges"] = [
@@ -560,11 +547,11 @@ def test_over_budget_edges_are_rejected_before_position_can_manufacture_isolatio
         "description": "Keeps the final owner connected even when listed last.",
     })
 
-    with pytest.raises(ValueError, match="20-edge readability budget; got 21"):
+    monkeypatch.setattr(graph_worker.settings, "graph_safety_max_edges", 20)
+    with pytest.raises(ValueError, match="20-edge resource-safety ceiling; got 21"):
         graph_worker._normalise_applied_graph(
             payload,
-            min_nodes=9,
-            max_nodes=9,
+            safety_max_nodes=9,
             resolved_complexity="production",
         )
 
@@ -584,8 +571,7 @@ def test_at_cap_patch_updates_an_edge_in_place_instead_of_disappearing():
         })
     existing = graph_worker._normalise_applied_graph(
         existing,
-        min_nodes=9,
-        max_nodes=9,
+        safety_max_nodes=9,
         resolved_complexity="production",
     )
     target = existing["edges"][0]
@@ -598,8 +584,7 @@ def test_at_cap_patch_updates_an_edge_in_place_instead_of_disappearing():
                 "set": {"flow": "feedback", "type": "loop"},
             }]
         },
-        min_nodes=9,
-        max_nodes=9,
+        safety_max_nodes=9,
         resolved_complexity="production",
     )
 
@@ -625,8 +610,7 @@ def test_semantically_empty_patch_is_rejected():
                     "set": {"label": "Fulfilment Stage 2"},
                 }]
             },
-            min_nodes=5,
-            max_nodes=7,
+            safety_max_nodes=7,
             resolved_complexity="prototype",
         )
 
@@ -638,8 +622,7 @@ def test_message_queue_is_a_supported_architecture_primitive():
 
     normalised = graph_worker._normalise_applied_graph(
         graph,
-        min_nodes=5,
-        max_nodes=7,
+        safety_max_nodes=7,
         resolved_complexity="prototype",
     )
 
@@ -660,8 +643,7 @@ def test_graph_parser_preserves_repairable_control_edges(label):
 
     normalised = graph_worker._normalise_applied_graph(
         graph,
-        min_nodes=5,
-        max_nodes=7,
+        safety_max_nodes=7,
         resolved_complexity="prototype",
     )
 
@@ -680,8 +662,7 @@ def test_graph_validator_accepts_complete_automatic_authorization_envelope():
 
     normalised = graph_worker._normalise_applied_graph(
         graph,
-        min_nodes=5,
-        max_nodes=7,
+        safety_max_nodes=7,
         resolved_complexity="prototype",
     )
 
@@ -698,8 +679,7 @@ def test_graph_parser_preserves_collapsed_outcomes_for_critic_repair():
 
     normalised = graph_worker._normalise_applied_graph(
         graph,
-        min_nodes=5,
-        max_nodes=7,
+        safety_max_nodes=7,
         resolved_complexity="prototype",
     )
 
@@ -716,8 +696,7 @@ def test_graph_parser_preserves_combined_deployment_edge_for_critic_repair():
 
     normalised = graph_worker._normalise_applied_graph(
         graph,
-        min_nodes=5,
-        max_nodes=7,
+        safety_max_nodes=7,
         resolved_complexity="prototype",
     )
 
@@ -739,8 +718,7 @@ def test_graph_parser_keeps_independent_control_defects_for_one_critic_review():
 
     normalised = graph_worker._normalise_applied_graph(
         graph,
-        min_nodes=5,
-        max_nodes=7,
+        safety_max_nodes=7,
         resolved_complexity="prototype",
     )
 
@@ -766,7 +744,7 @@ async def test_targeted_existing_graph_followup_uses_incremental_patch_lane(monk
         return json.dumps({"add_edges": [added_edge]})
 
     monkeypatch.setattr(graph_worker, "stream_llm", fake_stream_llm)
-    result = await graph_worker._generate_applied_architecture(
+    result = await graph_worker._generate_applied_architecture_patch(
         {
             "send": None,
             "user_message": "Expand the exception return paths",
@@ -780,20 +758,15 @@ async def test_targeted_existing_graph_followup_uses_incremental_patch_lane(monk
             "session_id": "thread-1",
         },
         "marketplace fulfilment system expand the exception return paths",
-        SimpleNamespace(
-            resolved="prototype",
-            min_graph_nodes=5,
-            max_graph_nodes=7,
-            answer_contract="A coherent bounded domain loop.",
-            thinking_budget=4096,
-        ),
+        SimpleNamespace(resolved="prototype"),
+        existing,
     )
 
     assert len(result["edges"]) == len(existing["edges"]) + 1
     assert len(calls) == 1
     assert calls[0]["telemetry"]["metadata"]["model_role"] == "incremental_patch"
     assert calls[0]["thinking_budget"] is None
-    assert calls[0]["effort"] == "medium"
+    assert calls[0]["effort"] == "max"
     assert "Source and target must be distinct" in calls[0]["system"]
     assert "immutable repair-only edge_id" in calls[0]["system"]
     assert '"remove_edges": ["edge_2"]' in calls[0]["system"]
@@ -837,7 +810,7 @@ async def test_current_production_profile_can_refine_legacy_nine_node_graph(monk
     assert len(calls) == 1
     assert len(result["nodes"]) == 9
     assert len(result["edges"]) == len(existing["edges"]) + 1
-    assert "within 9-13 nodes" in calls[0]["messages"][0]["content"]
+    assert "within 9-13 nodes" not in calls[0]["messages"][0]["content"]
 
 
 @pytest.mark.asyncio
@@ -865,6 +838,7 @@ async def test_invalid_initial_design_fails_closed_without_duplicate_model_call(
             "rag_chunks": [],
             "architect_plan": {},
             "challenger_review": {},
+            "architecture_ready": True,
             "user_id": "user-1",
             "session_id": "thread-1",
         },
@@ -887,7 +861,7 @@ async def test_invalid_patch_preserves_approved_graph_without_duplicate_model_ca
         return json.dumps({"remove_nodes": ["fulfilment_stage_2"]})
 
     monkeypatch.setattr(graph_worker, "stream_llm", fake_stream_llm)
-    result = await graph_worker._generate_applied_architecture(
+    result = await graph_worker._generate_applied_architecture_patch(
         {
             "send": None,
             "user_message": "Repair the failed parcel exception path",
@@ -905,26 +879,21 @@ async def test_invalid_patch_preserves_approved_graph_without_duplicate_model_ca
             "session_id": "thread-1",
         },
         "Repair the failed parcel exception path",
-        SimpleNamespace(
-            resolved="prototype",
-            min_graph_nodes=5,
-            max_graph_nodes=7,
-            answer_contract="A coherent bounded domain loop.",
-            thinking_budget=None,
-        ),
+        SimpleNamespace(resolved="prototype"),
+        existing,
     )
 
     assert result == approved
     assert existing == approved
     assert result is not existing
     assert len(calls) == 1
-    assert calls[0]["model"] == graph_worker.settings.graph_repair_model
+    assert calls[0]["model"] == graph_worker.settings.graph_builder_model
     assert calls[0]["timeout_seconds"] == graph_worker.settings.graph_patch_timeout_s
     assert (
         calls[0]["max_output_tokens"]
-        == graph_worker.settings.graph_patch_max_output_tokens
+        == graph_worker.settings.graph_builder_max_completion_tokens
     )
-    assert calls[0]["effort"] == "low"
+    assert calls[0]["effort"] == "max"
     assert calls[0]["thinking_budget"] is None
     assert "only the minimal patch" in calls[0]["messages"][0]["content"]
     assert "at most 8 total operations" not in calls[0]["messages"][0]["content"]
@@ -973,7 +942,7 @@ async def test_invalid_self_edge_patch_preserves_graph_without_duplicate_model_c
             "session_id": "thread-1",
         },
         "Make failure recovery explicit in this fulfilment system",
-        SimpleNamespace(resolved="prototype", min_graph_nodes=5, max_graph_nodes=7),
+        SimpleNamespace(resolved="prototype"),
         existing,
     )
 
@@ -981,7 +950,7 @@ async def test_invalid_self_edge_patch_preserves_graph_without_duplicate_model_c
     assert existing == approved
     assert result is not existing
     assert len(calls) == 1
-    assert calls[0]["effort"] == "low"
+    assert calls[0]["effort"] == "max"
     assert calls[0]["telemetry"]["metadata"]["patch_attempt"] == 0
 
 
@@ -994,9 +963,7 @@ def test_local_contract_canonicalization_repairs_book_technology_and_edge_label(
     with caplog.at_level("INFO", logger=graph_worker.__name__):
         result = graph_worker._normalise_applied_graph_candidate(
             graph,
-            publication_query="Design a marketplace fulfilment system",
-            min_nodes=5,
-            max_nodes=5,
+            safety_max_nodes=5,
             resolved_complexity="prototype",
             context="unit.initial",
         )
@@ -1028,8 +995,7 @@ def test_patch_contract_canonicalization_repairs_node_technology_and_edge_label(
                 "description": "Routes a failed carrier operation to its distinct recovery owner.",
             }],
         },
-        min_nodes=5,
-        max_nodes=7,
+        safety_max_nodes=7,
         resolved_complexity="prototype",
     )
 
@@ -1067,9 +1033,7 @@ def test_string_edge_label_canonicalization_is_bounded_and_content_free(
     with caplog.at_level("INFO", logger=graph_worker.__name__):
         result = graph_worker._normalise_applied_graph_candidate(
             graph,
-            publication_query="Design a marketplace fulfilment system",
-            min_nodes=5,
-            max_nodes=5,
+            safety_max_nodes=5,
             resolved_complexity="prototype",
             context="unit.string-label",
         )
@@ -1168,8 +1132,7 @@ def test_patch_applies_new_edge_with_blank_presentation_fields():
                 "description": None,
             }],
         },
-        min_nodes=5,
-        max_nodes=7,
+        safety_max_nodes=7,
         resolved_complexity="prototype",
     )
 
@@ -1194,8 +1157,7 @@ def test_blank_update_label_that_empties_set_is_rejected():
                     "set": {"label": " "},
                 }],
             },
-            min_nodes=5,
-            max_nodes=7,
+            safety_max_nodes=7,
             resolved_complexity="prototype",
         )
 
@@ -1212,8 +1174,7 @@ def test_patch_preserves_existing_labels_at_graph_contract_limit():
                 "set": {"description": "Owns the bounded marketplace intake."},
             }],
         },
-        min_nodes=5,
-        max_nodes=7,
+        safety_max_nodes=7,
         resolved_complexity="prototype",
     )
 
@@ -1228,9 +1189,7 @@ def test_string_edge_label_canonicalization_rejects_unsafe_values(label):
     with pytest.raises(ValueError, match="bounded exact string"):
         graph_worker._normalise_applied_graph_candidate(
             graph,
-            publication_query="Design a marketplace fulfilment system",
-            min_nodes=5,
-            max_nodes=5,
+            safety_max_nodes=5,
             resolved_complexity="prototype",
             context="unit.unsafe-string-label",
         )
@@ -1269,8 +1228,7 @@ def test_add_edge_missing_or_blank_label_recovers_only_from_description(label):
     result = graph_worker._apply_applied_graph_patch(
         existing,
         {"add_edges": [edge]},
-        min_nodes=5,
-        max_nodes=7,
+        safety_max_nodes=7,
         resolved_complexity="prototype",
     )
 
@@ -1312,8 +1270,7 @@ def test_add_edge_requires_both_endpoints(missing_field):
         graph_worker._apply_applied_graph_patch(
             existing,
             {"add_edges": [edge]},
-            min_nodes=5,
-            max_nodes=7,
+            safety_max_nodes=7,
             resolved_complexity="prototype",
         )
 
@@ -1335,80 +1292,9 @@ def test_local_contract_canonicalization_rejects_other_edge_label_shapes(invalid
     with pytest.raises(ValueError, match="bounded non-empty string list"):
         graph_worker._normalise_applied_graph_candidate(
             graph,
-            publication_query="Design a marketplace fulfilment system",
-            min_nodes=5,
-            max_nodes=5,
+            safety_max_nodes=5,
             resolved_complexity="prototype",
             context="unit.invalid-label",
-        )
-
-
-def _one_edge_over_budget_graph():
-    graph = _domain_graph(5)
-    budget = graph_worker._edge_budget(5)
-    index = 0
-    while len(graph["edges"]) < budget:
-        source = f"fulfilment_stage_{index % 5}"
-        target = f"fulfilment_stage_{(index + 2) % 5}"
-        graph["edges"].append({
-            "source": source,
-            "target": target,
-            "label": f"carries bounded auxiliary evidence {index}",
-            "technology": "Typed evidence event",
-            "sync": "async",
-            "flow": "feedback",
-            "description": "Carries one bounded auxiliary observation between existing responsibilities.",
-        })
-        index += 1
-    graph["edges"].append(copy.deepcopy(graph["edges"][0]))
-    return graph
-
-
-def test_one_edge_over_budget_compacts_only_after_strict_publication_validation(monkeypatch):
-    graph = _one_edge_over_budget_graph()
-    publication_checks = []
-
-    def accept_publication(query, candidate, resolved_complexity):
-        publication_checks.append((query, candidate, resolved_complexity))
-
-    monkeypatch.setattr(
-        graph_worker,
-        "_validate_applied_architecture_patch",
-        accept_publication,
-    )
-    result = graph_worker._normalise_applied_graph_candidate(
-        graph,
-        publication_query="Design a marketplace fulfilment system",
-        min_nodes=5,
-        max_nodes=5,
-        resolved_complexity="prototype",
-        context="unit.compaction",
-    )
-
-    assert len(result["edges"]) == graph_worker._edge_budget(5)
-    assert len(publication_checks) == 1
-    assert publication_checks[0][1] == result
-
-
-def test_one_edge_over_budget_fails_closed_without_safe_compaction(monkeypatch):
-    graph = _one_edge_over_budget_graph()
-
-    def reject_publication(_query, _candidate, _resolved_complexity):
-        raise ValueError("candidate fails strict publication validation")
-
-    monkeypatch.setattr(
-        graph_worker,
-        "_validate_applied_architecture_patch",
-        reject_publication,
-    )
-    with pytest.raises(ValueError, match="readability budget"):
-        graph_worker._normalise_applied_graph_candidate(
-            graph,
-            publication_query="Design a marketplace fulfilment system",
-            min_nodes=5,
-            max_nodes=5,
-            resolved_complexity="prototype",
-            context="unit.no-safe-compaction",
         )
 
 
@@ -1448,7 +1334,7 @@ def _one_node_over_budget_graph():
     return graph
 
 
-def test_one_node_over_budget_compacts_only_after_publication_validation(monkeypatch):
+def test_one_node_over_safety_ceiling_is_rejected_without_compaction(monkeypatch):
     graph = _one_node_over_budget_graph()
     publication_checks = []
 
@@ -1460,62 +1346,22 @@ def test_one_node_over_budget_compacts_only_after_publication_validation(monkeyp
         "_validate_applied_architecture_patch",
         accept_publication,
     )
-    result = graph_worker._normalise_applied_graph_candidate(
-        graph,
-        publication_query="Design a marketplace fulfilment system",
-        min_nodes=5,
-        max_nodes=5,
-        resolved_complexity="prototype",
-        context="unit.node-compaction",
-    )
-
-    assert len(publication_checks) == 1
-    assert publication_checks[0][1] == result
-    assert len(result["nodes"]) == 5
-    assert all(node["id"] != "fulfilment_stage_0" for node in result["nodes"])
-    assert all(
-        edge["source"] != "fulfilment_stage_0"
-        and edge["target"] != "fulfilment_stage_0"
-        for edge in result["edges"]
-    )
-    assert all(
-        "fulfilment_stage_0" not in group["nodeIds"]
-        for group in result["groups"]
-    )
-    assert all(
-        "fulfilment_stage_0" not in step["nodes"]
-        for step in result["sequence"]
-    )
-
-
-def test_one_node_over_budget_fails_closed_when_all_candidates_are_rejected(monkeypatch):
-    graph = _one_node_over_budget_graph()
-    publication_checks = []
-
-    def reject_publication(_query, candidate, _resolved_complexity):
-        publication_checks.append(candidate)
-        raise ValueError("candidate fails strict publication validation")
-
-    monkeypatch.setattr(
-        graph_worker,
-        "_validate_applied_architecture_patch",
-        reject_publication,
-    )
-    with pytest.raises(ValueError, match="contain 5-5 nodes; got 6"):
+    with pytest.raises(
+        ValueError,
+        match="exceeds its 5-node resource-safety ceiling; got 6",
+    ):
         graph_worker._normalise_applied_graph_candidate(
             graph,
-            publication_query="Design a marketplace fulfilment system",
-            min_nodes=5,
-            max_nodes=5,
+            safety_max_nodes=5,
             resolved_complexity="prototype",
-            context="unit.no-safe-node-compaction",
+            context="unit.node-safety-rejection",
         )
 
-    assert len(publication_checks) == 6
+    assert publication_checks == []
 
 
 @pytest.mark.asyncio
-async def test_semantically_ineffective_patch_reaches_canonical_workflow_review(monkeypatch):
+async def test_semantic_patch_defects_are_left_for_independent_model_review(monkeypatch):
     existing = _domain_graph(9, production=True)
     collapsed_edge = {
         "source": "fulfilment_stage_7",
@@ -1546,22 +1392,21 @@ async def test_semantically_ineffective_patch_reaches_canonical_workflow_review(
             "session_id": "thread-1",
         },
         "Make reconciliation branches explicit in this fulfilment system",
-        SimpleNamespace(resolved="production", min_graph_nodes=9, max_graph_nodes=13),
+        SimpleNamespace(resolved="production"),
         existing,
     )
 
     assert len(calls) == 1
     assert result["edges"][-1]["label"] == collapsed_edge["label"]
     assert result != existing
-    with pytest.raises(ValueError, match="Draw committed, not-found retry"):
-        graph_worker._validate_applied_architecture_patch(
-            "Make reconciliation branches explicit in this fulfilment system",
-            result,
-            "production",
-        )
+    graph_worker._validate_applied_architecture_patch(
+        "Make reconciliation branches explicit in this fulfilment system",
+        result,
+        "production",
+    )
 
 
-def test_self_loop_edges_are_removed_only_after_publication_validation(monkeypatch):
+def test_self_loop_edges_are_rejected_without_silent_deletion(monkeypatch):
     candidate = _domain_graph(5)
     self_loop = copy.deepcopy(candidate["edges"][0])
     self_loop["source"] = candidate["nodes"][0]["id"]
@@ -1578,17 +1423,15 @@ def test_self_loop_edges_are_removed_only_after_publication_validation(monkeypat
         accept_publication,
     )
 
-    normalised = graph_worker._normalise_applied_graph_candidate(
-        candidate,
-        publication_query="Design a production architecture.",
-        min_nodes=5,
-        max_nodes=12,
-        resolved_complexity="standard",
-        context="self-loop removal test",
-    )
+    with pytest.raises(ValueError, match="graph edges cannot point a node to itself"):
+        graph_worker._normalise_applied_graph_candidate(
+            candidate,
+            safety_max_nodes=12,
+            resolved_complexity="standard",
+            context="self-loop rejection test",
+        )
 
-    assert validations
-    assert all(edge["source"] != edge["target"] for edge in normalised["edges"])
+    assert validations == []
 
 
 def test_self_loop_removal_fails_closed_when_publication_topology_is_invalid(monkeypatch):
@@ -1610,9 +1453,7 @@ def test_self_loop_removal_fails_closed_when_publication_topology_is_invalid(mon
     with pytest.raises(ValueError, match="graph edges cannot point a node to itself"):
         graph_worker._normalise_applied_graph_candidate(
             candidate,
-            publication_query="Design a production architecture.",
-            min_nodes=5,
-            max_nodes=12,
+            safety_max_nodes=12,
             resolved_complexity="standard",
             context="self-loop rejection test",
         )

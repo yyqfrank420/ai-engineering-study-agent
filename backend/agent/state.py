@@ -121,6 +121,7 @@ class AgentState(TypedDict):
     evidence_bundle: NotRequired[dict[str, Any]]
     design_query: NotRequired[str]
     is_applied_design: NotRequired[bool]
+    architecture_ready: NotRequired[bool]
     architect_plan: NotRequired[dict[str, Any]]
     challenger_review: NotRequired[dict[str, Any]]
     diagram_evaluation: NotRequired[dict[str, Any]]

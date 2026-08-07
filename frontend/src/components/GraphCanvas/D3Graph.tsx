@@ -131,6 +131,7 @@ interface D3GraphProps {
   onNodeClick: (node: GraphNode) => void;
   initialViewState?: GraphViewState;
   onViewStateChange?: (state: GraphViewState) => void;
+  onLayoutReady?: (structureKey: string) => void;
 }
 
 type RenderNode = GraphNode & {
@@ -185,11 +186,13 @@ export function D3Graph({
   onNodeClick,
   initialViewState,
   onViewStateChange,
+  onLayoutReady,
 }: D3GraphProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const renderStateRef = useRef<GraphRenderState | null>(null);
   const onNodeClickRef = useRef(onNodeClick);
   const onViewStateChangeRef = useRef(onViewStateChange);
+  const onLayoutReadyRef = useRef(onLayoutReady);
   const graphDataRef = useRef(graphData);
   const initialViewStateRef = useRef(initialViewState);
   const renderedStructureRef = useRef<string | null>(null);
@@ -215,6 +218,10 @@ export function D3Graph({
   useEffect(() => {
     onViewStateChangeRef.current = onViewStateChange;
   }, [onViewStateChange]);
+
+  useEffect(() => {
+    onLayoutReadyRef.current = onLayoutReady;
+  }, [onLayoutReady]);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -1261,7 +1268,24 @@ export function D3Graph({
       isForward,
     };
 
+    let cancelled = false;
+    let firstFrame = 0;
+    let secondFrame = 0;
+    const signalReady = () => {
+      firstFrame = window.requestAnimationFrame(() => {
+        secondFrame = window.requestAnimationFrame(() => {
+          if (!cancelled) onLayoutReadyRef.current?.(structureKey);
+        });
+      });
+    };
+    const fonts = document.fonts?.ready;
+    if (fonts) void fonts.then(signalReady, signalReady);
+    else signalReady();
+
     return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
       renderStateRef.current = null;
     };
   }, [structureKey, viewportRevision]);

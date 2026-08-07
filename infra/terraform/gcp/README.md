@@ -19,6 +19,20 @@ populate versions directly in Secret Manager:
 GCP_PROJECT_ID='<project-id>' bash scripts/populate_secrets.sh
 ```
 
+When adding a required secret to an existing service, create its container before
+Terraform updates the Cloud Run binding. For the Kimi graph builder:
+
+```bash
+terraform -chdir=infra/terraform/gcp apply \
+  -target='google_secret_manager_secret.app["moonshot-api-key"]'
+GCP_PROJECT_ID='<project-id>' bash scripts/populate_secrets.sh
+terraform -chdir=infra/terraform/gcp apply
+```
+
+The middle step reads `MOONSHOT_API_KEY` from the ignored `backend/.env` file and
+creates the first `moonshot-api-key` version. Do not deploy the Kimi-enabled image
+until the final apply mounts that version in both Cloud Run services.
+
 ## Expected workflow
 
 1. Apply Terraform when infrastructure or stable runtime config changes

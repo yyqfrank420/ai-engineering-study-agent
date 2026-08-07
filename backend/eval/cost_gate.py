@@ -11,6 +11,7 @@ APPLICATION_PRICES_USD_PER_MILLION = {
     "claude-sonnet-5": (2.00, 10.00),
     "claude-opus-5": (5.00, 25.00),
     "claude-opus-4-8": (5.00, 25.00),
+    "kimi-k3": (3.00, 15.00),
     "gpt-5.4": (2.50, 15.00),
     "gpt-5.4-mini": (0.75, 4.50),
 }
@@ -182,9 +183,15 @@ def account_application_cost(
                 invalid_cases.add(case_id)
                 invalid_operations.add((case_id, operation))
                 continue
-            if (
-                cache_creation_input_tokens or cache_read_input_tokens
-            ) and not model.startswith("claude-"):
+            if cache_creation_input_tokens and not model.startswith("claude-"):
+                errors.append(
+                    f"application call {call_index} attempt {attempt_index} has "
+                    f"unsupported prompt-cache pricing for model {model!r}"
+                )
+                invalid_cases.add(case_id)
+                invalid_operations.add((case_id, operation))
+                continue
+            if cache_read_input_tokens and not model.startswith(("claude-", "kimi-")):
                 errors.append(
                     f"application call {call_index} attempt {attempt_index} has "
                     f"unsupported prompt-cache pricing for model {model!r}"

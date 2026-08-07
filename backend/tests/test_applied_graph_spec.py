@@ -15,30 +15,40 @@ from agent.applied_graph_spec import (
 from agent.stream_utils import StructuredLLMResponse
 
 
-def _draft() -> dict:
-    nodes = {}
-    for index in range(1, 10):
-        nodes[f"n{index}"] = {
-            "label": f"Responsibility {index}",
+def _group(index: int) -> tuple[str, str]:
+    if index < 5:
+        return "Product runtime", "runtime"
+    if index < 9:
+        return "Data and model services", "data"
+    if index < 12:
+        return "Delivery controls", "delivery"
+    return "Operations", "operations"
+
+
+def _draft(node_count: int = 14) -> dict:
+    nodes = []
+    for index in range(node_count):
+        group, group_kind = _group(index)
+        nodes.append({
+            "label": f"Responsibility {index + 1}",
             "type": "decision" if index == 3 else "service",
             "tier": "private",
-            "lane": "bottom" if index >= 8 else "main",
-            "responsibility": f"Owns bounded responsibility {index}.",
-            "parent": "ROOT" if index == 1 else "n1",
-            "parent_label": "starts the runtime" if index == 1 else f"passes validated action {index}",
+            "lane": "bottom" if group_kind == "operations" else "main",
+            "responsibility": f"Owns material responsibility {index + 1}.",
+            "group": group,
+            "group_kind": group_kind,
+            "parent_index": -1 if index == 0 else max(0, index - 1),
+            "parent_label": "" if index == 0 else f"passes validated action {index + 1}",
             "parent_flow": "runtime",
             "parent_sync": "sync",
-        }
-    return {
-        "title": "Bounded architecture",
-        "nodes": nodes,
-        "cross_links": [],
-    }
+            "sequence_step": index if 0 < index < 8 else 0,
+        })
+    return {"title": "Complete architecture", "nodes": nodes, "cross_links": []}
 
 
-def _assert_rooted_connected(draft: dict) -> dict[str, str]:
-    parents = {edge["target"]: edge["source"] for edge in draft["edges"]}
-    assert set(parents) == {f"n{index}" for index in range(2, 10)}
+def _assert_rooted(draft: dict) -> None:
+    parents = {edge["target"]: edge["source"] for edge in draft["edges"][: len(draft["nodes"]) - 1]}
+    assert set(parents) == {f"n{index}" for index in range(2, len(draft["nodes"]) + 1)}
     for node_id in parents:
         current = node_id
         seen = set()
@@ -46,341 +56,363 @@ def _assert_rooted_connected(draft: dict) -> dict[str, str]:
             assert current not in seen
             seen.add(current)
             current = parents[current]
-    return parents
 
 
-def test_specs_keep_existing_depth_and_edge_budgets():
-    prototype = applied_graph_spec("prototype")
-    production = applied_graph_spec("production")
-    assert (prototype.min_nodes, prototype.target_nodes, prototype.max_nodes) == (7, 9, 12)
-    assert prototype.max_edges == 27
-    assert (production.min_nodes, production.target_nodes, production.max_nodes) == (9, 9, 13)
-    assert production.max_edges == 30
-    assert prototype.max_output_tokens == 5200
-    assert production.max_output_tokens == 5200
+def test_spec_uses_shared_resource_safety_settings(monkeypatch):
+    from agent import applied_graph_spec as module
+
+    monkeypatch.setattr(module.settings, "graph_safety_max_nodes", 44)
+    monkeypatch.setattr(module.settings, "graph_safety_max_edges", 132)
+    spec = applied_graph_spec("production")
+    assert spec.depth == "production"
+    assert spec.safety_max_nodes == 44
+    assert spec.safety_max_edges == 132
 
 
-def test_topology_schema_has_exact_closed_slots_without_unsupported_bounds():
-    schema = applied_graph_topology_schema(applied_graph_spec("prototype"))
+def test_low_depth_stays_low():
+    assert applied_graph_spec("low").depth == "low"
+
+
+def test_topology_schema_uses_dynamic_closed_arrays_without_design_counts():
+    schema = applied_graph_topology_schema(applied_graph_spec("production"))
     nodes = schema["properties"]["nodes"]
     links = schema["properties"]["cross_links"]
-    node_record = schema["$defs"]["node_record"]
-    cross_link_record = schema["$defs"]["cross_link_record"]
-    assert nodes["additionalProperties"] is False
-    assert nodes["required"] == [f"n{index}" for index in range(1, 10)]
-    assert all(
-        value == {"$ref": "#/$defs/node_record"}
-        for value in nodes["properties"].values()
-    )
+    node_record = nodes["items"]
+    assert nodes["type"] == "array"
     assert node_record["additionalProperties"] is False
     assert node_record["required"] == [
-        "label", "type", "tier", "lane", "responsibility",
-        "parent", "parent_label", "parent_flow", "parent_sync",
+        "label",
+        "type",
+        "tier",
+        "lane",
+        "responsibility",
+        "group",
+        "group_kind",
+        "parent_index",
+        "parent_label",
+        "parent_flow",
+        "parent_sync",
+        "sequence_step",
     ]
-    assert node_record["properties"]["parent"]["enum"] == [
-        "ROOT", *(f"n{index}" for index in range(1, 10))
+    assert links["type"] == "array"
+    assert links["items"]["required"] == [
+        "source_index", "target_index", "label", "flow", "sync",
     ]
-    assert links == {
-        "type": "array",
-        "items": {"$ref": "#/$defs/cross_link_record"},
-    }
-    assert cross_link_record["additionalProperties"] is False
-    assert cross_link_record["required"] == [
-        "source", "target", "label", "flow", "sync",
-    ]
-    assert schema["required"] == ["title", "nodes", "cross_links"]
-    assert set(schema["properties"]) == set(schema["required"])
     serialized = json.dumps(schema)
-    assert "minItems" not in serialized
-    assert "maxItems" not in serialized
-    assert "minLength" not in serialized
-    assert "maxLength" not in serialized
-    assert "allOf" not in serialized
+    for unsupported_or_shaping_keyword in (
+        "$ref", "$defs", "minItems", "maxItems", "minLength", "maxLength", "allOf"
+    ):
+        assert unsupported_or_shaping_keyword not in serialized
 
 
-def test_parent_slots_materialize_exact_connected_tree():
-    draft = validate_applied_graph_topology(_draft(), applied_graph_spec("prototype"))
-    assert len(draft["nodes"]) == 9
-    assert len(draft["edges"]) == 8
-    assert {edge["target"] for edge in draft["edges"]} == {
-        f"n{index}" for index in range(2, 10)
-    }
+@pytest.mark.parametrize("node_count", [3, 14, 27])
+def test_validator_accepts_variable_material_topologies(node_count):
+    draft = validate_applied_graph_topology(_draft(node_count), applied_graph_spec("production"))
+    assert len(draft["nodes"]) == node_count
+    assert len(draft["edges"]) == node_count - 1
+    _assert_rooted(draft)
 
 
-def test_missing_node_slot_fails_closed():
-    payload = _draft()
-    del payload["nodes"]["n9"]
+def test_empty_topology_fails_closed():
     with pytest.raises(AppliedGraphSpecError) as caught:
-        validate_applied_graph_topology(payload, applied_graph_spec("prototype"))
-    assert caught.value.code == "graph_design_node_budget_invalid"
+        validate_applied_graph_topology(
+            {"title": "Empty", "nodes": [], "cross_links": []},
+            applied_graph_spec("production"),
+        )
+    assert caught.value.code == "graph_design_topology_invalid"
 
 
-def test_forward_parent_is_preserved_and_connected():
-    payload = _draft()
-    payload["nodes"]["n2"]["parent"] = "n9"
-    draft = validate_applied_graph_topology(payload, applied_graph_spec("prototype"))
-    parents = _assert_rooted_connected(draft)
-    assert parents["n2"] == "n9"
+def test_node_resource_safety_ceiling_is_enforced(monkeypatch):
+    from agent import applied_graph_spec as module
 
-
-def test_self_unknown_and_extra_root_parents_repair_to_n1():
-    payload = _draft()
-    payload["nodes"]["n2"]["parent"] = "ROOT"
-    payload["nodes"]["n3"]["parent"] = "n3"
-    payload["nodes"]["n4"]["parent"] = "not-a-slot"
-    draft = validate_applied_graph_topology(payload, applied_graph_spec("prototype"))
-    parents = _assert_rooted_connected(draft)
-    assert parents["n2"] == "n1"
-    assert parents["n3"] == "n1"
-    assert parents["n4"] == "n1"
-
-
-def test_cycle_repairs_first_slot_order_participant_to_n1():
-    payload = _draft()
-    payload["nodes"]["n2"]["parent"] = "n3"
-    payload["nodes"]["n3"]["parent"] = "n2"
-    draft = validate_applied_graph_topology(payload, applied_graph_spec("prototype"))
-    parents = _assert_rooted_connected(draft)
-    assert parents["n2"] == "n1"
-    assert parents["n3"] == "n2"
-
-
-def test_depth_over_five_repairs_current_node_to_n1():
-    payload = _draft()
-    payload["nodes"]["n2"]["parent"] = "n3"
-    payload["nodes"]["n3"]["parent"] = "n4"
-    payload["nodes"]["n4"]["parent"] = "n5"
-    payload["nodes"]["n5"]["parent"] = "n6"
-    payload["nodes"]["n6"]["parent"] = "n7"
-    payload["nodes"]["n7"]["parent"] = "n1"
-    draft = validate_applied_graph_topology(payload, applied_graph_spec("prototype"))
-    parents = _assert_rooted_connected(draft)
-    assert parents["n2"] == "n1"
-    assert parents["n3"] == "n4"
-
-
-def test_cross_link_self_loop_and_duplicate_are_discarded_deterministically():
-    payload = _draft()
-    payload["cross_links"] = [
-        {"source": "n2", "target": "n2", "label": "retry", "flow": "runtime", "sync": "sync"},
-        {"source": "n1", "target": "n2", "label": "passes validated action 2", "flow": "runtime", "sync": "sync"},
-    ]
-    draft = validate_applied_graph_topology(payload, applied_graph_spec("prototype"))
-    assert len(draft["edges"]) == 8
-
-
-def test_blank_authored_fields_and_root_metadata_normalize_deterministically():
-    payload = _draft()
-    payload["title"] = "   "
-    payload["nodes"]["n1"]["parent_label"] = ""
-    payload["nodes"]["n2"].update({
-        "label": " ",
-        "type": " SERVICE ",
-        "tier": " PRIVATE ",
-        "lane": " MAIN ",
-        "responsibility": "",
-        "parent": " N1 ",
-        "parent_label": " ",
-        "parent_flow": " RUNTIME ",
-        "parent_sync": " SYNC ",
-    })
-    draft = validate_applied_graph_topology(payload, applied_graph_spec("prototype"))
-    node = next(item for item in draft["nodes"] if item["id"] == "n2")
-    edge = next(item for item in draft["edges"] if item["target"] == "n2")
-    assert draft["title"] == "Applied Agent Architecture"
-    assert node["label"] == "Service n2"
-    assert node["responsibility"] == "Handles the assigned service responsibility."
-    assert edge == {
-        "source": "n1",
-        "target": "n2",
-        "label": "Routes validated work to Service n2",
-        "flow": "runtime",
-        "sync": "sync",
-    }
-
-
-def test_optional_cross_links_canonicalize_endpoints_and_drop_invalid_or_blank():
-    payload = _draft()
-    payload["cross_links"] = [
-        {"source": " N2 ", "target": "N3", "label": "Material route", "flow": "CONTROL", "sync": "ASYNC"},
-        {"source": "missing", "target": "n3", "label": "Invalid endpoint", "flow": "control", "sync": "async"},
-        {"source": "n3", "target": "n4", "label": " ", "flow": "control", "sync": "async"},
-    ]
-    draft = validate_applied_graph_topology(payload, applied_graph_spec("prototype"))
-    assert draft["edges"][8:] == [{
-        "source": "n2",
-        "target": "n3",
-        "label": "Material route",
-        "flow": "control",
-        "sync": "async",
-    }]
-
-
-def test_structural_string_failure_exposes_safe_path_and_rule_only():
-    payload = _draft()
-    payload["nodes"]["n2"]["label"] = None
+    monkeypatch.setattr(module.settings, "graph_safety_max_nodes", 4)
     with pytest.raises(AppliedGraphSpecError) as caught:
-        validate_applied_graph_topology(payload, applied_graph_spec("prototype"))
-    assert caught.value.code == "graph_design_schema_invalid"
-    assert caught.value.path == "nodes.n2.label"
-    assert caught.value.rule == "value_type"
+        validate_applied_graph_topology(_draft(5), applied_graph_spec("production"))
+    assert caught.value.code == "graph_design_node_safety_limit"
+    assert caught.value.node_count == 5
 
 
-def test_more_than_ten_cross_links_after_dedupe_keep_first_ten():
-    payload = _draft()
-    unique_links = [
+def test_edge_resource_safety_ceiling_is_enforced(monkeypatch):
+    from agent import applied_graph_spec as module
+
+    monkeypatch.setattr(module.settings, "graph_safety_max_edges", 3)
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        validate_applied_graph_topology(_draft(5), applied_graph_spec("production"))
+    assert caught.value.code == "graph_design_edge_safety_limit"
+    assert caught.value.edge_count == 4
+
+
+@pytest.mark.parametrize(
+    ("node_index", "parent_index"),
+    [(0, 0), (1, -1), (1, 1), (1, 99)],
+)
+def test_invalid_parent_relationships_fail_closed(node_index, parent_index):
+    payload = _draft(4)
+    payload["nodes"][node_index]["parent_index"] = parent_index
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        validate_applied_graph_topology(payload, applied_graph_spec("production"))
+    assert caught.value.code == "graph_design_topology_invalid"
+
+
+def test_parent_cycle_fails_instead_of_reparenting_with_stale_label():
+    payload = _draft(4)
+    payload["nodes"][1]["parent_index"] = 2
+    payload["nodes"][2]["parent_index"] = 1
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        validate_applied_graph_topology(payload, applied_graph_spec("production"))
+    assert caught.value.code == "graph_design_topology_invalid"
+
+
+def test_deep_acyclic_parent_chain_is_preserved():
+    draft = validate_applied_graph_topology(_draft(18), applied_graph_spec("production"))
+    parents = {edge["target"]: edge["source"] for edge in draft["edges"][:17]}
+    assert parents["n18"] == "n17"
+
+
+def test_cross_links_use_indexes_and_preserve_every_material_link():
+    payload = _draft(6)
+    payload["cross_links"] = [
+        {
+            "source_index": 1,
+            "target_index": 4,
+            "label": "publishes measured feedback",
+            "flow": "feedback",
+            "sync": "async",
+        },
+        {
+            "source_index": 5,
+            "target_index": 2,
+            "label": "rolls back failed release",
+            "flow": "deployment",
+            "sync": "async",
+        },
+    ]
+    draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
+    assert draft["edges"][-2:] == [
         {
             "source": "n2",
-            "target": "n3",
-            "label": f"material cross route {index}",
-            "flow": "control",
+            "target": "n5",
+            "label": "publishes measured feedback",
+            "flow": "feedback",
             "sync": "async",
-        }
-        for index in range(1, 12)
-    ]
-    payload["cross_links"] = [unique_links[0], *unique_links]
-    draft = validate_applied_graph_topology(payload, applied_graph_spec("prototype"))
-    assert [edge["label"] for edge in draft["edges"][8:]] == [
-        f"material cross route {index}" for index in range(1, 11)
-    ]
-
-
-def test_enrichment_builds_three_groups_without_inventing_edges():
-    spec = applied_graph_spec("prototype")
-    payload = _draft()
-    draft = validate_applied_graph_topology(payload, spec)
-    graph = enrich_applied_graph_topology(draft, spec=spec, architect_plan={})
-    assert len(graph["edges"]) == 8
-    assert len(graph["groups"]) == 3
-    assert len(graph["sequence"]) == 5
-    assert {node_id for group in graph["groups"] for node_id in group["nodeIds"]} == {
-        f"n{index}" for index in range(1, 10)
-    }
-
-
-def test_enrichment_preserves_only_authored_compensation_edges():
-    spec = applied_graph_spec("prototype")
-    payload = _draft()
-    payload["cross_links"] = [{
-        "source": "n2",
-        "target": "n1",
-        "label": "Compensation proposal returns for validation",
-        "flow": "control",
-        "sync": "async",
-    }]
-    graph = enrich_applied_graph_topology(
-        validate_applied_graph_topology(payload, spec), spec=spec, architect_plan={}
-    )
-    compensation_edges = [
-        edge for edge in graph["edges"]
-        if "compensat" in edge["label"].lower() and edge["target"] == "n1"
-    ]
-    assert {edge["source"] for edge in compensation_edges} == {"n2"}
-
-
-def test_ten_cross_links_remain_inside_nine_node_render_budget():
-    spec = applied_graph_spec("production")
-    payload = _draft()
-    payload["cross_links"] = [
+        },
         {
-            "source": f"n{((index - 1) % 8) + 1}",
-            "target": f"n{(index % 8) + 2}",
-            "label": f"material cross route {index}",
-            "flow": "control",
+            "source": "n6",
+            "target": "n3",
+            "label": "rolls back failed release",
+            "flow": "deployment",
             "sync": "async",
-        }
-        for index in range(1, 11)
+        },
     ]
+
+
+@pytest.mark.parametrize(
+    "cross_link",
+    [
+        {"source_index": 2, "target_index": 2, "label": "loop", "flow": "runtime", "sync": "sync"},
+        {"source_index": 9, "target_index": 2, "label": "unknown", "flow": "runtime", "sync": "sync"},
+    ],
+)
+def test_invalid_cross_link_fails_instead_of_disappearing(cross_link):
+    payload = _draft(5)
+    payload["cross_links"] = [cross_link]
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        validate_applied_graph_topology(payload, applied_graph_spec("production"))
+    assert caught.value.code == "graph_design_topology_invalid"
+
+
+def test_duplicate_cross_link_fails_instead_of_using_array_order():
+    payload = _draft(5)
+    duplicate = {
+        "source_index": 1,
+        "target_index": 3,
+        "label": "material control",
+        "flow": "control",
+        "sync": "sync",
+    }
+    payload["cross_links"] = [duplicate, duplicate]
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        validate_applied_graph_topology(payload, applied_graph_spec("production"))
+    assert caught.value.rule == "duplicate"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "rule"),
+    [("label", " ", "blank_required"), ("responsibility", "x" * 221, "safety_limit")],
+)
+def test_required_semantic_fields_are_rejected_instead_of_fabricated(field, value, rule):
+    payload = _draft(4)
+    payload["nodes"][1][field] = value
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        validate_applied_graph_topology(payload, applied_graph_spec("production"))
+    assert caught.value.rule == rule
+
+
+def test_enrichment_preserves_authored_groups_and_runtime_sequence():
+    spec = applied_graph_spec("production")
+    payload = _draft(14)
+    payload["nodes"][2]["sequence_step"] = 2
+    payload["nodes"][3]["sequence_step"] = 2
     graph = enrich_applied_graph_topology(
-        validate_applied_graph_topology(payload, spec), spec=spec, architect_plan={}
+        validate_applied_graph_topology(payload, spec),
+        spec=spec,
+        architect_plan={"assumptions": ["The source API supports version reads."]},
     )
-    assert len(graph["edges"]) == 18
+    assert [group["label"] for group in graph["groups"]] == [
+        "Product runtime", "Data and model services", "Delivery controls", "Operations",
+    ]
+    assert {node_id for group in graph["groups"] for node_id in group["nodeIds"]} == {
+        f"n{index}" for index in range(1, 15)
+    }
+    parallel_step = graph["sequence"][1]
+    assert {"n3", "n4"} <= set(parallel_step["nodes"])
+    assert graph["assumptions"] == ["The source API supports version reads."]
 
 
-def test_worst_case_topology_serialization_fits_generation_budget():
-    assert worst_case_topology_chars(applied_graph_spec("production")) < 16_000
+def test_worst_case_topology_serialization_is_bounded_by_resource_ceiling():
+    assert worst_case_topology_chars(applied_graph_spec("production")) < 200_000
 
 
-def test_prompt_names_fixed_slots_parent_depth_and_semantic_identity():
+def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     prompt = applied_graph_topology_prompt(
         query="Build a RAG runtime",
-        architect_plan={"components": ["retriever"], "assumptions": ["book corpus"]},
-        challenger_review={"blockers": ["show trust boundary"]},
-        commitments="show cache acceptance once",
-        spec=applied_graph_spec("prototype"),
+        architect_plan={"required_capabilities": ["retriever"]},
+        challenger_review={"risks": ["show trust boundary"]},
+        commitments="show accepted cache writes",
+        spec=applied_graph_spec("production"),
     )
-    assert "n1 through n9 exactly once" in prompt
-    assert "parent ROOT" in prompt
-    assert "depth at or below five" in prompt
-    assert "rooted, acyclic n1 tree" in prompt
-    assert "earlier parent" not in prompt
-    assert "cross_links as an array" in prompt
-    assert "at most ten distinct" in prompt
-    assert "semantic identity" in prompt
-    assert '"authoring_limits"' in prompt
-    assert "title at most 100 characters" in prompt
-    assert "node label at most 60 characters" in prompt
-    assert "one sentence of at most 140 characters" in prompt
-    assert "parent or cross-link label at most 100 characters" in prompt
-    assert "material cross-links only" in prompt
-    assert "no prose outside the schema fields" in prompt
-    assert "visible topology must identify distinct validation" in prompt
+    assert "Choose the number of nodes, groups, and cross-links from the design" in prompt
+    assert "Never merge distinct owners" in prompt
+    assert "zero-based index" in prompt
+    assert "sequence_step" in prompt
+    assert "all material non-tree connections" in prompt
+    assert "at most ten" not in prompt
+    assert "n1 through n9" not in prompt
+    assert "node_budget" not in prompt
 
 
 @pytest.mark.asyncio
-async def test_bounded_generator_uses_schema_once(monkeypatch):
+async def test_dynamic_generator_uses_schema_once(monkeypatch):
     import agent.nodes.graph_worker as graph_worker
+
     calls = []
 
     async def fake_stream_structured_llm(**kwargs):
         calls.append(kwargs)
-        payload = _draft()
-        payload["cross_links"].append({
-            "source": "n2", "target": "n2", "label": "retry", "flow": "runtime", "sync": "sync",
-        })
         return StructuredLLMResponse(
-            text=json.dumps(payload), finish_reason="end_turn", input_tokens=100,
-            output_tokens=500, provider="anthropic", model="claude-sonnet-5",
+            text=json.dumps(_draft(14)),
+            finish_reason="end_turn",
+            input_tokens=100,
+            output_tokens=500,
+            provider="moonshot",
+            model="kimi-k3",
         )
 
     monkeypatch.setattr(graph_worker, "stream_structured_llm", fake_stream_structured_llm)
-    monkeypatch.setattr(graph_worker, "_normalise_applied_graph", lambda graph, **_kwargs: graph)
-
-    def reject_if_called(*_args):
-        raise AssertionError("the canonical workflow owns semantic review")
-
-    monkeypatch.setattr(
-        graph_worker,
-        "_validate_applied_architecture_patch",
-        reject_if_called,
+    result = await graph_worker._generate_applied_architecture(
+        {
+            "graph_data": None,
+            "approved_graph_data": None,
+            "architect_plan": {"required_capabilities": ["complete runtime"]},
+            "challenger_review": {"risks": ["complete failures"]},
+            "architecture_ready": True,
+            "complexity": "production",
+        },
+        "Build a complete runtime",
+        SimpleNamespace(resolved="production"),
     )
-    result = await graph_worker._generate_bounded_applied_architecture(
-        {"graph_data": None, "architect_plan": {}, "challenger_review": {}, "complexity": "prototype"},
-        "Build a bounded runtime", SimpleNamespace(resolved="prototype"),
-    )
-    assert len(result["nodes"]) == 9
-    assert len(result["edges"]) == 8
+    assert len(result["nodes"]) == 14
+    assert len(result["groups"]) == 4
     assert len(calls) == 1
+    serialized_schema = json.dumps(calls[0]["response_schema"])
+    assert "maxItems" not in serialized_schema
+
+
+@pytest.mark.asyncio
+async def test_unpublished_rejection_gets_complete_redraw_with_all_blockers(monkeypatch):
+    import agent.nodes.graph_worker as graph_worker
+
+    calls = []
+    blockers = [
+        "The approval rejection route has no durable terminal state.",
+        "The timeout path retries without same-key outcome reconciliation.",
+        "The release path has no rollback edge.",
+    ]
+
+    async def fake_stream_structured_llm(**kwargs):
+        calls.append(kwargs)
+        return StructuredLLMResponse(
+            text=json.dumps(_draft(14)),
+            finish_reason="end_turn",
+            input_tokens=100,
+            output_tokens=500,
+            provider="moonshot",
+            model="kimi-k3",
+        )
+
+    monkeypatch.setattr(graph_worker, "stream_structured_llm", fake_stream_structured_llm)
+    await graph_worker._generate_applied_architecture(
+        {
+            "graph_data": {
+                "title": "Rejected candidate",
+                "nodes": [{"id": "old-node", "label": "Old node"}],
+                "edges": [],
+            },
+            "approved_graph_data": None,
+            "architect_plan": {"required_capabilities": ["complete runtime"]},
+            "challenger_review": {"risks": ["complete failures"]},
+            "graph_review": {
+                "approved": False,
+                "missing": blockers,
+                "revision_instruction": "Resolve the complete review.",
+            },
+            "graph_revision_count": 1,
+            "architecture_ready": True,
+            "complexity": "production",
+        },
+        "Build a complete runtime",
+        SimpleNamespace(resolved="production"),
+    )
+
+    prompt = calls[0]["messages"][0]["content"]
+    assert all(blocker in prompt for blocker in blockers)
+    assert "Rejected candidate" in prompt
+    assert "no identity-retention requirement" in prompt
+    assert "Keep at least 60%" not in prompt
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("text", "finish_reason", "code"),
-    [('{"title":', "max_tokens", "graph_design_output_truncated"), ('{"title":', "end_turn", "graph_design_schema_invalid")],
+    [
+        ('{"title":', "max_tokens", "graph_design_output_truncated"),
+        ('{"title":', "end_turn", "graph_design_schema_invalid"),
+    ],
 )
-async def test_bounded_generator_classifies_max_tokens_before_parse(monkeypatch, text, finish_reason, code):
+async def test_dynamic_generator_classifies_provider_truncation(monkeypatch, text, finish_reason, code):
     import agent.nodes.graph_worker as graph_worker
 
     async def fake_stream_structured_llm(**_kwargs):
         return StructuredLLMResponse(
-            text=text, finish_reason=finish_reason, input_tokens=10,
-            output_tokens=3600, provider="anthropic", model="claude-sonnet-5",
+            text=text,
+            finish_reason=finish_reason,
+            input_tokens=10,
+            output_tokens=3600,
+            provider="moonshot",
+            model="kimi-k3",
         )
 
     monkeypatch.setattr(graph_worker, "stream_structured_llm", fake_stream_structured_llm)
     with pytest.raises(AppliedGraphSpecError) as caught:
-        await graph_worker._generate_bounded_applied_architecture(
-            {"graph_data": None, "architect_plan": {}, "challenger_review": {}},
-            "Build a bounded runtime", SimpleNamespace(resolved="prototype"),
+        await graph_worker._generate_applied_architecture(
+            {
+                "graph_data": None,
+                "approved_graph_data": None,
+                "architect_plan": {"required_capabilities": ["runtime"]},
+                "challenger_review": {"risks": ["failure"]},
+                "architecture_ready": True,
+            },
+            "Build a runtime",
+            SimpleNamespace(resolved="prototype"),
         )
     assert caught.value.code == code

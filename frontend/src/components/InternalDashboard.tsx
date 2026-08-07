@@ -62,7 +62,8 @@ export function InternalDashboard({ authSession }: InternalDashboardProps) {
   }, [authSession]);
 
   useEffect(() => {
-    void load();
+    const timeout = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timeout);
   }, [load]);
 
   if (loading) {

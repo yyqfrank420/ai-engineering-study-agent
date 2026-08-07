@@ -234,7 +234,7 @@ jobs:
             --no-traffic \
             --tag "$REVISION_TAG" \
             --timeout 420s \
-            --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4,GRAPH_REPAIR_MODEL=claude-sonnet-5 \
+            --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4,ANTHROPIC_PROMPT_CACHE_ENABLED=true \
             --quiet
           candidate_url="$(gcloud run services describe "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json | python -c 'import json,os,sys; data=json.load(sys.stdin); tag=os.environ["REVISION_TAG"]; print(next((x.get("url", "") for x in data.get("status", {}).get("traffic", []) if x.get("tag") == tag), ""))')"
           if [ -z "$candidate_url" ]; then

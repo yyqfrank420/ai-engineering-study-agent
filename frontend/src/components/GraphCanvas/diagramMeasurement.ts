@@ -1,7 +1,7 @@
 import type { DiagramLayoutReport } from '../../types';
 
 
-export function measureDiagram(svg: SVGSVGElement, expectedEdges: number): DiagramLayoutReport {
+export function measureDiagram(svg: SVGSVGElement): DiagramLayoutReport {
   const viewport = svg.getBoundingClientRect();
   const nodes = Array.from(svg.querySelectorAll<SVGGElement>('g.node'));
   const rects = nodes.map(node => node.getBoundingClientRect());
@@ -50,10 +50,7 @@ export function measureDiagram(svg: SVGSVGElement, expectedEdges: number): Diagr
     viewport_width: Math.round(viewport.width),
     viewport_height: Math.round(viewport.height),
     rendered_nodes: nodes.length,
-    rendered_edges: Math.min(
-      expectedEdges,
-      svg.querySelectorAll('path.edge-vis').length,
-    ),
+    rendered_edges: svg.querySelectorAll('path.edge-vis').length,
     overlap_count: overlapCount,
     clipped_nodes: clippedNodes,
     clipped_edges: clippedEdges,

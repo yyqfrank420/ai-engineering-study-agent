@@ -37,7 +37,7 @@ describe('measureDiagram', () => {
     node.getBoundingClientRect = () => rect(100, 100, 180, 56);
     if (edge) edge.getBoundingClientRect = () => rect(280, 120, 120, 2);
 
-    const report = measureDiagram(svg, 1);
+    const report = measureDiagram(svg);
 
     expect(report.rendered_edges).toBe(1);
     expect(report.minimum_text_px).toBeCloseTo(7.2);
@@ -53,7 +53,7 @@ describe('measureDiagram', () => {
     svg.getBoundingClientRect = () => rect(0, 0, 720, 800);
     edge.getBoundingClientRect = () => rect(-12, 100, 80, 2);
 
-    const report = measureDiagram(svg, 1);
+    const report = measureDiagram(svg);
 
     expect(report.clipped_edges).toBe(1);
   });
@@ -112,7 +112,7 @@ describe('measureDiagram', () => {
       hiddenGroup,
     );
 
-    const report = measureDiagram(svg, 0);
+    const report = measureDiagram(svg);
 
     expect(report.overview_required_edge_labels).toBe(2);
     expect(report.visible_overview_required_edge_labels).toBe(1);

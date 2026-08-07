@@ -131,8 +131,6 @@ class ComplexityProfile:
     requested: str
     resolved: str
     thinking_budget: int | None
-    min_graph_nodes: int
-    max_graph_nodes: int
     answer_contract: str
 
 
@@ -186,7 +184,7 @@ def resolve_design_query(
         ])
         graph_parts.extend(
             str(node.get("label") or "")
-            for node in (graph_data.get("nodes") or [])[:12]
+            for node in (graph_data.get("nodes") or [])
             if isinstance(node, dict) and node.get("label")
         )
     parts = [*prior_user_messages[-3:], *graph_parts, message]
@@ -298,11 +296,6 @@ def resolve_complexity(requested: str, query: str) -> ComplexityProfile:
             requested=requested,
             resolved=resolved,
             thinking_budget=settings.production_thinking_budget_tokens,
-            # Node count is a bounded readability budget, not a quality score.
-            # Production responsibilities may be consolidated differently by
-            # domain; the browser render gate decides whether the result fits.
-            min_graph_nodes=min(11, settings.max_graph_nodes),
-            max_graph_nodes=min(13, settings.max_graph_nodes),
             answer_contract=(
                 "Production depth: give an implementable design, including component boundaries, "
                 "data contracts, the decision/feedback loop, safety controls, approval where "
@@ -316,8 +309,6 @@ def resolve_complexity(requested: str, query: str) -> ComplexityProfile:
             requested=requested,
             resolved=resolved,
             thinking_budget=settings.thinking_budget_tokens,
-            min_graph_nodes=7,
-            max_graph_nodes=9,
             answer_contract=(
                 "Prototype depth: produce a concrete buildable design with responsibilities, key "
                 "interfaces, the main data/control loop, important assumptions, and the first "
@@ -328,8 +319,6 @@ def resolve_complexity(requested: str, query: str) -> ComplexityProfile:
         requested=requested,
         resolved="low",
         thinking_budget=None,
-        min_graph_nodes=5,
-        max_graph_nodes=7,
         answer_contract=(
             "Low depth: answer the user's actual question directly and concisely. For an explanation "
             "or safety lesson, stop after the requested concept and necessary evidence; do not add "

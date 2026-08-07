@@ -173,7 +173,7 @@ function pathControlPoints(value: string | null): Array<{ x: number; y: number }
   }));
 }
 
-describe('maximum production graph capacity', () => {
+describe('dense production graph rendering', () => {
   it('renders a realistic 13-node/29-edge control topology at publication readability', () => {
     expect(capacityGraph.nodes).toHaveLength(13);
     expect(capacityGraph.edges).toHaveLength(29);

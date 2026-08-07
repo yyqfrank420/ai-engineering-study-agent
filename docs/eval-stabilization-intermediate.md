@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-07
 
-This document records the work performed on PR #37 (`codex/critic-json-retry`), the evidence from protected and diagnostic evaluations, and the remaining production exit criteria. PR #37 merged its two reviewed commits on 2026-08-07. Production is not considered fixed until the follow-up contract correction passes protected evaluation, merges, and is verified on Cloud Run and Vercel.
+This document records the work performed on PR #37 (`codex/critic-json-retry`), its follow-up contract correction in PR #38, prompt caching in PR #39, and the remaining production exit criteria. All three PRs merged on 2026-08-07. The Kimi role-routing change passed the offline gate and still needs one bounded protected graph diagnostic and deployment verification.
 
 ## Objective and operating rules
 
@@ -39,6 +39,11 @@ The original provider boundary relied on array `maxItems`. Anthropic structured 
 
 ### Applied graph generation
 
+This subsection records the fixed-slot contract used by the earlier stabilization branch. The current
+runtime supersedes it with variable arrays, model-authored groups and sequence, strict reference and
+cycle validation, and resource-safety ceilings that are absent from model prompts. It never truncates
+cross-links, reparents invalid topology, or deletes authored elements to fit a target count.
+
 - Introduced a dedicated structured applied-graph boundary in `backend/agent/applied_graph_spec.py`.
 - Replaced variable model-authored node IDs with exactly nine fixed slots (`n1` through `n9`).
 - Replaced the large inlined grammar with shared internal `$defs` records.
@@ -69,6 +74,39 @@ The original provider boundary relied on array `maxItems`. Anthropic structured 
 - Applied one omission rule to blank/null update fields; an otherwise empty update still fails.
 - Enriched added node and edge presentation fields through the same defaults as initial topology generation.
 - Preserved the existing graph on invalid patches and retained critic/publication validation after every repair.
+
+### One-shot architecture product and model roles
+
+The product target is a one-shot, publishable architecture diagram. Opus 5 xhigh writes the primary
+architecture brief, then performs a clean second-pass review before graph construction. Kimi K3 max
+owns initial graph topology and one complete redraw of a rejected unpublished candidate. Typed patches
+are reserved for user refinements to a previously published graph. Sonnet 5 high reviews architecture
+semantics and the private browser screenshot before publication. The protected semantic judge also
+defaults to Sonnet 5 high.
+
+The workflow now permits one repair after the first candidate. A second failed QA result suppresses
+the graph. Normal operation should publish the first candidate; repair rate and first-pass acceptance
+are release metrics, not an authoring strategy.
+
+Each reasoning role has a completion budget separate from the visible artifact bounds. Opus xhigh
+receives 64,000 completion tokens, Kimi max receives 65,536, and Sonnet graph QA receives 16,384.
+Graph nodes and edges have high resource-safety ceilings for rendering and persistence. The ceilings
+stay out of prompts and never shape a valid design. Text and patch payloads retain transport bounds. This avoids
+the earlier failure where hidden reasoning exhausted a small JSON-output cap before a complete object
+appeared.
+
+Kimi uses one OpenAI-compatible adapter boundary with strict structured output, streamed reasoning,
+bounded pre-output retry, provider usage telemetry, and automatic-cache accounting. The production
+topology schema inlines its two strict record shapes because K3's documented schema subset does not
+guarantee `$ref`. The browser still renders every candidate off-screen. Deterministic geometry checks
+ run first, then Sonnet receives the private screenshot and layout report for visual hierarchy and
+semantic QA.
+
+The root-cause review removed the fixed nine-node schema, positional three-group and five-step
+fabrication, cap-plus-one node and edge deletion, silent reparenting, first-draft ID retention, partial
+critic feedback, lexical semantic overrides, and the 520 ms screenshot timer. The renderer now signals
+layout readiness. Missing or failed browser evidence rejects the candidate. Sonnet's explicit rejection
+cannot be reversed by local label matching.
 
 ## Root-cause re-evaluation
 
@@ -152,9 +190,9 @@ Most recent authoritative evidence:
 - Diagnostic `31127543972`: edge IDs were accepted; the patch call hit exactly 3,200 output tokens and the server preserved the existing graph because no JSON object was emitted.
 - Diagnostic `31127721414`: the first repair published a valid candidate; the second repair failed because the patch protocol omitted and inconsistently required presentation fields.
 - Focused local patch/spec/graph/critic/workflow verification after the complete boundary correction: 198 tests passed.
-- The exact working tree passed the full local offline gate under the CI Node 20 arm64 runtime. Backend coverage passed with 735 tests and 91% total coverage. Frontend coverage passed with 200 tests, 90.89% statements, 78.57% branches, 93% functions, and 93.34% lines. Static/security, ingestion, migrations, Terraform validation, policy checks, and the production container build also passed.
+- The exact working tree passed the full local offline gate. Backend coverage passed with 731 tests and 91% total coverage. Frontend coverage passed under Node 20 with 200 tests, 90.96% statements, 78.58% branches, 93.08% functions, and 93.39% lines. Static/security, migrations, Terraform validation, policy checks, and the production container build also passed.
 - Backend/frontend staging readiness, dashboard smoke, capture, cleanup, artifact upload, latency accounting, and cost accounting all passed.
-- `main` contains PR #37 and still lacks the follow-up contract correction; no production-success claim is made.
+- `main` contains PR #37, PR #38, and PR #39. The Kimi role-routing branch has no paid or production evidence yet.
 
 ## Evaluation workflow lessons
 
@@ -171,12 +209,13 @@ Most recent authoritative evidence:
 
 ## Remaining execution order
 
-1. Pass required GitHub offline CI on the exact final tree.
-2. Pass one uninterrupted canonical eight-case protected evaluation on that tree.
-3. Verify the exact-tree approval tag and required PR checks.
-4. Merge the focused follow-up PR with the exact final head guard.
-5. Monitor the `main` production workflow through immutable backend deployment, smoke/promotion, and Vercel deployment.
-6. Verify Cloud Run revision/digest/traffic and the public backend and Vercel frontend URLs.
+1. Pass the full offline gate on the exact Kimi role-routing tree.
+2. Create the `moonshot-api-key` Secret Manager container, add its first version, then apply the Cloud Run secret binding.
+3. Run one protected graph diagnostic and require a publishable first candidate or one valid bounded repair.
+4. Run one uninterrupted canonical eight-case protected evaluation on that tree.
+5. Verify the exact-tree approval tag and required PR checks, then merge with the final-head guard.
+6. Monitor the `main` production workflow through immutable backend deployment, smoke/promotion, and Vercel deployment.
+7. Verify Cloud Run revision/digest/traffic and the public backend and Vercel frontend URLs.
 
 ## Repository and contributor notes
 
@@ -192,7 +231,8 @@ This effort is complete only when all of the following are true on authoritative
 - The final canonical run resolves every previously failing case.
 - One final canonical eight-case protected evaluation passes without manual review or infrastructure failure.
 - The exact Git tree has a valid protected-evaluation approval.
-- PR #37 is merged with the branch's two reviewed commits preserved.
+- PR #37, PR #38, and PR #39 remain present in `main` history.
+- The Kimi role-routing change is present in `main` and its first-pass acceptance evidence is recorded.
 - `main` deployment completes for the tested tree/digest.
 - Cloud Run serves the promoted revision and passes public health/smoke checks.
 - Vercel serves the current frontend deployment at the production alias.
