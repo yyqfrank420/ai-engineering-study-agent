@@ -490,11 +490,13 @@ def _has_applied_graph(graph_data: dict | None) -> bool:
 
 def _route_after_review(state: AgentState) -> Literal["accept", "revise", "reject"]:
     operation = state.get("graph_operation")
-    if isinstance(operation, dict) and operation.get("status") == "failed":
-        return "reject"
     graph = state.get("graph_data") or {}
-    if not state.get("graph_changed") or graph.get("design_origin") != "applied":
-        return "accept"
+    revision_count = int(state.get("graph_revision_count", 0))
+    if isinstance(operation, dict) and operation.get("status") == "failed" and revision_count == 0:
+        return "reject"
+    if not state.get("graph_changed"):
+        if revision_count == 0 or graph.get("design_origin") != "applied":
+            return "accept"
     review = state.get("graph_review") or {}
     repair_contract = review.get("repair_contract")
     if isinstance(repair_contract, dict):
@@ -513,15 +515,20 @@ def _route_after_review(state: AgentState) -> Literal["accept", "revise", "rejec
         return "accept"
     if (
         not review.get("terminal")
-        and int(state.get("graph_revision_count", 0)) < _MAX_GRAPH_REVISIONS
+        and revision_count < _MAX_GRAPH_REVISIONS
     ):
         return "revise"
     return "reject"
 
 
 def _route_after_revision(state: AgentState) -> Literal["review", "reject"]:
+    revision_count = int(state.get("graph_revision_count", 0))
     return (
-        "review" if state.get("graph_changed") and state.get("graph_data") else "reject"
+        "review"
+        if state.get("graph_data")
+        and revision_count > 0
+        and revision_count < _MAX_GRAPH_REVISIONS
+        else "reject"
     )
 
 

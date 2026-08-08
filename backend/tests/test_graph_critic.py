@@ -1485,6 +1485,35 @@ def test_repair_scope_controls_review_routing(scope, approved, expected):
 
 
 @pytest.mark.asyncio
+async def test_revision_node_reviews_unchanged_graphs_until_graph_changes(
+    monkeypatch,
+):
+    calls = []
+    graph = _domain_graph()
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return _structured_response(_passing_review_payload())
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+
+    result = await graph_critic_node(
+        {
+            **_critic_state(graph=graph),
+            "graph_changed": False,
+            "graph_revision_count": 1,
+            "graph_data": {**graph, "design_origin": "applied"},
+        }
+    )
+
+    assert calls
+    assert isinstance(result["graph_review"], dict)
+
+
+@pytest.mark.asyncio
 async def test_initial_local_rejection_gets_one_local_repair_pass(monkeypatch):
     calls = []
     graph = _domain_graph()
