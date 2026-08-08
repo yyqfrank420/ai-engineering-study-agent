@@ -23,6 +23,19 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+_SAFE_PROTOCOL_PATH = re.compile(r"[A-Za-z0-9_$.\[\]]{1,96}")
+_PROTOCOL_ERROR_RULES = {"invalid_enum", "missing_evidence"}
+
+
+class CriticProtocolError(ValueError):
+    """Expose safe validation coordinates without logging model-owned values."""
+
+    def __init__(self, message: str, *, path: str, rule: str) -> None:
+        super().__init__(message)
+        self.path = path if _SAFE_PROTOCOL_PATH.fullmatch(path) else None
+        self.rule = rule if rule in _PROTOCOL_ERROR_RULES else None
+
+
 _GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v36"
 # Sonnet 5 high effort can spend the full output allowance on adaptive thinking
 # before emitting the required scorecard. Medium keeps the review inside one call.
@@ -356,6 +369,12 @@ def _semantic_review_failure_code(exc: Exception, raw: str) -> str:
     return "semantic_review_unavailable"
 
 
+def _protocol_error_coordinates(exc: Exception) -> tuple[str | None, str | None]:
+    if not isinstance(exc, CriticProtocolError):
+        return None, None
+    return exc.path, exc.rule
+
+
 def _parse_complete_response(response: StructuredLLMResponse) -> dict[str, Any]:
     if response.finish_reason == "max_tokens":
         raise ValueError("semantic review output was truncated")
@@ -449,7 +468,11 @@ def _validate_witness_subgraph(
     path: str,
 ) -> None:
     if not evidence_edges or not route_pairs:
-        raise ValueError(f"{path} pass requires evidence edges and route pairs")
+        raise CriticProtocolError(
+            f"{path} pass requires evidence edges and route pairs",
+            path=path,
+            rule="missing_evidence",
+        )
     if len(evidence_edges) != len(set(evidence_edges)):
         raise ValueError(f"{path} evidence edges must not contain duplicates")
     if len(route_pairs) != len(set(route_pairs)):
@@ -578,6 +601,7 @@ def _canonicalise_review_protocol(
     graph: dict[str, Any],
     deterministic_findings: list[dict[str, str]],
     review_context: list[str],
+    require_topology_proofs: bool = True,
 ) -> dict[str, Any]:
     candidate = deepcopy(payload)
     deterministic_owners = _deterministic_finding_owners(deterministic_findings)
@@ -610,7 +634,11 @@ def _canonicalise_review_protocol(
         status = assessment.get("status")
         score = assessment.get("score")
         if status not in {"pass", "fail"}:
-            raise ValueError(f"{layer}.status must be pass or fail")
+            raise CriticProtocolError(
+                f"{layer}.status must be pass or fail",
+                path=f"layers.{layer}.status",
+                rule="invalid_enum",
+            )
         if (
             isinstance(score, bool)
             or not isinstance(score, (int, float))
@@ -781,6 +809,14 @@ def _canonicalise_review_protocol(
     ):
         raise ValueError("every deterministic finding must be classified exactly once")
 
+    if not require_topology_proofs:
+        return {
+            "repair_contract": {"repair_scope": scope, "layers": canonical_layers},
+            "strengths": [],
+            "advice": [],
+            "topology_proofs": [],
+        }
+
     model_proofs = candidate.get("topology_proofs")
     if (
         not isinstance(model_proofs, dict)
@@ -799,7 +835,11 @@ def _canonicalise_review_protocol(
         )
         status = proof.get("status")
         if status not in {"pass", "fail", "not_applicable"}:
-            raise ValueError(f"topology_proofs.{guarantee}.status is invalid")
+            raise CriticProtocolError(
+                f"topology_proofs.{guarantee}.status is invalid",
+                path=f"topology_proofs.{guarantee}.status",
+                rule="invalid_enum",
+            )
         indexes = _unique_model_indexes(
             proof.get("edge_indexes"),
             path=f"topology_proofs.{guarantee}.edge_indexes",
@@ -1193,6 +1233,7 @@ def _completed_critic_review(
         graph=graph,
         deterministic_findings=deterministic_findings,
         review_context=review_context,
+        require_topology_proofs=require_topology_proofs,
     )
     _validate_review_protocol(
         payload,
@@ -1440,9 +1481,13 @@ async def graph_critic_node(state: AgentState) -> AgentState:
                 == "semantic_review_output_truncated"
             ):
                 raise
+            error_path, error_rule = _protocol_error_coordinates(protocol_error)
             logger.warning(
-                "Critic protocol invalid; requesting one correction: type=%s",
+                "Critic protocol invalid; requesting one correction: "
+                "type=%s path=%s rule=%s",
                 type(protocol_error).__name__,
+                error_path,
+                error_rule,
             )
             response = await _request_critic_scorecard(
                 state,
@@ -1471,10 +1516,14 @@ async def graph_critic_node(state: AgentState) -> AgentState:
         # Structural checks cannot prove semantic control boundaries. Fail closed
         # rather than publishing a plausible but unaudited architecture.
         failure_code = _semantic_review_failure_code(exc, raw)
+        error_path, error_rule = _protocol_error_coordinates(exc)
         logger.warning(
-            "Model review unavailable; rejecting unaudited graph: type=%s code=%s",
+            "Model review unavailable; rejecting unaudited graph: "
+            "type=%s code=%s path=%s rule=%s",
             type(exc).__name__,
             failure_code,
+            error_path,
+            error_rule,
         )
         review = _reviewer_failure(
             failure_code=failure_code,
@@ -1871,11 +1920,15 @@ def _validate_review_protocol(
     ):
         failures.append("topology_proofs must be a JSON array of objects")
 
-    failed_proofs = [
-        proof
-        for proof in (topology_proofs or [])
-        if isinstance(proof, dict) and proof.get("status") == "fail"
-    ]
+    failed_proofs = (
+        [
+            proof
+            for proof in (topology_proofs or [])
+            if isinstance(proof, dict) and proof.get("status") == "fail"
+        ]
+        if require_topology_proofs
+        else []
+    )
     if failed_proofs and isinstance(payload.get("repair_contract"), dict):
         contract = payload["repair_contract"]
         layers = contract.get("layers")

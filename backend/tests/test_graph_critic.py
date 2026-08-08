@@ -6,6 +6,7 @@ from config import settings
 
 from adapters.llm_adapter import _anthropic_response_schema
 from agent.nodes.graph_critic import (
+    CriticProtocolError,
     _GRAPH_CRITIC_PROMPT_VERSION,
     _GRAPH_CRITIC_RESPONSE_SCHEMA,
     _GRAPH_CRITIC_SYSTEM,
@@ -150,6 +151,37 @@ def _passing_review_payload(*, strengths=None, advice=None, topology_proofs=None
             guarantee: ["not_applicable", [], []]
             for guarantee in sorted(_TOPOLOGY_PROOF_GUARANTEES)
         },
+    }
+
+
+async def _accept_diagram(graph):
+    return {
+        "screenshot_base64": "private-render",
+        "report": {
+            "rendered_nodes": len(graph["nodes"]),
+            "rendered_edges": len(graph["edges"]),
+            "overlap_count": 0,
+            "clipped_nodes": 0,
+            "clipped_edges": 0,
+            "minimum_text_px": 12,
+        },
+    }
+
+
+async def _ignore_event(_event):
+    return None
+
+
+def _critic_state(*, graph=None, complexity="prototype"):
+    return {
+        "graph_data": graph or _domain_graph(),
+        "graph_changed": True,
+        "user_message": "growth marketing multi-agent system",
+        "complexity": complexity,
+        "send": _ignore_event,
+        "await_diagram_evaluation": _accept_diagram,
+        "user_id": "user-1",
+        "session_id": "thread-1",
     }
 
 
@@ -379,6 +411,49 @@ def test_model_proof_rows_require_exact_status_and_edge_indexes(length):
             deterministic_findings=[],
             review_context=[],
         )
+
+
+def test_topology_proof_validation_follows_resolved_depth():
+    payload = _passing_review_payload()
+    guarantee = sorted(_TOPOLOGY_PROOF_GUARANTEES)[0]
+    payload["topology_proofs"][guarantee] = ["pass", [], []]
+
+    prototype = _canonicalise_review_protocol(
+        payload,
+        graph={},
+        deterministic_findings=[],
+        review_context=[],
+        require_topology_proofs=False,
+    )
+
+    assert prototype["topology_proofs"] == []
+    with pytest.raises(CriticProtocolError, match="pass requires evidence") as error:
+        _canonicalise_review_protocol(
+            payload,
+            graph={},
+            deterministic_findings=[],
+            review_context=[],
+            require_topology_proofs=True,
+        )
+    assert error.value.path == f"topology_proofs.{guarantee}"
+    assert error.value.rule == "missing_evidence"
+
+
+def test_protocol_errors_expose_only_safe_coordinates():
+    payload = _passing_review_payload()
+    _set_model_layer(payload, "components", status="PRIVATE_SENTINEL")
+
+    with pytest.raises(CriticProtocolError) as error:
+        _canonicalise_review_protocol(
+            payload,
+            graph={},
+            deterministic_findings=[],
+            review_context=[],
+        )
+
+    assert error.value.path == "layers.components.status"
+    assert error.value.rule == "invalid_enum"
+    assert "PRIVATE_SENTINEL" not in str(error.value)
 
 
 @pytest.mark.parametrize(
@@ -896,6 +971,10 @@ def test_failed_topology_proof_cannot_hide_behind_passing_layers():
         "reason": "The reconciliation path is incomplete.",
     }
 
+    _validate_review_protocol(
+        _protocol_review(proofs),
+        require_topology_proofs=False,
+    )
     with pytest.raises(ValueError, match="failed connections layer"):
         _validate_review_protocol(
             _protocol_review(proofs),
@@ -2724,6 +2803,74 @@ async def test_browser_render_time_is_deducted_from_one_absolute_critic_deadline
 
 
 @pytest.mark.asyncio
+async def test_prototype_critic_ignores_production_topology_proof_rows(monkeypatch):
+    calls = []
+    payload = _passing_review_payload()
+    for guarantee in _TOPOLOGY_PROOF_GUARANTEES:
+        payload["topology_proofs"][guarantee] = ["pass", [], []]
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return _structured_response(payload)
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+    result = await graph_critic_node(_critic_state())
+
+    assert result["graph_review"]["approved"] is True
+    assert result["graph_review"]["topology_proofs"] == []
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recovers", [True, False])
+async def test_protocol_correction_logs_safe_coordinates(
+    monkeypatch,
+    caplog,
+    recovers,
+):
+    invalid = _passing_review_payload()
+    _set_model_layer(invalid, "components", status="PRIVATE_SENTINEL")
+    valid = _passing_review_payload()
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        response = valid if recovers and len(calls) == 2 else invalid
+        return _structured_response(response)
+
+    caplog.set_level("WARNING", logger="agent.nodes.graph_critic")
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+    result = await graph_critic_node(_critic_state())
+
+    assert result["graph_review"]["approved"] is recovers
+    assert len(calls) == 2
+    assert "path=layers.components.status" in caplog.text
+    assert "rule=invalid_enum" in caplog.text
+    assert "PRIVATE_SENTINEL" not in caplog.text
+    if not recovers:
+        assert result["graph_review"]["terminal"] is True
+        terminal_logs = [
+            record.getMessage()
+            for record in caplog.records
+            if record.getMessage().startswith("Model review unavailable")
+        ]
+        assert len(terminal_logs) == 1
+        assert (
+            "path=layers.components.status rule=invalid_enum" in terminal_logs[0]
+        )
+        assert (
+            result["graph_review"]["failure_code"]
+            == "semantic_review_protocol_invalid"
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "invalid_payload",
     [
@@ -2815,6 +2962,13 @@ def _valid_protocol_topology_proofs(edge=None):
     ]
 
 
+def _valid_model_topology_proofs():
+    return {
+        guarantee: ["pass", [0], [[0, 1]]]
+        for guarantee in sorted(_TOPOLOGY_PROOF_GUARANTEES)
+    }
+
+
 def _protocol_review(topology_proofs):
     return {
         "repair_contract": _repair_contract(),
@@ -2865,38 +3019,43 @@ def test_production_critic_protocol_accepts_complete_topology_proofs():
 
 
 @pytest.mark.asyncio
-async def test_malformed_topology_proofs_get_one_bounded_correction(monkeypatch):
-    graph = _domain_graph()
-    edge = graph["edges"][0]
-    evidence_edge = {
-        "source": edge["source"],
-        "target": edge["target"],
-        "label": edge["label"],
+@pytest.mark.parametrize("recovers", [True, False])
+async def test_malformed_topology_proofs_get_one_bounded_correction(
+    monkeypatch,
+    caplog,
+    recovers,
+):
+    graph = {
+        "design_origin": "applied",
+        "nodes": [
+            {"id": "source_node", "label": "Source"},
+            {"id": "target_node", "label": "Target"},
+        ],
+        "edges": [
+            {
+                "source": "source_node",
+                "target": "target_node",
+                "label": "carries typed payload",
+            }
+        ],
+        "groups": [],
+        "sequence": [],
+        "assumptions": [],
     }
-    malformed = _valid_protocol_topology_proofs(evidence_edge)
-    malformed[-1]["guarantee"] = malformed[0]["guarantee"]
+    valid = _passing_review_payload(
+        topology_proofs=_valid_model_topology_proofs()
+    )
+    malformed = deepcopy(valid)
+    malformed_guarantee = sorted(_TOPOLOGY_PROOF_GUARANTEES)[0]
+    malformed["topology_proofs"][malformed_guarantee] = ["pass", [], []]
     calls = []
 
     async def fake_stream_llm(**kwargs):
         calls.append(kwargs)
-        return _structured_response(_protocol_review(malformed))
+        response = valid if recovers and len(calls) == 2 else malformed
+        return _structured_response(response)
 
-    async def await_diagram(candidate):
-        return {
-            "screenshot_base64": "private-render",
-            "report": {
-                "rendered_nodes": len(candidate["nodes"]),
-                "rendered_edges": len(candidate["edges"]),
-                "overlap_count": 0,
-                "clipped_nodes": 0,
-                "clipped_edges": 0,
-                "minimum_text_px": 12,
-            },
-        }
-
-    async def send(_event):
-        return None
-
+    caplog.set_level("WARNING", logger="agent.nodes.graph_critic")
     monkeypatch.setattr(
         "agent.nodes.graph_critic.stream_structured_llm",
         fake_stream_llm,
@@ -2913,23 +3072,27 @@ async def test_malformed_topology_proofs_get_one_bounded_correction(monkeypatch)
         },
     )
     result = await graph_critic_node(
-        {
-            "graph_data": graph,
-            "graph_changed": True,
-            "user_message": "production growth marketing multi-agent system",
-            "complexity": "production",
-            "send": send,
-            "await_diagram_evaluation": await_diagram,
-            "user_id": "user-1",
-            "session_id": "thread-1",
-        }
+        _critic_state(graph=graph, complexity="production")
     )
 
-    assert result["graph_review"]["approved"] is False
-    assert result["graph_review"]["terminal"] is True
-    assert result["graph_review"]["failure_code"] == "semantic_review_protocol_invalid"
-    assert result["graph_review"]["review_status"] == "unavailable"
+    assert result["graph_review"]["approved"] is recovers
+    assert result["graph_review"]["review_status"] == (
+        "completed" if recovers else "unavailable"
+    )
+    if recovers:
+        assert len(result["graph_review"]["topology_proofs"]) == len(
+            _TOPOLOGY_PROOF_GUARANTEES
+        )
+    else:
+        assert result["graph_review"]["terminal"] is True
+        assert (
+            result["graph_review"]["failure_code"]
+            == "semantic_review_protocol_invalid"
+        )
     assert len(calls) == 2
+    assert calls[1]["effort"] == "low"
+    assert f"path=topology_proofs.{malformed_guarantee}" in caplog.text
+    assert "rule=missing_evidence" in caplog.text
 
 
 @pytest.mark.asyncio
