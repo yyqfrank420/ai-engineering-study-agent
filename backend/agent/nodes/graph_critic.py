@@ -49,7 +49,7 @@ class CriticProtocolError(ValueError):
         self.rule = rule if rule in _PROTOCOL_ERROR_RULES else None
 
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v41"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v42"
 # Sonnet 5 high effort can spend the full output allowance on adaptive thinking
 # before emitting the required scorecard. Medium keeps the review inside one call.
 _GRAPH_CRITIC_EFFORT = "medium"
@@ -95,8 +95,6 @@ _RUBRIC_CODEBOOK = ", ".join(
 
 _MODEL_LAYER_FIELDS = {
     "components": (
-        "status",
-        "score",
         "finding_codes",
         "deterministic_finding_indexes",
         "context_indexes",
@@ -105,8 +103,6 @@ _MODEL_LAYER_FIELDS = {
         "addition_count",
     ),
     "connections": (
-        "status",
-        "score",
         "finding_codes",
         "deterministic_finding_indexes",
         "context_indexes",
@@ -115,8 +111,6 @@ _MODEL_LAYER_FIELDS = {
         "addition_count",
     ),
     "composition": (
-        "status",
-        "score",
         "finding_codes",
         "deterministic_finding_indexes",
         "context_indexes",
@@ -130,8 +124,6 @@ _MODEL_LAYER_FIELDS = {
         "assumption_addition_count",
     ),
     "render": (
-        "status",
-        "score",
         "finding_codes",
         "deterministic_finding_indexes",
         "context_indexes",
@@ -145,11 +137,7 @@ _MODEL_LAYER_OUTPUT_EXAMPLE = ",\n".join(
     + ": "
     + json.dumps(
         [
-            "pass"
-            if field == "status"
-            else 0.9
-            if field == "score"
-            else 0
+            0
             if field.endswith("addition_count")
             else []
             for field in fields
@@ -169,9 +157,7 @@ _MODEL_LAYER_ROW_SCHEMA = {
     "type": "array",
     "items": {
         "anyOf": [
-            {"type": "string"},
-            {"type": "number"},
-            {"type": "boolean"},
+            {"type": "integer"},
             {
                 "type": "array",
                 "items": {"anyOf": [{"type": "integer"}, {"type": "string"}]},
@@ -219,10 +205,6 @@ def _critic_response_schema(*, require_topology_proofs: bool) -> dict[str, Any]:
     return {
         **_strict_object_schema(
             {
-                "repair_scope": {
-                    "type": "string",
-                    "enum": ["none", "local", "global"],
-                },
                 "layers": _strict_object_schema(
                     {
                         layer: {"$ref": "#/$defs/layer_row"}
@@ -509,20 +491,6 @@ def _preflight_review_protocol(
             reject(row_path, "invalid_shape")
             continue
         assessment = dict(zip(fields, row, strict=True))
-        status = assessment["status"]
-        if not isinstance(status, str) or status.strip().lower() not in {
-            "pass",
-            "fail",
-        }:
-            reject(f"{row_path}.status", "invalid_enum")
-        score = assessment["score"]
-        if (
-            isinstance(score, bool)
-            or not isinstance(score, (int, float))
-            or not 0 <= float(score) <= 1
-        ):
-            reject(f"{row_path}.score", "invalid_range")
-
         finding_codes = assessment["finding_codes"]
         if not isinstance(finding_codes, list) or not all(
             isinstance(code, int)
@@ -586,17 +554,7 @@ def _preflight_review_protocol(
             elif len(value) != len(set(value)):
                 reject(f"{row_path}.composition_fields", "duplicate_reference")
 
-        normalized_status = status.strip().lower() if isinstance(status, str) else None
         has_blocker = bool(finding_codes or deterministic_indexes)
-        if normalized_status == "fail" and not has_blocker:
-            reject(row_path, "missing_finding")
-        if (
-            not has_blocker
-            and isinstance(score, (int, float))
-            and not isinstance(score, bool)
-            and float(score) < _APPROVAL_SCORE
-        ):
-            reject(row_path, "missing_finding")
         if not has_blocker and (
             valid_indexes.get("context_indexes")
             or valid_indexes.get("context_node_indexes")
@@ -878,12 +836,8 @@ def _canonicalise_review_protocol(
 ) -> dict[str, Any]:
     candidate = deepcopy(payload)
     deterministic_owners = _deterministic_finding_owners(deterministic_findings)
-    if set(candidate) != {"repair_scope", "layers", "topology_proofs"}:
+    if set(candidate) != {"layers", "topology_proofs"}:
         raise ValueError("critic scorecard must contain exactly the required fields")
-    _normalise_protocol_token(candidate, "repair_scope", "repair_scope")
-    scope = candidate.get("repair_scope")
-    if scope not in {"none", "local", "global"}:
-        raise ValueError("repair_scope must be none, local, or global")
 
     model_layers = candidate.get("layers")
     if not isinstance(model_layers, dict) or set(model_layers) != set(_REPAIR_LAYERS):
@@ -903,21 +857,6 @@ def _canonicalise_review_protocol(
         if not isinstance(row, list) or len(row) != len(fields):
             raise ValueError(f"{layer} scorecard row must contain {len(fields)} fields")
         assessment = dict(zip(fields, row, strict=True))
-        _normalise_protocol_token(assessment, "status", f"layers.{layer}.status")
-        status = assessment.get("status")
-        score = assessment.get("score")
-        if status not in {"pass", "fail"}:
-            raise CriticProtocolError(
-                f"{layer}.status must be pass or fail",
-                path=f"layers.{layer}.status",
-                rule="invalid_enum",
-            )
-        if (
-            isinstance(score, bool)
-            or not isinstance(score, (int, float))
-            or not 0 <= float(score) <= 1
-        ):
-            raise ValueError(f"{layer}.score must be between zero and one")
         finding_codes = _unique_model_rubric_codes(
             assessment.get("finding_codes"),
             path=f"layers.{layer}.finding_codes",
@@ -946,25 +885,10 @@ def _canonicalise_review_protocol(
             path=f"layers.{layer}.context_node_indexes",
             size=len(nodes),
         )
-        if status == "fail" and not finding_codes and not deterministic_indexes:
-            raise ValueError(f"failed {layer} layer requires a finding code")
-        derived_status = "fail" if finding_codes or deterministic_indexes else "pass"
-        if status != derived_status:
-            logger.info(
-                "Derived critic layer status from blockers: layer=%s model_status=%s "
-                "derived_status=%s",
-                layer,
-                status,
-                derived_status,
-            )
-        status = derived_status
+        status = "fail" if finding_codes or deterministic_indexes else "pass"
         if status == "pass" and (context_indexes or context_node_indexes):
             raise ValueError(f"passing {layer} layer cannot cite repair context")
-        score = (
-            float(score)
-            if status == "pass"
-            else min(float(score), _APPROVAL_SCORE - 0.01)
-        )
+        score = 1.0 if status == "pass" else 0.0
         context_findings = (
             [
                 _context_finding(
@@ -1097,14 +1021,7 @@ def _canonicalise_review_protocol(
     ):
         raise ValueError("every deterministic finding must be classified exactly once")
 
-    derived_scope = _repair_scope_for_layers(canonical_layers)
-    if scope != derived_scope:
-        logger.info(
-            "Derived critic repair scope from failed layers: model_scope=%s derived_scope=%s",
-            scope,
-            derived_scope,
-        )
-    scope = derived_scope
+    scope = _repair_scope_for_layers(canonical_layers)
 
     if not require_topology_proofs:
         return {
@@ -1278,7 +1195,7 @@ Compare the diagram with the user's exact request. Check all of the following:
 8. novice clarity: the screenshot makes the authored entry, main path, controls, and outcome easy to
    locate. Missing semantic records belong to their graph layer instead of render.
 9. logical flow: directed edge paths agree with the runtime behavior. Sequence ordering belongs to
-   authored composition and must be scored there.
+   authored composition and must be reviewed there.
 10. succinctness: node labels and responsibilities are concise rather than repetitive;
 11. MECE scope: major responsibilities have clear homes without needless duplicates, while
     cross-cutting evaluation, security, and observability may intentionally span components.
@@ -1373,7 +1290,7 @@ Use `finding_codes` only for a clear omission or defect that makes the diagram u
 unusable, or fails an explicit part of the user's request at the selected depth. The owner in the
 rubric codebook is authoritative. `components` owns node records. `connections` owns edge records.
 `composition` owns title, groups, sequence, and assumptions. `render` owns the screenshot and
-layout. These four ownership sets partition the mutable artifact. Score each layer against the full
+layout. These four ownership sets partition the mutable artifact. Review each layer against the full
 graph context, then classify the defect by the fields that must change. If one defect requires
 changes in multiple layers, fail each owner with a code assigned to that owner. Optional hardening or a
 different valid design preference must not produce a finding code or rejection. Accept consolidated
@@ -1382,8 +1299,6 @@ descriptions are expected.
 Review the architecture artifact only: prose answers, suggested follow-up questions, and other
 interaction elements are delivered downstream and do not belong in the diagram.
 
-Score anchors: 0.90-1.00 is clear and complete; 0.78-0.89 is publishable with optional advice;
-0.50-0.77 has a blocking omission; below 0.50 is unsafe, generic, or unusable.
 For an existing record defect, cite only the zero-based record indexes that may change. Use
 `node_indexes` only in components, `edge_indexes` only in connections, and `group_indexes`,
 `sequence_indexes`, `assumption_indexes`, plus `composition_fields` only in composition. A missing
@@ -1394,8 +1309,8 @@ context and never grant permission to mutate a record. Context supplements a fin
 not replace one.
 Each supplied deterministic finding names its authoritative `owner_layer`. Classify the finding
 under that layer by its zero-based packet index exactly once.
-A passing layer exposes no selectors or context and has no blockers. All four artifact layers are
-mandatory for every reviewed candidate and must be marked pass or fail.
+A layer with no finding codes or deterministic finding indexes exposes no selectors or context.
+All four artifact layers are mandatory for every reviewed candidate.
 Set each component or connection `addition_count` to the exact number of missing records required
 by the cited defect. Existing-record defects and every passing layer use zero. Context node indexes
 are read-only anchors for those additions. In composition, use the three addition-count fields for
@@ -1408,17 +1323,12 @@ editable existing group or a declared group addition. Every composition addition
 matching field in `composition_fields`. These are one repair plan across MECE owners, so fail every
 owner whose records must change.
 
-Set `repair_scope` to `none` when all four layers pass. Set it to `local` when components,
-connections, or composition fails, including a graph-caused render failure alongside an editable
-layer. Set it to `global` only when render is the sole failed layer and graph changes cannot repair
-the renderer.
 Copy every deterministic pre-review finding in the packet into the correct layer and localize it.
 </review_contract>
 
 <output_contract>
 Return one JSON object and nothing else:
 {
-  "repair_scope": "none|local|global",
   "layers": {
 <layer_output_example>
   },

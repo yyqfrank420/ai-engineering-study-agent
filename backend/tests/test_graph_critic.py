@@ -102,8 +102,6 @@ def _repair_contract(
 
 def _model_layer(layer):
     assessment = {
-        "status": "pass",
-        "score": 0.9,
         "finding_codes": [],
         "deterministic_finding_indexes": [],
         "context_indexes": [],
@@ -140,7 +138,6 @@ def _set_model_layer(payload, layer, **values):
 def _passing_review_payload(*, strengths=None, advice=None, topology_proofs=None):
     _ = strengths, advice
     return {
-        "repair_scope": "none",
         "layers": {
             layer: _model_layer(layer)
             for layer in (
@@ -193,7 +190,7 @@ def _critic_state(*, graph=None, complexity="prototype"):
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v41"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v42"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -307,7 +304,7 @@ def test_repair_layer_patch_fields_are_a_mece_partition():
     assert len(owners) == len(set(owners))
 
 
-def test_all_four_artifact_layers_must_be_scored():
+def test_internal_contract_requires_all_four_artifact_layers():
     contract = _repair_contract()
     for assessment in contract["layers"].values():
         assessment["status"] = "not_applicable"
@@ -324,6 +321,11 @@ def test_all_four_artifact_layers_must_be_scored():
         "render",
     ]
     assert layer_schema["properties"]["components"] == {"$ref": "#/$defs/layer_row"}
+    assert "repair_scope" not in _GRAPH_CRITIC_RESPONSE_SCHEMA["properties"]
+    assert all(
+        "status" not in fields and "score" not in fields
+        for fields in _MODEL_LAYER_FIELDS.values()
+    )
     assert (
         set(
             _GRAPH_CRITIC_RESPONSE_SCHEMA["properties"]["topology_proofs"]["properties"]
@@ -341,12 +343,9 @@ def test_model_indexes_are_expanded_to_exact_locked_selectors():
         "assumptions": [],
     }
     payload = _passing_review_payload()
-    payload["repair_scope"] = "local"
     _set_model_layer(
         payload,
         "connections",
-        status="fail",
-        score=0.7,
         finding_codes=[5],
         edge_indexes=[0],
     )
@@ -370,7 +369,7 @@ def test_model_indexes_are_expanded_to_exact_locked_selectors():
     _validate_repair_contract(normalized["repair_contract"], graph=graph)
 
 
-def test_model_status_and_score_are_derived_from_blockers():
+def test_layer_status_score_and_scope_are_derived_from_blockers():
     graph = {
         "nodes": [{"id": "intake"}, {"id": "gate"}],
         "edges": [{"source": "intake", "target": "gate", "label": "submit"}],
@@ -379,8 +378,6 @@ def test_model_status_and_score_are_derived_from_blockers():
     _set_model_layer(
         payload,
         "connections",
-        status="pass",
-        score=0.95,
         finding_codes=[5],
         edge_indexes=[0],
     )
@@ -395,25 +392,10 @@ def test_model_status_and_score_are_derived_from_blockers():
     layers = normalized["repair_contract"]["layers"]
 
     assert layers["connections"]["status"] == "fail"
-    assert layers["connections"]["score"] < 0.78
+    assert layers["connections"]["score"] == 0.0
     assert layers["components"]["status"] == "pass"
-    assert layers["components"]["score"] == 0.9
-
-
-def test_scorecard_preflight_rejects_low_score_without_a_blocker():
-    payload = _passing_review_payload(topology_proofs={})
-    _set_model_layer(payload, "components", score=0.0)
-
-    with pytest.raises(CriticProtocolError) as caught:
-        _preflight_review_protocol(
-            payload,
-            graph={},
-            deterministic_findings=[],
-            review_context=[],
-        )
-
-    assert caught.value.path == "layers.components"
-    assert caught.value.rule == "missing_finding"
+    assert layers["components"]["score"] == 1.0
+    assert normalized["repair_contract"]["repair_scope"] == "local"
 
 
 def test_scorecard_preflight_reports_independent_row_defects_together():
@@ -464,8 +446,6 @@ async def test_protocol_correction_receives_all_repair_algebra_defects(monkeypat
     _set_model_layer(
         invalid,
         "connections",
-        status="fail",
-        score=0.7,
         finding_codes=[connection_code],
         addition_count=1,
     )
@@ -581,7 +561,8 @@ def test_topology_proof_validation_follows_resolved_depth():
 
 def test_protocol_errors_expose_only_safe_coordinates():
     payload = _passing_review_payload()
-    _set_model_layer(payload, "components", status="PRIVATE_SENTINEL")
+    guarantee = sorted(_TOPOLOGY_PROOF_GUARANTEES)[0]
+    payload["topology_proofs"][guarantee] = ["PRIVATE_SENTINEL", [], []]
 
     with pytest.raises(CriticProtocolError) as error:
         _canonicalise_review_protocol(
@@ -591,7 +572,7 @@ def test_protocol_errors_expose_only_safe_coordinates():
             review_context=[],
         )
 
-    assert error.value.path == "layers.components.status"
+    assert error.value.path == f"topology_proofs.{guarantee}.status"
     assert error.value.rule == "invalid_enum"
     assert "PRIVATE_SENTINEL" not in str(error.value)
 
@@ -599,8 +580,6 @@ def test_protocol_errors_expose_only_safe_coordinates():
 @pytest.mark.parametrize(
     ("layer", "field", "value", "match"),
     [
-        ("components", "status", True, "status must be pass or fail"),
-        ("components", "score", "0.9", "score must be between zero and one"),
         ("components", "finding_codes", 1, "unknown rubric code"),
         ("components", "node_indexes", ["0"], "valid zero-based indexes"),
         ("composition", "composition_fields", [0], "unknown token"),
@@ -625,12 +604,9 @@ def test_model_layer_rows_reject_position_type_swaps(layer, field, value, match)
 )
 def test_model_rubric_codes_reject_values_outside_the_numbered_codebook(codes):
     payload = _passing_review_payload()
-    payload["repair_scope"] = "local"
     _set_model_layer(
         payload,
         "components",
-        status="fail",
-        score=0.7,
         finding_codes=codes,
     )
 
@@ -645,12 +621,9 @@ def test_model_rubric_codes_reject_values_outside_the_numbered_codebook(codes):
 
 def test_model_rubric_codes_reject_duplicates():
     payload = _passing_review_payload()
-    payload["repair_scope"] = "local"
     _set_model_layer(
         payload,
         "components",
-        status="fail",
-        score=0.7,
         finding_codes=[1, 1],
     )
 
@@ -665,14 +638,13 @@ def test_model_rubric_codes_reject_duplicates():
 
 def test_every_numbered_rubric_code_expands_to_its_canonical_finding():
     payload = _passing_review_payload()
-    payload["repair_scope"] = "local"
     for layer in _MODEL_LAYER_FIELDS:
         owned_codes = [
             index
             for index, code in enumerate(_RUBRIC_CODES, start=1)
             if _RUBRIC_CODE_OWNERS[code] == layer
         ]
-        values = {"status": "fail", "score": 0.7, "finding_codes": owned_codes}
+        values = {"finding_codes": owned_codes}
         if layer == "composition":
             values["composition_fields"] = ["assumptions"]
         _set_model_layer(payload, layer, **values)
@@ -703,8 +675,7 @@ def test_every_numbered_rubric_code_expands_to_its_canonical_finding():
 )
 def test_rubric_codes_cannot_unlock_a_layer_they_do_not_own(layer, code, owner):
     payload = _passing_review_payload()
-    payload["repair_scope"] = "local"
-    values = {"status": "fail", "score": 0.7, "finding_codes": [code]}
+    values = {"finding_codes": [code]}
     if layer == "composition":
         values["composition_fields"] = ["assumptions"]
     _set_model_layer(payload, layer, **values)
@@ -730,12 +701,9 @@ def test_failed_topology_proof_requires_connections_code_17(finding_codes):
     payload = _passing_review_payload()
     guarantee = sorted(_TOPOLOGY_PROOF_GUARANTEES)[0]
     payload["topology_proofs"][guarantee] = ["fail", [], []]
-    payload["repair_scope"] = "local"
     _set_model_layer(
         payload,
         "connections",
-        status="fail",
-        score=0.7,
         finding_codes=finding_codes,
         context_node_indexes=[0, 1],
         addition_count=1,
@@ -849,12 +817,9 @@ def test_missing_record_context_is_actionable_without_unlocking_node_anchors():
         "assumptions": [],
     }
     payload = _passing_review_payload()
-    payload["repair_scope"] = "local"
     _set_model_layer(
         payload,
         "connections",
-        status="fail",
-        score=0.7,
         finding_codes=[4],
         context_indexes=[0],
         context_node_indexes=[0, 1],
@@ -898,12 +863,9 @@ def test_repair_context_rejects_out_of_range_indexes(field, value, match):
         "assumptions": [],
     }
     payload = _passing_review_payload()
-    payload["repair_scope"] = "local"
     _set_model_layer(
         payload,
         "components",
-        status="fail",
-        score=0.7,
         finding_codes=[1],
         **{field: value},
     )
@@ -939,12 +901,9 @@ def test_model_index_arrays_reject_duplicates_before_locking():
         "assumptions": [],
     }
     payload = _passing_review_payload()
-    payload["repair_scope"] = "local"
     _set_model_layer(
         payload,
         "components",
-        status="fail",
-        score=0.7,
         finding_codes=[1],
         node_indexes=[0, 0],
     )
@@ -994,12 +953,9 @@ def test_feedback_edge_finding_cannot_fail_components_while_connections_passes()
     assert deterministic_findings[0]["owner_layer"] == "connections"
 
     payload = _passing_review_payload()
-    payload["repair_scope"] = "local"
     _set_model_layer(
         payload,
         "components",
-        status="fail",
-        score=0.7,
         deterministic_finding_indexes=[0],
     )
 
@@ -1084,58 +1040,38 @@ def test_render_only_failure_cannot_enter_local_patch_lane():
         _validate_repair_contract(contract, graph={})
 
 
-def test_protocol_tokens_are_normalized_without_touching_record_identity():
+def test_model_payload_rejects_server_owned_repair_fields():
     payload = _passing_review_payload()
-    payload["repair_scope"] = " LOCAL "
-    _set_model_layer(payload, "components", status=" PASS ")
-    _set_model_layer(
-        payload,
-        "composition",
-        status=" FAIL ",
-        score=0.7,
-        finding_codes=[12],
-        composition_fields=["groups"],
-    )
+    payload["repair_scope"] = "local"
 
-    normalized = _canonicalise_review_protocol(
-        payload, graph={}, deterministic_findings=[], review_context=[]
-    )
-
-    assert normalized["repair_contract"]["repair_scope"] == "local"
-    assert normalized["repair_contract"]["layers"]["components"]["status"] == "pass"
-    assert normalized["repair_contract"]["layers"]["composition"][
-        "composition_fields"
-    ] == ["groups"]
+    with pytest.raises(ValueError, match="exactly the required fields"):
+        _canonicalise_review_protocol(
+            payload, graph={}, deterministic_findings=[], review_context=[]
+        )
 
 
 @pytest.mark.parametrize(
-    ("model_scope", "failed_layer", "expected_scope", "expected_route"),
+    ("failed_layer", "expected_scope", "expected_route"),
     [
-        ("global", "connections", "local", "revise"),
-        ("local", "render", "global", "reject"),
-        ("global", None, "none", "accept"),
+        ("connections", "local", "revise"),
+        ("render", "global", "reject"),
+        (None, "none", "accept"),
     ],
 )
 def test_repair_scope_is_derived_from_failed_layer_ownership(
-    model_scope,
     failed_layer,
     expected_scope,
     expected_route,
 ):
     graph = _domain_graph()
     payload = _passing_review_payload()
-    payload["repair_scope"] = model_scope
     if failed_layer is not None:
         finding_code = next(
             index
             for index, code in enumerate(_RUBRIC_CODES, start=1)
             if _RUBRIC_CODE_OWNERS[code] == failed_layer
         )
-        values = {
-            "status": "fail",
-            "score": 0.7,
-            "finding_codes": [finding_code],
-        }
+        values = {"finding_codes": [finding_code]}
         if failed_layer == "connections":
             values["edge_indexes"] = [0]
         _set_model_layer(
@@ -1322,12 +1258,9 @@ async def test_initial_local_rejection_gets_one_monotonic_completion_pass(monkey
     async def fake_stream_llm(**kwargs):
         calls.append(kwargs)
         payload = _passing_review_payload()
-        payload["repair_scope"] = "local"
         _set_model_layer(
             payload,
             "connections",
-            status="fail",
-            score=0.7,
             finding_codes=[connection_code],
             edge_indexes=[0] if len(calls) == 1 else [0, 1],
         )
@@ -1354,9 +1287,8 @@ async def test_initial_local_rejection_gets_one_monotonic_completion_pass(monkey
 async def test_protocol_correction_is_the_clean_completion_pass(monkeypatch):
     calls = []
     invalid = _passing_review_payload()
-    _set_model_layer(invalid, "components", status="invalid")
+    _set_model_layer(invalid, "components", finding_codes="invalid")
     local = _passing_review_payload()
-    local["repair_scope"] = "local"
     connection_code = next(
         index
         for index, code in enumerate(_RUBRIC_CODES, start=1)
@@ -1365,8 +1297,6 @@ async def test_protocol_correction_is_the_clean_completion_pass(monkeypatch):
     _set_model_layer(
         local,
         "connections",
-        status="fail",
-        score=0.7,
         finding_codes=[connection_code],
         edge_indexes=[0],
     )
@@ -1441,12 +1371,9 @@ async def test_final_review_can_reopen_an_unchanged_layer_after_a_local_repair(
 
     async def fake_stream_llm(**_kwargs):
         payload = _passing_review_payload()
-        payload["repair_scope"] = "local"
         _set_model_layer(
             payload,
             "components",
-            status="fail",
-            score=0.7,
             finding_codes=[component_code],
             node_indexes=[0],
         )
@@ -2824,12 +2751,9 @@ async def test_deterministic_domain_findings_reach_semantic_localization(monkeyp
     async def fake_stream_llm(**kwargs):
         calls.append(kwargs)
         payload = _passing_review_payload()
-        payload["repair_scope"] = "local"
         _set_model_layer(
             payload,
             "components",
-            status="fail",
-            score=0.7,
             finding_codes=[1],
             deterministic_finding_indexes=[0],
             node_indexes=[0],
@@ -3049,7 +2973,7 @@ async def test_protocol_correction_logs_safe_coordinates(
     recovers,
 ):
     invalid = _passing_review_payload()
-    _set_model_layer(invalid, "components", status="PRIVATE_SENTINEL")
+    _set_model_layer(invalid, "components", finding_codes="PRIVATE_SENTINEL")
     valid = _passing_review_payload()
     calls = []
     events = []
@@ -3073,8 +2997,8 @@ async def test_protocol_correction_logs_safe_coordinates(
 
     assert result["graph_review"]["approved"] is recovers
     assert len(calls) == 2
-    assert "path=layers.components.status" in caplog.text
-    assert "rule=invalid_enum" in caplog.text
+    assert "path=layers.components.finding_codes" in caplog.text
+    assert "rule=invalid_reference" in caplog.text
     assert "PRIVATE_SENTINEL" not in caplog.text
     if not recovers:
         assert result["graph_review"]["terminal"] is True
@@ -3085,7 +3009,8 @@ async def test_protocol_correction_logs_safe_coordinates(
         ]
         assert len(terminal_logs) == 1
         assert (
-            "path=layers.components.status rule=invalid_enum" in terminal_logs[0]
+            "path=layers.components.finding_codes rule=invalid_reference"
+            in terminal_logs[0]
         )
         assert (
             result["graph_review"]["failure_code"]
@@ -3093,8 +3018,8 @@ async def test_protocol_correction_logs_safe_coordinates(
         )
         review_event = events[-1]
         assert review_event["validation_stage"] == "correction"
-        assert review_event["validation_path"] == "layers.components.status"
-        assert review_event["validation_rule"] == "invalid_enum"
+        assert review_event["validation_path"] == "layers.components.finding_codes"
+        assert review_event["validation_rule"] == "invalid_reference"
 
 
 @pytest.mark.asyncio
@@ -3450,7 +3375,6 @@ async def test_valid_first_semantic_review_uses_one_call(monkeypatch):
 
 def test_semantic_review_wire_has_only_fixed_scorecard_fields():
     assert set(_GRAPH_CRITIC_RESPONSE_SCHEMA["properties"]) == {
-        "repair_scope",
         "layers",
         "topology_proofs",
     }
@@ -3459,6 +3383,13 @@ def test_semantic_review_wire_has_only_fixed_scorecard_fields():
     assert '"reason"' not in schema_text
     assert '"strengths"' not in schema_text
     assert '"advice"' not in schema_text
+    row_item_types = {
+        option["type"]
+        for option in _GRAPH_CRITIC_RESPONSE_SCHEMA["$defs"]["layer_row"]["items"][
+            "anyOf"
+        ]
+    }
+    assert row_item_types == {"integer", "array"}
 
 
 def test_semantic_review_failure_classifies_truncated_protocol_output():
