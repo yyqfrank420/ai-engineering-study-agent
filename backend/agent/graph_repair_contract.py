@@ -559,12 +559,16 @@ def validate_repair_contract(
         )
     if len(classified_deterministic_ids) != len(set(classified_deterministic_ids)):
         failures.append("each deterministic finding ID must be classified exactly once")
-    if deterministic_finding_owners is not None and set(
-        classified_deterministic_ids
-    ) != set(deterministic_finding_owners):
-        failures.append(
-            "every supplied deterministic finding ID must be classified exactly once"
+    if deterministic_finding_owners is not None:
+        unknown_deterministic_ids = set(classified_deterministic_ids) - set(
+            deterministic_finding_owners
         )
+        if unknown_deterministic_ids:
+            failures.append("classified deterministic finding IDs must be supplied")
+        if deterministic_finding_owners and not classified_deterministic_ids:
+            failures.append(
+                "the active repair region must classify a deterministic finding"
+            )
     components = layers.get("components") if isinstance(layers, dict) else None
     connections = layers.get("connections") if isinstance(layers, dict) else None
     composition = layers.get("composition") if isinstance(layers, dict) else None

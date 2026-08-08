@@ -193,7 +193,7 @@ def _critic_state(*, graph=None, complexity="prototype"):
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v43"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v44"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -1224,6 +1224,67 @@ def test_feedback_edge_finding_cannot_fail_components_while_connections_passes()
         )
 
 
+def test_scorecard_can_defer_deterministic_findings_outside_active_region():
+    graph = {
+        "nodes": [
+            {"id": "a", "label": "A"},
+            {"id": "b", "label": "B"},
+            {"id": "c", "label": "C"},
+            {"id": "d", "label": "D"},
+        ],
+        "edges": [
+            {"source": "a", "target": "b", "label": "first"},
+            {"source": "c", "target": "d", "label": "second"},
+        ],
+        "groups": [],
+        "sequence": [],
+        "assumptions": [],
+    }
+    deterministic_findings = [
+        {
+            "id": "deterministic_1",
+            "owner_layer": "connections",
+            "finding": "Repair the first route.",
+        },
+        {
+            "id": "deterministic_2",
+            "owner_layer": "connections",
+            "finding": "Repair the disconnected second route later.",
+        },
+    ]
+    payload = _passing_review_payload()
+    _set_model_layer(
+        payload,
+        "connections",
+        deterministic_finding_indexes=[0],
+        edge_indexes=[0],
+    )
+
+    _preflight_review_protocol(
+        payload,
+        graph=graph,
+        deterministic_findings=deterministic_findings,
+        review_context=[],
+    )
+    canonical = _canonicalise_review_protocol(
+        payload,
+        graph=graph,
+        deterministic_findings=deterministic_findings,
+        review_context=[],
+        require_topology_proofs=False,
+    )
+    _validate_review_protocol(
+        canonical,
+        require_topology_proofs=False,
+        graph=graph,
+        deterministic_findings=deterministic_findings,
+    )
+
+    assert canonical["repair_contract"]["layers"]["connections"][
+        "deterministic_finding_ids"
+    ] == ["deterministic_1"]
+
+
 def test_repair_contract_validation_enforces_deterministic_finding_owner():
     finding_id = "deterministic_1"
     contract = _repair_contract(
@@ -1490,7 +1551,7 @@ async def test_disconnected_local_repair_skips_patch_admission(monkeypatch):
             payload,
             "connections",
             finding_codes=[connection_code],
-            edge_indexes=[0, 1],
+            edge_indexes=[0, 1] if len(calls) == 1 else [0],
         )
         return _structured_response(payload)
 
@@ -1501,9 +1562,20 @@ async def test_disconnected_local_repair_skips_patch_admission(monkeypatch):
 
     review = (await graph_critic_node(_critic_state(graph=graph)))["graph_review"]
 
-    assert len(calls) == 1
-    assert review["terminal"] is True
-    assert review["failure_code"] == "graph_repair_nonlocal"
+    assert len(calls) == 2
+    assert review.get("terminal") is not True
+    assert review["repair_contract"]["repair_scope"] == "local"
+    assert review["repair_contract"]["layers"]["connections"][
+        "edge_selectors"
+    ] == [
+        {
+            "source": graph["edges"][0]["source"],
+            "target": graph["edges"][0]["target"],
+            "label": graph["edges"][0]["label"],
+        }
+    ]
+    correction = calls[1]["messages"][0]["content"][-1]["text"]
+    assert "one admissible region" in correction
 
 
 @pytest.mark.asyncio
