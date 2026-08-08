@@ -96,8 +96,44 @@ def test_failed_review_gets_up_to_three_bounded_revisions():
         )
         == "reject"
     )
-    assert _route_after_revision({**failed, "graph_changed": True}) == "review"
+    assert (
+        _route_after_revision({**failed, "graph_revision_count": 1, "graph_changed": True})
+        == "review"
+    )
     assert _route_after_revision({**failed, "graph_changed": False}) == "reject"
+
+
+def test_failed_revision_no_graph_change_stays_in_repair_loop():
+    from agent.graph import _route_after_review, _route_after_revision
+
+    state = {
+        "graph_changed": False,
+        "graph_data": {"design_origin": "applied", "nodes": [], "edges": []},
+        "graph_revision_count": 1,
+        "graph_review": {
+            "approved": False,
+            "terminal": False,
+        },
+        "graph_operation": {"status": "failed", "kind": "create", "failure_code": "graph_patch_no_effect"},
+    }
+
+    assert _route_after_review(state) == "revise"
+    assert _route_after_revision(state) == "review"
+
+
+def test_initial_revision_failures_still_reject_without_graph_change():
+    from agent.graph import _route_after_review, _route_after_revision
+
+    state = {
+        "graph_changed": False,
+        "graph_data": {"nodes": [], "edges": []},
+        "graph_revision_count": 0,
+        "graph_review": {"approved": True, "terminal": False},
+        "graph_operation": {"status": "failed", "kind": "create", "failure_code": "graph_design_rejected"},
+    }
+
+    assert _route_after_review(state) == "reject"
+    assert _route_after_revision(state) == "reject"
 
 
 def test_patch_admission_uses_available_time_after_following_reserve():

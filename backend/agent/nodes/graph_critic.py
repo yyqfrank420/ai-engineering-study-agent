@@ -1499,11 +1499,10 @@ def _completed_critic_review(
 async def graph_critic_node(state: AgentState) -> AgentState:
     graph = state.get("graph_data")
     query = state.get("design_query") or state.get("user_message", "")
-    if (
-        not graph
-        or not state.get("graph_changed")
-        or graph.get("design_origin") != "applied"
-    ):
+    if not graph or graph.get("design_origin") != "applied":
+        return {**state, "graph_review": {"approved": True, "score": 1.0}}
+    revision_count = int(state.get("graph_revision_count", 0))
+    if revision_count == 0 and not state.get("graph_changed"):
         return {**state, "graph_review": {"approved": True, "score": 1.0}}
 
     profile = resolve_complexity(state.get("complexity", "auto"), query)
