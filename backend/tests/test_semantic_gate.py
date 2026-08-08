@@ -340,14 +340,15 @@ async def test_anthropic_judge_uses_direct_structured_output_schema(monkeypatch)
         constructor_calls.append(kwargs)
         return client
 
-    monkeypatch.setattr("eval.judge_adapter.AsyncAnthropic", fake_anthropic)
+    monkeypatch.setattr("eval.judge_adapter.create_anthropic_client", fake_anthropic)
+    monkeypatch.setattr("eval.judge_adapter.get_posthog_client", lambda: None)
     monkeypatch.setenv("EVAL_JUDGE_PROVIDER", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-test-key")
     monkeypatch.delenv("EVAL_JUDGE_MODEL", raising=False)
 
     judgment = await SemanticJudge().judge(corpus, case, {"answer": "Artifact text."})
 
-    assert constructor_calls == [{"api_key": "anthropic-test-key", "max_retries": 0}]
+    assert constructor_calls == [{"api_key": "anthropic-test-key"}]
     request = create.await_args.kwargs
     assert request["model"] == DEFAULT_ANTHROPIC_JUDGE_MODEL
     assert request["max_tokens"] == 8192
@@ -369,6 +370,7 @@ async def test_anthropic_judge_uses_direct_structured_output_schema(monkeypatch)
     assert "minItems" not in __import__("json").dumps(anthropic_schema)
     assert "maxItems" not in __import__("json").dumps(anthropic_schema)
     assert "response_format" not in request
+    assert "posthog_properties" not in request
     assert judgment.provider == "anthropic"
     assert judgment.model == DEFAULT_ANTHROPIC_JUDGE_MODEL
     assert judgment.input_tokens == 123
@@ -409,7 +411,8 @@ async def test_anthropic_judge_prefers_eval_judge_api_key(monkeypatch):
         constructor_calls.append(kwargs)
         return client
 
-    monkeypatch.setattr("eval.judge_adapter.AsyncAnthropic", fake_anthropic)
+    monkeypatch.setattr("eval.judge_adapter.create_anthropic_client", fake_anthropic)
+    monkeypatch.setattr("eval.judge_adapter.get_posthog_client", lambda: None)
     monkeypatch.setenv("EVAL_JUDGE_PROVIDER", "anthropic")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setenv("EVAL_JUDGE_API_KEY", "anthropic-fallback-key")
@@ -417,7 +420,7 @@ async def test_anthropic_judge_prefers_eval_judge_api_key(monkeypatch):
 
     await SemanticJudge().judge(corpus, case, {"answer": "Artifact text."})
 
-    assert constructor_calls == [{"api_key": "anthropic-fallback-key", "max_retries": 0}]
+    assert constructor_calls == [{"api_key": "anthropic-fallback-key"}]
 
 
 def test_semantic_replay_reuses_only_identity_bound_valid_judgments(tmp_path):
@@ -498,9 +501,10 @@ def test_semantic_judge_defaults_to_sonnet_5(monkeypatch):
     monkeypatch.delenv("EVAL_JUDGE_MODEL", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-test-key")
     monkeypatch.setattr(
-        "eval.judge_adapter.AsyncAnthropic",
+        "eval.judge_adapter.create_anthropic_client",
         lambda **_kwargs: client,
     )
+    monkeypatch.setattr("eval.judge_adapter.get_posthog_client", lambda: None)
 
     judge = SemanticJudge()
 
@@ -534,9 +538,10 @@ async def test_anthropic_judge_rejects_non_structured_responses(
     )
     client = SimpleNamespace(messages=SimpleNamespace(create=create))
     monkeypatch.setattr(
-        "eval.judge_adapter.AsyncAnthropic",
+        "eval.judge_adapter.create_anthropic_client",
         lambda **_kwargs: client,
     )
+    monkeypatch.setattr("eval.judge_adapter.get_posthog_client", lambda: None)
 
     with pytest.raises(RuntimeError, match=message):
         await SemanticJudge(

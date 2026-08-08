@@ -56,41 +56,62 @@ def get_posthog_client():
     return client
 
 
-@lru_cache(maxsize=1)
-def _get_anthropic_client():
+def create_anthropic_client(*, api_key: str):
+    """Create an Anthropic client with optional PostHog instrumentation."""
+    posthog_client = get_posthog_client()
+    if posthog_client is None:
+        from anthropic import AsyncAnthropic
+
+        return AsyncAnthropic(api_key=api_key, max_retries=0)
+
     from posthog.ai.anthropic import AsyncAnthropic
 
     return AsyncAnthropic(
-        api_key=settings.anthropic_api_key,
+        api_key=api_key,
         max_retries=0,
-        posthog_client=get_posthog_client(),
+        posthog_client=posthog_client,
     )
+
+
+def create_openai_client(*, api_key: str, base_url: str | None = None):
+    """Create an OpenAI-compatible client with optional PostHog instrumentation."""
+    client_kwargs: dict[str, object] = {
+        "api_key": api_key,
+        "max_retries": 0,
+    }
+    if base_url is not None:
+        client_kwargs["base_url"] = base_url
+
+    posthog_client = get_posthog_client()
+    if posthog_client is None:
+        from openai import AsyncOpenAI
+
+        return AsyncOpenAI(**client_kwargs)
+
+    from posthog.ai.openai import AsyncOpenAI
+
+    return AsyncOpenAI(**client_kwargs, posthog_client=posthog_client)
+
+
+@lru_cache(maxsize=1)
+def _get_anthropic_client():
+    return create_anthropic_client(api_key=settings.anthropic_api_key)
 
 
 @lru_cache(maxsize=1)
 def _get_openai_client():
     if not settings.openai_api_key:
         return None
-    from posthog.ai.openai import AsyncOpenAI
-
-    return AsyncOpenAI(
-        api_key=settings.openai_api_key,
-        max_retries=0,
-        posthog_client=get_posthog_client(),
-    )
+    return create_openai_client(api_key=settings.openai_api_key)
 
 
 @lru_cache(maxsize=1)
 def _get_kimi_client():
     if not settings.moonshot_api_key:
         return None
-    from posthog.ai.openai import AsyncOpenAI
-
-    return AsyncOpenAI(
+    return create_openai_client(
         api_key=settings.moonshot_api_key,
         base_url=settings.moonshot_base_url,
-        max_retries=0,
-        posthog_client=get_posthog_client(),
     )
 
 # Maps Anthropic model name → OpenAI fallback model name.
@@ -352,12 +373,13 @@ async def _chat_completions_stream(
                 "schema": response_schema,
             },
         }
-    if posthog_distinct_id:
-        kwargs["posthog_distinct_id"] = posthog_distinct_id
-    if posthog_trace_id:
-        kwargs["posthog_trace_id"] = posthog_trace_id
-    if posthog_properties:
-        kwargs["posthog_properties"] = posthog_properties
+    if get_posthog_client() is not None:
+        if posthog_distinct_id:
+            kwargs["posthog_distinct_id"] = posthog_distinct_id
+        if posthog_trace_id:
+            kwargs["posthog_trace_id"] = posthog_trace_id
+        if posthog_properties:
+            kwargs["posthog_properties"] = posthog_properties
     # posthog-python's OpenAI wrapper has no kwarg to override the detected
     # provider, so Kimi calls (routed through it via Moonshot's base_url) are
     # attributed to "openai" in PostHog's own $ai_provider field. The app's
@@ -592,12 +614,13 @@ async def stream_response(
         "system":     [system_block],
         "messages":   messages,
     }
-    if posthog_distinct_id:
-        kwargs["posthog_distinct_id"] = posthog_distinct_id
-    if posthog_trace_id:
-        kwargs["posthog_trace_id"] = posthog_trace_id
-    if posthog_properties:
-        kwargs["posthog_properties"] = posthog_properties
+    if get_posthog_client() is not None:
+        if posthog_distinct_id:
+            kwargs["posthog_distinct_id"] = posthog_distinct_id
+        if posthog_trace_id:
+            kwargs["posthog_trace_id"] = posthog_trace_id
+        if posthog_properties:
+            kwargs["posthog_properties"] = posthog_properties
     uses_adaptive_effort = _uses_adaptive_effort(model)
     effective_effort = effort or _effort_from_legacy_budget(thinking_budget)
     if uses_adaptive_effort:

@@ -112,12 +112,12 @@ def test_get_posthog_client_constructs_when_configured(monkeypatch):
 def test_lazy_clients_and_semaphore_branches(monkeypatch):
     import adapters.llm_adapter as llm
 
-    class _PosthogAnthropicModule:
+    class _AnthropicModule:
         class AsyncAnthropic:
             def __init__(self, **kwargs):
                 self.kwargs = kwargs
 
-    class _PosthogOpenAIModule:
+    class _OpenAIModule:
         class AsyncOpenAI:
             def __init__(self, **kwargs):
                 self.kwargs = kwargs
@@ -125,8 +125,8 @@ def test_lazy_clients_and_semaphore_branches(monkeypatch):
     llm._get_anthropic_client.cache_clear()
     llm._get_openai_client.cache_clear()
     llm._get_kimi_client.cache_clear()
-    monkeypatch.setitem(sys.modules, "posthog.ai.anthropic", _PosthogAnthropicModule)
-    monkeypatch.setitem(sys.modules, "posthog.ai.openai", _PosthogOpenAIModule)
+    monkeypatch.setitem(sys.modules, "anthropic", _AnthropicModule)
+    monkeypatch.setitem(sys.modules, "openai", _OpenAIModule)
     monkeypatch.setattr(llm, "get_posthog_client", lambda: None)
     monkeypatch.setattr(settings, "anthropic_api_key", "anthropic-key")
     monkeypatch.setattr(settings, "openai_api_key", "")
@@ -135,7 +135,6 @@ def test_lazy_clients_and_semaphore_branches(monkeypatch):
     assert llm._get_anthropic_client().kwargs == {
         "api_key": "anthropic-key",
         "max_retries": 0,
-        "posthog_client": None,
     }
     assert llm._get_openai_client() is None
     assert llm._get_anthropic_stream_semaphore() is None
@@ -147,7 +146,6 @@ def test_lazy_clients_and_semaphore_branches(monkeypatch):
     assert llm._get_openai_client().kwargs == {
         "api_key": "openai-key",
         "max_retries": 0,
-        "posthog_client": None,
     }
     first = llm._get_anthropic_stream_semaphore()
     second = llm._get_anthropic_stream_semaphore()
@@ -159,12 +157,12 @@ def test_kimi_client_uses_the_moonshot_openai_compatible_endpoint(monkeypatch):
 
     calls = []
 
-    class _PosthogOpenAIModule:
+    class _OpenAIModule:
         class AsyncOpenAI:
             def __init__(self, **kwargs):
                 calls.append(kwargs)
 
-    monkeypatch.setitem(sys.modules, "posthog.ai.openai", _PosthogOpenAIModule)
+    monkeypatch.setitem(sys.modules, "openai", _OpenAIModule)
     monkeypatch.setattr(llm, "get_posthog_client", lambda: None)
     monkeypatch.setattr(settings, "moonshot_api_key", "moonshot-key")
     monkeypatch.setattr(settings, "moonshot_base_url", "https://api.moonshot.ai/v1")
@@ -174,8 +172,50 @@ def test_kimi_client_uses_the_moonshot_openai_compatible_endpoint(monkeypatch):
         "api_key": "moonshot-key",
         "base_url": "https://api.moonshot.ai/v1",
         "max_retries": 0,
-        "posthog_client": None,
     }]
+
+
+def test_provider_clients_use_posthog_wrappers_only_when_configured(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    calls = []
+    posthog_client = object()
+
+    class _PosthogAnthropicModule:
+        class AsyncAnthropic:
+            def __init__(self, **kwargs):
+                calls.append(("anthropic", kwargs))
+
+    class _PosthogOpenAIModule:
+        class AsyncOpenAI:
+            def __init__(self, **kwargs):
+                calls.append(("openai", kwargs))
+
+    monkeypatch.setitem(sys.modules, "posthog.ai.anthropic", _PosthogAnthropicModule)
+    monkeypatch.setitem(sys.modules, "posthog.ai.openai", _PosthogOpenAIModule)
+    monkeypatch.setattr(llm, "get_posthog_client", lambda: posthog_client)
+
+    llm.create_anthropic_client(api_key="anthropic-key")
+    llm.create_openai_client(api_key="openai-key")
+
+    assert calls == [
+        (
+            "anthropic",
+            {
+                "api_key": "anthropic-key",
+                "max_retries": 0,
+                "posthog_client": posthog_client,
+            },
+        ),
+        (
+            "openai",
+            {
+                "api_key": "openai-key",
+                "max_retries": 0,
+                "posthog_client": posthog_client,
+            },
+        ),
+    ]
 
 
 def test_stream_response_compat_only_passes_telemetry_when_supported():
