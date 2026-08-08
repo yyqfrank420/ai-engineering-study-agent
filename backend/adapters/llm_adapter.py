@@ -531,18 +531,34 @@ async def _anthropic_stream_once(kwargs: dict) -> AsyncGenerator[object, None]:
     if semaphore is None:
         if queue_wait_observer:
             queue_wait_observer(0)
-        async with _get_anthropic_client().messages.stream(**sdk_kwargs) as stream:
-            async for event in stream:
-                yield event
+        async for event in _iterate_anthropic_stream(sdk_kwargs):
+            yield event
         return
 
     queued_at = time.perf_counter()
     async with semaphore:
         if queue_wait_observer:
             queue_wait_observer(max(0, int((time.perf_counter() - queued_at) * 1000)))
-        async with _get_anthropic_client().messages.stream(**sdk_kwargs) as stream:
-            async for event in stream:
+        async for event in _iterate_anthropic_stream(sdk_kwargs):
+            yield event
+
+
+async def _iterate_anthropic_stream(
+    sdk_kwargs: dict,
+) -> AsyncGenerator[object, None]:
+    """Iterate native Anthropic and PostHog-wrapped stream interfaces."""
+    stream = _get_anthropic_client().messages.stream(**sdk_kwargs)
+    if inspect.isawaitable(stream):
+        stream = await stream
+
+    if hasattr(stream, "__aenter__"):
+        async with stream as opened_stream:
+            async for event in opened_stream:
                 yield event
+        return
+
+    async for event in stream:
+        yield event
 
 
 async def stream_response(

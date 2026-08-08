@@ -408,6 +408,27 @@ async def test_anthropic_stream_once_without_semaphore(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_anthropic_stream_once_supports_posthog_awaitable_stream(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    async def wrapped_stream():
+        async def events():
+            yield _Event("content_block_delta", _Delta("text_delta", text="ok"))
+
+        return events()
+
+    client = SimpleNamespace(
+        messages=SimpleNamespace(stream=lambda **_kwargs: wrapped_stream())
+    )
+    monkeypatch.setattr(llm, "_get_anthropic_stream_semaphore", lambda: None)
+    monkeypatch.setattr(llm, "_get_anthropic_client", lambda: client)
+
+    events = await _collect(llm._anthropic_stream_once({"model": "m"}))
+
+    assert events[0].delta.text == "ok"
+
+
+@pytest.mark.asyncio
 async def test_stream_response_retries_before_tokens_then_succeeds(monkeypatch):
     import adapters.llm_adapter as llm
 
