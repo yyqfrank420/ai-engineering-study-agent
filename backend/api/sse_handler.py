@@ -32,6 +32,7 @@ from api.chat_guards import (
     check_prompt_injection,
     check_rate_limit,
     internal_test_stream_scope,
+    is_production_traffic,
     knowledge_base_ready,
     truncate_utf8,
 )
@@ -292,6 +293,7 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
             "session_id":        thread_id,
             "user_id":           user_id,
             "user_email":        user["email"] or f"{user_id}@unknown.local",
+            "is_production":     is_production_traffic(user),
             "request_id":        request_id,
             "client_request_id": body.client_request_id,
             "user_message":      content,

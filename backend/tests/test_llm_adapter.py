@@ -63,6 +63,32 @@ def test_build_telemetry_includes_optional_fields():
     }
 
 
+def test_posthog_properties_separate_production_from_evaluations(monkeypatch):
+    from adapters.llm_adapter import build_posthog_properties
+
+    monkeypatch.setattr(settings, "otel_environment", "production")
+    monkeypatch.setattr(settings, "evaluation_run_id", "")
+
+    assert build_posthog_properties(session_id="thread-1") == {
+        "environment": "production",
+        "is_production": True,
+        "$ai_session_id": "thread-1",
+    }
+
+    monkeypatch.setattr(settings, "otel_environment", "staging")
+    monkeypatch.setattr(settings, "evaluation_run_id", "run-123-attempt-1")
+
+    assert build_posthog_properties(
+        session_id="eval-case-1",
+        is_production=False,
+    ) == {
+        "environment": "staging",
+        "is_production": False,
+        "$ai_session_id": "eval-case-1",
+        "evaluation_run_id": "run-123-attempt-1",
+    }
+
+
 def test_get_posthog_client_logs_loudly_but_does_not_break_llm_calls_locally(
     monkeypatch, caplog
 ):

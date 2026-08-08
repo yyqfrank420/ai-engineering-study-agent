@@ -49,6 +49,7 @@ locals {
       ANTHROPIC_MAX_CONCURRENT_STREAMS = "4"
       ANTHROPIC_PROMPT_CACHE_ENABLED   = "false"
       INTERNAL_DASHBOARD_ALLOWLIST_RAW = var.internal_dashboard_allowlist_raw
+      OTEL_ENVIRONMENT                 = "production"
       POSTHOG_HOST                     = "https://eu.i.posthog.com"
     },
     var.env_vars,

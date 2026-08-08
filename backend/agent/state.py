@@ -95,6 +95,7 @@ class AgentState(TypedDict):
     session_id: str  # thread identifier; field name kept for runtime compatibility
     user_id: str
     user_email: str
+    is_production: bool
     user_message: str
     history: list[dict]  # prior conversation turns (role/content dicts)
 

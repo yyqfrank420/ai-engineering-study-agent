@@ -1415,6 +1415,7 @@ async def _request_critic_scorecard(
             operation,
             user_id=state.get("user_id"),
             thread_id=state.get("session_id"),
+            is_production=state.get("is_production"),
             metadata={
                 "complexity_resolved": resolved_complexity,
                 "revision_count": revision_count,

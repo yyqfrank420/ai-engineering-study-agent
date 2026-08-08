@@ -305,6 +305,7 @@ async def orchestrator_route(state: AgentState) -> AgentState:
             "orchestrator_route",
             user_id=state.get("user_id"),
             thread_id=state.get("session_id"),
+            is_production=state.get("is_production"),
             metadata={
                 "request_id": state.get("request_id"),
                 "client_request_id": state.get("client_request_id"),
@@ -415,6 +416,7 @@ async def quick_synthesise(state: AgentState) -> AgentState:
             "quick_synthesise",
             user_id=state.get("user_id"),
             thread_id=state.get("session_id"),
+            is_production=state.get("is_production"),
             metadata={
                 "request_id": state.get("request_id"),
                 "client_request_id": state.get("client_request_id"),
@@ -444,6 +446,7 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
             "context_condense",
             user_id=state.get("user_id"),
             thread_id=state.get("session_id"),
+            is_production=state.get("is_production"),
             metadata={
                 "request_id": state.get("request_id"),
                 "client_request_id": state.get("client_request_id"),
@@ -536,6 +539,7 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
         "orchestrator_synthesise",
         user_id=state.get("user_id"),
         thread_id=state.get("session_id"),
+        is_production=state.get("is_production"),
         metadata={
             "route": state.get("route", ""),
             "complexity_requested": state.get("complexity", "auto"),

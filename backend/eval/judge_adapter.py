@@ -15,6 +15,7 @@ from openai import APIConnectionError, APITimeoutError, RateLimitError
 from pydantic import BaseModel, ConfigDict, Field
 
 from adapters.llm_adapter import (
+    build_posthog_properties,
     create_anthropic_client,
     create_openai_client,
     get_posthog_client,
@@ -327,7 +328,10 @@ class SemanticJudge:
             tuple(artifact_sources),
             tuple(case.rubric_dimensions),
         )
-        posthog_properties = {"$ai_session_id": f"eval-{case.id}"}
+        posthog_properties = build_posthog_properties(
+            session_id=f"eval-{case.id}",
+            is_production=False,
+        )
         if self.provider == "anthropic":
             request_kwargs = {
                 "model": self.model,

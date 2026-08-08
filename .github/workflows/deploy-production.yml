@@ -124,7 +124,7 @@ jobs:
         env:
           CANDIDATE_TAG: prod-${{ github.run_id }}
         run: |
-          gcloud run deploy "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE@$IMAGE_DIGEST" --no-traffic --tag "$CANDIDATE_TAG" --timeout 1000s --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4 --quiet
+          gcloud run deploy "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE@$IMAGE_DIGEST" --no-traffic --tag "$CANDIDATE_TAG" --timeout 1000s --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4,OTEL_ENVIRONMENT=production --quiet
           candidate_url="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json | python -c 'import json,os,sys; data=json.load(sys.stdin); tag=os.environ["CANDIDATE_TAG"]; print(next((x.get("url", "") for x in data.get("status", {}).get("traffic", []) if x.get("tag") == tag), ""))')"
           [ -n "$candidate_url" ] || exit 1
           echo "CANDIDATE_URL=$candidate_url" >> "$GITHUB_ENV"
@@ -183,6 +183,7 @@ jobs:
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VITE_IS_PRODUCTION: "true"
         run: |
           npm ci --prefer-offline --no-audit --no-fund
           npx vercel@${VERCEL_CLI_VERSION} pull --yes --environment=production --token="${{ secrets.VERCEL_TOKEN }}"

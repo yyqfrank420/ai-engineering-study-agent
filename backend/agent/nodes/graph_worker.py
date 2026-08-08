@@ -1218,6 +1218,7 @@ async def _generate_applied_architecture(
                 "graph_worker_applied_design",
                 user_id=state.get("user_id"),
                 thread_id=state.get("session_id"),
+                is_production=state.get("is_production"),
                 metadata={
                     "complexity_requested": state.get("complexity", "auto"),
                     "complexity_resolved": spec.depth,
@@ -1361,6 +1362,7 @@ async def _generate_applied_architecture_patch(
                 "graph_worker_applied_patch",
                 user_id=state.get("user_id"),
                 thread_id=state.get("session_id"),
+                is_production=state.get("is_production"),
                 metadata={
                     "complexity_requested": state.get("complexity", "auto"),
                     "complexity_resolved": profile.resolved,
