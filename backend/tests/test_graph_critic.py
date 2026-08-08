@@ -22,7 +22,7 @@ from agent.nodes.graph_critic import (
     _lock_unchanged_passed_layers,
     _needs_repair_completion,
     _preflight_review_protocol,
-    _require_monotonic_repair_completion,
+    _merge_monotonic_repair_completion,
     _review_packet,
     _validate_repair_contract,
     _validate_review_protocol,
@@ -194,7 +194,7 @@ def _critic_state(*, graph=None, complexity="prototype"):
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v40"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v41"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -1224,7 +1224,7 @@ def test_repair_scope_controls_review_routing(scope, approved, expected):
     assert _route_after_review(state) == expected
 
 
-def test_repair_completion_can_extend_but_not_narrow_prior_authority():
+def test_repair_completion_is_merged_with_prior_authority():
     first_edge = {"source": "a", "target": "b", "label": "first"}
     second_edge = {"source": "b", "target": "c", "label": "second"}
     prior = {
@@ -1242,24 +1242,43 @@ def test_repair_completion_can_extend_but_not_narrow_prior_authority():
         ),
         "topology_proofs": [],
     }
-    completion = deepcopy(prior)
-    completion_layer = completion["repair_contract"]["layers"]["connections"]
-    completion_layer["blocking_findings"].append("Repair the second route.")
-    completion_layer["edge_selectors"].append(second_edge)
-    completion_layer["context_node_ids"].append("c")
-    completion_layer["addition_count"] = 2
+    completion = {
+        "repair_contract": _repair_contract(
+            scope="local",
+            failed_layer="connections",
+            findings=["Repair the second route."],
+            layer_selectors={
+                "connections": {
+                    "edge_selectors": [second_edge],
+                    "context_node_ids": ["b", "c"],
+                    "addition_count": 2,
+                }
+            },
+        ),
+        "topology_proofs": [],
+    }
 
-    assert _require_monotonic_repair_completion(prior, completion) is completion
-
-    narrowed = deepcopy(completion)
-    narrowed["repair_contract"]["layers"]["connections"]["edge_selectors"] = [
-        second_edge
+    merged = _merge_monotonic_repair_completion(prior, completion)
+    merged_connections = merged["repair_contract"]["layers"]["connections"]
+    assert merged_connections["blocking_findings"] == [
+        "Repair the first route.",
+        "Repair the second route.",
     ]
-    with pytest.raises(CriticProtocolError) as caught:
-        _require_monotonic_repair_completion(prior, narrowed)
+    assert merged_connections["edge_selectors"] == [first_edge, second_edge]
+    assert merged_connections["context_node_ids"] == ["a", "b", "c"]
+    assert merged_connections["addition_count"] == 2
 
-    assert caught.value.path == "connections.edge_selectors"
-    assert caught.value.rule == "non_monotonic_completion"
+    clean_completion = {
+        "repair_contract": _repair_contract(),
+        "strengths": [],
+        "advice": [],
+        "topology_proofs": [],
+    }
+    retained = _merge_monotonic_repair_completion(prior, clean_completion)
+    retained_connections = retained["repair_contract"]["layers"]["connections"]
+    assert retained_connections["status"] == "fail"
+    assert retained_connections["blocking_findings"] == ["Repair the first route."]
+    assert retained_connections["edge_selectors"] == [first_edge]
 
 
 @pytest.mark.parametrize(

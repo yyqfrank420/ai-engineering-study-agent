@@ -35,7 +35,6 @@ _PROTOCOL_ERROR_RULES = {
     "invalid_shape",
     "missing_finding",
     "missing_evidence",
-    "non_monotonic_completion",
     "ownership_mismatch",
     "unexpected_context",
 }
@@ -50,7 +49,7 @@ class CriticProtocolError(ValueError):
         self.rule = rule if rule in _PROTOCOL_ERROR_RULES else None
 
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v40"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v41"
 # Sonnet 5 high effort can spend the full output allowance on adaptive thinking
 # before emitting the required scorecard. Medium keeps the review inside one call.
 _GRAPH_CRITIC_EFFORT = "medium"
@@ -1541,11 +1540,12 @@ async def _request_critic_scorecard(
                 "type": "text",
                 "text": (
                     "Run a clean completeness pass before the one allowed repair. The prior "
-                    "scorecard below is protocol-valid. Return a complete replacement scorecard "
-                    "for the same candidate. Preserve every prior blocker, selector, context "
-                    "anchor, deterministic finding, addition count, and failed topology proof. "
-                    "Add every independent blocking defect the prior pass missed. Do not weaken "
-                    "or remove prior repair authority.\nPrior scorecard: "
+                    "scorecard below is an authoritative lower bound. Return a protocol-valid "
+                    "scorecard with every blocking defect found by this pass. You may omit prior "
+                    "blockers and selectors because the server retains and unions the lower "
+                    "bound. Add every independent blocking defect the prior pass missed. The "
+                    "candidate has not changed, so do not claim a prior defect was repaired.\n"
+                    "Prior scorecard: "
                     + completion_scorecard
                 ),
             }
@@ -1575,25 +1575,22 @@ async def _request_critic_scorecard(
     )
 
 
-def _edge_selector_set(value: Any) -> set[tuple[str, str, str]]:
-    return {
-        (item["source"], item["target"], item["label"])
-        for item in value
-        if isinstance(item, dict)
-        and all(
-            isinstance(item.get(field), str)
-            for field in ("source", "target", "label")
-        )
-    }
+def _ordered_union(prior: list[Any], completion: list[Any]) -> list[Any]:
+    merged = deepcopy(prior)
+    for item in completion:
+        if item not in merged:
+            merged.append(deepcopy(item))
+    return merged
 
 
-def _require_monotonic_repair_completion(
+def _merge_monotonic_repair_completion(
     prior_review: dict[str, Any],
     completion_review: dict[str, Any],
 ) -> dict[str, Any]:
-    """Keep the pre-patch audit from narrowing already valid repair evidence."""
+    """Union two valid pre-patch audits under server-owned repair authority."""
     prior_layers = prior_review["repair_contract"]["layers"]
     completion_layers = completion_review["repair_contract"]["layers"]
+    merged_layers = deepcopy(completion_layers)
     list_fields = (
         "blocking_findings",
         "deterministic_finding_ids",
@@ -1604,49 +1601,76 @@ def _require_monotonic_repair_completion(
         "assumption_indexes",
         "context_node_ids",
     )
-    failures: list[str] = []
     for layer in _REPAIR_LAYERS:
         prior = prior_layers[layer]
         completion = completion_layers[layer]
-        if prior["status"] == "fail" and completion["status"] != "fail":
-            failures.append(f"{layer}.status")
+        merged = merged_layers[layer]
         for field in list_fields:
-            if not set(prior[field]).issubset(completion[field]):
-                failures.append(f"{layer}.{field}")
-        if not _edge_selector_set(prior["edge_selectors"]).issubset(
-            _edge_selector_set(completion["edge_selectors"])
-        ):
-            failures.append(f"{layer}.edge_selectors")
-        if completion["addition_count"] < prior["addition_count"]:
-            failures.append(f"{layer}.addition_count")
+            merged[field] = _ordered_union(prior[field], completion[field])
+        merged["edge_selectors"] = _ordered_union(
+            prior["edge_selectors"], completion["edge_selectors"]
+        )
+        merged["addition_count"] = max(
+            prior["addition_count"], completion["addition_count"]
+        )
         prior_appends = prior["composition_append_counts"]
         completion_appends = completion["composition_append_counts"]
-        if any(
-            completion_appends.get(field, 0) < count
-            for field, count in prior_appends.items()
-        ):
-            failures.append(f"{layer}.composition_append_counts")
+        merged["composition_append_counts"] = {
+            field: max(prior_appends.get(field, 0), completion_appends.get(field, 0))
+            for field in sorted(set(prior_appends) | set(completion_appends))
+        }
+        merged["status"] = "fail" if merged["blocking_findings"] else "pass"
+        merged["score"] = min(float(prior["score"]), float(completion["score"]))
+        merged["reason"] = (
+            "The artifact layer requires the cited repair."
+            if merged["status"] == "fail"
+            else "The artifact layer passed the rubric."
+        )
 
-    completion_proofs = {
-        proof.get("guarantee"): proof.get("status")
-        for proof in completion_review.get("topology_proofs") or []
+    prior_proofs = {
+        proof.get("guarantee"): proof
+        for proof in prior_review.get("topology_proofs") or []
         if isinstance(proof, dict)
     }
-    for proof in prior_review.get("topology_proofs") or []:
+    merged_proofs = deepcopy(completion_review.get("topology_proofs") or [])
+    merged_guarantees = {
+        proof.get("guarantee")
+        for proof in merged_proofs
+        if isinstance(proof, dict)
+    }
+    for index, proof in enumerate(merged_proofs):
+        if not isinstance(proof, dict):
+            continue
+        prior = prior_proofs.get(proof.get("guarantee"))
         if (
-            isinstance(proof, dict)
-            and proof.get("status") == "fail"
-            and completion_proofs.get(proof.get("guarantee")) != "fail"
+            isinstance(prior, dict)
+            and prior.get("status") == "fail"
+            and proof.get("status") != "fail"
         ):
-            failures.append(f"topology_proofs.{proof.get('guarantee')}")
+            merged_proofs[index] = deepcopy(prior)
+    merged_proofs.extend(
+        deepcopy(proof)
+        for guarantee, proof in prior_proofs.items()
+        if guarantee not in merged_guarantees
+    )
 
-    if failures:
-        raise CriticProtocolError(
-            "repair completion narrowed prior findings",
-            path=failures[0],
-            rule="non_monotonic_completion",
-        )
-    return completion_review
+    return _review_from_repair_contract(
+        {
+            "repair_contract": {
+                "repair_scope": _repair_scope_for_layers(merged_layers),
+                "layers": merged_layers,
+            },
+            "strengths": _ordered_union(
+                prior_review.get("strengths") or [],
+                completion_review.get("strengths") or [],
+            ),
+            "advice": _ordered_union(
+                prior_review.get("advice") or [],
+                completion_review.get("advice") or [],
+            ),
+            "topology_proofs": merged_proofs,
+        }
+    )
 
 
 def _needs_repair_completion(review: dict[str, Any], revision_count: int) -> bool:
@@ -1967,7 +1991,18 @@ async def graph_critic_node(state: AgentState) -> AgentState:
                 review_context=review_packet["review_context"],
                 require_topology_proofs=profile.resolved == "production",
             )
-            review = _require_monotonic_repair_completion(review, completion_review)
+            review = _merge_monotonic_repair_completion(review, completion_review)
+            _validate_review_protocol(
+                {
+                    "repair_contract": review["repair_contract"],
+                    "strengths": review["strengths"],
+                    "advice": review["advice"],
+                    "topology_proofs": review["topology_proofs"],
+                },
+                require_topology_proofs=profile.resolved == "production",
+                graph=graph,
+                deterministic_findings=deterministic_findings,
+            )
         review = _lock_unchanged_passed_layers(
             state,
             review,

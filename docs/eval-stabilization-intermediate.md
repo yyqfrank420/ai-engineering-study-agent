@@ -456,6 +456,19 @@ Most recent authoritative evidence:
   medium-effort correction and completeness audit. The prompt states the existing component, connection,
   endpoint, and grouped-composition permission dependencies. Every terminal protocol rejection emits
   a safe validation stage, path, and rule in the captured workflow event without retaining model text.
+- Diagnostic `31261404727` ran `graph-expansion` on exact head `bf3bde1`. Opus planning and
+  challenge, Kimi generation, private rendering, and both Sonnet review passes completed without a
+  provider retry or fallback. Kimi produced a 24-node, 57-edge, 5-group prototype candidate. The
+  initial critic returned a protocol-valid local rejection. The clean completion pass then changed
+  the connections blocker set, and the server rejected it at
+  `completion/connections.blocking_findings/non_monotonic_completion`. No Kimi patch ran. Six calls
+  cost $0.856352. The failure was an ownership defect: an independent completion had to reproduce
+  the first pass's derived blocker strings exactly even when it expanded the same context.
+- Critic v41 makes validated repair authority server-owned. The server takes an ordered union of
+  both valid pre-patch reviews, retains prior selectors and failed proofs, takes the higher addition
+  permissions, derives status and scope, and validates the merged contract before Kimi receives it.
+  The completion pass can add findings without restating the lower bound. It cannot revoke prior
+  repair authority.
 - Canonical run `31221851568` completed all Kimi provider calls. Two valid topology objects were
   discarded because one bounded title and one bounded responsibility exceeded presentation limits.
   Two other 33-node and 39-node candidates passed browser rendering, then their Sonnet reviews were
@@ -470,7 +483,7 @@ Most recent authoritative evidence:
   lines. Static analysis, dependency audits, ingestion artifacts, migrations, Terraform validation,
   the production frontend build, and the backend container build pass on the same working tree.
 - Backend/frontend staging readiness, dashboard smoke, capture, cleanup, artifact upload, latency accounting, and cost accounting all passed.
-- `main` contains PRs #37 through #40. PR #41 now needs one v39 exact-tree diagnostic before the
+- `main` contains PRs #37 through #40. PR #41 now needs one v41 exact-tree diagnostic before the
   canonical run.
 
 ## Evaluation workflow lessons
