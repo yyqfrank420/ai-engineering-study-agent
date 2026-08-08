@@ -50,7 +50,7 @@ class CriticProtocolError(ValueError):
         self.rule = rule if rule in _PROTOCOL_ERROR_RULES else None
 
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v43"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v44"
 # Sonnet 5 high effort can spend the full output allowance on adaptive thinking
 # before emitting the required scorecard. Medium keeps the review inside one call.
 _GRAPH_CRITIC_EFFORT = "medium"
@@ -597,10 +597,8 @@ def _preflight_review_protocol(
             ):
                 reject(path, "unexpected_context")
 
-    if sorted(classified_deterministic_indexes) != list(
-        range(len(deterministic_findings))
-    ):
-        reject("deterministic_findings", "incomplete_classification")
+    if deterministic_findings and not classified_deterministic_indexes:
+        reject("deterministic_findings", "missing_active_region")
     if failures:
         summary = "; ".join(f"{path}:{rule}" for path, rule in failures)
         path, rule = failures[0]
@@ -983,10 +981,10 @@ def _canonicalise_review_protocol(
                 if count > 0
             }
         canonical_layers[layer] = canonical
-    if sorted(classified_deterministic_indexes) != list(
-        range(len(deterministic_findings))
-    ):
-        raise ValueError("every deterministic finding must be classified exactly once")
+    if deterministic_findings and not classified_deterministic_indexes:
+        raise ValueError(
+            "the active repair region must classify at least one deterministic finding"
+        )
 
     scope = _repair_scope_for_layers(canonical_layers)
 
@@ -1273,8 +1271,9 @@ Use `context_indexes` for exact items in the packet's `review_context` and
 `context_node_indexes` for existing nodes that anchor a missing record. These fields provide repair
 context and never grant permission to mutate a record. Context supplements a finding code; it does
 not replace one.
-Each supplied deterministic finding names its authoritative `owner_layer`. Classify the finding
-under that layer by its zero-based packet index exactly once.
+Each supplied deterministic finding names its authoritative `owner_layer`. Classify at least one
+finding in the active local repair region under its owner layer. Leave findings outside that region
+unclassified; the next review will see them again against the repaired graph.
 A layer with no finding codes or deterministic finding indexes exposes no selectors or context.
 All four artifact layers are mandatory for every reviewed candidate.
 Set each component or connection `addition_count` to the exact number of missing records required
@@ -1395,9 +1394,10 @@ async def _request_critic_scorecard(
                 "type": "text",
                 "text": (
                     "Your prior scorecard failed protocol validation. Correct it and run the clean "
-                    "focus pass before the next local repair. Keep every valid judgment "
-                    "unchanged, add every blocking defect that was missed for the selected "
-                    "repair region, and obey the exact "
+                    "focus pass before the next local repair. Keep valid judgments inside the "
+                    "selected repair region. Remove unrelated findings and selectors so the patch "
+                    "covers one admissible region; the next review will see them again. Add every "
+                    "blocking defect that was missed inside the selected region, and obey the exact "
                     f"{correction_contracts}.\n"
                     f"Validation error: {validation_error[:1000]}\n"
                     f"Prior scorecard: {invalid_response[:12000]}"
@@ -1488,7 +1488,11 @@ def _completed_critic_review(
         raise
     except ValueError as exc:
         raise _critic_protocol_error(exc) from exc
-    return _review_from_repair_contract(payload)
+    review = _review_from_repair_contract(payload)
+    contract = review.get("repair_contract")
+    if isinstance(contract, dict) and contract.get("repair_scope") == "local":
+        _validate_local_repair_admission(contract, graph=graph)
+    return review
 
 
 async def graph_critic_node(state: AgentState) -> AgentState:

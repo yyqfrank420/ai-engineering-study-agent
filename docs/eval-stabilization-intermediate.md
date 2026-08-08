@@ -84,8 +84,9 @@ candidate and handles user refinements to a previously published graph. Sonnet 5
 semantics and the private browser screenshot before publication. The protected semantic judge also
 defaults to Sonnet 5 high.
 
-The workflow now permits one repair after the first candidate. A second failed QA result suppresses
-the graph. Normal operation should publish the first candidate; repair rate and first-pass acceptance
+The workflow now permits up to three bounded local repairs after the first candidate. Each review
+selects one connected repair region and sees the full current graph again. A failed QA result after
+the third repair suppresses the graph. Normal operation should publish the first candidate; repair rate and first-pass acceptance
 are release metrics, not an authoring strategy.
 
 Each reasoning role has a completion budget separate from the visible artifact bounds. Opus xhigh
@@ -554,7 +555,7 @@ Most recent authoritative evidence:
 ## Remaining execution order
 
 1. Pass the full offline gate on the exact tracked tree.
-2. Run one protected graph diagnostic and require a publishable first candidate or one valid bounded repair.
+2. Run one protected graph diagnostic and require a publishable first candidate or bounded local repairs.
 3. Run one uninterrupted canonical eight-case protected evaluation on that tree.
 4. Verify the exact-tree approval tag and required PR checks, then merge with the final-head guard.
 5. Monitor the `main` production workflow through immutable backend deployment, smoke/promotion, and Vercel deployment.
