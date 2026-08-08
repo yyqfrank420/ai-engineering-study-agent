@@ -815,8 +815,12 @@ def test_live_eval_job_allows_setup_around_the_bounded_browser_suite():
         encoding="utf-8"
     )
     assert 'ANTHROPIC_MAX_CONCURRENT_STREAMS = "4"' in terraform_locals
+    assert 'POSTHOG_API_KEY                   = "posthog-api-key"' in terraform_locals
+    assert 'POSTHOG_HOST                     = "https://eu.i.posthog.com"' in terraform_locals
     env_example = (ROOT / "backend/.env.example").read_text(encoding="utf-8")
     assert "ANTHROPIC_MAX_CONCURRENT_STREAMS=4" in env_example
+    assert "POSTHOG_API_KEY=" in env_example
+    assert "POSTHOG_HOST=https://eu.i.posthog.com" in env_example
 
 
 def test_browser_workflows_use_development_only_internal_auth_bootstrap():

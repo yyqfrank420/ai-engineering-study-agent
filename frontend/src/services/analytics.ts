@@ -5,7 +5,7 @@ type PostHogClient = typeof import('posthog-js')['default'];
 
 const STORAGE_KEY = 'agent.analytics.anonymous_id';
 const POSTHOG_KEY = (import.meta.env.VITE_POSTHOG_KEY as string | undefined)?.trim() ?? '';
-const POSTHOG_HOST = (import.meta.env.VITE_POSTHOG_HOST as string | undefined)?.trim() || 'https://us.i.posthog.com';
+const POSTHOG_HOST = (import.meta.env.VITE_POSTHOG_HOST as string | undefined)?.trim() || 'https://eu.i.posthog.com';
 const ANALYTICS_ENABLED = import.meta.env.VITE_ANALYTICS_ENABLED !== 'false';
 const PUBLIC_EVENTS = new Set<AnalyticsEventName>([
   'auth_viewed',
