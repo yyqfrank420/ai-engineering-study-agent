@@ -435,8 +435,13 @@ def test_stream_response_records_llm_telemetry(temp_data_dir, monkeypatch):
         SimpleNamespace(type="content_block_delta", delta=SimpleNamespace(type="text_delta", text="Hello")),
         SimpleNamespace(type="content_block_delta", delta=SimpleNamespace(type="text_delta", text=" world")),
     ]
+
+    async def create(**kwargs):
+        assert kwargs["stream"] is True
+        return _FakeAnthropicStream(fake_events)
+
     fake_client = SimpleNamespace(
-        messages=SimpleNamespace(stream=lambda **kwargs: _FakeAnthropicStream(fake_events))
+        messages=SimpleNamespace(create=create)
     )
     monkeypatch.setattr("adapters.llm_adapter._get_anthropic_client", lambda: fake_client)
 
@@ -483,21 +488,17 @@ def test_stream_response_limits_concurrent_anthropic_streams(temp_data_dir, monk
 
     class _SlowAnthropicStream:
         def __init__(self):
-            self._events = iter([
-                SimpleNamespace(type="content_block_delta", delta=SimpleNamespace(type="text_delta", text="ok")),
-            ])
-
-        async def __aenter__(self):
             nonlocal active, max_active
             active += 1
             max_active = max(max_active, active)
             gates["entered"].set()
-            return self
+            self._events = iter([
+                SimpleNamespace(type="content_block_delta", delta=SimpleNamespace(type="text_delta", text="ok")),
+            ])
 
-        async def __aexit__(self, exc_type, exc, tb):
+        async def aclose(self):
             nonlocal active
             active -= 1
-            return False
 
         def __aiter__(self):
             return self
@@ -509,8 +510,12 @@ def test_stream_response_limits_concurrent_anthropic_streams(temp_data_dir, monk
             except StopIteration as exc:
                 raise StopAsyncIteration from exc
 
+    async def create(**kwargs):
+        assert kwargs["stream"] is True
+        return _SlowAnthropicStream()
+
     fake_client = SimpleNamespace(
-        messages=SimpleNamespace(stream=lambda **kwargs: _SlowAnthropicStream())
+        messages=SimpleNamespace(create=create)
     )
     monkeypatch.setattr(settings, "anthropic_max_concurrent_streams", 1)
     monkeypatch.setattr(llm_adapter, "_anthropic_stream_semaphore", None)
