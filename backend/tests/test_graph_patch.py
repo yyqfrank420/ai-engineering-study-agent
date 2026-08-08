@@ -3046,6 +3046,45 @@ async def test_nonlocal_repair_contract_never_calls_the_patch_model(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_unanchored_component_additions_never_call_the_patch_model(monkeypatch):
+    existing = _domain_graph(5)
+    contract = _local_repair_contract(
+        failed_layers={
+            "components": {"addition_count": 2},
+            "connections": {"addition_count": 1},
+        }
+    )
+    calls = []
+
+    async def fail_if_called(**kwargs):
+        calls.append(kwargs)
+        raise AssertionError("patch model must not run")
+
+    monkeypatch.setattr(graph_worker, "stream_llm", fail_if_called)
+    with pytest.raises(graph_worker.GraphPatchRejected) as raised:
+        await graph_worker._generate_applied_architecture_patch(
+            {
+                "send": None,
+                "user_message": "Add the missing subsystem",
+                "graph_revision_count": 1,
+                "graph_review": {
+                    "approved": False,
+                    "repair_contract": contract,
+                },
+                "complexity": "prototype",
+                "user_id": "user-1",
+                "session_id": "thread-1",
+            },
+            "Add the missing subsystem",
+            SimpleNamespace(resolved="prototype"),
+            existing,
+        )
+
+    assert raised.value.code == "graph_patch_contract_invalid"
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_invalid_self_edge_patch_preserves_graph_without_duplicate_model_call(
     monkeypatch,
 ):

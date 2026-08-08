@@ -9,12 +9,14 @@ from typing import Any
 from anthropic import (
     APIConnectionError as AnthropicAPIConnectionError,
     APITimeoutError as AnthropicAPITimeoutError,
-    AsyncAnthropic,
     RateLimitError as AnthropicRateLimitError,
 )
-from openai import APIConnectionError, APITimeoutError, AsyncOpenAI, RateLimitError
+from openai import APIConnectionError, APITimeoutError, RateLimitError
+from posthog.ai.anthropic import AsyncAnthropic
+from posthog.ai.openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
+from adapters.llm_adapter import get_posthog_client
 from eval.quality_corpus import EvaluationCase, EvaluationCorpus
 from eval.semantic_gate import DimensionJudgment, JudgeResult
 
@@ -300,10 +302,14 @@ class SemanticJudge:
         key = api_key or os.getenv(key_env, "")
         if not key:
             raise RuntimeError(f"{key_env} is required for semantic evaluation")
+        client_kwargs = {"api_key": key, "max_retries": 0}
+        posthog_client = get_posthog_client()
+        if posthog_client is not None:
+            client_kwargs["posthog_client"] = posthog_client
         if selected_provider == "anthropic":
-            self.client = AsyncAnthropic(api_key=key, max_retries=0)
+            self.client = AsyncAnthropic(**client_kwargs)
         else:
-            self.client = AsyncOpenAI(api_key=key, max_retries=0)
+            self.client = AsyncOpenAI(**client_kwargs)
 
     async def judge(
         self,
@@ -317,6 +323,7 @@ class SemanticJudge:
             tuple(artifact_sources),
             tuple(case.rubric_dimensions),
         )
+        posthog_properties = {"$ai_session_id": f"eval-{case.id}"}
         if self.provider == "anthropic":
             response = await self.client.messages.create(
                 model=self.model,
@@ -330,6 +337,7 @@ class SemanticJudge:
                         "schema": _anthropic_response_schema(schema),
                     },
                 },
+                posthog_properties=posthog_properties,
             )
             if response.stop_reason == "refusal":
                 raise RuntimeError(
@@ -379,6 +387,7 @@ class SemanticJudge:
                         "schema": schema,
                     },
                 },
+                posthog_properties=posthog_properties,
             )
             content = response.choices[0].message.content or ""
             usage = response.usage

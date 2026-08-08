@@ -55,7 +55,7 @@ NodeResult = Awaitable[AgentState]
 AgentNode = Callable[[AgentState], NodeResult]
 
 _GRAPH_STAGE_DEADLINE_KEY = "_graph_stage_deadline_s"
-_MAX_GRAPH_REVISIONS = 1
+_MAX_GRAPH_REVISIONS = 3
 
 
 def _with_graph_stage_deadline(state: AgentState, timeout_s: float) -> AgentState:

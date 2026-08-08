@@ -126,6 +126,12 @@ def validate_local_repair_admission(
                 ]
             )
         )
+        if components["addition_count"] and not context_node_ids:
+            raise ValueError("local component additions require an existing graph anchor")
+        if connections["addition_count"] < components["addition_count"]:
+            raise ValueError(
+                "local additions require enough edges to attach every new component"
+            )
         if selected_existing_nodes and not selected_existing_nodes.intersection(
             context_node_ids
         ):

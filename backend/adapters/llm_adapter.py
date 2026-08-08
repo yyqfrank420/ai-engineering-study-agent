@@ -6,7 +6,8 @@
 #          Yields a ("provider_switch", "openai") tuple before the first OpenAI
 #          token so calling nodes can forward a browser notification.
 # Language: Python
-# Connects to: config.py (model names, API keys), agent nodes, api/sse_handler.py
+# Connects to: config.py (model names, API keys), agent nodes, api/sse_handler.py,
+#              PostHog AI Observability (posthog.ai.anthropic/openai wrapper clients)
 # Inputs:  model name, system prompt, messages list, optional thinking budget
 # Outputs: async generator yielding (event_type, content) tuples:
 #          ("thinking", text) | ("text", token) | ("done", "") |
@@ -16,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 from collections.abc import AsyncGenerator
 from functools import lru_cache
 import hashlib
@@ -32,12 +34,36 @@ logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
-def _get_anthropic_client():
-    import anthropic
+def get_posthog_client():
+    """Shared PostHog client for AI Observability. None is a valid, silent no-op.
 
-    return anthropic.AsyncAnthropic(
+    A missing key must never break LLM calls — this client wraps the same
+    Anthropic/OpenAI client objects the app depends on for its core feature.
+    Locally, log loudly instead of raising so the guard can't 500 every chat.
+    """
+    if not settings.posthog_api_key:
+        if not settings.k_service:
+            logger.error(
+                "POSTHOG_API_KEY variable required by PostHog is missing or "
+                "un-configured, this causes events to be silently missed. "
+                "This error stops appearing once POSTHOG_API_KEY is configured"
+            )
+        return None
+    from posthog import Posthog
+
+    client = Posthog(settings.posthog_api_key, host=settings.posthog_host)
+    atexit.register(client.shutdown)
+    return client
+
+
+@lru_cache(maxsize=1)
+def _get_anthropic_client():
+    from posthog.ai.anthropic import AsyncAnthropic
+
+    return AsyncAnthropic(
         api_key=settings.anthropic_api_key,
         max_retries=0,
+        posthog_client=get_posthog_client(),
     )
 
 
@@ -45,11 +71,12 @@ def _get_anthropic_client():
 def _get_openai_client():
     if not settings.openai_api_key:
         return None
-    import openai
+    from posthog.ai.openai import AsyncOpenAI
 
-    return openai.AsyncOpenAI(
+    return AsyncOpenAI(
         api_key=settings.openai_api_key,
         max_retries=0,
+        posthog_client=get_posthog_client(),
     )
 
 
@@ -57,12 +84,13 @@ def _get_openai_client():
 def _get_kimi_client():
     if not settings.moonshot_api_key:
         return None
-    import openai
+    from posthog.ai.openai import AsyncOpenAI
 
-    return openai.AsyncOpenAI(
+    return AsyncOpenAI(
         api_key=settings.moonshot_api_key,
         base_url=settings.moonshot_base_url,
         max_retries=0,
+        posthog_client=get_posthog_client(),
     )
 
 # Maps Anthropic model name → OpenAI fallback model name.
@@ -83,6 +111,54 @@ _NON_RETRYABLE_ANTHROPIC_ERRORS = {
     "PermissionDeniedError",
     "UnprocessableEntityError",
 }
+
+
+def _build_streamer_kwargs(
+    streamer: object,
+    response_schema: dict | None,
+    posthog_distinct_id: str | None,
+    posthog_trace_id: str | None,
+    posthog_properties: dict | None,
+) -> dict[str, object]:
+    """Build keyword args for a streamer call without breaking tests that monkeypatch stubs.
+
+    Monkeypatched streamers in tests use ``*args`` signatures, and this avoids passing
+    keyword-only fields to them.
+    """
+    kwargs: dict[str, object] = {}
+    if response_schema is not None:
+        kwargs["response_schema"] = response_schema
+
+    try:
+        signature = inspect.signature(streamer)
+    except (TypeError, ValueError):
+        return kwargs if response_schema is not None else {}
+
+    has_var_keyword = any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in signature.parameters.values()
+    )
+    if has_var_keyword:
+        if posthog_distinct_id is not None:
+            kwargs["posthog_distinct_id"] = posthog_distinct_id
+        if posthog_trace_id is not None:
+            kwargs["posthog_trace_id"] = posthog_trace_id
+        if posthog_properties is not None:
+            kwargs["posthog_properties"] = posthog_properties
+        return kwargs
+
+    for name, value in (
+        ("posthog_distinct_id", posthog_distinct_id),
+        ("posthog_trace_id", posthog_trace_id),
+        ("posthog_properties", posthog_properties),
+    ):
+        if value is not None and name in signature.parameters:
+            kwargs[name] = value
+
+    if response_schema is not None and "response_schema" not in signature.parameters:
+        return {}
+
+    return kwargs
 
 
 class EvaluationProviderAttemptLimitExceeded(RuntimeError):
@@ -240,6 +316,9 @@ async def _chat_completions_stream(
     top_p: float | None = None,
     max_output_tokens: int | None = None,
     response_schema: dict | None = None,
+    posthog_distinct_id: str | None = None,
+    posthog_trace_id: str | None = None,
+    posthog_properties: dict | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
     """Stream one OpenAI-compatible Chat Completions response."""
     completion_messages = [
@@ -273,6 +352,17 @@ async def _chat_completions_stream(
                 "schema": response_schema,
             },
         }
+    if posthog_distinct_id:
+        kwargs["posthog_distinct_id"] = posthog_distinct_id
+    if posthog_trace_id:
+        kwargs["posthog_trace_id"] = posthog_trace_id
+    if posthog_properties:
+        kwargs["posthog_properties"] = posthog_properties
+    # posthog-python's OpenAI wrapper has no kwarg to override the detected
+    # provider, so Kimi calls (routed through it via Moonshot's base_url) are
+    # attributed to "openai" in PostHog's own $ai_provider field. The app's
+    # own telemetry (record_llm_telemetry / llm_call_completed) still records
+    # the true "kimi" provider independently of PostHog.
 
     stream = await client.chat.completions.create(**kwargs)
     finish_reason: str | None = None
@@ -353,6 +443,9 @@ async def _openai_stream(
     top_p: float | None = None,
     max_output_tokens: int | None = None,
     response_schema: dict | None = None,
+    posthog_distinct_id: str | None = None,
+    posthog_trace_id: str | None = None,
+    posthog_properties: dict | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
     client = _get_openai_client()
     if client is None:
@@ -368,6 +461,9 @@ async def _openai_stream(
         top_p,
         max_output_tokens,
         response_schema,
+        posthog_distinct_id,
+        posthog_trace_id,
+        posthog_properties,
     ):
         yield event
 
@@ -381,6 +477,9 @@ async def _kimi_stream(
     top_p: float | None = None,
     max_output_tokens: int | None = None,
     response_schema: dict | None = None,
+    posthog_distinct_id: str | None = None,
+    posthog_trace_id: str | None = None,
+    posthog_properties: dict | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
     client = _get_kimi_client()
     if client is None:
@@ -396,6 +495,9 @@ async def _kimi_stream(
         top_p,
         max_output_tokens,
         response_schema,
+        posthog_distinct_id,
+        posthog_trace_id,
+        posthog_properties,
     ):
         yield event
 
@@ -474,12 +576,28 @@ async def stream_response(
         # Protected evaluation repeats stable role prompts often enough to
         # recover Anthropic's cache-write premium within the cache lifetime.
         system_block["cache_control"] = {"type": "ephemeral"}
+    # PostHog AI Observability identity: one session per conversation (thread_id),
+    # one trace per turn (request_id) shared by every call the turn makes.
+    telemetry_details = telemetry or {}
+    telemetry_metadata = telemetry_details.get("metadata") or {}
+    posthog_distinct_id = telemetry_details.get("user_id")
+    posthog_trace_id = telemetry_metadata.get("request_id")
+    posthog_session_id = telemetry_details.get("thread_id")
+    posthog_properties = (
+        {"$ai_session_id": posthog_session_id} if posthog_session_id else None
+    )
     kwargs: dict = {
         "model":      model,
         "max_tokens": effective_max_output_tokens,
         "system":     [system_block],
         "messages":   messages,
     }
+    if posthog_distinct_id:
+        kwargs["posthog_distinct_id"] = posthog_distinct_id
+    if posthog_trace_id:
+        kwargs["posthog_trace_id"] = posthog_trace_id
+    if posthog_properties:
+        kwargs["posthog_properties"] = posthog_properties
     uses_adaptive_effort = _uses_adaptive_effort(model)
     effective_effort = effort or _effort_from_legacy_budget(thinking_budget)
     if uses_adaptive_effort:
@@ -686,10 +804,15 @@ async def stream_response(
                     top_p,
                     effective_max_output_tokens,
                 )
-                response = (
-                    streamer(*stream_args, response_schema=response_schema)
-                    if response_schema is not None
-                    else streamer(*stream_args)
+                response = streamer(
+                    *stream_args,
+                    **_build_streamer_kwargs(
+                        streamer,
+                        response_schema,
+                        posthog_distinct_id,
+                        posthog_trace_id,
+                        posthog_properties,
+                    ),
                 )
                 async for event in response:
                     if event[0] == "text":

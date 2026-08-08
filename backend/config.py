@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     graph_design_timeout_s: float = 150.0
     architecture_role_timeout_s: float = 150.0
     graph_critic_timeout_s: float = 90.0
-    # Initial editable rejections receive one clean completeness pass before repair.
+    # Initial editable rejections receive one local repair pass before edit.
     # Both reviews share this stage ceiling and may borrow saved upstream time.
     graph_critic_max_timeout_s: float = 195.0
     graph_patch_timeout_s: float = 180.0
@@ -183,6 +183,9 @@ class Settings(BaseSettings):
     # Base OTLP/HTTP endpoint, e.g. https://collector.example.com
     otel_exporter_otlp_endpoint: str = ""
     otel_exporter_otlp_headers_raw: str = ""
+    # PostHog AI Observability — instruments Anthropic/OpenAI LLM calls only.
+    posthog_api_key: str = ""
+    posthog_host: str = "https://us.i.posthog.com"
     internal_dashboard_allowlist_raw: str = ""
     analytics_queue_max_size: int = 1000
     analytics_event_schema_version: int = 1

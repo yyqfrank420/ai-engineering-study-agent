@@ -64,7 +64,7 @@ def test_architecture_roles_follow_graph_request_intent(message, expected):
     assert _should_run_applied_design_roles(state) is expected
 
 
-def test_failed_review_gets_at_most_one_bounded_revision():
+def test_failed_review_gets_up_to_three_bounded_revisions():
     from agent.graph import (
         _repair_attempt_summary,
         _route_after_review,
@@ -73,6 +73,7 @@ def test_failed_review_gets_at_most_one_bounded_revision():
 
     assert _repair_attempt_summary(0) == "before a reviewed revision could complete"
     assert _repair_attempt_summary(1) == "after 1 reviewed revision"
+    assert _repair_attempt_summary(2) == "after 2 reviewed revisions"
     assert _repair_attempt_summary(3) == "after 3 reviewed revisions"
 
     failed = {
@@ -82,7 +83,9 @@ def test_failed_review_gets_at_most_one_bounded_revision():
     }
 
     assert _route_after_review({**failed, "graph_revision_count": 0}) == "revise"
-    assert _route_after_review({**failed, "graph_revision_count": 1}) == "reject"
+    assert _route_after_review({**failed, "graph_revision_count": 1}) == "revise"
+    assert _route_after_review({**failed, "graph_revision_count": 2}) == "revise"
+    assert _route_after_review({**failed, "graph_revision_count": 3}) == "reject"
     assert (
         _route_after_review(
             {
@@ -454,6 +457,6 @@ async def test_langgraph_can_verify_one_bounded_repair_then_publish(monkeypatch)
         if event.get("phase") == "revise" and event.get("status") == "retry"
     ]
     assert [event["detail"].split(",", 1)[0] for event in repair_events] == [
-        "Reworking the diagram 1 of 1",
+        "Reworking the diagram 1 of 3",
     ]
     assert not any(event.get("type") == "graph_notice" for event in events)

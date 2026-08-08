@@ -20,9 +20,7 @@ from agent.nodes.graph_critic import (
     _deterministic_render_review,
     _deterministic_review,
     _enforce_local_repair_admission,
-    _needs_repair_completion,
     _preflight_review_protocol,
-    _merge_monotonic_repair_completion,
     _review_packet,
     _validate_repair_contract,
     _validate_review_protocol,
@@ -195,7 +193,7 @@ def _critic_state(*, graph=None, complexity="prototype"):
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v42"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v43"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -212,7 +210,7 @@ def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
     assert "A passing proof cites the complete actual" in _critic_system(
         require_topology_proofs=True
     )
-    assert "Do not stop after finding the first defect" in _GRAPH_CRITIC_SYSTEM
+    assert "highest-priority local repair region" in _GRAPH_CRITIC_SYSTEM
     assert "event-stream systems define bounded" in _GRAPH_CRITIC_SYSTEM
     assert "backpressure and overload behavior" in _GRAPH_CRITIC_SYSTEM
     assert "partition/order or event-time semantics" in _GRAPH_CRITIC_SYSTEM
@@ -437,6 +435,28 @@ def test_local_repair_admits_a_connected_existing_node_branch_addition():
             ]
         },
     )
+
+
+def test_local_component_additions_require_an_existing_graph_anchor():
+    graph = {
+        "nodes": [{"id": "existing"}],
+        "edges": [],
+        "groups": [],
+    }
+    contract = _repair_contract(
+        scope="local",
+        failed_layer="components",
+        layer_selectors={"components": {"addition_count": 2}},
+    )
+    contract["layers"]["connections"] = _layer(
+        "fail",
+        0.7,
+        findings=["Connect the missing components."],
+        addition_count=1,
+    )
+
+    with pytest.raises(ValueError, match="existing graph anchor"):
+        validate_local_repair_admission(contract, graph=graph)
 
 
 def test_appended_groups_require_corresponding_new_components():
@@ -1403,87 +1423,8 @@ def test_repair_scope_controls_review_routing(scope, approved, expected):
     assert _route_after_review(state) == expected
 
 
-def test_repair_completion_is_merged_with_prior_authority():
-    first_edge = {"source": "a", "target": "b", "label": "first"}
-    second_edge = {"source": "b", "target": "c", "label": "second"}
-    prior = {
-        "repair_contract": _repair_contract(
-            scope="local",
-            failed_layer="connections",
-            findings=["Repair the first route."],
-            layer_selectors={
-                "connections": {
-                    "edge_selectors": [first_edge],
-                    "context_node_ids": ["a", "b"],
-                    "addition_count": 1,
-                }
-            },
-        ),
-        "topology_proofs": [],
-    }
-    completion = {
-        "repair_contract": _repair_contract(
-            scope="local",
-            failed_layer="connections",
-            findings=["Repair the second route."],
-            layer_selectors={
-                "connections": {
-                    "edge_selectors": [second_edge],
-                    "context_node_ids": ["b", "c"],
-                    "addition_count": 2,
-                }
-            },
-        ),
-        "topology_proofs": [],
-    }
-
-    merged = _merge_monotonic_repair_completion(prior, completion)
-    merged_connections = merged["repair_contract"]["layers"]["connections"]
-    assert merged_connections["blocking_findings"] == [
-        "Repair the first route.",
-        "Repair the second route.",
-    ]
-    assert merged_connections["edge_selectors"] == [first_edge, second_edge]
-    assert merged_connections["context_node_ids"] == ["a", "b", "c"]
-    assert merged_connections["addition_count"] == 2
-
-    clean_completion = {
-        "repair_contract": _repair_contract(),
-        "strengths": [],
-        "advice": [],
-        "topology_proofs": [],
-    }
-    retained = _merge_monotonic_repair_completion(prior, clean_completion)
-    retained_connections = retained["repair_contract"]["layers"]["connections"]
-    assert retained_connections["status"] == "fail"
-    assert retained_connections["blocking_findings"] == ["Repair the first route."]
-    assert retained_connections["edge_selectors"] == [first_edge]
-
-
-@pytest.mark.parametrize(
-    ("scope", "revision_count", "expected"),
-    [
-        ("local", 0, True),
-        ("none", 0, False),
-        ("global", 0, False),
-        ("local", 1, False),
-    ],
-)
-def test_repair_completion_runs_only_for_initial_local_rejections(
-    scope,
-    revision_count,
-    expected,
-):
-    review = {
-        "review_status": "completed",
-        "repair_contract": {"repair_scope": scope},
-    }
-
-    assert _needs_repair_completion(review, revision_count) is expected
-
-
 @pytest.mark.asyncio
-async def test_initial_local_rejection_gets_one_monotonic_completion_pass(monkeypatch):
+async def test_initial_local_rejection_gets_one_local_repair_pass(monkeypatch):
     calls = []
     graph = _domain_graph()
     graph["edges"].append(
@@ -1516,19 +1457,17 @@ async def test_initial_local_rejection_gets_one_monotonic_completion_pass(monkey
     )
     result = await graph_critic_node(_critic_state(graph=graph))
 
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert calls[0]["telemetry"]["operation"] == "graph_critic"
-    assert calls[1]["telemetry"]["operation"] == "graph_critic_repair_completion"
-    assert "clean completeness pass" in calls[1]["messages"][0]["content"][-1]["text"]
     assert len(
         result["graph_review"]["repair_contract"]["layers"]["connections"][
             "edge_selectors"
         ]
-    ) == 2
+    ) == 1
 
 
 @pytest.mark.asyncio
-async def test_disconnected_repair_skips_completion_and_patch_admission(monkeypatch):
+async def test_disconnected_local_repair_skips_patch_admission(monkeypatch):
     calls = []
     graph = _domain_graph()
     graph["edges"].append(
@@ -1568,7 +1507,7 @@ async def test_disconnected_repair_skips_completion_and_patch_admission(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_protocol_correction_is_the_clean_completion_pass(monkeypatch):
+async def test_protocol_correction_is_the_clean_focus_pass(monkeypatch):
     calls = []
     invalid = _passing_review_payload()
     _set_model_layer(invalid, "components", finding_codes="invalid")
@@ -1601,8 +1540,8 @@ async def test_protocol_correction_is_the_clean_completion_pass(monkeypatch):
         "graph_critic_protocol_correction",
     ]
     correction = calls[1]["messages"][0]["content"][-1]["text"]
-    assert "clean completeness pass" in correction
-    assert "add every independent blocking defect" in correction
+    assert "focus pass" in correction
+    assert "selected repair region" in correction
 
 
 @pytest.mark.asyncio

@@ -50,7 +50,7 @@ class CriticProtocolError(ValueError):
         self.rule = rule if rule in _PROTOCOL_ERROR_RULES else None
 
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v42"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v43"
 # Sonnet 5 high effort can spend the full output allowance on adaptive thinking
 # before emitting the required scorecard. Medium keeps the review inside one call.
 _GRAPH_CRITIC_EFFORT = "medium"
@@ -1248,10 +1248,9 @@ bypass. Do not infer a missing control from a node name or an assumption.
 Never put a missing directed edge, state, branch, gate, or boundary in advice: that is a blocking
 failure under this contract. Advice is only for genuinely optional hardening of an already complete
 topology.
-Do not stop after finding the first defect. Report every independent blocking failure you can
-substantiate in one response. The designer receives at most one bounded repair.
-Report the complete failure set so that repair can resolve the candidate without an open-ended
-redesign loop.
+Review all blocking defects with full context, then return the highest-priority local repair
+region for this pass. The designer receives one bounded local repair contract.
+Do not bundle unrelated regions into one repair request.
 
 Use `finding_codes` only for a clear omission or defect that makes the diagram unsafe, misleading,
 unusable, or fails an explicit part of the user's request at the selected depth. The owner in the
@@ -1290,7 +1289,7 @@ editable existing group or a declared group addition. Every composition addition
 matching field in `composition_fields`. These are one repair plan across MECE owners, so fail every
 owner whose records must change.
 
-Copy every deterministic pre-review finding in the packet into the correct layer and localize it.
+Copy deterministic pre-review findings that belong to the active local repair region.
 </review_contract>
 
 <output_contract>
@@ -1317,13 +1316,11 @@ _GRAPH_CRITIC_SYSTEM = (
 
 _GRAPH_CRITIC_SYSTEM += """
 
-<exhaustive_review_contract>
-Audit every acceptance-checklist item in one review. Report all independent blocking defects you can
-identify. Within each artifact layer, combine repeated instances of one defect into one finding with
-all affected selectors. Give every layer that must change its own blocker. Never defer a visible
-checklist defect to a later revision. The bounded patch must receive the complete repair set in this
-response.
-</exhaustive_review_contract>
+<repair_scope_contract>
+Report the highest-priority local repair region per pass. Keep every other blocking defect for the next
+pass. Use the same row schema and ownership rules, but only authorize mutation inside this single
+repair region.
+</repair_scope_contract>
 """
 
 def _critic_system(*, require_topology_proofs: bool) -> str:
@@ -1368,10 +1365,7 @@ async def _request_critic_scorecard(
     resolved_complexity: str,
     revision_count: int,
     correction: tuple[str, str] | None = None,
-    completion_scorecard: str | None = None,
 ) -> StructuredLLMResponse:
-    if correction is not None and completion_scorecard is not None:
-        raise ValueError("critic correction and completion are mutually exclusive")
     message = _critic_message(review_packet, render_result)
     operation = "graph_critic"
     effort = _GRAPH_CRITIC_EFFORT
@@ -1401,29 +1395,12 @@ async def _request_critic_scorecard(
                 "type": "text",
                 "text": (
                     "Your prior scorecard failed protocol validation. Correct it and run the clean "
-                    "completeness pass before the one allowed repair. Keep every valid judgment "
-                    "unchanged, add every independent blocking defect the prior pass missed, and "
-                    "obey the exact "
+                    "focus pass before the next local repair. Keep every valid judgment "
+                    "unchanged, add every blocking defect that was missed for the selected "
+                    "repair region, and obey the exact "
                     f"{correction_contracts}.\n"
                     f"Validation error: {validation_error[:1000]}\n"
                     f"Prior scorecard: {invalid_response[:12000]}"
-                ),
-            }
-        )
-    elif completion_scorecard is not None:
-        operation = "graph_critic_repair_completion"
-        message["content"].append(
-            {
-                "type": "text",
-                "text": (
-                    "Run a clean completeness pass before the one allowed repair. The prior "
-                    "scorecard below is an authoritative lower bound. Return a protocol-valid "
-                    "scorecard with every blocking defect found by this pass. You may omit prior "
-                    "blockers and selectors because the server retains and unions the lower "
-                    "bound. Add every independent blocking defect the prior pass missed. The "
-                    "candidate has not changed, so do not claim a prior defect was repaired.\n"
-                    "Prior scorecard: "
-                    + completion_scorecard
                 ),
             }
         )
@@ -1449,113 +1426,6 @@ async def _request_critic_scorecard(
         ),
         timeout_seconds=critic_timeout_seconds(state),
         max_output_tokens=max_output_tokens,
-    )
-
-
-def _ordered_union(prior: list[Any], completion: list[Any]) -> list[Any]:
-    merged = deepcopy(prior)
-    for item in completion:
-        if item not in merged:
-            merged.append(deepcopy(item))
-    return merged
-
-
-def _merge_monotonic_repair_completion(
-    prior_review: dict[str, Any],
-    completion_review: dict[str, Any],
-) -> dict[str, Any]:
-    """Union two valid pre-patch audits under server-owned repair authority."""
-    prior_layers = prior_review["repair_contract"]["layers"]
-    completion_layers = completion_review["repair_contract"]["layers"]
-    merged_layers = deepcopy(completion_layers)
-    list_fields = (
-        "blocking_findings",
-        "deterministic_finding_ids",
-        "node_ids",
-        "group_ids",
-        "composition_fields",
-        "sequence_indexes",
-        "assumption_indexes",
-        "context_node_ids",
-    )
-    for layer in _REPAIR_LAYERS:
-        prior = prior_layers[layer]
-        completion = completion_layers[layer]
-        merged = merged_layers[layer]
-        for field in list_fields:
-            merged[field] = _ordered_union(prior[field], completion[field])
-        merged["edge_selectors"] = _ordered_union(
-            prior["edge_selectors"], completion["edge_selectors"]
-        )
-        merged["addition_count"] = max(
-            prior["addition_count"], completion["addition_count"]
-        )
-        prior_appends = prior["composition_append_counts"]
-        completion_appends = completion["composition_append_counts"]
-        merged["composition_append_counts"] = {
-            field: max(prior_appends.get(field, 0), completion_appends.get(field, 0))
-            for field in sorted(set(prior_appends) | set(completion_appends))
-        }
-        merged["status"] = "fail" if merged["blocking_findings"] else "pass"
-        merged["score"] = min(float(prior["score"]), float(completion["score"]))
-        merged["reason"] = (
-            "The artifact layer requires the cited repair."
-            if merged["status"] == "fail"
-            else "The artifact layer passed the rubric."
-        )
-
-    prior_proofs = {
-        proof.get("guarantee"): proof
-        for proof in prior_review.get("topology_proofs") or []
-        if isinstance(proof, dict)
-    }
-    merged_proofs = deepcopy(completion_review.get("topology_proofs") or [])
-    merged_guarantees = {
-        proof.get("guarantee")
-        for proof in merged_proofs
-        if isinstance(proof, dict)
-    }
-    for index, proof in enumerate(merged_proofs):
-        if not isinstance(proof, dict):
-            continue
-        prior = prior_proofs.get(proof.get("guarantee"))
-        if (
-            isinstance(prior, dict)
-            and prior.get("status") == "fail"
-            and proof.get("status") != "fail"
-        ):
-            merged_proofs[index] = deepcopy(prior)
-    merged_proofs.extend(
-        deepcopy(proof)
-        for guarantee, proof in prior_proofs.items()
-        if guarantee not in merged_guarantees
-    )
-
-    return _review_from_repair_contract(
-        {
-            "repair_contract": {
-                "repair_scope": _repair_scope_for_layers(merged_layers),
-                "layers": merged_layers,
-            },
-            "strengths": _ordered_union(
-                prior_review.get("strengths") or [],
-                completion_review.get("strengths") or [],
-            ),
-            "advice": _ordered_union(
-                prior_review.get("advice") or [],
-                completion_review.get("advice") or [],
-            ),
-            "topology_proofs": merged_proofs,
-        }
-    )
-
-
-def _needs_repair_completion(review: dict[str, Any], revision_count: int) -> bool:
-    return (
-        revision_count == 0
-        and review.get("review_status") == "completed"
-        and not review.get("terminal")
-        and (review.get("repair_contract") or {}).get("repair_scope") == "local"
     )
 
 
@@ -1747,11 +1617,13 @@ async def graph_critic_node(state: AgentState) -> AgentState:
                 review_context=review_packet["review_context"],
                 require_topology_proofs=profile.resolved == "production",
             )
-        except (ValueError, json.JSONDecodeError) as protocol_error:
+        except (CriticProtocolError, ValueError, json.JSONDecodeError) as protocol_error:
             if (
                 _semantic_review_failure_code(protocol_error, raw)
                 == "semantic_review_output_truncated"
             ):
+                raise
+            if protocol_corrected:
                 raise
             error_path, error_rule = _protocol_error_coordinates(protocol_error)
             logger.warning(
@@ -1781,37 +1653,6 @@ async def graph_critic_node(state: AgentState) -> AgentState:
             )
             protocol_corrected = True
         review = _enforce_local_repair_admission(review, graph)
-        if _needs_repair_completion(review, revision_count) and not protocol_corrected:
-            validation_stage = "completion"
-            response = await _request_critic_scorecard(
-                state,
-                review_packet=review_packet,
-                render_result=render_result,
-                resolved_complexity=profile.resolved,
-                revision_count=revision_count,
-                completion_scorecard=raw,
-            )
-            raw = response.text
-            completion_review = _completed_critic_review(
-                response,
-                graph=graph,
-                deterministic_findings=deterministic_findings,
-                review_context=review_packet["review_context"],
-                require_topology_proofs=profile.resolved == "production",
-            )
-            review = _merge_monotonic_repair_completion(review, completion_review)
-            _validate_review_protocol(
-                {
-                    "repair_contract": review["repair_contract"],
-                    "strengths": review["strengths"],
-                    "advice": review["advice"],
-                    "topology_proofs": review["topology_proofs"],
-                },
-                require_topology_proofs=profile.resolved == "production",
-                graph=graph,
-                deterministic_findings=deterministic_findings,
-            )
-            review = _enforce_local_repair_admission(review, graph)
     except Exception as exc:
         # Structural checks cannot prove semantic control boundaries. Fail closed
         # rather than publishing a plausible but unaudited architecture.

@@ -22,6 +22,7 @@ def _clear_client_caches(llm):
         llm._get_anthropic_client,
         llm._get_openai_client,
         llm._get_kimi_client,
+        llm.get_posthog_client,
     ):
         clear = getattr(client_factory, "cache_clear", None)
         if clear:
@@ -62,15 +63,61 @@ def test_build_telemetry_includes_optional_fields():
     }
 
 
+def test_get_posthog_client_logs_loudly_but_does_not_break_llm_calls_locally(
+    monkeypatch, caplog
+):
+    import adapters.llm_adapter as llm
+
+    monkeypatch.setattr(settings, "posthog_api_key", "")
+    monkeypatch.setattr(settings, "k_service", "")
+
+    with caplog.at_level("ERROR", logger="adapters.llm_adapter"):
+        client = llm.get_posthog_client()
+
+    assert client is None
+    assert "POSTHOG_API_KEY" in caplog.text
+
+
+def test_get_posthog_client_is_a_silent_noop_in_cloud_run_when_unconfigured(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    monkeypatch.setattr(settings, "posthog_api_key", "")
+    monkeypatch.setattr(settings, "k_service", "agent-backend")
+
+    assert llm.get_posthog_client() is None
+
+
+def test_get_posthog_client_constructs_when_configured(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    class _PosthogModule:
+        class Posthog:
+            def __init__(self, api_key, host=None):
+                self.api_key = api_key
+                self.host = host
+                self.shutdown_called = False
+
+            def shutdown(self):
+                self.shutdown_called = True
+
+    monkeypatch.setitem(sys.modules, "posthog", _PosthogModule)
+    monkeypatch.setattr(settings, "posthog_api_key", "phc_test-key")
+    monkeypatch.setattr(settings, "posthog_host", "https://eu.i.posthog.com")
+
+    client = llm.get_posthog_client()
+    assert client.api_key == "phc_test-key"
+    assert client.host == "https://eu.i.posthog.com"
+
+
 def test_lazy_clients_and_semaphore_branches(monkeypatch):
     import adapters.llm_adapter as llm
 
-    class _AnthropicModule:
+    class _PosthogAnthropicModule:
         class AsyncAnthropic:
             def __init__(self, **kwargs):
                 self.kwargs = kwargs
 
-    class _OpenAIModule:
+    class _PosthogOpenAIModule:
         class AsyncOpenAI:
             def __init__(self, **kwargs):
                 self.kwargs = kwargs
@@ -78,8 +125,9 @@ def test_lazy_clients_and_semaphore_branches(monkeypatch):
     llm._get_anthropic_client.cache_clear()
     llm._get_openai_client.cache_clear()
     llm._get_kimi_client.cache_clear()
-    monkeypatch.setitem(sys.modules, "anthropic", _AnthropicModule)
-    monkeypatch.setitem(sys.modules, "openai", _OpenAIModule)
+    monkeypatch.setitem(sys.modules, "posthog.ai.anthropic", _PosthogAnthropicModule)
+    monkeypatch.setitem(sys.modules, "posthog.ai.openai", _PosthogOpenAIModule)
+    monkeypatch.setattr(llm, "get_posthog_client", lambda: None)
     monkeypatch.setattr(settings, "anthropic_api_key", "anthropic-key")
     monkeypatch.setattr(settings, "openai_api_key", "")
     monkeypatch.setattr(settings, "anthropic_max_concurrent_streams", 0)
@@ -87,6 +135,7 @@ def test_lazy_clients_and_semaphore_branches(monkeypatch):
     assert llm._get_anthropic_client().kwargs == {
         "api_key": "anthropic-key",
         "max_retries": 0,
+        "posthog_client": None,
     }
     assert llm._get_openai_client() is None
     assert llm._get_anthropic_stream_semaphore() is None
@@ -98,6 +147,7 @@ def test_lazy_clients_and_semaphore_branches(monkeypatch):
     assert llm._get_openai_client().kwargs == {
         "api_key": "openai-key",
         "max_retries": 0,
+        "posthog_client": None,
     }
     first = llm._get_anthropic_stream_semaphore()
     second = llm._get_anthropic_stream_semaphore()
@@ -109,12 +159,13 @@ def test_kimi_client_uses_the_moonshot_openai_compatible_endpoint(monkeypatch):
 
     calls = []
 
-    class _OpenAIModule:
+    class _PosthogOpenAIModule:
         class AsyncOpenAI:
             def __init__(self, **kwargs):
                 calls.append(kwargs)
 
-    monkeypatch.setitem(sys.modules, "openai", _OpenAIModule)
+    monkeypatch.setitem(sys.modules, "posthog.ai.openai", _PosthogOpenAIModule)
+    monkeypatch.setattr(llm, "get_posthog_client", lambda: None)
     monkeypatch.setattr(settings, "moonshot_api_key", "moonshot-key")
     monkeypatch.setattr(settings, "moonshot_base_url", "https://api.moonshot.ai/v1")
 
@@ -123,6 +174,7 @@ def test_kimi_client_uses_the_moonshot_openai_compatible_endpoint(monkeypatch):
         "api_key": "moonshot-key",
         "base_url": "https://api.moonshot.ai/v1",
         "max_retries": 0,
+        "posthog_client": None,
     }]
 
 
