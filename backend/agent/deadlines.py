@@ -98,7 +98,7 @@ def critic_timeout_seconds(state: dict[str, Any]) -> float:
         max_s=settings.graph_critic_max_timeout_s,
         downstream_reserve_s=downstream_reserve_s,
         stage="graph critic",
-        standalone_s=settings.graph_critic_timeout_s,
+        standalone_s=settings.graph_critic_max_timeout_s,
     )
 
 

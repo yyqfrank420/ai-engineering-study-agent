@@ -79,8 +79,9 @@ class Settings(BaseSettings):
     graph_design_timeout_s: float = 150.0
     architecture_role_timeout_s: float = 150.0
     graph_critic_timeout_s: float = 90.0
-    # Sonnet reviews may borrow saved upstream time up to this liveness ceiling.
-    graph_critic_max_timeout_s: float = 180.0
+    # Initial editable rejections receive one clean completeness pass before repair.
+    # Both reviews share this stage ceiling and may borrow saved upstream time.
+    graph_critic_max_timeout_s: float = 195.0
     graph_patch_timeout_s: float = 150.0
     # Kimi may use time saved by earlier stages up to this per-call ceiling.
     # Deadline admission still preserves the complete downstream review path.

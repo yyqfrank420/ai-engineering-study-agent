@@ -6,7 +6,7 @@ Last updated: 2026-08-08
 
 Restore the current architecture pipeline and deploy it before starting the staged generation redesign.
 
-The current release reached graph review on exact head `41f4881`. It produced and rendered a valid 46-node, 67-edge prototype candidate. The critic timed out because the prototype wire contract still requested five production proof rows and deadline admission reserved time for a later repair before the first verdict existed.
+The current release now completes architecture planning, Kimi generation, private rendering, local repair, and post-patch review. Diagnostic `31257810429` exposed serial defect discovery in the critic: the second review found an unchanged cache gate defect that the first review missed. The pipeline withheld the graph after its one allowed repair.
 
 The redesign stays outside the release-critical path. It begins after the current pipeline passes the targeted live diagnostic and production smoke test.
 
@@ -21,21 +21,26 @@ The redesign stays outside the release-critical path. It begins after the curren
 5. Add paired prototype and production tests.
 6. Give the active critic verdict priority over speculative repair time while preserving synthesis and finalization.
 7. Keep whole-graph generation, private render, MECE review layers, locks, and one bounded local repair.
+8. Complete the first editable review before spending the one repair.
 
 ### Current status
 
 - Canonicalisation and final validation use the resolved architecture depth.
-- Critic v38 sends an empty proof object at prototype depth and keeps the full proof contract at production depth.
-- The active critic may borrow up to the existing 180-second ceiling. Patch admission assigns any remaining repair time after a failed verdict.
+- Critic v39 sends an empty proof object at prototype depth and keeps the full proof contract at production depth.
+- An initial editable rejection receives one clean completion pass against the same graph and render. The server rejects any completion that drops prior findings or mutation authority.
+- The shared initial critic stage may borrow up to 195 seconds. The measured timing replay preserves 98 seconds for patching and 101 seconds for final review.
 - Repair scope is derived from failed layer ownership, so editable defects enter one bounded patch and render-only defects fail closed.
-- Focused critic, patch, and workflow verification passes: 282 tests, including depth-specific schema and repair-scope regressions.
-- The next paid action is one exact-head `graph-expansion` diagnostic. Another failure requires new evidence before any retry.
+- The exact `122b1fd` diagnostic completed all graph stages and proved the repair pipeline works. Its remaining failure was an unchanged defect omitted by the first critic.
+- Focused v39 critic and deadline verification passes. The next paid action remains one exact-head `graph-expansion` diagnostic after review, commit, and CI.
 
 ### Tests
 
 - A prototype review with incomplete topology witnesses succeeds when all required prototype checks pass.
 - The same incomplete witnesses fail at production depth.
 - A corrected review can recover from one malformed response.
+- An initial editable rejection receives exactly one completion pass before repair.
+- A completion may add defects and selectors but cannot remove or weaken prior repair evidence.
+- Post-patch reviews do not start another completion pass.
 - Safe error telemetry identifies the rejected field and rule without storing raw prompts or model output.
 - Existing graph critic, repair, workflow, API, and browser tests remain green.
 - Backend and frontend coverage stay at or above their current 90% thresholds.

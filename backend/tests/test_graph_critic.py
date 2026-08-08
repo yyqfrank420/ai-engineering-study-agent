@@ -20,6 +20,8 @@ from agent.nodes.graph_critic import (
     _deterministic_render_review,
     _deterministic_review,
     _lock_unchanged_passed_layers,
+    _needs_repair_completion,
+    _require_monotonic_repair_completion,
     _review_packet,
     _validate_repair_contract,
     _validate_review_protocol,
@@ -191,7 +193,7 @@ def _critic_state(*, graph=None, complexity="prototype"):
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v38"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v39"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -1091,6 +1093,153 @@ def test_repair_scope_controls_review_routing(scope, approved, expected):
     }
 
     assert _route_after_review(state) == expected
+
+
+def test_repair_completion_can_extend_but_not_narrow_prior_authority():
+    first_edge = {"source": "a", "target": "b", "label": "first"}
+    second_edge = {"source": "b", "target": "c", "label": "second"}
+    prior = {
+        "repair_contract": _repair_contract(
+            scope="local",
+            failed_layer="connections",
+            findings=["Repair the first route."],
+            layer_selectors={
+                "connections": {
+                    "edge_selectors": [first_edge],
+                    "context_node_ids": ["a", "b"],
+                    "addition_count": 1,
+                }
+            },
+        ),
+        "topology_proofs": [],
+    }
+    completion = deepcopy(prior)
+    completion_layer = completion["repair_contract"]["layers"]["connections"]
+    completion_layer["blocking_findings"].append("Repair the second route.")
+    completion_layer["edge_selectors"].append(second_edge)
+    completion_layer["context_node_ids"].append("c")
+    completion_layer["addition_count"] = 2
+
+    assert _require_monotonic_repair_completion(prior, completion) is completion
+
+    narrowed = deepcopy(completion)
+    narrowed["repair_contract"]["layers"]["connections"]["edge_selectors"] = [
+        second_edge
+    ]
+    with pytest.raises(CriticProtocolError) as caught:
+        _require_monotonic_repair_completion(prior, narrowed)
+
+    assert caught.value.path == "connections.edge_selectors"
+    assert caught.value.rule == "non_monotonic_completion"
+
+
+@pytest.mark.parametrize(
+    ("scope", "revision_count", "expected"),
+    [
+        ("local", 0, True),
+        ("none", 0, False),
+        ("global", 0, False),
+        ("local", 1, False),
+    ],
+)
+def test_repair_completion_runs_only_for_initial_local_rejections(
+    scope,
+    revision_count,
+    expected,
+):
+    review = {
+        "review_status": "completed",
+        "repair_contract": {"repair_scope": scope},
+    }
+
+    assert _needs_repair_completion(review, revision_count) is expected
+
+
+@pytest.mark.asyncio
+async def test_initial_local_rejection_gets_one_monotonic_completion_pass(monkeypatch):
+    calls = []
+    graph = _domain_graph()
+    graph["edges"].append(
+        {
+            "source": "objective",
+            "target": "approval",
+            "label": "requires approval",
+        }
+    )
+    connection_code = next(
+        index
+        for index, code in enumerate(_RUBRIC_CODES, start=1)
+        if _RUBRIC_CODE_OWNERS[code] == "connections"
+    )
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        payload = _passing_review_payload()
+        payload["repair_scope"] = "local"
+        _set_model_layer(
+            payload,
+            "connections",
+            status="fail",
+            score=0.7,
+            finding_codes=[connection_code],
+            edge_indexes=[0] if len(calls) == 1 else [0, 1],
+        )
+        return _structured_response(payload)
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+    result = await graph_critic_node(_critic_state(graph=graph))
+
+    assert len(calls) == 2
+    assert calls[0]["telemetry"]["operation"] == "graph_critic"
+    assert calls[1]["telemetry"]["operation"] == "graph_critic_repair_completion"
+    assert "clean completeness pass" in calls[1]["messages"][0]["content"][-1]["text"]
+    assert len(
+        result["graph_review"]["repair_contract"]["layers"]["connections"][
+            "edge_selectors"
+        ]
+    ) == 2
+
+
+@pytest.mark.asyncio
+async def test_protocol_correction_can_feed_the_completion_pass(monkeypatch):
+    calls = []
+    invalid = _passing_review_payload()
+    _set_model_layer(invalid, "components", status="invalid")
+    local = _passing_review_payload()
+    local["repair_scope"] = "local"
+    connection_code = next(
+        index
+        for index, code in enumerate(_RUBRIC_CODES, start=1)
+        if _RUBRIC_CODE_OWNERS[code] == "connections"
+    )
+    _set_model_layer(
+        local,
+        "connections",
+        status="fail",
+        score=0.7,
+        finding_codes=[connection_code],
+        edge_indexes=[0],
+    )
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return _structured_response(invalid if len(calls) == 1 else local)
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+    result = await graph_critic_node(_critic_state())
+
+    assert result["graph_review"]["repair_contract"]["repair_scope"] == "local"
+    assert [call["telemetry"]["operation"] for call in calls] == [
+        "graph_critic",
+        "graph_critic_protocol_correction",
+        "graph_critic_repair_completion",
+    ]
 
 
 def test_unchanged_passed_layers_remain_locked_after_a_local_repair():
@@ -2817,7 +2966,7 @@ async def test_malformed_structured_review_fails_closed_without_retry(monkeypatc
     assert result["graph_review"]["failure_code"] == "semantic_review_output_truncated"
     assert len(calls) == 1
     assert calls[0]["model"] == settings.graph_qa_model
-    assert calls[0]["timeout_seconds"] <= settings.graph_critic_timeout_s
+    assert calls[0]["timeout_seconds"] <= settings.graph_critic_max_timeout_s
     assert calls[0]["max_output_tokens"] == settings.graph_qa_max_completion_tokens
     assert calls[0]["effort"] == "medium"
     assert calls[0]["response_schema"] == _GRAPH_CRITIC_PROTOTYPE_RESPONSE_SCHEMA

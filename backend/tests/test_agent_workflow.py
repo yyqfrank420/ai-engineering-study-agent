@@ -261,7 +261,34 @@ def test_critics_prioritize_the_verdict_and_preserve_finalization():
 
     assert design_timeout_seconds({}) == settings.graph_design_timeout_s
     assert patch_timeout_seconds({}) == settings.graph_patch_timeout_s
-    assert critic_timeout_seconds({}) == settings.graph_critic_timeout_s
+    assert critic_timeout_seconds({}) == settings.graph_critic_max_timeout_s
+
+
+def test_measured_completion_path_preserves_patch_and_final_review_time(monkeypatch):
+    from agent import deadlines
+    from config import settings
+
+    clock = {"now": 386.0}
+    monkeypatch.setattr(deadlines.time, "monotonic", lambda: clock["now"])
+    state = {
+        "terminal_deadline_s": (
+            settings.agent_timeout_s - settings.agent_terminal_headroom_s
+        )
+    }
+
+    initial_critic_s = deadlines.critic_timeout_seconds(state)
+    assert initial_critic_s == 195.0
+    clock["now"] += initial_critic_s
+
+    patch_s = deadlines.patch_timeout_seconds(state)
+    assert patch_s >= 98.0
+    clock["now"] += 98.0
+
+    final_critic_s = deadlines.critic_timeout_seconds(state)
+    assert final_critic_s >= 101.0
+    clock["now"] += 101.0
+
+    assert deadlines.synthesis_timeout_seconds(state) == settings.graph_synthesis_timeout_s
 
 
 def test_graph_stage_caps_for_one_complete_patch_fit_terminal_window():

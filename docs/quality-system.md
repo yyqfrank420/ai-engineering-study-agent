@@ -138,11 +138,11 @@ artifact digest, replay commit/actor, reviewer, and reason. Selective replay is
 review evidence only and does not itself publish an image approval or deploy.
 
 PR evaluation limits are eight cases, 64 application provider attempts, and 16
-judge provider attempts. The current PR corpus has 54 logical application calls on
+judge provider attempts. The current PR corpus has 58 logical application calls on
 its complete one-repair paths. Provider retry and fallback paths have a theoretical
-132-attempt first-pass ceiling. The tagged staging revision atomically reserves one
+140-attempt first-pass ceiling. The tagged staging revision atomically reserves one
 shared quota record before each provider request and rejects attempt 65 before it is
-sent. This leaves ten attempts for transient provider failures while placing a hard
+sent. This leaves six attempts for transient provider failures while placing a hard
 cost boundary below the failure envelope. Production traffic does not set this
 evaluation-only quota. The timeout chain is deliberately nested: the backend
 agent envelope is 910 seconds, with model work stopping at 880 seconds to retain persistence

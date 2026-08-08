@@ -25,7 +25,11 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 _SAFE_PROTOCOL_PATH = re.compile(r"[A-Za-z0-9_$.\[\]]{1,96}")
-_PROTOCOL_ERROR_RULES = {"invalid_enum", "missing_evidence"}
+_PROTOCOL_ERROR_RULES = {
+    "invalid_enum",
+    "missing_evidence",
+    "non_monotonic_completion",
+}
 
 
 class CriticProtocolError(ValueError):
@@ -37,7 +41,7 @@ class CriticProtocolError(ValueError):
         self.rule = rule if rule in _PROTOCOL_ERROR_RULES else None
 
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v38"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v39"
 # Sonnet 5 high effort can spend the full output allowance on adaptive thinking
 # before emitting the required scorecard. Medium keeps the review inside one call.
 _GRAPH_CRITIC_EFFORT = "medium"
@@ -1221,7 +1225,10 @@ async def _request_critic_scorecard(
     resolved_complexity: str,
     revision_count: int,
     correction: tuple[str, str] | None = None,
+    completion_scorecard: str | None = None,
 ) -> StructuredLLMResponse:
+    if correction is not None and completion_scorecard is not None:
+        raise ValueError("critic correction and completion are mutually exclusive")
     message = _critic_message(review_packet, render_result)
     operation = "graph_critic"
     effort = _GRAPH_CRITIC_EFFORT
@@ -1258,6 +1265,22 @@ async def _request_critic_scorecard(
                 ),
             }
         )
+    elif completion_scorecard is not None:
+        operation = "graph_critic_repair_completion"
+        message["content"].append(
+            {
+                "type": "text",
+                "text": (
+                    "Run a clean completeness pass before the one allowed repair. The prior "
+                    "scorecard below is protocol-valid. Return a complete replacement scorecard "
+                    "for the same candidate. Preserve every prior blocker, selector, context "
+                    "anchor, deterministic finding, addition count, and failed topology proof. "
+                    "Add every independent blocking defect the prior pass missed. Do not weaken "
+                    "or remove prior repair authority.\nPrior scorecard: "
+                    + completion_scorecard
+                ),
+            }
+        )
     return await stream_structured_llm(
         model=settings.graph_qa_model,
         system=system + _GRAPH_CRITIC_COMPACT_PROTOCOL,
@@ -1280,6 +1303,88 @@ async def _request_critic_scorecard(
         ),
         timeout_seconds=critic_timeout_seconds(state),
         max_output_tokens=max_output_tokens,
+    )
+
+
+def _edge_selector_set(value: Any) -> set[tuple[str, str, str]]:
+    return {
+        (item["source"], item["target"], item["label"])
+        for item in value
+        if isinstance(item, dict)
+        and all(
+            isinstance(item.get(field), str)
+            for field in ("source", "target", "label")
+        )
+    }
+
+
+def _require_monotonic_repair_completion(
+    prior_review: dict[str, Any],
+    completion_review: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep the pre-patch audit from narrowing already valid repair evidence."""
+    prior_layers = prior_review["repair_contract"]["layers"]
+    completion_layers = completion_review["repair_contract"]["layers"]
+    list_fields = (
+        "blocking_findings",
+        "deterministic_finding_ids",
+        "node_ids",
+        "group_ids",
+        "composition_fields",
+        "sequence_indexes",
+        "assumption_indexes",
+        "context_node_ids",
+    )
+    failures: list[str] = []
+    for layer in _REPAIR_LAYERS:
+        prior = prior_layers[layer]
+        completion = completion_layers[layer]
+        if prior["status"] == "fail" and completion["status"] != "fail":
+            failures.append(f"{layer}.status")
+        for field in list_fields:
+            if not set(prior[field]).issubset(completion[field]):
+                failures.append(f"{layer}.{field}")
+        if not _edge_selector_set(prior["edge_selectors"]).issubset(
+            _edge_selector_set(completion["edge_selectors"])
+        ):
+            failures.append(f"{layer}.edge_selectors")
+        if completion["addition_count"] < prior["addition_count"]:
+            failures.append(f"{layer}.addition_count")
+        prior_appends = prior["composition_append_counts"]
+        completion_appends = completion["composition_append_counts"]
+        if any(
+            completion_appends.get(field, 0) < count
+            for field, count in prior_appends.items()
+        ):
+            failures.append(f"{layer}.composition_append_counts")
+
+    completion_proofs = {
+        proof.get("guarantee"): proof.get("status")
+        for proof in completion_review.get("topology_proofs") or []
+        if isinstance(proof, dict)
+    }
+    for proof in prior_review.get("topology_proofs") or []:
+        if (
+            isinstance(proof, dict)
+            and proof.get("status") == "fail"
+            and completion_proofs.get(proof.get("guarantee")) != "fail"
+        ):
+            failures.append(f"topology_proofs.{proof.get('guarantee')}")
+
+    if failures:
+        raise CriticProtocolError(
+            "repair completion narrowed prior findings",
+            path=failures[0],
+            rule="non_monotonic_completion",
+        )
+    return completion_review
+
+
+def _needs_repair_completion(review: dict[str, Any], revision_count: int) -> bool:
+    return (
+        revision_count == 0
+        and review.get("review_status") == "completed"
+        and (review.get("repair_contract") or {}).get("repair_scope") == "local"
     )
 
 
@@ -1555,6 +1660,24 @@ async def graph_critic_node(state: AgentState) -> AgentState:
                 review_context=review_packet["review_context"],
                 require_topology_proofs=profile.resolved == "production",
             )
+        if _needs_repair_completion(review, revision_count):
+            response = await _request_critic_scorecard(
+                state,
+                review_packet=review_packet,
+                render_result=render_result,
+                resolved_complexity=profile.resolved,
+                revision_count=revision_count,
+                completion_scorecard=raw,
+            )
+            raw = response.text
+            completion_review = _completed_critic_review(
+                response,
+                graph=graph,
+                deterministic_findings=deterministic_findings,
+                review_context=review_packet["review_context"],
+                require_topology_proofs=profile.resolved == "production",
+            )
+            review = _require_monotonic_repair_completion(review, completion_review)
         review = _lock_unchanged_passed_layers(
             state,
             review,

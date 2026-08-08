@@ -424,6 +424,25 @@ Most recent authoritative evidence:
   maps to `global`. Model scope remains a validated wire field for compatibility and cannot bypass
   the bounded repair lane. A changed patch still requires a second independent review before
   publication.
+- Diagnostic `31257810429` ran `graph-expansion` on exact head `122b1fd`. All eight application
+  calls completed without provider fallback. Kimi produced a 41-node, 73-edge, 7-group candidate.
+  The private render passed with zero clipping or overlap. Sonnet's first review rejected fallback
+  branch completion and four reversed actor edges. Kimi applied the declared local repair in 97.441
+  seconds, adding the missing fallback terminal edge and removing the four cited edges. The second
+  review then rejected a cache-hit gate-preservation defect. Exact graph comparison proved that the
+  cache path, its nodes, and every incident edge were unchanged by the patch. The defect was visible
+  in the first candidate: cache hits could serve before rejoining the input guardrail and policy
+  paths, with no accepted-post-gate cache-fill edge. The first critic discovered defects serially.
+  The one-revision limit then withheld the improved candidate. The run cost $1.065204; no semantic
+  judge call ran.
+- Critic v39 runs one clean completeness review of an initial editable rejection before spending the
+  single Kimi repair. It supplies the first protocol-valid scorecard against the same candidate and
+  render. The completion must retain every earlier blocker, selector, context anchor, deterministic
+  finding, addition count, composition append count, and failed topology proof. Server validation
+  rejects any narrowing before the patch worker runs. Initial approval, render-only rejection, and
+  post-patch review keep one critic pass. The shared critic stage may borrow saved upstream time up
+  to 195 seconds. A replay of the measured run offsets leaves 98 seconds for Kimi and 101 seconds
+  for the final critic inside the existing terminal deadline and downstream reserves.
 - Canonical run `31221851568` completed all Kimi provider calls. Two valid topology objects were
   discarded because one bounded title and one bounded responsibility exceeded presentation limits.
   Two other 33-node and 39-node candidates passed browser rendering, then their Sonnet reviews were
@@ -438,7 +457,7 @@ Most recent authoritative evidence:
   lines. Static analysis, dependency audits, ingestion artifacts, migrations, Terraform validation,
   the production frontend build, and the backend container build pass on the same working tree.
 - Backend/frontend staging readiness, dashboard smoke, capture, cleanup, artifact upload, latency accounting, and cost accounting all passed.
-- `main` contains PRs #37 through #40. PR #41 now needs one exact-tree diagnostic before the
+- `main` contains PRs #37 through #40. PR #41 now needs one v39 exact-tree diagnostic before the
   canonical run.
 
 ## Evaluation workflow lessons
