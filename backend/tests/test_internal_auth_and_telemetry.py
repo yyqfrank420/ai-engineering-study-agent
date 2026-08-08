@@ -14,6 +14,22 @@ from storage.analytics_event_store import list_recent_analytics_events
 from storage.telemetry_store import list_recent_http_request_logs, list_recent_llm_telemetry
 
 
+def test_only_ordinary_production_users_are_production_traffic(monkeypatch):
+    from api.chat_guards import is_production_traffic
+
+    ordinary_user = {"claims": {"app_metadata": {"provider": "email"}}}
+    internal_test_user = {
+        "claims": {"app_metadata": {"provider": "internal_test"}}
+    }
+
+    monkeypatch.setattr(settings, "otel_environment", "production")
+    assert is_production_traffic(ordinary_user) is True
+    assert is_production_traffic(internal_test_user) is False
+
+    monkeypatch.setattr(settings, "otel_environment", "staging")
+    assert is_production_traffic(ordinary_user) is False
+
+
 def test_internal_login_returns_bearer_token_without_touching_otp(temp_data_dir, monkeypatch):
     from main import create_app
 

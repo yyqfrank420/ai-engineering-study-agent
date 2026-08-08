@@ -264,6 +264,9 @@ def test_pr_live_eval_is_globally_serial_and_blocks_manual_review():
     assert "--require-approved-corpus" in workflow
     assert "--manual-review-policy blocking" in workflow
     assert "environment: staging-eval" in workflow
+    assert "EVALUATION_RUN_ID=$EVALUATION_RUN_ID" in workflow
+    assert "OTEL_ENVIRONMENT: staging" in workflow
+    assert "EVALUATION_PROVIDER_ATTEMPT_LIMIT: 64" in workflow
     assert "resolve-approved-tree:" in workflow
     assert "needs: [classify, resolve-approved-tree]" in workflow
     assert "needs.resolve-approved-tree.outputs.approved == 'false'" in workflow
@@ -284,11 +287,25 @@ def test_pr_live_eval_is_globally_serial_and_blocks_manual_review():
     )
 
 
+def test_production_deploy_marks_backend_and_frontend_analytics():
+    workflow = Path(".github/workflows/deploy-production.yml").read_text(
+        encoding="utf-8"
+    )
+    terraform = Path("infra/terraform/gcp/locals.tf").read_text(encoding="utf-8")
+
+    assert "OTEL_ENVIRONMENT=production" in workflow
+    assert 'VITE_IS_PRODUCTION: "true"' in workflow
+    assert 'OTEL_ENVIRONMENT                 = "production"' in terraform
+    assert 'OTEL_ENVIRONMENT = "staging"' in terraform
+
+
 def test_scheduled_eval_blocks_manual_review_for_an_approved_corpus():
     workflow = Path(".github/workflows/scheduled-eval.yml").read_text(encoding="utf-8")
 
     assert "--require-approved-corpus" in workflow
     assert "--manual-review-policy blocking" in workflow
+    assert "OTEL_ENVIRONMENT: staging" in workflow
+    assert "EVALUATION_PROVIDER_ATTEMPT_LIMIT: 150" in workflow
     assert "BROWSER_OUTCOME: ${{ steps.browser.outcome }}" in workflow
     assert "SEMANTIC_OUTCOME: ${{ steps.semantic.outcome }}" in workflow
     assert (

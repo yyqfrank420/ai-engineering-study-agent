@@ -746,6 +746,7 @@ def _telemetry(state: AgentState, operation: str, resolved: str) -> dict:
         operation,
         user_id=state.get("user_id"),
         thread_id=state.get("session_id"),
+        is_production=state.get("is_production"),
         metadata={
             "complexity_resolved": resolved,
             "request_id": state.get("request_id"),

@@ -93,6 +93,28 @@ def create_openai_client(*, api_key: str, base_url: str | None = None):
     return AsyncOpenAI(**client_kwargs, posthog_client=posthog_client)
 
 
+def build_posthog_properties(
+    *,
+    session_id: str | None = None,
+    is_production: bool | None = None,
+) -> dict[str, object]:
+    environment = settings.otel_environment.strip().lower() or "development"
+    properties: dict[str, object] = {
+        "environment": environment,
+        "is_production": (
+            environment == "production"
+            if is_production is None
+            else is_production
+        ),
+    }
+    if session_id:
+        properties["$ai_session_id"] = session_id
+    evaluation_run_id = settings.evaluation_run_id.strip()
+    if evaluation_run_id:
+        properties["evaluation_run_id"] = evaluation_run_id
+    return properties
+
+
 @lru_cache(maxsize=1)
 def _get_anthropic_client():
     return create_anthropic_client(api_key=settings.anthropic_api_key)
@@ -235,6 +257,7 @@ def build_telemetry(
     *,
     user_id: str | None = None,
     thread_id: str | None = None,
+    is_production: bool | None = None,
     metadata: dict | None = None,
 ) -> dict:
     payload = {"operation": operation}
@@ -242,6 +265,8 @@ def build_telemetry(
         payload["user_id"] = user_id
     if thread_id:
         payload["thread_id"] = thread_id
+    if is_production is not None:
+        payload["is_production"] = is_production
     if metadata:
         payload["metadata"] = metadata
     return payload
@@ -622,8 +647,14 @@ async def stream_response(
     posthog_distinct_id = telemetry_details.get("user_id")
     posthog_trace_id = telemetry_metadata.get("request_id")
     posthog_session_id = telemetry_details.get("thread_id")
-    posthog_properties = (
-        {"$ai_session_id": posthog_session_id} if posthog_session_id else None
+    telemetry_is_production = telemetry_details.get("is_production")
+    posthog_properties = build_posthog_properties(
+        session_id=posthog_session_id,
+        is_production=(
+            telemetry_is_production
+            if isinstance(telemetry_is_production, bool)
+            else None
+        ),
     )
     kwargs: dict = {
         "model":      model,
