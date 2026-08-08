@@ -22,6 +22,7 @@ def _clear_client_caches(llm):
         llm._get_anthropic_client,
         llm._get_openai_client,
         llm._get_kimi_client,
+        llm.get_posthog_client,
     ):
         clear = getattr(client_factory, "cache_clear", None)
         if clear:
@@ -62,15 +63,61 @@ def test_build_telemetry_includes_optional_fields():
     }
 
 
+def test_get_posthog_client_logs_loudly_but_does_not_break_llm_calls_locally(
+    monkeypatch, caplog
+):
+    import adapters.llm_adapter as llm
+
+    monkeypatch.setattr(settings, "posthog_api_key", "")
+    monkeypatch.setattr(settings, "k_service", "")
+
+    with caplog.at_level("ERROR", logger="adapters.llm_adapter"):
+        client = llm.get_posthog_client()
+
+    assert client is None
+    assert "POSTHOG_API_KEY" in caplog.text
+
+
+def test_get_posthog_client_is_a_silent_noop_in_cloud_run_when_unconfigured(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    monkeypatch.setattr(settings, "posthog_api_key", "")
+    monkeypatch.setattr(settings, "k_service", "agent-backend")
+
+    assert llm.get_posthog_client() is None
+
+
+def test_get_posthog_client_constructs_when_configured(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    class _PosthogModule:
+        class Posthog:
+            def __init__(self, api_key, host=None):
+                self.api_key = api_key
+                self.host = host
+                self.shutdown_called = False
+
+            def shutdown(self):
+                self.shutdown_called = True
+
+    monkeypatch.setitem(sys.modules, "posthog", _PosthogModule)
+    monkeypatch.setattr(settings, "posthog_api_key", "phc_test-key")
+    monkeypatch.setattr(settings, "posthog_host", "https://eu.i.posthog.com")
+
+    client = llm.get_posthog_client()
+    assert client.api_key == "phc_test-key"
+    assert client.host == "https://eu.i.posthog.com"
+
+
 def test_lazy_clients_and_semaphore_branches(monkeypatch):
     import adapters.llm_adapter as llm
 
-    class _AnthropicModule:
+    class _PosthogAnthropicModule:
         class AsyncAnthropic:
             def __init__(self, **kwargs):
                 self.kwargs = kwargs
 
-    class _OpenAIModule:
+    class _PosthogOpenAIModule:
         class AsyncOpenAI:
             def __init__(self, **kwargs):
                 self.kwargs = kwargs
@@ -78,8 +125,9 @@ def test_lazy_clients_and_semaphore_branches(monkeypatch):
     llm._get_anthropic_client.cache_clear()
     llm._get_openai_client.cache_clear()
     llm._get_kimi_client.cache_clear()
-    monkeypatch.setitem(sys.modules, "anthropic", _AnthropicModule)
-    monkeypatch.setitem(sys.modules, "openai", _OpenAIModule)
+    monkeypatch.setitem(sys.modules, "posthog.ai.anthropic", _PosthogAnthropicModule)
+    monkeypatch.setitem(sys.modules, "posthog.ai.openai", _PosthogOpenAIModule)
+    monkeypatch.setattr(llm, "get_posthog_client", lambda: None)
     monkeypatch.setattr(settings, "anthropic_api_key", "anthropic-key")
     monkeypatch.setattr(settings, "openai_api_key", "")
     monkeypatch.setattr(settings, "anthropic_max_concurrent_streams", 0)
@@ -87,6 +135,7 @@ def test_lazy_clients_and_semaphore_branches(monkeypatch):
     assert llm._get_anthropic_client().kwargs == {
         "api_key": "anthropic-key",
         "max_retries": 0,
+        "posthog_client": None,
     }
     assert llm._get_openai_client() is None
     assert llm._get_anthropic_stream_semaphore() is None
@@ -98,6 +147,7 @@ def test_lazy_clients_and_semaphore_branches(monkeypatch):
     assert llm._get_openai_client().kwargs == {
         "api_key": "openai-key",
         "max_retries": 0,
+        "posthog_client": None,
     }
     first = llm._get_anthropic_stream_semaphore()
     second = llm._get_anthropic_stream_semaphore()
@@ -109,12 +159,13 @@ def test_kimi_client_uses_the_moonshot_openai_compatible_endpoint(monkeypatch):
 
     calls = []
 
-    class _OpenAIModule:
+    class _PosthogOpenAIModule:
         class AsyncOpenAI:
             def __init__(self, **kwargs):
                 calls.append(kwargs)
 
-    monkeypatch.setitem(sys.modules, "openai", _OpenAIModule)
+    monkeypatch.setitem(sys.modules, "posthog.ai.openai", _PosthogOpenAIModule)
+    monkeypatch.setattr(llm, "get_posthog_client", lambda: None)
     monkeypatch.setattr(settings, "moonshot_api_key", "moonshot-key")
     monkeypatch.setattr(settings, "moonshot_base_url", "https://api.moonshot.ai/v1")
 
@@ -123,6 +174,7 @@ def test_kimi_client_uses_the_moonshot_openai_compatible_endpoint(monkeypatch):
         "api_key": "moonshot-key",
         "base_url": "https://api.moonshot.ai/v1",
         "max_retries": 0,
+        "posthog_client": None,
     }]
 
 
@@ -198,6 +250,40 @@ async def test_stream_response_success_records_thinking_text_and_done(monkeypatc
     assert telemetry_records[0]["metadata"]["output_tokens"] == 0
     assert telemetry_records[0]["metadata"]["provider_attempts"] == 1
     assert metric_records[0]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_stream_response_records_outer_deadline_cancellation(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    monkeypatch.setattr(settings, "llm_max_retries", 1)
+    telemetry_records, metric_records = _patch_llm_telemetry(monkeypatch)
+
+    async def delayed_anthropic_stream(_kwargs):
+        await asyncio.Event().wait()
+        if False:
+            yield None
+
+    monkeypatch.setattr(llm, "_anthropic_stream_once", delayed_anthropic_stream)
+
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.01):
+            await _collect(
+                llm.stream_response(
+                    model=settings.architecture_model,
+                    system="system",
+                    messages=[{"role": "user", "content": "design"}],
+                    effort="xhigh",
+                    telemetry={"operation": "architecture_architect"},
+                    allow_fallback=False,
+                )
+            )
+
+    assert telemetry_records[0]["status"] == "error"
+    assert telemetry_records[0]["error_type"] == "CancelledError"
+    assert telemetry_records[0]["metadata"]["provider_attempts"] == 1
+    assert telemetry_records[0]["metadata"]["attempts"][0]["status"] == "cancelled"
+    assert metric_records[0]["status"] == "error"
 
 
 def test_opus_5_is_an_adaptive_effort_model():
@@ -355,7 +441,10 @@ async def test_stream_response_accounts_usage_for_every_anthropic_attempt(monkey
 
 
 @pytest.mark.asyncio
-async def test_stream_response_does_not_retry_non_retryable_anthropic_4xx(monkeypatch):
+async def test_stream_response_does_not_retry_non_retryable_anthropic_4xx(
+    monkeypatch,
+    caplog,
+):
     import adapters.llm_adapter as llm
 
     monkeypatch.setattr(settings, "llm_max_retries", 3)
@@ -366,6 +455,13 @@ async def test_stream_response_does_not_retry_non_retryable_anthropic_4xx(monkey
 
     class BadRequestError(Exception):
         status_code = 400
+        request_id = "req_schema"
+        body = {
+            "error": {
+                "type": "invalid_request_error",
+                "message": "The compiled grammar is too large.\nSimplify the schema."
+            }
+        }
 
     async def failing_anthropic(_kwargs):
         nonlocal attempts
@@ -389,6 +485,10 @@ async def test_stream_response_does_not_retry_non_retryable_anthropic_4xx(monkey
         ("text", "fallback"),
         ("done", ""),
     ]
+    assert "status=400 request_id=req_schema" in caplog.text
+    assert "provider_error=invalid_request_error" in caplog.text
+    assert "diagnostic=schema_compilation_too_large" in caplog.text
+    assert "Simplify the schema" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -848,6 +948,8 @@ async def test_anthropic_structured_output_merges_schema_effort_and_metadata(
         "properties": {
             "ok": {"type": "boolean"},
             "items": {"type": "array", "minItems": 1, "maxItems": 2},
+            "score": {"type": "number", "minimum": 0, "maximum": 1},
+            "name": {"type": "string", "minLength": 1, "maxLength": 20},
         },
     }
 
@@ -869,6 +971,10 @@ async def test_anthropic_structured_output_merges_schema_effort_and_metadata(
     assert output_config["format"]["type"] == "json_schema"
     assert "minItems" not in json.dumps(output_config["format"]["schema"])
     assert "maxItems" not in json.dumps(output_config["format"]["schema"])
+    assert "minimum" not in json.dumps(output_config["format"]["schema"])
+    assert "maximum" not in json.dumps(output_config["format"]["schema"])
+    assert "minLength" not in json.dumps(output_config["format"]["schema"])
+    assert "maxLength" not in json.dumps(output_config["format"]["schema"])
     assert events[0] == ("text", '{"ok":true}')
     metadata = json.loads(events[1][1])
     assert metadata == {
@@ -879,6 +985,79 @@ async def test_anthropic_structured_output_merges_schema_effort_and_metadata(
         "model": "claude-sonnet-5",
     }
     assert events[2] == ("done", "")
+
+
+def test_anthropic_schema_transform_preserves_property_names():
+    from adapters.llm_adapter import _anthropic_response_schema
+
+    schema = {
+        "type": "object",
+        "required": ["minimum"],
+        "properties": {
+            "minimum": {"type": "integer", "minimum": 1},
+            "nested": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string", "minLength": 2},
+            },
+        },
+    }
+
+    transformed = _anthropic_response_schema(schema)
+
+    assert transformed["required"] == ["minimum"]
+    assert transformed["properties"]["minimum"] == {"type": "integer"}
+    assert transformed["properties"]["nested"] == {
+        "type": "array",
+        "items": {"type": "string"},
+    }
+
+
+def test_evaluation_provider_attempt_reservation_uses_shared_atomic_store(monkeypatch):
+    import adapters.llm_adapter as llm
+    import storage.rate_limit_store as rate_limit_store
+
+    captured = []
+    monkeypatch.setattr(settings, "evaluation_run_id", "run-123-attempt-1")
+    monkeypatch.setattr(settings, "evaluation_provider_attempt_limit", 64)
+    monkeypatch.setattr(
+        rate_limit_store,
+        "reserve_rate_limit",
+        lambda dimensions: captured.append(dimensions) or ("reservation",),
+    )
+
+    llm._reserve_evaluation_provider_attempt()
+
+    assert len(captured) == 1
+    assert captured[0][0].identifier == "run-123-attempt-1"
+    assert captured[0][0].event_type == "llm_provider_attempt"
+    assert captured[0][0].limit == 64
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["kimi-k3", "claude-opus-5"])
+async def test_evaluation_quota_blocks_before_any_provider_request(monkeypatch, model):
+    import adapters.llm_adapter as llm
+
+    provider_started = False
+
+    async def provider_must_not_start(*_args, **_kwargs):
+        nonlocal provider_started
+        provider_started = True
+        if False:
+            yield
+
+    def reject_attempt():
+        raise llm.EvaluationProviderAttemptLimitExceeded("budget exhausted")
+
+    monkeypatch.setattr(llm, "_reserve_evaluation_provider_attempt", reject_attempt)
+    monkeypatch.setattr(llm, "_kimi_stream", provider_must_not_start)
+    monkeypatch.setattr(llm, "_anthropic_stream_once", provider_must_not_start)
+
+    with pytest.raises(llm.EvaluationProviderAttemptLimitExceeded):
+        await _collect(llm.stream_response(model, "system", []))
+
+    assert provider_started is False
 
 
 @pytest.mark.asyncio

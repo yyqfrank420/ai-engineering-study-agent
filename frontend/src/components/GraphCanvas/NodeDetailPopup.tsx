@@ -75,7 +75,7 @@ export function NodeDetailPopup({ node, edges, onClose, onTellMeMore, onExpandGr
             }}>
               {node.type.toUpperCase()}
             </span>
-            {node.tier && (
+            {node.tier && node.design_origin !== 'applied' && (
               <span style={{
                 fontSize: '0.5rem',
                 fontWeight: 700,

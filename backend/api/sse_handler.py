@@ -281,6 +281,13 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
             "status": "Question received — preparing context…",
         })
 
+        workflow_started_at = asyncio.get_running_loop().time()
+        terminal_deadline = (
+            workflow_started_at
+            + settings.agent_timeout_s
+            - settings.agent_terminal_headroom_s
+        )
+
         state: AgentState = {
             "session_id":        thread_id,
             "user_id":           user_id,
@@ -303,6 +310,8 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
             "response_text":     "",
             "send":              send,
             "await_search_tool_request": await_search_tool_request,
+            "workflow_started_at_s": workflow_started_at,
+            "terminal_deadline_s": terminal_deadline,
         }
 
         agent_task = asyncio.create_task(run_agent(state, rag_tools, graph_tools, node_detail_tools))
@@ -312,10 +321,8 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
             # Drain queue until agent finishes AND queue is empty.
             # Short timeout on each get() so we re-check agent_task.done() frequently.
             # Hard wall-clock timeout aborts the task if it runs too long.
-            loop_start = asyncio.get_event_loop().time()
             while True:
-                elapsed = asyncio.get_event_loop().time() - loop_start
-                if elapsed > settings.agent_timeout_s:
+                if asyncio.get_running_loop().time() >= terminal_deadline:
                     agent_task.cancel()
                     record_timeout()
                     enqueue_analytics_event(

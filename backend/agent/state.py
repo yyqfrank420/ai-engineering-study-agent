@@ -9,18 +9,18 @@
 # Outputs: AgentState TypedDict
 # ─────────────────────────────────────────────────────────────────────────────
 
-from typing import Any, NotRequired, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 
 class GraphNode(TypedDict):
     id: str
-    label: str              # 1-4 word display name
-    type: str               # "client" | "service" | "datastore" | "queue" | "gateway" | "network" | "external" | "control" | "decision"
-    technology: str         # specific tech choice, e.g. "Python / FastAPI", "PostgreSQL 15"
-    description: str        # 1-sentence responsibility summary (graph worker)
-    tier: str | None        # "public" | "private" | None (concept graphs omit this)
+    label: str  # 1-4 word display name
+    type: str  # "client" | "service" | "datastore" | "queue" | "gateway" | "network" | "external" | "control" | "decision"
+    technology: str  # specific tech choice, e.g. "Python / FastAPI", "PostgreSQL 15"
+    description: str  # 1-sentence responsibility summary (graph worker)
+    tier: str | None  # "public" | "private" | None (concept graphs omit this)
     lane: NotRequired[str]  # "main" | "bottom"
-    detail: str | None      # enriched book content (Node Detail Workers, Phase 3)
+    detail: str | None  # enriched book content (Node Detail Workers, Phase 3)
     layer: NotRequired[str]
     canonical_id: NotRequired[str]
     confidence: NotRequired[float]
@@ -32,10 +32,10 @@ class GraphNode(TypedDict):
 class GraphEdge(TypedDict):
     source: str
     target: str
-    label: str              # specific action phrase: "sends query", "streams embeddings"
-    technology: str         # transport + format: "HTTPS/JSON", "gRPC/Protobuf", "Kafka"
-    sync: str               # "sync" | "async"
-    description: str        # 1 sentence: what data flows here
+    label: str  # specific action phrase: "sends query", "streams embeddings"
+    technology: str  # transport + format: "HTTPS/JSON", "gRPC/Protobuf", "Kafka"
+    sync: str  # "sync" | "async"
+    description: str  # 1 sentence: what data flows here
     flow: NotRequired[str]  # "runtime" | "control" | "feedback" | "deployment"
     type: NotRequired[str]  # "loop" for an actual feedback return edge
     edge_id: NotRequired[str]
@@ -46,28 +46,37 @@ class GraphEdge(TypedDict):
 
 class GraphStep(TypedDict):
     step: int
-    nodes: list[str]   # node IDs active at this step
+    nodes: list[str]  # node IDs active at this step
     description: str
 
 
 class GraphGroup(TypedDict):
     id: str
-    label: str         # e.g. "Orchestration Layer"
-    nodeIds: list[str] # IDs of member nodes
-    kind: NotRequired[str]  # "runtime" | "data" | "operations" | "delivery" | "external"
+    label: str  # e.g. "Orchestration Layer"
+    nodeIds: list[str]  # IDs of member nodes
+    kind: NotRequired[
+        str
+    ]  # "runtime" | "data" | "operations" | "delivery" | "external"
 
 
 class GraphData(TypedDict):
-    graph_type: str    # "architecture" | "concept"
+    graph_type: str  # "architecture" | "concept"
     title: str
     nodes: list[GraphNode]
     edges: list[GraphEdge]
     sequence: list[GraphStep]
     groups: NotRequired[list[GraphGroup]]  # semantic layer groupings (optional)
-    version: NotRequired[str]              # fresh identifier per generated graph revision
-    design_origin: NotRequired[str]        # "applied" for user-specific generated designs
+    version: NotRequired[str]  # fresh identifier per generated graph revision
+    design_origin: NotRequired[str]  # "applied" for user-specific generated designs
     resolved_complexity: NotRequired[str]
     assumptions: NotRequired[list[str]]
+    view_state: NotRequired[dict[str, Any]]
+
+
+class GraphOperation(TypedDict):
+    kind: Literal["create", "edit"]
+    status: Literal["candidate", "applied", "failed"]
+    failure_code: str | None
 
 
 class Chunk(TypedDict):
@@ -83,16 +92,16 @@ class Chunk(TypedDict):
 
 class AgentState(TypedDict):
     # ── Input ─────────────────────────────────────────────────────────────────
-    session_id: str          # thread identifier; field name kept for runtime compatibility
+    session_id: str  # thread identifier; field name kept for runtime compatibility
     user_id: str
     user_email: str
     user_message: str
-    history: list[dict]      # prior conversation turns (role/content dicts)
+    history: list[dict]  # prior conversation turns (role/content dicts)
 
     # ── Mode controls (set by the frontend per request) ───────────────────────
-    complexity: str          # "auto" | "low" | "prototype" | "production"
-    graph_mode: str          # "auto" | "on" | "off"
-    research_enabled: bool   # True = run research_worker alongside rag_worker
+    complexity: str  # "auto" | "low" | "prototype" | "production"
+    graph_mode: str  # "auto" | "on" | "off"
+    research_enabled: bool  # True = run research_worker alongside rag_worker
 
     # ── Routing ───────────────────────────────────────────────────────────────
     # Set by Orchestrator in Phase 0: "memory" (fast path) or "search" (fan out)
@@ -101,14 +110,18 @@ class AgentState(TypedDict):
     client_request_id: str | None
 
     # ── Worker outputs ────────────────────────────────────────────────────────
-    rag_chunks: list[Chunk]         # populated by RAG Worker (Phase 1)
-    retrieval_relevance: str        # "strong" | "weak"
-    retrieval_notice: str           # explanation shown to the user when book retrieval is weak
-    graph_data: GraphData | None    # populated by Graph Worker (Phase 1)
+    rag_chunks: list[Chunk]  # populated by RAG Worker (Phase 1)
+    retrieval_relevance: str  # "strong" | "weak"
+    retrieval_notice: str  # explanation shown to the user when book retrieval is weak
+    graph_data: GraphData | None  # populated by Graph Worker (Phase 1)
     # True when the graph changed this turn — tells orchestrator to emit graph_data event
     graph_changed: bool
-    graph_notice_sent: bool         # True when we've already warned that no graph could be produced
+    graph_notice_sent: (
+        bool  # True when we've already warned that no graph could be produced
+    )
     graph_review: NotRequired[dict[str, Any]]
+    graph_operation: NotRequired[GraphOperation]
+    graph_intent: NotRequired[Literal["create", "edit"] | None]
     graph_revision_count: NotRequired[int]
     approved_graph_data: NotRequired[GraphData | None]
     workflow_started_at_s: NotRequired[float]
@@ -124,10 +137,11 @@ class AgentState(TypedDict):
     architecture_ready: NotRequired[bool]
     architect_plan: NotRequired[dict[str, Any]]
     challenger_review: NotRequired[dict[str, Any]]
+    early_response_text: NotRequired[str]
     diagram_evaluation: NotRequired[dict[str, Any]]
 
     # ── Final outputs ─────────────────────────────────────────────────────────
-    response_text: str              # synthesised response (Phase 2)
+    response_text: str  # synthesised response (Phase 2)
 
     # ── SSE send callback ─────────────────────────────────────────────────────
     # Injected before the graph runs; nodes call this to push events to the browser.

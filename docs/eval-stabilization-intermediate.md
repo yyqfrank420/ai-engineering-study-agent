@@ -1,8 +1,8 @@
 # Live Evaluation Stabilization: Intermediate Record
 
-Last updated: 2026-08-07
+Last updated: 2026-08-08
 
-This document records the work performed on PR #37 (`codex/critic-json-retry`), its follow-up contract correction in PR #38, prompt caching in PR #39, and the remaining production exit criteria. All three PRs merged on 2026-08-07. The Kimi role-routing change passed the offline gate and still needs one bounded protected graph diagnostic and deployment verification.
+This document records the stabilization work through PR #41 (`codex/restore-live-eval-gate`) and the remaining production exit criteria. PRs #37 through #40 merged on 2026-08-07. PR #41 now contains the exact-tree live gate, compact Kimi topology boundary, MECE review contract, bounded repair workflow, fixed publication frame, and bounded label placement. It still needs one protected graph diagnostic, the canonical evaluation, merge, and deployment verification.
 
 ## Objective and operating rules
 
@@ -78,9 +78,9 @@ cross-links, reparents invalid topology, or deletes authored elements to fit a t
 ### One-shot architecture product and model roles
 
 The product target is a one-shot, publishable architecture diagram. Opus 5 xhigh writes the primary
-architecture brief, then performs a clean second-pass review before graph construction. Kimi K3 max
-owns initial graph topology and one complete redraw of a rejected unpublished candidate. Typed patches
-are reserved for user refinements to a previously published graph. Sonnet 5 high reviews architecture
+architecture brief, then performs a clean second-pass review before graph construction. Kimi K3 low
+owns initial graph topology. Kimi K3 high applies one typed local repair to a rejected unpublished
+candidate and handles user refinements to a previously published graph. Sonnet 5 medium reviews architecture
 semantics and the private browser screenshot before publication. The protected semantic judge also
 defaults to Sonnet 5 high.
 
@@ -89,7 +89,17 @@ the graph. Normal operation should publish the first candidate; repair rate and 
 are release metrics, not an authoring strategy.
 
 Each reasoning role has a completion budget separate from the visible artifact bounds. Opus xhigh
-receives 64,000 completion tokens, Kimi max receives 65,536, and Sonnet graph QA receives 16,384.
+receives 16,000 completion tokens for its bounded JSON plan. Kimi low topology generation and Kimi
+high focused repair each receive 65,536. Sonnet graph QA receives 16,384. The two Opus passes each own
+up to 150 seconds within the shared request deadline. Initial Kimi construction and Kimi repair each
+own up to 150 seconds. Sonnet graph review owns 90 seconds and can borrow unused upstream time up to
+180 seconds while downstream reserves remain intact.
+Protected runs measured both 89-second and 119-second Kimi max calls with accepted private reasoning
+and no structured output. A production-sized high probe also exhausted 120 seconds, so the initial
+topology uses low effort for schema translation after Opus has made the design decisions. The
+repeat production-sized low probe completed a valid 25-node, 33-edge topology in 74.67 seconds
+with 3,215 completion tokens. The complete one-repair path retains 37 seconds of request-deadline
+reserve.
 Graph nodes and edges have high resource-safety ceilings for rendering and persistence. The ceilings
 stay out of prompts and never shape a valid design. Text and patch payloads retain transport bounds. This avoids
 the earlier failure where hidden reasoning exhausted a small JSON-output cap before a complete object
@@ -107,6 +117,19 @@ fabrication, cap-plus-one node and edge deletion, silent reparenting, first-draf
 critic feedback, lexical semantic overrides, and the 520 ms screenshot timer. The renderer now signals
 layout readiness. Missing or failed browser evidence rejects the candidate. Sonnet's explicit rejection
 cannot be reversed by local label matching.
+
+The later graph-expansion diagnostic exposed a separate state identity failure after a strong first
+candidate. The workflow created and rendered a complete 33-node, 53-edge graph. Critic provider work
+completed, but protocol postprocessing raised `ValueError`, so the unpublished candidate was withheld.
+The second turn then generated an unrelated canonical fallback with 10 nodes and 3 edges. Evaluation
+flattened evidence across turns and accepted matching counts instead of the exact per-turn graph
+identity. The semantic judge ran in report-only mode. Ten eager node-detail calls added cost without
+contributing to the result.
+
+This changed the working diagnosis. Model intelligence and graph size were not the active failure.
+The graph lifecycle allowed candidate identity to be lost between creation, review, repair, rendering,
+and evaluation. A local protocol error could discard a near-complete artifact, and a later unrelated
+artifact could satisfy the coarse final predicate.
 
 ## Root-cause re-evaluation
 
@@ -178,21 +201,334 @@ PR #37 preserved `87c9012` and `cbbc892` as its two reviewed commits. The post-m
 Current implementation state:
 
 - Immutable repair-only edge IDs replace prose selectors and endpoint-pair recovery.
-- The focused repair call uses its configured 7,500-token allowance and a 90-second deadline.
-- Patch context includes every mutable field; additions share initial-topology presentation enrichment; updates use one blank/null omission rule.
+- Initial topology and one typed local repair each use the 65,536-token safety ceiling and a
+  150-second deadline. The same typed patch boundary handles published graph refinements.
+- Sonnet returns one schema-constrained review with separate component, connection, composition,
+  and render assessments. Five named topology proofs cover disjoint cross-layer guarantees. The
+  provider response uses compact positional rows under those fixed names. The server restores named
+  fields, expands numbered rubric codes and indexes, and validates the canonical repair contract.
+  Failed component and connection rows state exact addition counts and read-only context nodes.
+  Composition rows state exact append counts for groups, sequence, and assumptions. A local repair
+  can change only cited failed records. Passing layers and uncited records remain locked
+  before the patch and after normalization. Read-only obligation and node-anchor indexes make
+  missing-record repairs specific without granting mutation rights. A graph-caused render failure
+  may share one local repair with a failed editable layer. Render-only and global failures suppress
+  the diagram.
+- The four score layers have one server-owned partition of mutable fields. Components owns node
+  records. Connections owns edge records. Composition owns title, groups, sequence, and assumptions.
+  Render owns the measured screenshot and layout. Each rubric code and deterministic finding has
+  exactly one owner. A defect that needs changes in two layers must fail both owners.
+- A passing layer is retained across one bounded repair when its full dependency fingerprint is
+  unchanged. Component locks cover every mutable node field. Connection locks cover every mutable
+  node and edge field because endpoint meaning can change without an edge rewrite. Composition locks
+  cover its records and every semantic node and edge field. Render locks cover the full graph.
+  A current deterministic finding prevents a stale pass from being restored. The corrected scorecard
+  and topology proofs are validated again after locks are applied.
+- Graph operations carry typed create or edit state and candidate, applied, or failed state. An edit
+  cannot enter canonical fallback. A failed or ineffective local patch preserves the last applied
+  graph and ends that repair attempt.
+- User edits and critic repairs apply typed patches to exact records. Connection endpoint names are
+  read-only anchors. Added edges are limited to new node IDs plus those named anchors. Unspecified
+  fields fail before the patch call. New component IDs, connection endpoints, removal targets, and
+  composition append counts come from the edit scope. Normalization rechecks every field that the
+  scope did not permit.
+- Connection additions require at least two declared endpoint identities. Component additions in a
+  grouped graph either update one named existing group or append exactly one declared group. A zero
+  append budget rejects new group, sequence, and assumption records.
+- Browser evidence is turn-scoped. Each graph-required turn must produce a fresh graph version and
+  exact node and edge identities in the D3 DOM. Matching counts cannot substitute for matching
+  records. The final deterministic gate applies the same identity check to auto-graph cases. The
+  semantic judge receives each turn's graph, rendered identities, and turn-tagged retrieval and
+  research evidence, so it can evaluate preservation across an edit.
+- Node details are generated only after an explicit selection. Graph publication no longer triggers
+  eager detail calls for every node.
+- Patch context includes every node and edge as a compact global skeleton. Only selected records,
+  named context nodes, selected edges, and editable composition collections include full mutable
+  detail. Original repair-only edge IDs stay stable across the projection. Failed rubric and topology
+  proof names receive compact server-owned acceptance criteria; unrelated rubric text is omitted.
+- The private evaluator owns one fixed 1440x960 publication frame. Deep graphs keep whole topology
+  levels and use deterministic alternating tracks. Skip, wrap, and return edges use row and track
+  gutters. The deterministic publication gate requires node titles of at least 11 pixels.
 - Regression coverage includes exact selection among parallel edges, unknown IDs, complete mutable context, shared addition defaults, update omission semantics, the 100-character label contract, larger bounded patches, partial repair windows, authored-only topology, and patch prompt identity.
-- The latest topology-authority correction passes 198 focused graph, critic, workflow, and prompt tests.
+- The current stabilization tree passes 1,034 tracked backend tests at 90% total coverage. The
+  frontend passes 214 tests with 91.32% statements, 79.02% branches, 93.33% functions, and 93.64%
+  lines. Static analysis, dependency audits, ingestion artifacts, migrations, Terraform validation,
+  the production frontend build, and the backend container build pass on the same working tree.
 
 Most recent authoritative evidence:
 
+- Diagnostic `31226616907` reached the private browser render, then Anthropic rejected the repeated
+  four-layer Sonnet review schema with HTTP 400. A one-token replay captured the provider message:
+  `The compiled grammar is too large`. The replacement provider contract defines one tagged layer
+  assessment array and converts it to the existing four-key domain map before validation. The exact
+  replacement schema compiled successfully in a one-token Sonnet 5 replay. The diagnostic was
+  cancelled before its second architecture chain could repeat the same deterministic failure.
+- Diagnostic `31227838552` proved the replacement critic schema no longer blocks graph work. Its
+  Opus architect and challenger completed in 108.6 and 118.0 seconds. Kimi then streamed 18,680
+  topology characters and hit the former fixed 150-second design limit before response completion.
+  The run was cancelled before its follow-up could repeat the failed first turn. Design and patch
+  now retain their 150-second guaranteed reservations and may borrow unused upstream time up to 240
+  seconds. Admission still reserves both Sonnet reviews, one repair, synthesis, finalization, and
+  30 seconds for workflow orchestration.
+- Diagnostic `31229001829` confirmed that Kimi completes when it can borrow saved upstream time. It
+  returned 27,205 topology characters in 159.3 seconds on one attempt. The first Sonnet review then
+  reached its former fixed 90-second limit after 88.5 seconds inside the provider call and returned
+  no structured assessment. Critic calls now retain their 90-second guaranteed reservation and may
+  borrow saved time up to a 180-second liveness ceiling under the same downstream and orchestration
+  reserves. Safe availability, about 164 seconds in this run, remains the active limit when lower.
+  The run was cancelled after its second architect call to avoid paying for a graph that could not
+  satisfy the already-failed first-turn expectation.
+- Diagnostic `31230128866` confirmed that the remaining failure sits at the Kimi topology wire
+  boundary. Opus architect and challenger calls completed in 108.1 and 112.8 seconds. Kimi streamed
+  23,815 visible JSON characters for 234.4 seconds and consumed the full safe window reserved around
+  the two critic calls, one patch, synthesis, finalization, and orchestration. Current evidence does
+  not support reducing a downstream deadline. The topology wire contract now owns three disjoint
+  graph sections: components, connections, and composition. Render evidence remains a fourth critic
+  layer. Components, tree edges, non-tree links, groups, and sequence steps use compact positional
+  references. Server validation restores the same canonical graph and checks fixed tuple arity, enum
+  values, exact group partitioning, rooted acyclic topology, unique links, and sequence references.
+  This removes repeated field names and duplicated prompt commitments without changing critic,
+  repair, renderer, or publication behavior.
+- A one-token Kimi K3 probe accepted the exact v9 production schema. It opened the structured stream
+  and was closed after the first event. No graph generation was requested.
+- Diagnostic `31232163789` proved the compact wire removed the topology timeout. Kimi returned a
+  complete 15,510-character object in 135.8 seconds on one attempt, compared with 23,815 characters
+  and 234.4 seconds in `31230128866`. Server validation then rejected `components[0][1]` because the
+  positional schema could no longer enforce a distinct node-type enum and the v9 prompt omitted the
+  allowed vocabulary. The run was cancelled after the next architect call and before a second Kimi
+  call. V10 uses disjoint integer namespaces generated from the validator's canonical mappings:
+  node type `100-108`, tier `200-201`, lane `300-301`, flow `400-403`, sync `500-501`, and group kind
+  `600-604`. Every categorical position rejects foreign, malformed, and unknown codes. The canonical
+  graph still contains the same named values. A one-token Kimi probe accepted the exact v10 schema.
+- Diagnostic `31233156283` proved Kimi v10 could build and render the first private candidate: 35
+  nodes, 57 edges, and 5 groups completed in 99.3 seconds. Sonnet then spent the full 16,384-token
+  completion allowance on adaptive thinking and emitted no scorecard after 174.4 seconds. The
+  workflow failed closed as `semantic_review_output_truncated`. A later Kimi response also exposed
+  that separate component and tree arrays could drift in count.
+- V11 makes component/tree drift unrepresentable. The root row and each parent-before-child
+  component row carry their incoming tree edge in one record; non-tree links remain separate. Every
+  rooted tree is representable through a parent-first ordering, and the server still validates the
+  restored canonical graph.
+- Critic v30 keeps the 16,384-token cost ceiling, uses Sonnet medium effort, and replaces repeated
+  free-form review prose with four fixed named layer scorecards and five fixed named topology
+  proofs. Rubric codes and bounded indexes are expanded server-side into exact selectors and repair
+  context. Pass status requires a score of at least 0.78; fail status requires a lower score.
+- Diagnostic `31235230016` proved Kimi v11 completed the first graph on the exact `2abf303` tree.
+  Opus architect and challenger completed in 103.3 and 119.8 seconds. Kimi returned 12,414 topology
+  characters in 178.2 seconds. Sonnet rejected the v30 fixed-object review schema with HTTP 400 after
+  675 ms and generated no review tokens. The run was cancelled before a second architecture chain.
+  Cleanup removed its tagged no-traffic revision. Staging traffic stayed on the existing revision.
+- Critic v31 keeps the four named MECE layers and five named proofs. It moves repeated assessment
+  fields into shared positional rows and maps them back to named fields before domain validation.
+  The field legend in the prompt is generated from the same server field map, so row order has one
+  owner. The raw and Anthropic-adapted schema are both 1,274 bytes. Boundary tests cover every row
+  arity, position types, all 27 rubric codes, topology code 17 coupling, adapter `$defs` and `$ref`
+  preservation, and passing-layer locks. An exact one-token Sonnet 5 medium probe accepted this
+  schema and stopped at the requested one-token cap.
+- Diagnostic `31236639491` ran one protected `graph-expansion` case on exact head `15cb03a`. Both
+  requested turns completed their Opus architect, Opus challenger, Kimi topology, and synthesis
+  calls. The first Kimi object failed before rendering at `components[20][4]` with an invalid lane
+  enum. The second failed at `composition.steps[16][0]` because the step used the component index
+  namespace while v11 expected a component-row index. The critic was never called. The run made
+  nine application calls, zero judge calls, and recorded $1.331445 application cost. Cleanup removed
+  the no-traffic candidate revision and staging traffic remained on the prior revision.
+- V12 removes tier and lane from the repeated topology tuples. Applied graphs omit the network tier
+  badge because the authored topology does not contain a separate network-accessibility fact. The
+  server derives the bottom lane only from a validated operations group. Lane is no longer a mutable
+  component field, so composition repair and component locking have separate owners. Links, groups,
+  and composition steps now share component indexes. Steps accept only non-root indexes from 1
+  through the final component and retain strict duplicate and range validation. The authored
+  sequence remains intact because parent-first tree order cannot establish runtime chronology.
+  Compact tuple output, provider schema size, resource budgets, and all semantic topology fields
+  remain unchanged.
+- Diagnostic `31238039667` ran the protected two-turn `graph-expansion` case on exact head
+  `34d17f6`. Kimi returned complete topology objects of 9,491 and 8,476 characters. Both were
+  rejected before rendering at aggregate path `composition.groups`, rule `topology`, because at
+  least one component was absent from the separate group membership arrays. The graph critic and
+  semantic judge were never called. The run made nine application calls and recorded $1.332952 in
+  application cost. The workflow cleanup removed the candidate tag, and staging traffic remained
+  100% on the stable revision.
+- V13 removes that cross-record exact-partition trap. Group definitions are compact `[label,kind]`
+  rows, and each root or component tuple carries one required `group_index`. Tuple arity gives every
+  component one assignment; the server validates each reference at its component path. Unused group
+  definitions have no graph effect and are dropped during enrichment. Exact duplicate definitions
+  share one identity. Distinct labels that collide after bounded normalization still fail closed.
+  The provider schema is 844 bytes, and the worst-case topology serialization fell from 46,228 to
+  44,608 characters.
+- Diagnostic `31241232161` ran the protected two-turn `graph-expansion` case on exact head
+  `f5f83ad`. Turn one produced a 33-node, 53-edge candidate and the private browser rendered every
+  record without overlap or clipping. The critic call completed, then review postprocessing raised
+  `ValueError`; the candidate was withheld. Turn two selected an unrelated 10-node, 3-edge canonical
+  graph. The old evaluator combined turn evidence, accepted counts without exact identities, and left
+  semantic review non-blocking. Ten eager node-detail calls were made. Application cost was
+  $1.100258. This run supplied the reproduction for typed graph lifecycle state, strict MECE review
+  validation, monotonic layer locks, exact per-turn D3 identity, and removal of eager detail calls.
+- Critic v34 binds every semantic rubric code and deterministic finding to one server-owned MECE
+  layer and rejects any model scorecard that classifies it under another layer. Its production
+  topology evidence uses a cited witness subgraph plus directed endpoint claims. The server rejects
+  nonexistent routes, unproved cycles, duplicate evidence, and edges outside every claimed route.
+  Semantic sufficiency remains with the independent critic. Published applied graphs use bounded
+  patch handling for edits and rewrites, including whole-graph rewrite language. A distinct new system
+  design creates a new artifact. Any failed patch preserves the last approved graph.
+- Diagnostic `31246433859` ran only `graph-expansion` on exact head `bf8180d`. Kimi produced a
+  42-node, 62-edge candidate. The private browser inherited the live 656x848 split pane and reduced
+  node titles to about 6.3 pixels. Sonnet rejected connection and render defects. The Kimi max patch
+  accepted the stream but reached the remaining 210.9-second request window before it emitted a
+  final patch. The adapter made one provider attempt and preserved the candidate. Known application
+  spend, excluding the cancelled patch with incomplete provider usage, was about $0.856549. This
+  isolated two general faults: the repair request repeated locked detail, and private review inherited
+  a user-controlled pane shape.
+- Diagnostic `31249964798` ran only `graph-expansion` on exact head `d474b40`. Opus produced the
+  architecture and Kimi produced a 34-node, 64-edge candidate. The fixed 1440x960 browser report
+  measured zero node or edge clipping, zero overlap, and 14.68-pixel minimum node titles. Seven of
+  eight overview labels were visible. The `HTTPS inference request` label was placed 14.34 pixels
+  beyond the left frame because edge-label collision candidates had no bounds check. The deterministic
+  gate correctly withheld the clipped graph before critic or repair calls. Four application calls cost
+  $0.682831; no judge call ran. The renderer now bounds every measured label candidate and fallback on
+  both axes before collision checks. A 34-node, 64-edge multi-track regression covers the live level
+  distribution without retaining domain-specific topology.
+- Diagnostic `31255291000` ran `graph-expansion` on exact head `41f4881`. Both Opus architect
+  attempts failed before token acceptance with Anthropic `overloaded_error`. Graph construction and
+  critic validation did not run. The written synthesis call cost $0.067999. A delayed retry was
+  permitted only after Cloud Run logs identified the provider error.
+- Diagnostic `31255655951` retried the same case and exact head. The first Opus architect attempt
+  received `overloaded_error`; its second attempt completed. The challenger and Kimi builder also
+  completed. Kimi produced a 46-node, 67-edge, 5-group prototype candidate. The private 1440x960
+  render showed all 46 nodes and 67 edges, zero clipping or overlap, 13.44-pixel minimum text, and
+  all eight required overview labels. Sonnet accepted the critic request, then the local stage
+  deadline cancelled it after 102.223 seconds without terminal output or usage. The candidate was
+  withheld as `semantic_review_timeout`; no repair or judge call ran. Fully priced calls cost
+  $0.669823. Known critic input and cache-write usage raises the known minimum to $0.717704, plus
+  unreported critic output or thinking.
+- The timeout exposed one depth contract across two boundaries. Prototype validation ignored
+  production topology proofs after a completed response, while the provider schema and prompt still
+  required five exhaustive proof rows. Initial critic admission also reserved 240 seconds for a
+  future patch and second critic before the first verdict existed. A prior completed prototype
+  critic on a smaller 33-node, 53-edge graph took 134.735 seconds, so the 102.223-second allowance
+  was already below observed demand.
+- Critic v37 gives prototype reviews a four-layer scorecard with an empty topology-proof object.
+  Production keeps all five proof rows and their directed witness contract. Critic admission now
+  preserves synthesis, finalization, and orchestration while allowing the active verdict to borrow
+  up to the existing 180-second ceiling. Patch admission decides the remaining repair budget after
+  a failed verdict. This removes unused prototype work and gives the current gate priority over a
+  speculative later stage.
+- Diagnostic `31256929226` ran `graph-expansion` on exact head `e645bf2`. All five logical model
+  calls completed without fallback. Kimi produced a 36-node, 58-edge, 5-group prototype candidate.
+  The private render had zero clipping or overlap, 14.68-pixel minimum text, and all eight overview
+  labels visible. Sonnet completed the depth-aware review in 64.356 seconds and rejected one
+  connections-layer reconciliation defect. The review carried model-owned `repair_scope=global`,
+  so routing withheld the candidate without calling the bounded Kimi patch. The run cost $0.771274;
+  no judge call ran.
+- Critic v38 derives repair scope from the server-owned MECE layer results. No failed layer maps to
+  `none`; any components, connections, or composition failure maps to `local`; a render-only failure
+  maps to `global`. Model scope remains a validated wire field for compatibility and cannot bypass
+  the bounded repair lane. A changed patch still requires a second independent review before
+  publication.
+- Diagnostic `31257810429` ran `graph-expansion` on exact head `122b1fd`. All eight application
+  calls completed without provider fallback. Kimi produced a 41-node, 73-edge, 7-group candidate.
+  The private render passed with zero clipping or overlap. Sonnet's first review rejected fallback
+  branch completion and four reversed actor edges. Kimi applied the declared local repair in 97.441
+  seconds, adding the missing fallback terminal edge and removing the four cited edges. The second
+  review then rejected a cache-hit gate-preservation defect. Exact graph comparison proved that the
+  cache path, its nodes, and every incident edge were unchanged by the patch. The defect was visible
+  in the first candidate: cache hits could serve before rejoining the input guardrail and policy
+  paths, with no accepted-post-gate cache-fill edge. The first critic discovered defects serially.
+  The one-revision limit then withheld the improved candidate. The run cost $1.065204; no semantic
+  judge call ran.
+- Critic v39 runs one clean completeness review of an initial editable rejection before spending the
+  single Kimi repair. It supplies the first protocol-valid scorecard against the same candidate and
+  render. The completion must retain every earlier blocker, selector, context anchor, deterministic
+  finding, addition count, composition append count, and failed topology proof. Server validation
+  rejects any narrowing before the patch worker runs. Initial approval, render-only rejection, and
+  post-patch review keep one critic pass. The shared critic stage may borrow saved upstream time up
+  to 195 seconds. A replay of the measured run offsets leaves 98 seconds for Kimi and 101 seconds
+  for the final critic inside the existing terminal deadline and downstream reserves.
+- Diagnostic `31259489721` ran `graph-expansion` on exact head `93bc29b`. Opus architect and
+  challenger, Kimi construction, the private render, and both Sonnet protocol attempts completed.
+  The 48-node, 71-edge, 5-group prototype graph passed deterministic and browser checks. The initial
+  critic and its low-effort correction each returned provider-valid JSON that failed the Python
+  scorecard contract. No completeness pass or Kimi repair ran. Six calls cost $0.816763. Retained
+  evidence records `ValueError` without a path, so the exact model-owned value is unavailable.
+- Critic v40 removes the known serial protocol traps before another paid run. Its generated pass-row
+  example now uses a valid `0.9` score. The server derives layer status from blockers, places failed
+  scores below the publish threshold, rejects low scores that omit a blocker, and derives repair scope.
+  A bounded preflight reports independent layer-row and production-proof defects together to one
+  medium-effort correction and completeness audit. The prompt states the existing component, connection,
+  endpoint, and grouped-composition permission dependencies. Every terminal protocol rejection emits
+  a safe validation stage, path, and rule in the captured workflow event without retaining model text.
+- Diagnostic `31261404727` ran `graph-expansion` on exact head `bf3bde1`. Opus planning and
+  challenge, Kimi generation, private rendering, and both Sonnet review passes completed without a
+  provider retry or fallback. Kimi produced a 24-node, 57-edge, 5-group prototype candidate. The
+  initial critic returned a protocol-valid local rejection. The clean completion pass then changed
+  the connections blocker set, and the server rejected it at
+  `completion/connections.blocking_findings/non_monotonic_completion`. No Kimi patch ran. Six calls
+  cost $0.856352. The failure was an ownership defect: an independent completion had to reproduce
+  the first pass's derived blocker strings exactly even when it expanded the same context.
+- Critic v41 makes validated repair authority server-owned. The server takes an ordered union of
+  both valid pre-patch reviews, retains prior selectors and failed proofs, takes the higher addition
+  permissions, derives status and scope, and validates the merged contract before Kimi receives it.
+  The completion pass can add findings without restating the lower bound. It cannot revoke prior
+  repair authority.
+- Diagnostic `31262285743` ran `graph-expansion` on exact head `3c2ceaa` while exact-head offline CI
+  passed. Opus planning and challenge completed, then Kimi returned a provider-valid topology. The
+  local parser rejected `root[1]` with `value_type` before rendering because the shared tuple schema
+  permits strings in every position while categorical decoding accepted only integer codes. Four
+  calls cost $0.602776; no critic, patch, or judge call ran.
+- Applied topology decoding now accepts either the documented integer code or its canonical finite
+  codebook name at every categorical position. It normalizes known decimal code strings, case, and
+  surrounding whitespace, then rejects unknown names, booleans, and foreign codes. Indexes remain
+  integer-only.
+  This resolves the provider-schema mismatch without another Kimi call or a provider-specific
+  positional schema.
+- Diagnostic `31263053030` ran `graph-expansion` on exact head `84f628f` while exact-head offline CI
+  passed. The normalized Kimi topology reached private rendering and both Sonnet pre-patch reviews.
+  The server merged their local repair authority for a 42-responsibility candidate. The Kimi patch
+  was cancelled after 142.051 seconds because the dynamic deadline retained the final critic and
+  synthesis reserves. The complete turn took 719.136 seconds and withheld the unpublished candidate.
+  Earlier protocol and topology fixes worked; this failure was isolated to repair latency.
+- The primary architect remains Opus 5 at xhigh. The dependent challenger now uses Sonnet 5 at
+  medium because it reviews a complete primary plan and does not own the design. The last Opus
+  challenger consumed 140.737 seconds. The repair cap is 180 seconds. The backend, browser, and
+  Cloud Run boundaries are 940, 970, and 1000 seconds so each outer layer retains 30 seconds for a
+  typed terminal result and persistence. The complete admitted repair path still retains the final
+  critic and synthesis reserves.
+- Diagnostic `31264351143` ran `graph-expansion` on exact head `1ac7ac7` while exact-head CI
+  passed. Moving the challenger to Sonnet reduced that stage from 140.737 to 32.058 seconds. Opus
+  planning took 111.089 seconds and Kimi topology generation took 177.457 seconds. The application
+  turn completed in 344.639 seconds, down from 719.136 seconds. Kimi returned provider-valid JSON,
+  then local validation rejected the fifth component's parent reference at `components[4][0]`.
+  No critic or patch ran.
+- Parent-reference decoding now preserves valid zero-based topology and also accepts a complete,
+  consistently one-based parent set by converting every parent reference together. Mixed conventions,
+  forward references, cycles, non-integers, and out-of-range indexes still fail closed. The topology
+  prompt includes concrete first-row and fifth-row bounds so the provider does not need the fallback.
+- The WebSocket now emits a deterministic design frame after the architect and challenger finish,
+  before Kimi topology generation. It carries the interpreted plan, bounded assumptions, and the
+  challenger risks. The final stored answer contains the same frame, so a slow graph call no longer
+  leaves the user without useful architecture text.
+- Post-patch semantic review is authoritative. The removed layer-fingerprint lock could overwrite a
+  newly discovered defect in an unchanged layer with an earlier pass result. Patch-time mutation
+  locks still prevent Kimi from changing graph fields outside the approved repair contract.
+- Critic v42 removes model-owned repair scope, layer status, and layer score from the wire protocol.
+  The server derives pass or fail from blocker evidence, assigns the internal binary score, and maps
+  failed layer ownership to repair scope. The provider grammar now accepts only the integer and array
+  values used by the compact rows. This removes contradictory protocol states before the next paid run.
+- Canonical run `31221851568` completed all Kimi provider calls. Two valid topology objects were
+  discarded because one bounded title and one bounded responsibility exceeded presentation limits.
+  Two other 33-node and 39-node candidates passed browser rendering, then their Sonnet reviews were
+  cancelled at about 43.5 seconds by the former 45-second stage cap. One Opus challenger reached the
+  former 120-second cap. The run provides no completed semantic verdict on those graph candidates.
 - Offline CI `31085357395`: success on `4d7dcb3` before the repair-ID change.
 - Diagnostic `31056353630`: initial graph and critic both executed; failure is isolated to focused repair validation.
 - Diagnostic `31127543972`: edge IDs were accepted; the patch call hit exactly 3,200 output tokens and the server preserved the existing graph because no JSON object was emitted.
 - Diagnostic `31127721414`: the first repair published a valid candidate; the second repair failed because the patch protocol omitted and inconsistently required presentation fields.
-- Focused local patch/spec/graph/critic/workflow verification after the complete boundary correction: 198 tests passed.
-- The exact working tree passed the full local offline gate. Backend coverage passed with 731 tests and 91% total coverage. Frontend coverage passed under Node 20 with 200 tests, 90.96% statements, 78.58% branches, 93.08% functions, and 93.39% lines. Static/security, migrations, Terraform validation, policy checks, and the production container build also passed.
+- The current stabilization tree passes 1,034 tracked backend tests at 90% total coverage. The
+  frontend passes 216 tests with 91.32% statements, 78.96% branches, 93.23% functions, and 93.65%
+  lines. Static analysis, dependency audits, ingestion artifacts, migrations, Terraform validation,
+  the production frontend build, and the backend container build pass on the same working tree.
 - Backend/frontend staging readiness, dashboard smoke, capture, cleanup, artifact upload, latency accounting, and cost accounting all passed.
-- `main` contains PR #37, PR #38, and PR #39. The Kimi role-routing branch has no paid or production evidence yet.
+- `main` contains PRs #37 through #40. PR #41 now needs one v42 exact-tree diagnostic before the
+  canonical run.
 
 ## Evaluation workflow lessons
 
@@ -206,16 +542,23 @@ Most recent authoritative evidence:
 8. A public `graph_emitted=false` code is insufficient for operations. It hid grammar compilation, truncation, topology, mutation-role, critic, and patch failures behind one predicate.
 9. Diagnostic cases are appropriate for iterative debugging, but they cannot publish an `approved-tree-*` tag. Final approval still requires one canonical complete eight-case run.
 10. Exact-tree identity is required for safe approval reuse across squash merges; commit SHA equality alone is insufficient.
+11. Keep the model wire schema separate from the domain contract when provider grammar limits would
+    force duplicated definitions. Convert once at the provider boundary and validate the canonical
+    domain form before any mutation decision.
+12. Evaluation evidence must remain attached to one turn and one graph version. Counts are capacity
+    checks, but they cannot prove that the expected graph reached the DOM.
+13. Treat a strong candidate as durable unpublished state. A local review or patch failure preserves
+    that candidate for bounded correction. It does not authorize topology regeneration or canonical
+    fallback.
 
 ## Remaining execution order
 
-1. Pass the full offline gate on the exact Kimi role-routing tree.
-2. Create the `moonshot-api-key` Secret Manager container, add its first version, then apply the Cloud Run secret binding.
-3. Run one protected graph diagnostic and require a publishable first candidate or one valid bounded repair.
-4. Run one uninterrupted canonical eight-case protected evaluation on that tree.
-5. Verify the exact-tree approval tag and required PR checks, then merge with the final-head guard.
-6. Monitor the `main` production workflow through immutable backend deployment, smoke/promotion, and Vercel deployment.
-7. Verify Cloud Run revision/digest/traffic and the public backend and Vercel frontend URLs.
+1. Pass the full offline gate on the exact tracked tree.
+2. Run one protected graph diagnostic and require a publishable first candidate or one valid bounded repair.
+3. Run one uninterrupted canonical eight-case protected evaluation on that tree.
+4. Verify the exact-tree approval tag and required PR checks, then merge with the final-head guard.
+5. Monitor the `main` production workflow through immutable backend deployment, smoke/promotion, and Vercel deployment.
+6. Verify Cloud Run revision, digest, traffic, and the public backend and frontend URLs.
 
 ## Repository and contributor notes
 

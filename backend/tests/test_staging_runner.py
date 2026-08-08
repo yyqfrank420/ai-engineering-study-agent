@@ -58,13 +58,25 @@ def test_route_detection_treats_rag_as_search():
 
 
 def test_route_detection_treats_lookup_without_rag_as_simple():
-    events = [{"type": "worker_status", "worker": "orchestrator", "status": "Looking it up..."}]
+    events = [
+        {
+            "type": "worker_status",
+            "worker": "orchestrator",
+            "status": "Looking it up...",
+        }
+    ]
 
     assert detect_route(events) == "simple"
 
 
 def test_route_detection_defaults_to_memory_when_only_writing():
-    events = [{"type": "worker_status", "worker": "orchestrator", "status": "Writing the explanation..."}]
+    events = [
+        {
+            "type": "worker_status",
+            "worker": "orchestrator",
+            "status": "Writing the explanation...",
+        }
+    ]
 
     assert detect_route(events) == "memory"
 
@@ -216,7 +228,12 @@ def test_blocking_staging_smoke_set_covers_risky_paths_without_excess_llm_calls(
     smoke_cases = [cases_by_id[case_id] for case_id in BLOCKING_STAGING_CASE_IDS]
     categories = {case.category for case in smoke_cases}
 
-    assert categories == {"happy_path", "mode_controls", "edge_cases", "applied_design_quality"}
+    assert categories == {
+        "happy_path",
+        "mode_controls",
+        "edge_cases",
+        "applied_design_quality",
+    }
     assert "S11" in BLOCKING_STAGING_CASE_IDS
 
     model_backed_chat_steps = [
@@ -238,19 +255,19 @@ def test_graph_off_staging_case_avoids_brittle_keyword_requirements():
     assert step.expect.response_contains == ["RAG"]
 
 
-def test_pr_live_eval_is_globally_serial_and_reports_manual_review():
+def test_pr_live_eval_is_globally_serial_and_blocks_manual_review():
     workflow = Path(".github/workflows/live-eval.yml").read_text(encoding="utf-8")
 
     assert "group: staging-live-eval-global" in workflow
     assert "cancel-in-progress: false" in workflow
     assert "./scripts/ci browser --suite pr" in workflow
     assert "--require-approved-corpus" in workflow
-    assert "--manual-review-policy report-only" in workflow
+    assert "--manual-review-policy blocking" in workflow
     assert "environment: staging-eval" in workflow
     assert "resolve-approved-tree:" in workflow
-    assert 'needs: [classify, resolve-approved-tree]' in workflow
-    assert 'needs.resolve-approved-tree.outputs.approved == \'false\'' in workflow
-    assert 'needs.resolve-approved-tree.outputs.approved }}' in workflow
+    assert "needs: [classify, resolve-approved-tree]" in workflow
+    assert "needs.resolve-approved-tree.outputs.approved == 'false'" in workflow
+    assert "needs.resolve-approved-tree.outputs.approved }}" in workflow
     assert 'gcloud artifacts docker tags list "$IMAGE"' in workflow
     assert '--filter="tag=\\"$approval_tag\\""' in workflow
     assert 'if [ -z "$matches" ]; then' in workflow
@@ -260,16 +277,18 @@ def test_pr_live_eval_is_globally_serial_and_reports_manual_review():
     assert 'if [ "$TREE_APPROVED" = true ]; then' in workflow
     assert 'if [ "$EVAL_RESULT" != skipped ]; then' in workflow
     assert 'if [ "$TREE_APPROVED" != false ]; then' in workflow
-    assert workflow.index("Upload evaluation evidence") < workflow.index(
-        "Enforce evaluation result"
-    ) < workflow.index("Publish exact-tree approval tag")
+    assert (
+        workflow.index("Upload evaluation evidence")
+        < workflow.index("Enforce evaluation result")
+        < workflow.index("Publish exact-tree approval tag")
+    )
 
 
-def test_scheduled_eval_reports_manual_review_without_masking_hard_failures():
+def test_scheduled_eval_blocks_manual_review_for_an_approved_corpus():
     workflow = Path(".github/workflows/scheduled-eval.yml").read_text(encoding="utf-8")
 
     assert "--require-approved-corpus" in workflow
-    assert "--manual-review-policy report-only" in workflow
+    assert "--manual-review-policy blocking" in workflow
     assert "BROWSER_OUTCOME: ${{ steps.browser.outcome }}" in workflow
     assert "SEMANTIC_OUTCOME: ${{ steps.semantic.outcome }}" in workflow
     assert (
@@ -347,7 +366,10 @@ def test_dashboard_smoke_rejects_an_incomplete_response_contract(monkeypatch):
 def test_extract_helpers_return_expected_values():
     events = [
         {"type": "worker_status", "worker": "orchestrator", "status": "Routing"},
-        {"type": "graph_data", "data": {"title": "Graph", "nodes": [], "edges": [], "sequence": []}},
+        {
+            "type": "graph_data",
+            "data": {"title": "Graph", "nodes": [], "edges": [], "sequence": []},
+        },
         {"type": "response_delta", "content": "Hello"},
         {"type": "response_delta", "content": " world"},
     ]
@@ -355,7 +377,9 @@ def test_extract_helpers_return_expected_values():
     assert extract_workers(events) == {"orchestrator"}
     assert extract_worker_statuses(events) == ["Routing"]
     assert extract_graph_data(events)["title"] == "Graph"
-    assert extract_graph_node_labels({"nodes": [{"label": "Retriever"}, {"id": "missing-label"}]}) == {"Retriever"}
+    assert extract_graph_node_labels(
+        {"nodes": [{"label": "Retriever"}, {"id": "missing-label"}]}
+    ) == {"Retriever"}
     assert extract_response_text(events) == "Hello world"
 
 
@@ -458,7 +482,11 @@ def test_evaluate_expectation_rejects_generic_customer_support_graph():
             graph_emitted=True,
             graph_type="architecture",
             graph_title_contains="Customer Support",
-            graph_node_labels_include=["Billing Agent", "Returns Agent", "Escalation Agent"],
+            graph_node_labels_include=[
+                "Billing Agent",
+                "Returns Agent",
+                "Escalation Agent",
+            ],
             graph_node_labels_exclude=["Tool Use", "Planning", "Evaluation"],
         ),
     )
@@ -488,7 +516,10 @@ def test_evaluate_expectation_rejects_generic_customer_support_graph():
     failures = evaluate_expectation(step, run, {})
 
     assert "graph_type expected architecture, got concept" in failures
-    assert "graph title expected to contain 'Customer Support', got 'Agent Architecture'" in failures
+    assert (
+        "graph title expected to contain 'Customer Support', got 'Agent Architecture'"
+        in failures
+    )
     assert "graph missing node label 'Billing Agent'" in failures
     assert "graph unexpectedly included node label 'Tool Use'" in failures
 
@@ -502,17 +533,25 @@ def test_evaluate_expectation_checks_structural_maturity_without_exact_labels():
     graph = {
         "graph_type": "architecture",
         "title": "Domain workflow",
-        "nodes": [{"id": node_id, "label": label} for node_id, label in (
-            ("intake", "Request Intake"),
-            ("decision", "Bounded Decision"),
-            ("execution", "Controlled Execution"),
-            ("outcome", "Outcome Store"),
-        )],
+        "nodes": [
+            {"id": node_id, "label": label}
+            for node_id, label in (
+                ("intake", "Request Intake"),
+                ("decision", "Bounded Decision"),
+                ("execution", "Controlled Execution"),
+                ("outcome", "Outcome Store"),
+            )
+        ],
         "edges": [
             {"source": "intake", "target": "decision", "flow": "runtime"},
             {"source": "decision", "target": "execution", "flow": "control"},
             {"source": "execution", "target": "outcome", "flow": "runtime"},
-            {"source": "outcome", "target": "decision", "flow": "feedback", "type": "loop"},
+            {
+                "source": "outcome",
+                "target": "decision",
+                "flow": "feedback",
+                "type": "loop",
+            },
         ],
         "groups": [
             {"label": "Intake", "nodeIds": ["intake"]},
@@ -539,8 +578,14 @@ def test_evaluate_expectation_checks_structural_maturity_without_exact_labels():
     graph["assumptions"] = []
     graph["groups"][2]["nodeIds"] = ["decision"]
     failures = evaluate_expectation(step, run, {})
-    assert "mature graph must assign every node to exactly one responsibility zone" in failures
-    assert "mature graph must keep inferred requirements visible as assumptions" in failures
+    assert (
+        "mature graph must assign every node to exactly one responsibility zone"
+        in failures
+    )
+    assert (
+        "mature graph must keep inferred requirements visible as assumptions"
+        in failures
+    )
 
 
 def test_evaluate_expectation_requires_expansion_to_preserve_stable_components():
@@ -551,10 +596,12 @@ def test_evaluate_expectation_requires_expansion_to_preserve_stable_components()
     )
     run = {
         "status_code": 200,
-        "events": [{
-            "type": "graph_data",
-            "data": {"nodes": [{"id": "intake"}, {"id": "replacement"}]},
-        }],
+        "events": [
+            {
+                "type": "graph_data",
+                "data": {"nodes": [{"id": "intake"}, {"id": "replacement"}]},
+            }
+        ],
         "json_body": None,
         "body_text": "",
     }
@@ -566,7 +613,9 @@ def test_evaluate_expectation_requires_expansion_to_preserve_stable_components()
 
     failures = evaluate_expectation(step, run, case_state)
 
-    assert "graph retained too few stable component identities (0.33 < 0.60)" in failures
+    assert (
+        "graph retained too few stable component identities (0.33 < 0.60)" in failures
+    )
 
 
 def test_evaluate_expectation_reports_unexpected_sse_error_text():
@@ -577,7 +626,9 @@ def test_evaluate_expectation_reports_unexpected_sse_error_text():
     )
     run = {
         "status_code": 200,
-        "events": [{"type": "error", "content": "Another response is already running."}],
+        "events": [
+            {"type": "error", "content": "Another response is already running."}
+        ],
         "json_body": None,
         "body_text": "",
     }
@@ -681,9 +732,15 @@ def test_blocking_request_reads_until_stream_eof(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    monkeypatch.setattr(urllib.request, "urlopen", lambda request, data=None, timeout=120: _FakeResponse())
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda request, data=None, timeout=120: _FakeResponse(),
+    )
 
-    run = _blocking_request("POST", "https://example.com/api/chat", "token", {"content": "hi"}, True)
+    run = _blocking_request(
+        "POST", "https://example.com/api/chat", "token", {"content": "hi"}, True
+    )
 
     assert [event["type"] for event in run["events"]] == ["worker_status", "done"]
     assert ": trailer" in run["body_text"]

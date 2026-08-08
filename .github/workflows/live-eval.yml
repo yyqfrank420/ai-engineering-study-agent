@@ -1,6 +1,7 @@
 name: Live eval required
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [main]
   push:
@@ -226,6 +227,8 @@ jobs:
         name: Deploy digest as a no-traffic staging revision
         env:
           REVISION_TAG: eval-${{ github.run_id }}-${{ github.run_attempt }}
+          EVALUATION_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          EVALUATION_PROVIDER_ATTEMPT_LIMIT: 64
         run: |
           gcloud run deploy "$STAGING_SERVICE" \
             --project "$PROJECT_ID" \
@@ -233,8 +236,8 @@ jobs:
             --image "$IMAGE@$IMAGE_DIGEST" \
             --no-traffic \
             --tag "$REVISION_TAG" \
-            --timeout 420s \
-            --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4,ANTHROPIC_PROMPT_CACHE_ENABLED=true \
+            --timeout 1000s \
+            --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4,ANTHROPIC_PROMPT_CACHE_ENABLED=true,EVALUATION_RUN_ID=$EVALUATION_RUN_ID,EVALUATION_PROVIDER_ATTEMPT_LIMIT=$EVALUATION_PROVIDER_ATTEMPT_LIMIT \
             --quiet
           candidate_url="$(gcloud run services describe "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json | python -c 'import json,os,sys; data=json.load(sys.stdin); tag=os.environ["REVISION_TAG"]; print(next((x.get("url", "") for x in data.get("status", {}).get("traffic", []) if x.get("tag") == tag), ""))')"
           if [ -z "$candidate_url" ]; then
@@ -280,7 +283,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           EVAL_JUDGE_PROVIDER: anthropic
           EVAL_JUDGE_MODEL: claude-sonnet-5
-        run: ./scripts/ci live --suite pr --target "$CANDIDATE_URL" --input artifacts/live-eval/browser-results.json --output artifacts/live-eval/live-results.json --require-approved-corpus --manual-review-policy report-only
+        run: ./scripts/ci live --suite pr --target "$CANDIDATE_URL" --input artifacts/live-eval/browser-results.json --output artifacts/live-eval/live-results.json --require-approved-corpus --manual-review-policy blocking
 
       - name: Record deployment identity
         if: always()
