@@ -35,6 +35,7 @@ from agent.nodes.architecture_workers import (
     early_design_frame_node,
 )
 from agent.nodes.graph_critic import graph_critic_node
+from agent.graph_repair_contract import validate_local_repair_admission
 from agent.nodes.orchestrator_node import (
     orchestrator_route,
     orchestrator_synthesise,
@@ -503,6 +504,10 @@ def _route_after_review(state: AgentState) -> Literal["accept", "revise", "rejec
         if repair_scope == "global":
             return "reject"
         if repair_scope != "local":
+            return "reject"
+        try:
+            validate_local_repair_admission(repair_contract, graph=graph)
+        except ValueError:
             return "reject"
     if review.get("approved"):
         return "accept"

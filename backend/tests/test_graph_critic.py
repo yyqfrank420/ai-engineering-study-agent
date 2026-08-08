@@ -19,6 +19,7 @@ from agent.nodes.graph_critic import (
     _critic_system,
     _deterministic_render_review,
     _deterministic_review,
+    _enforce_local_repair_admission,
     _needs_repair_completion,
     _preflight_review_protocol,
     _merge_monotonic_repair_completion,
@@ -28,7 +29,11 @@ from agent.nodes.graph_critic import (
     graph_critic_node,
 )
 from agent.graph import _route_after_review
-from agent.graph_repair_contract import REPAIR_LAYER_PATCH_FIELDS
+from agent.graph_repair_contract import (
+    REPAIR_LAYER_PATCH_FIELDS,
+    validate_local_repair_admission,
+    validate_repair_patch_region,
+)
 from agent.nodes.graph_worker import _GRAPH_PATCH_KEYS
 from agent.stream_utils import StructuredLLMResponse
 
@@ -290,6 +295,235 @@ def test_component_additions_in_a_grouped_graph_require_composition_groups():
 
     with pytest.raises(ValueError, match="groups"):
         _validate_repair_contract(contract, graph=graph)
+
+
+def test_local_repair_admits_one_connected_cross_layer_region():
+    edge = {"source": "intake", "target": "gate", "label": "submit"}
+    graph = {
+        "nodes": [{"id": node_id} for node_id in ("intake", "gate", "outcome")],
+        "edges": [edge],
+        "groups": [],
+    }
+    contract = _repair_contract(
+        scope="local",
+        failed_layer="components",
+        layer_selectors={"components": {"node_ids": ["gate"]}},
+    )
+    contract["layers"]["connections"] = _layer(
+        "fail",
+        0.7,
+        findings=["Repair the adjacent route."],
+        edge_selectors=[edge],
+    )
+
+    validate_local_repair_admission(contract, graph=graph)
+
+
+def test_local_repair_admits_a_contiguous_ungrouped_route():
+    edges = [
+        {"source": "a", "target": "b", "label": "first"},
+        {"source": "b", "target": "c", "label": "second"},
+        {"source": "c", "target": "d", "label": "third"},
+    ]
+    graph = {
+        "nodes": [{"id": node_id} for node_id in ("a", "b", "c", "d")],
+        "edges": edges,
+        "groups": [],
+    }
+    contract = _repair_contract(
+        scope="local",
+        failed_layer="connections",
+        layer_selectors={"connections": {"edge_selectors": edges}},
+    )
+
+    validate_local_repair_admission(contract, graph=graph)
+
+
+def test_local_repair_rejects_disconnected_edge_regions():
+    edges = [
+        {"source": "a", "target": "b", "label": "first"},
+        {"source": "c", "target": "d", "label": "second"},
+    ]
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": node_id} for node_id in ("a", "b", "c", "d")],
+        "edges": edges,
+        "groups": [],
+    }
+    contract = _repair_contract(
+        scope="local",
+        failed_layer="connections",
+        layer_selectors={"connections": {"edge_selectors": edges}},
+    )
+
+    with pytest.raises(ValueError, match="one connected topology region"):
+        validate_local_repair_admission(contract, graph=graph)
+
+    review = _enforce_local_repair_admission(
+        {
+            "approved": False,
+            "review_status": "completed",
+            "repair_contract": contract,
+        },
+        graph,
+    )
+    assert review["terminal"] is True
+    assert review["failure_code"] == "graph_repair_nonlocal"
+    assert (
+        _route_after_review(
+            {
+                "graph_changed": True,
+                "graph_data": graph,
+                "graph_revision_count": 0,
+                "graph_review": review,
+            }
+        )
+        == "reject"
+    )
+
+
+def test_local_repair_rejects_a_connected_graph_wide_mutation_surface():
+    node_ids = [f"n{index}" for index in range(15)]
+    edges = [
+        {"source": source, "target": target, "label": f"step {index}"}
+        for index, (source, target) in enumerate(
+            zip(node_ids[:-1], node_ids[1:], strict=True),
+            start=1,
+        )
+    ]
+    graph = {
+        "nodes": [{"id": node_id} for node_id in node_ids],
+        "edges": edges,
+        "groups": [
+            {"id": "intake", "nodeIds": node_ids[:5]},
+            {"id": "runtime", "nodeIds": node_ids[5:10]},
+            {"id": "outcomes", "nodeIds": node_ids[10:]},
+        ],
+    }
+    contract = _repair_contract(
+        scope="local",
+        failed_layer="connections",
+        layer_selectors={"connections": {"edge_selectors": edges[:11]}},
+    )
+
+    with pytest.raises(ValueError, match="authored group boundary"):
+        validate_local_repair_admission(contract, graph=graph)
+
+
+def test_local_repair_admits_a_connected_existing_node_branch_addition():
+    graph = {
+        "nodes": [{"id": node_id} for node_id in ("gate", "approved", "rejected")],
+        "edges": [],
+        "groups": [],
+    }
+    contract = _repair_contract(
+        scope="local",
+        failed_layer="connections",
+        layer_selectors={
+            "connections": {
+                "addition_count": 2,
+                "context_node_ids": ["gate", "approved", "rejected"],
+            }
+        },
+    )
+
+    validate_local_repair_admission(contract, graph=graph)
+    validate_repair_patch_region(
+        contract,
+        patch={
+            "add_edges": [
+                {"source": "gate", "target": "approved"},
+                {"source": "gate", "target": "rejected"},
+            ]
+        },
+    )
+
+
+def test_appended_groups_require_corresponding_new_components():
+    graph = {
+        "nodes": [{"id": "a"}],
+        "edges": [],
+        "groups": [{"id": "runtime", "nodeIds": ["a"]}],
+    }
+    contract = _repair_contract(
+        scope="local",
+        failed_layer="composition",
+        layer_selectors={
+            "composition": {
+                "composition_fields": ["groups"],
+                "composition_append_counts": {"groups": 1},
+            }
+        },
+    )
+
+    with pytest.raises(ValueError, match="without new components"):
+        validate_local_repair_admission(contract, graph=graph)
+
+
+def test_group_metadata_cannot_hide_disconnected_edge_regions():
+    edges = [
+        {"source": "a", "target": "b", "label": "first"},
+        {"source": "c", "target": "d", "label": "second"},
+    ]
+    graph = {
+        "nodes": [{"id": node_id} for node_id in ("a", "b", "c", "d")],
+        "edges": edges,
+        "groups": [{"id": "runtime", "nodeIds": ["a", "b", "c", "d"]}],
+    }
+    contract = _repair_contract(
+        scope="local",
+        failed_layer="connections",
+        layer_selectors={"connections": {"edge_selectors": edges}},
+    )
+    contract["layers"]["composition"] = _layer(
+        "fail",
+        0.7,
+        findings=["Repair group membership."],
+        composition_fields=["groups"],
+        group_ids=["runtime"],
+    )
+
+    with pytest.raises(ValueError, match="one connected topology region"):
+        validate_local_repair_admission(contract, graph=graph)
+
+
+def test_local_repair_rejects_whole_collection_composition_authority():
+    graph = {
+        "nodes": [{"id": "gate"}],
+        "edges": [],
+        "groups": [{"id": "runtime", "nodeIds": ["gate"]}],
+    }
+    contract = _repair_contract(
+        scope="local",
+        failed_layer="composition",
+        layer_selectors={"composition": {"composition_fields": ["groups"]}},
+    )
+
+    with pytest.raises(ValueError, match="whole groups collection"):
+        validate_local_repair_admission(contract, graph=graph)
+
+
+def test_local_repair_rejects_unanchored_metadata_mixed_with_topology():
+    graph = {
+        "nodes": [{"id": "gate"}],
+        "edges": [],
+        "groups": [],
+        "title": "Current title",
+    }
+    contract = _repair_contract(
+        scope="local",
+        failed_layer="components",
+        layer_selectors={"components": {"node_ids": ["gate"]}},
+    )
+    contract["layers"]["composition"] = _layer(
+        "fail",
+        0.7,
+        findings=["Repair the title."],
+        composition_fields=["title"],
+    )
+
+    with pytest.raises(ValueError, match="unanchored title"):
+        validate_local_repair_admission(contract, graph=graph)
 
 
 def test_repair_layer_patch_fields_are_a_mece_partition():
@@ -1145,13 +1379,23 @@ def test_repair_scope_controls_review_routing(scope, approved, expected):
     )
     state = {
         "graph_changed": True,
-        "graph_data": {"design_origin": "applied"},
+        "graph_data": {
+            "design_origin": "applied",
+            "nodes": [{"id": "target"}],
+            "edges": [],
+            "groups": [],
+        },
         "graph_revision_count": 0,
         "graph_review": {
             "approved": approved,
             "repair_contract": _repair_contract(
                 scope=scope,
                 failed_layer=failed_layer,
+                layer_selectors=(
+                    {"components": {"node_ids": ["target"]}}
+                    if failed_layer == "components"
+                    else None
+                ),
             ),
         },
     }
@@ -1281,6 +1525,46 @@ async def test_initial_local_rejection_gets_one_monotonic_completion_pass(monkey
             "edge_selectors"
         ]
     ) == 2
+
+
+@pytest.mark.asyncio
+async def test_disconnected_repair_skips_completion_and_patch_admission(monkeypatch):
+    calls = []
+    graph = _domain_graph()
+    graph["edges"].append(
+        {
+            "source": "approval",
+            "target": "executor",
+            "label": "executes approved action",
+        }
+    )
+    connection_code = next(
+        index
+        for index, code in enumerate(_RUBRIC_CODES, start=1)
+        if _RUBRIC_CODE_OWNERS[code] == "connections"
+    )
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        payload = _passing_review_payload()
+        _set_model_layer(
+            payload,
+            "connections",
+            finding_codes=[connection_code],
+            edge_indexes=[0, 1],
+        )
+        return _structured_response(payload)
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+
+    review = (await graph_critic_node(_critic_state(graph=graph)))["graph_review"]
+
+    assert len(calls) == 1
+    assert review["terminal"] is True
+    assert review["failure_code"] == "graph_repair_nonlocal"
 
 
 @pytest.mark.asyncio
@@ -2479,9 +2763,8 @@ async def test_semantic_critic_reviews_the_private_rendered_image(
     assert "https://example.com" in packet["evidence_allowlist"]
     assert packet["review_context"] == [
         f"Architect commitment: {architect_tail}",
-        "Challenger risk (safety): Unapproved writes Mitigation: Approval gate",
-        f"Challenger risk (completeness): {challenger_tail} Mitigation: Keep it visible",
     ]
+    assert challenger_tail not in content[0]["text"]
     assert "full-plan-duplicate-must-not-ship" not in content[0]["text"]
     assert "challenger-status-must-not-ship" not in content[0]["text"]
     assert "Judge its visual hierarchy" in _GRAPH_CRITIC_SYSTEM
@@ -2562,9 +2845,6 @@ def test_review_packet_keeps_semantics_and_omits_duplicate_internal_metadata():
 
     assert packet["review_context"] == [
         "Architect commitment: Bind approval to the exact action.",
-        "Challenger risk (safety): Approval can go stale. Mitigation: Revalidate immediately before execution.",
-        "Challenger missing requirement: Confirm the source of truth.",
-        "Challenger tradeoff: Freshness adds one read.",
     ]
     candidate = packet["candidate"]
     assert len(candidate["nodes"]) == len(graph["nodes"])

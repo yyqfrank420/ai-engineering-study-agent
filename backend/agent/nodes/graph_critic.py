@@ -15,6 +15,7 @@ from agent.graph_repair_contract import (
     COMPOSITION_FIELDS as _COMPOSITION_FIELDS,
     REPAIR_LAYERS as _REPAIR_LAYERS,
     repair_scope_for_layers as _repair_scope_for_layers,
+    validate_local_repair_admission as _validate_local_repair_admission,
     validate_repair_contract as _validate_repair_contract,
 )
 from agent.state import AgentState
@@ -280,24 +281,6 @@ def _semantic_graph_projection(graph: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _challenger_concerns(value: Any) -> dict[str, Any]:
-    review = value if isinstance(value, dict) else {}
-    return {
-        "risks": _project_records(
-            review.get("risks"),
-            ("area", "risk", "mitigation"),
-        ),
-        "missing_requirements": [
-            item
-            for item in (review.get("missing_requirements") or [])
-            if isinstance(item, str)
-        ],
-        "tradeoffs": [
-            item for item in (review.get("tradeoffs") or []) if isinstance(item, str)
-        ],
-    }
-
-
 def _review_packet(
     state: AgentState,
     *,
@@ -310,23 +293,7 @@ def _review_packet(
     plan = state.get("architect_plan") or {}
     requirements = plan.get("diagram_requirements") if isinstance(plan, dict) else []
     commitments = [item for item in (requirements or []) if isinstance(item, str)]
-    challenger = _challenger_concerns(state.get("challenger_review"))
     review_context = [f"Architect commitment: {item}" for item in commitments]
-    review_context.extend(
-        "Challenger risk"
-        + (f" ({risk.get('area')})" if risk.get("area") else "")
-        + f": {risk.get('risk')}"
-        + (f" Mitigation: {risk.get('mitigation')}" if risk.get("mitigation") else "")
-        for risk in challenger["risks"]
-        if risk.get("risk")
-    )
-    review_context.extend(
-        f"Challenger missing requirement: {item}"
-        for item in challenger["missing_requirements"]
-    )
-    review_context.extend(
-        f"Challenger tradeoff: {item}" for item in challenger["tradeoffs"]
-    )
     report = render_result.get("report")
     return {
         "request": query,
@@ -1587,8 +1554,34 @@ def _needs_repair_completion(review: dict[str, Any], revision_count: int) -> boo
     return (
         revision_count == 0
         and review.get("review_status") == "completed"
+        and not review.get("terminal")
         and (review.get("repair_contract") or {}).get("repair_scope") == "local"
     )
+
+
+def _enforce_local_repair_admission(
+    review: dict[str, Any], graph: dict[str, Any]
+) -> dict[str, Any]:
+    contract = review.get("repair_contract")
+    if not isinstance(contract, dict) or contract.get("repair_scope") != "local":
+        return review
+    try:
+        _validate_local_repair_admission(contract, graph=graph)
+    except ValueError as exc:
+        logger.info("Graph repair is outside the local patch lane: %s", exc)
+        rejected = deepcopy(review)
+        rejected.update(
+            {
+                "terminal": True,
+                "failure_code": "graph_repair_nonlocal",
+                "revision_instruction": (
+                    "The requested corrections exceed one bounded architecture region. "
+                    "The diagram was withheld without modifying the reviewed candidate."
+                ),
+            }
+        )
+        return rejected
+    return review
 
 
 def _completed_critic_review(
@@ -1787,6 +1780,7 @@ async def graph_critic_node(state: AgentState) -> AgentState:
                 require_topology_proofs=profile.resolved == "production",
             )
             protocol_corrected = True
+        review = _enforce_local_repair_admission(review, graph)
         if _needs_repair_completion(review, revision_count) and not protocol_corrected:
             validation_stage = "completion"
             response = await _request_critic_scorecard(
@@ -1817,6 +1811,7 @@ async def graph_critic_node(state: AgentState) -> AgentState:
                 graph=graph,
                 deterministic_findings=deterministic_findings,
             )
+            review = _enforce_local_repair_admission(review, graph)
     except Exception as exc:
         # Structural checks cannot prove semantic control boundaries. Fail closed
         # rather than publishing a plausible but unaudited architecture.

@@ -605,8 +605,8 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
     prompt = captured["messages"][0]["content"]
     assert '"node_budget"' not in prompt
     assert "Cache versioned channel reads" in prompt
-    assert "Unapproved campaign writes" in prompt
-    assert '"challenger_review"' in prompt
+    assert '"reviewed_plan"' in prompt
+    assert '"challenger_review"' not in prompt
     assert '"diagram_commitments"' not in prompt
     assert "Designing a production domain architecture" in events[0]["status"]
 

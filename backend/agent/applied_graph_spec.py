@@ -160,7 +160,6 @@ def applied_graph_topology_prompt(
     *,
     query: str,
     architect_plan: Any,
-    challenger_review: Any,
     spec: AppliedGraphSpec,
 ) -> str:
     codebook = " ".join(
@@ -175,8 +174,7 @@ def applied_graph_topology_prompt(
     design_input = {
         "request": _bounded_input(query, spec.query_chars),
         "depth": spec.depth,
-        "architect_plan": _without_status_update(architect_plan),
-        "challenger_review": _without_status_update(challenger_review),
+        "reviewed_plan": _without_status_update(architect_plan),
     }
     return (
         "Build the complete architecture topology from the supplied design input. Include every "

@@ -1078,6 +1078,63 @@ def test_repair_contract_rejects_out_of_scope_node_mutation_before_normalization
     assert existing == before
 
 
+def test_patch_rejects_actual_additions_disconnected_from_selected_region():
+    existing = _domain_graph(4)
+    selected_edge = {
+        key: existing["edges"][0][key] for key in ("source", "target", "label")
+    }
+    context_node_ids = [
+        "fulfilment_stage_1",
+        "fulfilment_stage_2",
+        "fulfilment_stage_3",
+    ]
+    contract = _local_repair_contract(
+        failed_layers={
+            "components": {
+                "addition_count": 1,
+                "context_node_ids": context_node_ids,
+            },
+            "connections": {
+                "edge_selectors": [selected_edge],
+                "addition_count": 2,
+                "context_node_ids": context_node_ids,
+            },
+        }
+    )
+    patch = {
+        "add_nodes": [
+            {
+                "id": "repair_worker",
+                "label": "Repair Worker",
+                "type": "service",
+                "technology": "Bounded worker",
+                "description": "Repairs one parcel state.",
+            }
+        ],
+        "add_edges": [
+            {
+                "source": "repair_worker",
+                "target": target,
+                "label": f"repairs {target}",
+                "technology": "Versioned event",
+                "sync": "async",
+                "flow": "control",
+                "description": "Carries the bounded repair.",
+            }
+            for target in ("fulfilment_stage_2", "fulfilment_stage_3")
+        ],
+    }
+
+    with pytest.raises(ValueError, match="disconnected topology regions"):
+        graph_worker._apply_applied_graph_patch(
+            existing,
+            patch,
+            safety_max_nodes=5,
+            resolved_complexity="prototype",
+            repair_contract=contract,
+        )
+
+
 def test_failed_connection_layer_requires_explicit_edge_addition_permission():
     existing = _domain_graph(5)
     contract = _local_repair_contract(failed_layers={"connections": {}})
@@ -2941,6 +2998,51 @@ async def test_invalid_patch_preserves_approved_graph_without_duplicate_model_ca
     assert calls[0]["telemetry"]["metadata"]["prompt_version"] == (
         graph_worker._APPLIED_GRAPH_PATCH_PROMPT_VERSION
     )
+
+
+@pytest.mark.asyncio
+async def test_nonlocal_repair_contract_never_calls_the_patch_model(monkeypatch):
+    existing = _domain_graph(15, production=True)
+    edge_selectors = [
+        {
+            "source": edge["source"],
+            "target": edge["target"],
+            "label": edge["label"],
+        }
+        for edge in existing["edges"][:8]
+    ]
+    calls = []
+
+    async def fail_if_called(**kwargs):
+        calls.append(kwargs)
+        raise AssertionError("patch model must not run")
+
+    monkeypatch.setattr(graph_worker, "stream_llm", fail_if_called)
+    with pytest.raises(graph_worker.GraphPatchRejected) as raised:
+        await graph_worker._generate_applied_architecture_patch(
+            {
+                "send": None,
+                "user_message": "Repair the broad runtime chain",
+                "graph_revision_count": 1,
+                "graph_review": {
+                    "approved": False,
+                    "repair_contract": _local_repair_contract(
+                        failed_layers={
+                            "connections": {"edge_selectors": edge_selectors}
+                        }
+                    ),
+                },
+                "complexity": "prototype",
+                "user_id": "user-1",
+                "session_id": "thread-1",
+            },
+            "Repair the broad runtime chain",
+            SimpleNamespace(resolved="prototype"),
+            existing,
+        )
+
+    assert raised.value.code == "graph_patch_contract_invalid"
+    assert calls == []
 
 
 @pytest.mark.asyncio

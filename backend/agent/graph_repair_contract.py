@@ -47,6 +47,176 @@ def repair_scope_for_layers(layers: dict[str, Any]) -> str:
     return "global"
 
 
+def _topology_region_count(
+    node_ids: set[str],
+    edges: list[tuple[str, str]],
+) -> int:
+    adjacency = {node_id: set() for node_id in node_ids}
+    for source, target in edges:
+        adjacency.setdefault(source, set()).add(target)
+        adjacency.setdefault(target, set()).add(source)
+    visited: set[str] = set()
+    region_count = 0
+    for start in adjacency:
+        if start in visited:
+            continue
+        region_count += 1
+        pending = [start]
+        while pending:
+            node_id = pending.pop()
+            if node_id in visited:
+                continue
+            visited.add(node_id)
+            pending.extend(adjacency[node_id] - visited)
+    return region_count
+
+
+def validate_local_repair_admission(
+    contract: dict[str, Any],
+    *,
+    graph: dict[str, Any],
+) -> None:
+    """Require one connected mutation region before entering the patch lane."""
+    validate_repair_contract(contract, graph=graph)
+    if contract["repair_scope"] != "local":
+        raise ValueError("only a local repair contract can enter the patch lane")
+
+    layers = contract["layers"]
+    components = layers["components"]
+    connections = layers["connections"]
+    composition = layers["composition"]
+    semantic_repair = (
+        components["status"] == "fail" or connections["status"] == "fail"
+    )
+    composition_fields = set(composition["composition_fields"])
+    if semantic_repair and composition_fields & {"title", "assumptions"}:
+        raise ValueError(
+            "a semantic patch cannot also rewrite unanchored title or assumption records"
+        )
+
+    composition_selectors = {
+        "groups": composition["group_ids"],
+        "sequence": composition["sequence_indexes"],
+        "assumptions": composition["assumption_indexes"],
+    }
+    append_counts = composition["composition_append_counts"]
+    for field, selectors in composition_selectors.items():
+        if field in composition_fields and not selectors and not append_counts.get(field):
+            raise ValueError(
+                f"local repair cannot replace the whole {field} collection"
+            )
+    if append_counts.get("groups", 0) > components["addition_count"]:
+        raise ValueError("local repair cannot append groups without new components")
+
+    selected_edges = connections["edge_selectors"]
+    selected_edge_pairs = [
+        (selector["source"], selector["target"]) for selector in selected_edges
+    ]
+    selected_existing_nodes = {
+        *components["node_ids"],
+        *(node_id for pair in selected_edge_pairs for node_id in pair),
+    }
+    context_node_ids: list[str] = []
+    if connections["addition_count"]:
+        context_node_ids = list(
+            dict.fromkeys(
+                [
+                    *components["context_node_ids"],
+                    *connections["context_node_ids"],
+                ]
+            )
+        )
+        if selected_existing_nodes and not selected_existing_nodes.intersection(
+            context_node_ids
+        ):
+            raise ValueError(
+                "local edge addition anchors do not intersect the selected region"
+            )
+    region_count = _topology_region_count(
+        selected_existing_nodes | set(context_node_ids),
+        selected_edge_pairs,
+    )
+    if region_count > connections["addition_count"] + 1:
+        raise ValueError(
+            "local repair selectors cannot form one connected topology region"
+        )
+
+    groups = [
+        group
+        for group in (graph.get("groups") or [])
+        if isinstance(group, dict) and group.get("id")
+    ]
+    if not groups:
+        return
+
+    node_groups: dict[str, str] = {}
+    for group in groups:
+        raw_node_ids = group.get("nodeIds")
+        for node_id in raw_node_ids if isinstance(raw_node_ids, list) else []:
+            if isinstance(node_id, str) and node_id:
+                node_groups[node_id] = str(group["id"])
+
+    affected_nodes = {
+        *components["node_ids"],
+        *context_node_ids,
+        *(
+            node_id
+            for selector in selected_edges
+            for node_id in (selector["source"], selector["target"])
+        ),
+    }
+    if affected_nodes - set(node_groups):
+        raise ValueError("local repair cites nodes outside authored group boundaries")
+    affected_groups = {
+        *(node_groups[node_id] for node_id in affected_nodes),
+        *composition["group_ids"],
+    }
+    if len(affected_groups) > 2:
+        raise ValueError("local repair crosses more than one authored group boundary")
+    if len(affected_groups) == 2 and not connections["addition_count"]:
+        boundary_pairs = {
+            frozenset((node_groups[edge["source"]], node_groups[edge["target"]]))
+            for edge in selected_edges
+            if node_groups[edge["source"]] != node_groups[edge["target"]]
+        }
+        if frozenset(affected_groups) not in boundary_pairs:
+            raise ValueError(
+                "local repair spans two groups without editing their shared boundary"
+            )
+
+
+def validate_repair_patch_region(
+    contract: dict[str, Any],
+    *,
+    patch: dict[str, Any],
+) -> None:
+    """Verify actual additions remain connected to the selected repair records."""
+    layers = contract["layers"]
+    selected_edges = layers["connections"]["edge_selectors"]
+    added_nodes = [
+        node["id"]
+        for node in (patch.get("add_nodes") or [])
+        if isinstance(node, dict) and isinstance(node.get("id"), str)
+    ]
+    added_edges = [
+        (edge["source"], edge["target"])
+        for edge in (patch.get("add_edges") or [])
+        if isinstance(edge, dict)
+        and isinstance(edge.get("source"), str)
+        and isinstance(edge.get("target"), str)
+    ]
+    edge_pairs = [
+        (edge["source"], edge["target"]) for edge in selected_edges
+    ] + added_edges
+    node_ids = {
+        *layers["components"]["node_ids"],
+        *added_nodes,
+        *(node_id for pair in edge_pairs for node_id in pair),
+    }
+    if _topology_region_count(node_ids, edge_pairs) > 1:
+        raise ValueError("graph patch mutations span disconnected topology regions")
+
+
 def _unique_strings(value: Any, field: str, failures: list[str]) -> list[str]:
     if not isinstance(value, list) or not all(
         isinstance(item, str) and item.strip() for item in value

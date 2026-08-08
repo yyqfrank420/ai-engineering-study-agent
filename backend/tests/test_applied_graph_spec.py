@@ -679,10 +679,6 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
             "diagram_requirements": ["show accepted cache writes"],
             "status_update": "UI progress only",
         },
-        challenger_review={
-            "risks": ["show trust boundary"],
-            "status_update": "UI risk progress only",
-        },
         spec=applied_graph_spec("production"),
     )
     assert "Choose the number of components, groups, and links from the design" in prompt
@@ -713,7 +709,9 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     assert "diagram_commitments" not in prompt
     assert prompt.count("diagram_requirements") == 1
     assert "UI progress only" not in prompt
-    assert "UI risk progress only" not in prompt
+    assert '"reviewed_plan"' in prompt
+    assert '"architect_plan"' not in prompt
+    assert '"challenger_review"' not in prompt
     assert "at most ten" not in prompt
     assert "n1 through n9" not in prompt
     assert "node_budget" not in prompt
