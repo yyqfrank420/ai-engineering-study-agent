@@ -14,6 +14,7 @@ from agent.nodes.architecture_workers import (
     _worker_context,
     architect_node,
     challenger_node,
+    early_design_frame_node,
     format_diagram_commitments,
 )
 from agent.stream_utils import StructuredLLMResponse
@@ -341,3 +342,66 @@ async def test_challenger_failure_stops_graph_input(monkeypatch):
     assert captured["timeout_seconds"] == settings.architecture_role_timeout_s
     assert captured["max_output_tokens"] == settings.architecture_max_completion_tokens
     assert captured["response_schema"] is _CHALLENGER_RESPONSE_SCHEMA
+
+
+@pytest.mark.asyncio
+async def test_early_design_frame_uses_only_reviewed_plan_fields():
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    result = await early_design_frame_node(
+        {
+            "is_applied_design": True,
+            "architecture_ready": True,
+            "architect_plan": {
+                "interpretation": "A tenant-safe model serving platform.",
+                "assumptions": ["Vendor APIs support idempotency keys."],
+                "open_questions": ["Which regions are required?"],
+                "diagram_requirements": ["PRIVATE GRAPH REQUIREMENT"],
+            },
+            "challenger_review": {
+                "risks": [
+                    {
+                        "risk": "Unknown outcomes can cause blind retries.",
+                        "mitigation": "Use same-key read-back.",
+                    }
+                ]
+            },
+            "graph_data": {
+                "nodes": [{"label": "PRIVATE NODE"}],
+                "edges": [],
+            },
+            "send": send,
+        }
+    )
+
+    text = result["early_response_text"]
+    assert "diagram review pending" in text
+    assert "tenant-safe model serving" in text
+    assert "Unknown outcomes" in text
+    assert "same-key read-back" in text
+    assert "PRIVATE GRAPH REQUIREMENT" not in text
+    assert "PRIVATE NODE" not in text
+    assert events == [{"type": "response_delta", "content": text}]
+
+
+@pytest.mark.asyncio
+async def test_early_design_frame_emits_nothing_without_a_ready_applied_design():
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    result = await early_design_frame_node(
+        {
+            "is_applied_design": True,
+            "architecture_ready": False,
+            "architect_plan": {"interpretation": "Unreviewed plan"},
+            "send": send,
+        }
+    )
+
+    assert result == {"early_response_text": ""}
+    assert events == []

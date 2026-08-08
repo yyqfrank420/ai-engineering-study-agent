@@ -29,7 +29,11 @@ from agent.deadlines import (
     patch_timeout_seconds,
     synthesis_timeout_seconds,
 )
-from agent.nodes.architecture_workers import architect_node, challenger_node
+from agent.nodes.architecture_workers import (
+    architect_node,
+    challenger_node,
+    early_design_frame_node,
+)
 from agent.nodes.graph_critic import graph_critic_node
 from agent.nodes.orchestrator_node import (
     orchestrator_route,
@@ -182,6 +186,9 @@ def build_agent_workflow(
 
     async def challenge_plan(state: AgentState) -> AgentState:
         return await challenger_node(state)  # type: ignore[return-value]
+
+    async def show_early_design_frame(state: AgentState) -> AgentState:
+        return await early_design_frame_node(state)  # type: ignore[return-value]
 
     async def draft_graph(state: AgentState) -> AgentState:
         try:
@@ -415,6 +422,10 @@ def build_agent_workflow(
     workflow.add_node("architect", _traced("agent.architect", architecture_plan))
     workflow.add_node("challenger", _traced("agent.challenger", challenge_plan))
     workflow.add_node(
+        "early_design_frame",
+        _traced("agent.early_design_frame", show_early_design_frame),
+    )
+    workflow.add_node(
         "expand_context", _traced("agent.search_tool_wait", expand_context)
     )
     workflow.add_node("review_graph", _traced("agent.graph_review", review_graph))
@@ -442,7 +453,8 @@ def build_agent_workflow(
     workflow.add_edge("gather_context", "expand_context")
     workflow.add_edge("expand_context", "architect")
     workflow.add_edge("architect", "challenger")
-    workflow.add_edge("challenger", "draft_graph")
+    workflow.add_edge("challenger", "early_design_frame")
+    workflow.add_edge("early_design_frame", "draft_graph")
     workflow.add_edge("draft_graph", "review_graph")
     workflow.add_conditional_edges(
         "review_graph",

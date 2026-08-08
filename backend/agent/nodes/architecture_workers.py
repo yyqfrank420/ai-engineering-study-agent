@@ -372,6 +372,45 @@ async def challenger_node(state: AgentState) -> dict[str, Any]:
     return {"challenger_review": review, "architecture_ready": True}
 
 
+async def early_design_frame_node(state: AgentState) -> dict[str, Any]:
+    """Show the reviewed direction while the private diagram is still being built."""
+    if not state.get("is_applied_design", False) or not state.get(
+        "architecture_ready", False
+    ):
+        return {"early_response_text": ""}
+
+    plan = state.get("architect_plan") or {}
+    review = state.get("challenger_review") or {}
+    interpretation = _text(plan.get("interpretation"), 320)
+    assumptions = _text_list(plan.get("assumptions"), limit=220)[:3]
+    open_questions = _text_list(plan.get("open_questions"), limit=220)[:3]
+    risks = []
+    for item in (review.get("risks") or [])[:3]:
+        if not isinstance(item, dict):
+            continue
+        risk = _text(item.get("risk"), 180)
+        mitigation = _text(item.get("mitigation"), 180)
+        if risk:
+            risks.append(f"{risk}" + (f" Response: {mitigation}" if mitigation else ""))
+
+    sections = ["### Proposed direction (diagram review pending)"]
+    if interpretation:
+        sections.append(interpretation)
+    for title, items in (
+        ("Assumptions", assumptions),
+        ("Open questions", open_questions),
+        ("Risks under review", risks),
+    ):
+        if items:
+            sections.append(f"{title}:\n" + "\n".join(f"- {item}" for item in items))
+    if len(sections) == 1:
+        return {"early_response_text": ""}
+
+    text = "\n\n".join(sections)
+    await state["send"]({"type": "response_delta", "content": text})
+    return {"early_response_text": text}
+
+
 def _worker_context(
     state: AgentState,
     answer_contract: str,

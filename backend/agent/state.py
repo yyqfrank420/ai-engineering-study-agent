@@ -138,6 +138,7 @@ class AgentState(TypedDict):
     architecture_ready: NotRequired[bool]
     architect_plan: NotRequired[dict[str, Any]]
     challenger_review: NotRequired[dict[str, Any]]
+    early_response_text: NotRequired[str]
     diagram_evaluation: NotRequired[dict[str, Any]]
 
     # ── Final outputs ─────────────────────────────────────────────────────────
