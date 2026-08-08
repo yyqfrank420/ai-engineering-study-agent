@@ -395,7 +395,10 @@ def _required_graph_turn_failure(
         or case.steps[step_index].ui.graph_mode != "on"
     ):
         return None
-    if any(event.get("type") == "graph_notice" for event in events):
+    if (
+        any(event.get("type") == "graph_notice" for event in events)
+        and not extract_graph_data(events)
+    ):
         return (
             "required_graph_withheld",
             f"case {case.id} turn {step_index + 1} required a graph but received "
@@ -1419,7 +1422,7 @@ async def _run_browser_attempt(
         rendered_graph_version = None
         rendered_node_ids: list[str] = []
         rendered_edge_identities: list[dict[str, str]] = []
-        if not failure_details:
+        if not failure_details and case.deterministic.graph_emitted is True:
             try:
                 dom = await _graph_dom_state(page, graph)
                 rendered_node_ids = dom["node_ids"]

@@ -288,12 +288,33 @@ def test_required_graph_notice_wins_over_same_turn_graph_resync():
         0,
         [
             {"type": "graph_notice"},
-            {"type": "graph_data", "data": {"nodes": [], "edges": []}},
+            {
+                "type": "graph_data",
+                "data": {"version": "graph-v1", "nodes": [], "edges": []},
+            },
         ],
+        {"graph-v1"},
     )
 
     assert failure is not None
-    assert failure[0] == "required_graph_withheld"
+    assert failure[0] == "required_graph_version_reused"
+
+
+def test_required_graph_notice_with_graph_data_passes_required_graph_check():
+    from eval.browser_runner import _required_graph_turn_failure
+
+    case = load_corpus().by_id["graph-expansion"]
+    assert _required_graph_turn_failure(
+        case,
+        0,
+        [
+            {"type": "graph_notice"},
+            {
+                "type": "graph_data",
+                "data": {"version": "graph-v2", "nodes": [{"id": "a"}], "edges": []},
+            },
+        ],
+    ) is None
 
 
 def test_required_graph_turn_without_notice_requires_graph_data():
@@ -412,6 +433,25 @@ async def test_required_graph_turn_rejects_wrong_same_count_dom_identity(monkeyp
 
     assert failure is not None
     assert failure[0] == "required_graph_turn_node_identity_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_non_graph_case_skips_case_level_graph_dom_inspection(monkeypatch):
+    from eval.browser_runner import _send_case_steps
+
+    case = load_corpus().by_id["memory"]
+
+    async def fake_send_step(page, sent_case, step_index, frames, *, timeout_seconds):
+        del page, sent_case, step_index, frames, timeout_seconds
+        return [{"type": "done"}]
+
+    async def fail_if_called(_page, _graph):
+        raise AssertionError("case-level graph DOM inspection should be skipped")
+
+    monkeypatch.setattr("eval.browser_runner._send_step", fake_send_step)
+    monkeypatch.setattr("eval.browser_runner._graph_dom_state", fail_if_called)
+
+    await _send_case_steps(None, case, [], [], timeout_seconds=390)
 
 
 @pytest.mark.asyncio
