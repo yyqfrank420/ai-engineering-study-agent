@@ -502,6 +502,17 @@ Most recent authoritative evidence:
   consistently one-based parent set by converting every parent reference together. Mixed conventions,
   forward references, cycles, non-integers, and out-of-range indexes still fail closed. The topology
   prompt includes concrete first-row and fifth-row bounds so the provider does not need the fallback.
+- The WebSocket now emits a deterministic design frame after the architect and challenger finish,
+  before Kimi topology generation. It carries the interpreted plan, bounded assumptions, and the
+  challenger risks. The final stored answer contains the same frame, so a slow graph call no longer
+  leaves the user without useful architecture text.
+- Post-patch semantic review is authoritative. The removed layer-fingerprint lock could overwrite a
+  newly discovered defect in an unchanged layer with an earlier pass result. Patch-time mutation
+  locks still prevent Kimi from changing graph fields outside the approved repair contract.
+- Critic v42 removes model-owned repair scope, layer status, and layer score from the wire protocol.
+  The server derives pass or fail from blocker evidence, assigns the internal binary score, and maps
+  failed layer ownership to repair scope. The provider grammar now accepts only the integer and array
+  values used by the compact rows. This removes contradictory protocol states before the next paid run.
 - Canonical run `31221851568` completed all Kimi provider calls. Two valid topology objects were
   discarded because one bounded title and one bounded responsibility exceeded presentation limits.
   Two other 33-node and 39-node candidates passed browser rendering, then their Sonnet reviews were
@@ -516,7 +527,7 @@ Most recent authoritative evidence:
   lines. Static analysis, dependency audits, ingestion artifacts, migrations, Terraform validation,
   the production frontend build, and the backend container build pass on the same working tree.
 - Backend/frontend staging readiness, dashboard smoke, capture, cleanup, artifact upload, latency accounting, and cost accounting all passed.
-- `main` contains PRs #37 through #40. PR #41 now needs one v41 exact-tree diagnostic before the
+- `main` contains PRs #37 through #40. PR #41 now needs one v42 exact-tree diagnostic before the
   canonical run.
 
 ## Evaluation workflow lessons
