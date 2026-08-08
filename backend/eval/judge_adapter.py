@@ -299,7 +299,12 @@ class SemanticJudge:
             if selected_provider == "anthropic"
             else "OPENAI_API_KEY"
         )
+        fallback_key_env = (
+            "EVAL_JUDGE_API_KEY" if selected_provider == "anthropic" else None
+        )
         key = api_key or os.getenv(key_env, "")
+        if not key and fallback_key_env is not None:
+            key = os.getenv(fallback_key_env, "")
         if not key:
             raise RuntimeError(f"{key_env} is required for semantic evaluation")
         client_kwargs = {"api_key": key, "max_retries": 0}

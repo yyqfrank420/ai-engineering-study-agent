@@ -375,6 +375,51 @@ async def test_anthropic_judge_uses_direct_structured_output_schema(monkeypatch)
     assert judgment.output_tokens == 45
 
 
+@pytest.mark.asyncio
+async def test_anthropic_judge_prefers_eval_judge_api_key(monkeypatch):
+    corpus = load_corpus()
+    case = corpus.cases[0]
+    create = AsyncMock(
+        return_value=SimpleNamespace(
+            content=[
+                SimpleNamespace(
+                    type="text",
+                    text=__import__("json").dumps(
+                        {
+                            "dimensions": {
+                                dimension: {
+                                    "grade": "pass",
+                                    "evidence": [{"source_id": "answer-1"}],
+                                    "rationale": "The cited artifact satisfies the rubric.",
+                                }
+                                for dimension in case.rubric_dimensions
+                            },
+                        }
+                    ),
+                )
+            ],
+            stop_reason="end_turn",
+            usage=SimpleNamespace(input_tokens=12, output_tokens=4),
+        )
+    )
+    client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    constructor_calls = []
+
+    def fake_anthropic(**kwargs):
+        constructor_calls.append(kwargs)
+        return client
+
+    monkeypatch.setattr("eval.judge_adapter.AsyncAnthropic", fake_anthropic)
+    monkeypatch.setenv("EVAL_JUDGE_PROVIDER", "anthropic")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("EVAL_JUDGE_API_KEY", "anthropic-fallback-key")
+    monkeypatch.delenv("EVAL_JUDGE_MODEL", raising=False)
+
+    await SemanticJudge().judge(corpus, case, {"answer": "Artifact text."})
+
+    assert constructor_calls == [{"api_key": "anthropic-fallback-key", "max_retries": 0}]
+
+
 def test_semantic_replay_reuses_only_identity_bound_valid_judgments(tmp_path):
     corpus = load_corpus()
     case = corpus.cases[0]
