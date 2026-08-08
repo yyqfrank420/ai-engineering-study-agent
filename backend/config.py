@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     graph_builder_max_completion_tokens: int = 65536
     graph_qa_max_completion_tokens: int = 16384
     # Hard timeout on the whole agent run (seconds); yields a timeout error event
-    agent_timeout_s: int = 910
+    agent_timeout_s: int = 940
     # Graph work must leave fixed synthesis, persistence, and transport headroom.
     agent_terminal_headroom_s: float = 30.0
     # Stage admission keeps this time inside the terminal window for orchestration.
@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     # Initial editable rejections receive one clean completeness pass before repair.
     # Both reviews share this stage ceiling and may borrow saved upstream time.
     graph_critic_max_timeout_s: float = 195.0
-    graph_patch_timeout_s: float = 150.0
+    graph_patch_timeout_s: float = 180.0
     # Kimi may use time saved by earlier stages up to this per-call ceiling.
     # Deadline admission still preserves the complete downstream review path.
     graph_builder_max_timeout_s: float = 240.0

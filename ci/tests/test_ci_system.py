@@ -717,7 +717,7 @@ def test_live_eval_job_allows_setup_around_the_bounded_browser_suite():
     assert "timeout-minutes: 90" in workflow
     budgets = manifest["live"]["budgets"]
     settings = Settings(_env_file=None)
-    assert settings.agent_timeout_s == 910
+    assert settings.agent_timeout_s == 940
     assert settings.anthropic_max_concurrent_streams == 4
     assert budgets["application_turn_timeout_seconds"] == settings.agent_timeout_s + 30
     assert (
@@ -779,7 +779,7 @@ def test_live_eval_job_allows_setup_around_the_bounded_browser_suite():
     request_timeout = terraform_variables.split(
         'variable "request_timeout_seconds"', 1
     )[1].split("}", 1)[0]
-    assert "default     = 970" in request_timeout
+    assert "default     = 1000" in request_timeout
     deploy_workflows = "\n".join(
         (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
         for name in ("live-eval.yml", "scheduled-eval.yml", "deploy-production.yml")
@@ -788,7 +788,7 @@ def test_live_eval_job_allows_setup_around_the_bounded_browser_suite():
         encoding="utf-8"
     )
     assert "timeout-minutes: 35" in production
-    assert deploy_workflows.count("--timeout 970s") == 3
+    assert deploy_workflows.count("--timeout 1000s") == 3
     assert (
         f"EVALUATION_PROVIDER_ATTEMPT_LIMIT: {budgets['application_calls']}"
         in deploy_workflows

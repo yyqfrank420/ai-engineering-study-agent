@@ -480,6 +480,18 @@ Most recent authoritative evidence:
   integer-only.
   This resolves the provider-schema mismatch without another Kimi call or a provider-specific
   positional schema.
+- Diagnostic `31263053030` ran `graph-expansion` on exact head `84f628f` while exact-head offline CI
+  passed. The normalized Kimi topology reached private rendering and both Sonnet pre-patch reviews.
+  The server merged their local repair authority for a 42-responsibility candidate. The Kimi patch
+  was cancelled after 142.051 seconds because the dynamic deadline retained the final critic and
+  synthesis reserves. The complete turn took 719.136 seconds and withheld the unpublished candidate.
+  Earlier protocol and topology fixes worked; this failure was isolated to repair latency.
+- The primary architect remains Opus 5 at xhigh. The dependent challenger now uses Sonnet 5 at
+  medium because it reviews a complete primary plan and does not own the design. The last Opus
+  challenger consumed 140.737 seconds. The repair cap is 180 seconds. The backend, browser, and
+  Cloud Run boundaries are 940, 970, and 1000 seconds so each outer layer retains 30 seconds for a
+  typed terminal result and persistence. The complete admitted repair path still retains the final
+  critic and synthesis reserves.
 - Canonical run `31221851568` completed all Kimi provider calls. Two valid topology objects were
   discarded because one bounded title and one bounded responsibility exceeded presentation limits.
   Two other 33-node and 39-node candidates passed browser rendering, then their Sonnet reviews were

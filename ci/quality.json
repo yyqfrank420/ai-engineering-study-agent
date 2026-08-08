@@ -242,7 +242,7 @@
       "browser_case_concurrency": 4,
       "browser_graph_case_concurrency": 2,
       "browser_infrastructure_retry_count": 0,
-      "application_turn_timeout_seconds": 940,
+      "application_turn_timeout_seconds": 970,
       "browser_suite_base_timeout_seconds": 180,
       "browser_suite_per_turn_timeout_seconds": 150,
       "browser_suite_max_timeout_seconds": 3600,

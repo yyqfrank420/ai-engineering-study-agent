@@ -77,7 +77,7 @@ def test_browser_budget_scales_with_turns_and_retains_a_hard_ceiling():
     assert browser_case_concurrency() == 4
     assert browser_graph_case_concurrency() == 2
     assert browser_infrastructure_retry_count() == 0
-    assert application_turn_timeout_seconds() == 940
+    assert application_turn_timeout_seconds() == 970
     assert semantic_suite_timeout_seconds("pr") == 1200
     assert semantic_suite_timeout_seconds("full") == 3600
 

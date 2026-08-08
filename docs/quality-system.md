@@ -145,9 +145,9 @@ shared quota record before each provider request and rejects attempt 65 before i
 sent. This leaves six attempts for transient provider failures while placing a hard
 cost boundary below the failure envelope. Production traffic does not set this
 evaluation-only quota. The timeout chain is deliberately nested: the backend
-agent envelope is 910 seconds, with model work stopping at 880 seconds to retain persistence
-headroom. The Playwright turn waits at most 940 seconds so it can capture the typed terminal event,
-and Cloud Run accepts a request for at most 970
+agent envelope is 940 seconds, with model work stopping at 910 seconds to retain persistence
+headroom. The Playwright turn waits at most 970 seconds so it can capture the typed terminal event,
+and Cloud Run accepts a request for at most 1000
 seconds. The browser-suite timeout scales with the number of turns and the two-wide
 graph lane, with a 60-minute hard ceiling. Semantic judging is capped at 20 minutes
 for PR/smoke/diagnostic suites and 60 minutes for full suites. The outer GitHub jobs
@@ -165,7 +165,7 @@ fallback, and every provider attempt. Reports publish deterministic nearest-rank
 p50/p95 summaries for case end-to-end, turn end-to-end, first event, and first token;
 final infrastructure-failed cases are excluded from those baselines. Latency remains
 report-only with no manifest thresholds while five clean runs are collected.
-Reviewed baselines can then add blocking thresholds without changing the 910-second
+Reviewed baselines can then add blocking thresholds without changing the 940-second
 correctness deadline. Stage durations may overlap and are reported independently
 rather than added into a false critical path.
 

@@ -261,7 +261,7 @@ async def test_architect_empty_success_stops_graph_input(monkeypatch):
 
     assert result == {"architect_plan": {}, "architecture_ready": False}
     assert captured["effort"] == "xhigh"
-    assert captured["model"] == "claude-opus-5"
+    assert captured["model"] == settings.architecture_model
     assert captured["timeout_seconds"] == settings.architecture_role_timeout_s
     assert captured["max_output_tokens"] == settings.architecture_max_completion_tokens
     assert captured["response_schema"] is _ARCHITECT_RESPONSE_SCHEMA
@@ -335,8 +335,8 @@ async def test_challenger_failure_stops_graph_input(monkeypatch):
     })
 
     assert result == {"challenger_review": {}, "architecture_ready": False}
-    assert captured["effort"] == "xhigh"
-    assert captured["model"] == "claude-opus-5"
+    assert captured["effort"] == "medium"
+    assert captured["model"] == settings.graph_qa_model
     assert "Primary architect candidate" in captured["messages"][0]["content"]
     assert captured["timeout_seconds"] == settings.architecture_role_timeout_s
     assert captured["max_output_tokens"] == settings.architecture_max_completion_tokens

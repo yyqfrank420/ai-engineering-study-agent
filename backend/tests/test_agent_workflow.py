@@ -336,7 +336,7 @@ def test_architecture_and_one_complete_patch_fit_the_request_deadline():
     )
     terminal_window_s = settings.agent_timeout_s - settings.agent_terminal_headroom_s
 
-    assert all_stage_caps_s == 843
+    assert all_stage_caps_s == 873
     assert terminal_window_s - all_stage_caps_s == 37
 
 

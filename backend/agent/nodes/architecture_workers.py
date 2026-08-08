@@ -323,7 +323,7 @@ async def challenger_node(state: AgentState) -> dict[str, Any]:
     )
     try:
         response = await stream_structured_llm(
-            model=settings.architecture_model,
+            model=settings.graph_qa_model,
             system=_CHALLENGER_SYSTEM,
             messages=[{
                 "role": "user",
@@ -334,7 +334,7 @@ async def challenger_node(state: AgentState) -> dict[str, Any]:
                 ),
             }],
             response_schema=_CHALLENGER_RESPONSE_SCHEMA,
-            effort="xhigh",
+            effort="medium",
             timeout_seconds=architecture_timeout_seconds(state, review=True),
             max_output_tokens=settings.architecture_max_completion_tokens,
             temperature=settings.graph_temperature,
