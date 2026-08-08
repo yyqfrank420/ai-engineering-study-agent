@@ -12,11 +12,13 @@ from anthropic import (
     RateLimitError as AnthropicRateLimitError,
 )
 from openai import APIConnectionError, APITimeoutError, RateLimitError
-from posthog.ai.anthropic import AsyncAnthropic
-from posthog.ai.openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
-from adapters.llm_adapter import get_posthog_client
+from adapters.llm_adapter import (
+    create_anthropic_client,
+    create_openai_client,
+    get_posthog_client,
+)
 from eval.quality_corpus import EvaluationCase, EvaluationCorpus
 from eval.semantic_gate import DimensionJudgment, JudgeResult
 
@@ -307,14 +309,11 @@ class SemanticJudge:
             key = os.getenv(fallback_key_env, "")
         if not key:
             raise RuntimeError(f"{key_env} is required for semantic evaluation")
-        client_kwargs = {"api_key": key, "max_retries": 0}
-        posthog_client = get_posthog_client()
-        if posthog_client is not None:
-            client_kwargs["posthog_client"] = posthog_client
+        self.posthog_enabled = get_posthog_client() is not None
         if selected_provider == "anthropic":
-            self.client = AsyncAnthropic(**client_kwargs)
+            self.client = create_anthropic_client(api_key=key)
         else:
-            self.client = AsyncOpenAI(**client_kwargs)
+            self.client = create_openai_client(api_key=key)
 
     async def judge(
         self,
@@ -330,19 +329,23 @@ class SemanticJudge:
         )
         posthog_properties = {"$ai_session_id": f"eval-{case.id}"}
         if self.provider == "anthropic":
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=8192,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-                output_config={
+            request_kwargs = {
+                "model": self.model,
+                "max_tokens": 8192,
+                "system": system,
+                "messages": [{"role": "user", "content": user}],
+                "output_config": {
                     "effort": "high",
                     "format": {
                         "type": "json_schema",
                         "schema": _anthropic_response_schema(schema),
                     },
                 },
-                posthog_properties=posthog_properties,
+            }
+            if self.posthog_enabled:
+                request_kwargs["posthog_properties"] = posthog_properties
+            response = await self.client.messages.create(
+                **request_kwargs,
             )
             if response.stop_reason == "refusal":
                 raise RuntimeError(
@@ -377,14 +380,14 @@ class SemanticJudge:
             input_tokens = int(usage.input_tokens if usage else 0)
             output_tokens = int(usage.output_tokens if usage else 0)
         else:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
+            request_kwargs = {
+                "model": self.model,
+                "messages": [
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
-                reasoning_effort="low",
-                response_format={
+                "reasoning_effort": "low",
+                "response_format": {
                     "type": "json_schema",
                     "json_schema": {
                         "name": "semantic_judgment",
@@ -392,8 +395,10 @@ class SemanticJudge:
                         "schema": schema,
                     },
                 },
-                posthog_properties=posthog_properties,
-            )
+            }
+            if self.posthog_enabled:
+                request_kwargs["posthog_properties"] = posthog_properties
+            response = await self.client.chat.completions.create(**request_kwargs)
             content = response.choices[0].message.content or ""
             usage = response.usage
             input_tokens = int(usage.prompt_tokens if usage else 0)
