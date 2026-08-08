@@ -1718,102 +1718,6 @@ def _completed_critic_review(
     return _review_from_repair_contract(payload)
 
 
-def _layer_fingerprint(graph: dict[str, Any], layer: str) -> str:
-    node_semantic_fields = ("id", "label", "type", "technology", "description")
-    edge_semantic_fields = (
-        "source",
-        "target",
-        "label",
-        "technology",
-        "sync",
-        "flow",
-        "description",
-        "type",
-    )
-    layer_payload = {
-        "components": _project_records(
-            graph.get("nodes"),
-            node_semantic_fields,
-        ),
-        "connections": {
-            "nodes": _project_records(
-                graph.get("nodes"),
-                node_semantic_fields,
-            ),
-            "edges": _project_records(
-                graph.get("edges"),
-                edge_semantic_fields,
-            ),
-        },
-        "composition": {
-            **{field: graph.get(field) for field in _COMPOSITION_FIELDS},
-            "nodes": _project_records(graph.get("nodes"), node_semantic_fields),
-            "edges": _project_records(
-                graph.get("edges"),
-                edge_semantic_fields,
-            ),
-        },
-        "render": {key: value for key, value in graph.items() if key != "version"},
-    }[layer]
-    return json.dumps(layer_payload, sort_keys=True, separators=(",", ":"))
-
-
-def _lock_unchanged_passed_layers(
-    state: AgentState,
-    review: dict[str, Any],
-    graph: dict[str, Any],
-    *,
-    deterministic_findings: list[dict[str, str]] | None = None,
-    require_topology_proofs: bool = False,
-) -> dict[str, Any]:
-    baseline = state.get("repair_baseline_graph_data")
-    prior_review = state.get("graph_review")
-    if not isinstance(baseline, dict) or not isinstance(prior_review, dict):
-        return review
-    prior_contract = prior_review.get("repair_contract")
-    contract = review.get("repair_contract")
-    if not isinstance(prior_contract, dict) or not isinstance(contract, dict):
-        return review
-    prior_layers = prior_contract.get("layers")
-    layers = contract.get("layers")
-    if not isinstance(prior_layers, dict) or not isinstance(layers, dict):
-        return review
-
-    locked_layers: list[str] = []
-    for layer in _REPAIR_LAYERS:
-        prior_layer = prior_layers.get(layer)
-        if (
-            isinstance(prior_layer, dict)
-            and prior_layer.get("status") == "pass"
-            and not (layers.get(layer) or {}).get("deterministic_finding_ids")
-            and _layer_fingerprint(baseline, layer) == _layer_fingerprint(graph, layer)
-        ):
-            layers[layer] = deepcopy(prior_layer)
-            locked_layers.append(layer)
-    if not locked_layers:
-        return review
-
-    contract["repair_scope"] = _repair_scope_for_layers(layers)
-    topology_proofs = review.get("topology_proofs") or []
-    if "connections" in locked_layers:
-        topology_proofs = deepcopy(prior_review.get("topology_proofs") or [])
-    locked_payload = {
-        "repair_contract": contract,
-        "strengths": review.get("strengths") or [],
-        "advice": review.get("advice") or [],
-        "topology_proofs": topology_proofs,
-    }
-    _validate_review_protocol(
-        locked_payload,
-        require_topology_proofs=require_topology_proofs,
-        graph=graph,
-        deterministic_findings=deterministic_findings or [],
-    )
-    locked_review = _review_from_repair_contract(locked_payload)
-    locked_review["locked_layers"] = locked_layers
-    return locked_review
-
-
 async def graph_critic_node(state: AgentState) -> AgentState:
     graph = state.get("graph_data")
     query = state.get("design_query") or state.get("user_message", "")
@@ -2003,13 +1907,6 @@ async def graph_critic_node(state: AgentState) -> AgentState:
                 graph=graph,
                 deterministic_findings=deterministic_findings,
             )
-        review = _lock_unchanged_passed_layers(
-            state,
-            review,
-            graph,
-            deterministic_findings=deterministic_findings,
-            require_topology_proofs=profile.resolved == "production",
-        )
     except Exception as exc:
         # Structural checks cannot prove semantic control boundaries. Fail closed
         # rather than publishing a plausible but unaudited architecture.

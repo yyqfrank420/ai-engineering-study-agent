@@ -19,7 +19,6 @@ from agent.nodes.graph_critic import (
     _critic_system,
     _deterministic_render_review,
     _deterministic_review,
-    _lock_unchanged_passed_layers,
     _needs_repair_completion,
     _preflight_review_protocol,
     _merge_monotonic_repair_completion,
@@ -1392,10 +1391,30 @@ async def test_protocol_correction_is_the_clean_completion_pass(monkeypatch):
     assert "add every independent blocking defect" in correction
 
 
-def test_unchanged_passed_layers_remain_locked_after_a_local_repair():
+@pytest.mark.asyncio
+async def test_final_review_can_reopen_an_unchanged_layer_after_a_local_repair(
+    monkeypatch,
+):
     baseline = _domain_graph()
-    for index, node in enumerate(baseline["nodes"]):
-        node["id"] = f"node_{index}"
+    node_ids = ["objective", "quality", "optimizer", "approval", "executor", "outcome"]
+    for node, node_id in zip(baseline["nodes"], node_ids, strict=True):
+        node["id"] = node_id
+    baseline["edges"] = [
+        {
+            "source": source,
+            "target": target,
+            "label": "passes bounded work",
+        }
+        for source, target in zip(node_ids[:-1], node_ids[1:], strict=True)
+    ]
+    baseline["edges"].append(
+        {
+            "source": "outcome",
+            "target": "objective",
+            "label": "returns attributed outcomes",
+            "type": "loop",
+        }
+    )
     edge = baseline["edges"][0]
     prior_contract = _repair_contract(
         scope="local",
@@ -1414,242 +1433,49 @@ def test_unchanged_passed_layers_remain_locked_after_a_local_repair():
     )
     candidate = deepcopy(baseline)
     candidate["edges"][0]["description"] = "Carries the repaired bounded event."
-    current_contract = _repair_contract(
-        scope="local",
-        failed_layer="components",
-        layer_selectors={"components": {"node_ids": [candidate["nodes"][0]["id"]]}},
+    component_code = next(
+        index
+        for index, code in enumerate(_RUBRIC_CODES, start=1)
+        if _RUBRIC_CODE_OWNERS[code] == "components"
     )
 
-    review = _lock_unchanged_passed_layers(
+    async def fake_stream_llm(**_kwargs):
+        payload = _passing_review_payload()
+        payload["repair_scope"] = "local"
+        _set_model_layer(
+            payload,
+            "components",
+            status="fail",
+            score=0.7,
+            finding_codes=[component_code],
+            node_indexes=[0],
+        )
+        return _structured_response(payload)
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+    state = _critic_state(graph=candidate)
+    state.update(
         {
+            "graph_revision_count": 1,
             "repair_baseline_graph_data": baseline,
             "graph_review": {
                 "repair_contract": prior_contract,
                 "topology_proofs": [],
             },
-        },
-        {"repair_contract": current_contract, "topology_proofs": []},
-        candidate,
+        }
     )
 
-    assert review["approved"] is True
-    assert review["repair_contract"]["repair_scope"] == "none"
-    assert review["repair_contract"]["layers"]["components"]["status"] == "pass"
-    assert review["repair_contract"]["layers"]["components"]["node_ids"] == []
-    assert set(review["locked_layers"]) == {"components"}
+    review = (await graph_critic_node(state))["graph_review"]
 
-
-def test_layer_lock_rechecks_connections_when_endpoint_meaning_changes():
-    baseline = _domain_graph()
-    for index, node in enumerate(baseline["nodes"]):
-        node["id"] = f"node_{index}"
-    prior_contract = _repair_contract(
-        scope="local",
-        failed_layer="components",
-        layer_selectors={"components": {"node_ids": [baseline["nodes"][0]["id"]]}},
-    )
-    candidate = deepcopy(baseline)
-    candidate["nodes"][0]["description"] = "Now owns a different boundary."
-    edge = candidate["edges"][0]
-    current_contract = _repair_contract(
-        scope="local",
-        failed_layer="connections",
-        layer_selectors={
-            "connections": {
-                "edge_selectors": [
-                    {
-                        "source": edge["source"],
-                        "target": edge["target"],
-                        "label": edge["label"],
-                    }
-                ]
-            }
-        },
-    )
-
-    review = _lock_unchanged_passed_layers(
-        {
-            "repair_baseline_graph_data": baseline,
-            "graph_review": {
-                "repair_contract": prior_contract,
-                "topology_proofs": [],
-            },
-        },
-        {"repair_contract": current_contract, "topology_proofs": []},
-        candidate,
-    )
-
-    assert review["repair_contract"]["layers"]["connections"]["status"] == "fail"
-    assert "connections" not in review.get("locked_layers", [])
-
-
-def test_layer_lock_rechecks_composition_when_component_meaning_changes():
-    baseline = _domain_graph()
-    baseline["title"] = "Campaign control loop"
-    for index, node in enumerate(baseline["nodes"]):
-        node["id"] = f"node_{index}"
-    prior_contract = _repair_contract(
-        scope="local",
-        failed_layer="components",
-        layer_selectors={"components": {"node_ids": [baseline["nodes"][0]["id"]]}},
-    )
-    candidate = deepcopy(baseline)
-    candidate["nodes"][0]["description"] = "Now owns a different product boundary."
-    current_contract = _repair_contract(
-        scope="local",
-        failed_layer="composition",
-        layer_selectors={"composition": {"composition_fields": ["title"]}},
-    )
-
-    review = _lock_unchanged_passed_layers(
-        {
-            "repair_baseline_graph_data": baseline,
-            "graph_review": {
-                "repair_contract": prior_contract,
-                "topology_proofs": [],
-            },
-        },
-        {"repair_contract": current_contract, "topology_proofs": []},
-        candidate,
-    )
-
-    assert review["repair_contract"]["layers"]["composition"]["status"] == "fail"
-    assert "composition" not in review.get("locked_layers", [])
-
-
-def test_layer_lock_rechecks_connections_when_endpoint_technology_changes():
-    baseline = _domain_graph()
-    for index, node in enumerate(baseline["nodes"]):
-        node["id"] = f"node_{index}"
-        node["technology"] = "Bounded application service"
-    prior_contract = _repair_contract(
-        scope="local",
-        failed_layer="components",
-        layer_selectors={"components": {"node_ids": [baseline["nodes"][0]["id"]]}},
-    )
-    candidate = deepcopy(baseline)
-    candidate["nodes"][0]["technology"] = "Untrusted vector retrieval corpus"
-    edge = candidate["edges"][0]
-    current_contract = _repair_contract(
-        scope="local",
-        failed_layer="connections",
-        layer_selectors={
-            "connections": {
-                "edge_selectors": [
-                    {
-                        "source": edge["source"],
-                        "target": edge["target"],
-                        "label": edge["label"],
-                    }
-                ]
-            }
-        },
-    )
-
-    review = _lock_unchanged_passed_layers(
-        {
-            "repair_baseline_graph_data": baseline,
-            "graph_review": {
-                "repair_contract": prior_contract,
-                "topology_proofs": [],
-            },
-        },
-        {"repair_contract": current_contract, "topology_proofs": []},
-        candidate,
-    )
-
-    assert review["repair_contract"]["layers"]["connections"]["status"] == "fail"
-    assert "connections" not in review.get("locked_layers", [])
-
-
-def test_layer_lock_never_erases_a_current_deterministic_finding():
-    graph = _domain_graph()
-    for index, node in enumerate(graph["nodes"]):
-        node["id"] = f"node_{index}"
-    current_contract = _repair_contract(
-        scope="local",
-        failed_layer="components",
-        layer_selectors={
-            "components": {
-                "node_ids": [graph["nodes"][0]["id"]],
-                "deterministic_finding_ids": ["deterministic_1"],
-            }
-        },
-    )
-
-    review = _lock_unchanged_passed_layers(
-        {
-            "repair_baseline_graph_data": deepcopy(graph),
-            "graph_review": {
-                "repair_contract": _repair_contract(),
-                "topology_proofs": [],
-            },
-        },
-        {"repair_contract": current_contract, "topology_proofs": []},
-        graph,
-        deterministic_findings=[
-            {
-                "id": "deterministic_1",
-                "finding": "Repair the component identity.",
-                "owner_layer": "components",
-            }
-        ],
-    )
-
-    assert review["approved"] is False
-    assert review["repair_contract"]["layers"]["components"][
-        "deterministic_finding_ids"
-    ] == ["deterministic_1"]
-
-
-def test_layer_lock_promotes_a_render_only_residual_to_global_scope():
-    baseline = _domain_graph()
-    for index, node in enumerate(baseline["nodes"]):
-        node["id"] = f"node_{index}"
-    edge = baseline["edges"][0]
-    prior_contract = _repair_contract(
-        scope="local",
-        failed_layer="connections",
-        layer_selectors={
-            "connections": {
-                "edge_selectors": [
-                    {
-                        "source": edge["source"],
-                        "target": edge["target"],
-                        "label": edge["label"],
-                    }
-                ]
-            }
-        },
-    )
-    candidate = deepcopy(baseline)
-    candidate["edges"][0]["description"] = "Carries the repaired event."
-    current_contract = _repair_contract(
-        scope="local",
-        failed_layer="components",
-        layer_selectors={"components": {"node_ids": [candidate["nodes"][0]["id"]]}},
-    )
-    current_contract["layers"]["render"] = _layer(
-        "fail",
-        0.6,
-        findings=["The rendered topology is clipped."],
-    )
-
-    review = _lock_unchanged_passed_layers(
-        {
-            "repair_baseline_graph_data": baseline,
-            "graph_review": {
-                "repair_contract": prior_contract,
-                "topology_proofs": [],
-            },
-        },
-        {"repair_contract": current_contract, "topology_proofs": []},
-        candidate,
-    )
-
-    assert review["repair_contract"]["repair_scope"] == "global"
-    assert review["review_status"] == "completed"
-    assert review["terminal"] is True
+    assert review["repair_contract"]["repair_scope"] == "local"
+    assert review["repair_contract"]["layers"]["components"]["status"] == "fail"
+    assert review["repair_contract"]["layers"]["components"]["node_ids"] == [
+        candidate["nodes"][0]["id"]
+    ]
+    assert "locked_layers" not in review
 
 
 def test_required_topology_proofs_reject_missing_or_invented_edges():

@@ -224,7 +224,6 @@ def build_agent_workflow(
         revision_state = {
             **state,
             "graph_revision_count": revision_count,
-            "repair_baseline_graph_data": copy.deepcopy(state.get("graph_data")),
         }
         try:
             timeout_s = patch_timeout_seconds(revision_state)

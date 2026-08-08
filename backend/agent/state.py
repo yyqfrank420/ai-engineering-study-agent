@@ -124,7 +124,6 @@ class AgentState(TypedDict):
     graph_intent: NotRequired[Literal["create", "edit"] | None]
     graph_revision_count: NotRequired[int]
     approved_graph_data: NotRequired[GraphData | None]
-    repair_baseline_graph_data: NotRequired[GraphData | None]
     workflow_started_at_s: NotRequired[float]
     terminal_deadline_s: NotRequired[float]
     search_tool_wait_task: NotRequired[Any]
