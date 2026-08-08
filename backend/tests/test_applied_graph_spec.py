@@ -433,7 +433,7 @@ def test_edge_resource_safety_ceiling_is_enforced(monkeypatch):
 
 @pytest.mark.parametrize(
     ("component_index", "parent_index"),
-    [(0, -1), (0, 1), (0, 99), (1, 2)],
+    [(0, -1), (0, 99), (1, 2)],
 )
 def test_invalid_parent_relationships_fail_closed(component_index, parent_index):
     payload = _draft(4)
@@ -441,6 +441,35 @@ def test_invalid_parent_relationships_fail_closed(component_index, parent_index)
     with pytest.raises(AppliedGraphSpecError) as caught:
         validate_applied_graph_topology(payload, applied_graph_spec("production"))
     assert caught.value.code == "graph_design_topology_invalid"
+
+
+def test_consistent_one_based_parent_indexes_are_normalized():
+    payload = _draft(6)
+    for component in payload["components"]:
+        component[0] += 1
+
+    draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    parents = {edge["target"]: edge["source"] for edge in draft["edges"][:5]}
+    assert parents == {
+        "n2": "n1",
+        "n3": "n2",
+        "n4": "n3",
+        "n5": "n4",
+        "n6": "n5",
+    }
+
+
+def test_mixed_parent_index_conventions_fail_closed():
+    payload = _draft(4)
+    payload["components"][0][0] = 1
+    payload["components"][1][0] = 0
+
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert caught.value.code == "graph_design_topology_invalid"
+    assert caught.value.path == "components[0][0]"
 
 
 def test_forward_parent_fails_instead_of_permitting_a_cycle():
@@ -673,6 +702,7 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
         for code, token in codebook.items():
             assert f"{code}={token}" in prompt
     assert "components[i] defines component i+1" in prompt
+    assert "components[4] may use parent 0 through 4, never 5" in prompt
     assert "must be smaller than the component index" in prompt
     assert "Every component must reference exactly one group" in prompt
     assert "Links use component indexes starting with root 0" in prompt

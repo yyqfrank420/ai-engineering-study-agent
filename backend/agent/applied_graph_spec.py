@@ -193,7 +193,8 @@ def applied_graph_topology_prompt(
         "smaller. Order components in a stable visual reading order. The root is component 0. A row "
         "at components[i] defines component i+1 and its one incoming tree edge. Parent indexes are "
         "zero-based and must be smaller than the component index, which makes one rooted acyclic "
-        "topology. Define groups before assigning their zero-based indexes in the root and "
+        "topology. For example, components[0] must use parent 0 and components[4] may use parent "
+        "0 through 4, never 5. Define groups before assigning their zero-based indexes in the root and "
         "component rows. Every component must reference exactly one group. Links use component "
         "indexes starting with root 0. "
         "Composition steps use the same indexes but allow only non-root components 1 through the "
@@ -309,6 +310,30 @@ def _raise_topology(path: str) -> None:
     )
 
 
+def _normalise_parent_indexes(parent_indexes: list[int]) -> list[int]:
+    zero_based = all(
+        0 <= parent_index < component_index
+        for component_index, parent_index in enumerate(parent_indexes, start=1)
+    )
+    if zero_based:
+        return parent_indexes
+
+    one_based = all(
+        1 <= parent_index <= component_index
+        for component_index, parent_index in enumerate(parent_indexes, start=1)
+    )
+    if one_based:
+        logger.info("Normalized one-based applied graph parent indexes")
+        return [parent_index - 1 for parent_index in parent_indexes]
+
+    invalid_index = next(
+        component_index
+        for component_index, parent_index in enumerate(parent_indexes, start=1)
+        if not 0 <= parent_index < component_index
+    )
+    _raise_topology(f"components[{invalid_index - 1}][0]")
+
+
 def _validate_component(
     component: list[Any],
     *,
@@ -354,12 +379,25 @@ def _validate_components(
     ]
     group_indexes = [_required_index(root[3], path="root[3]")]
     tree_edges: list[dict[str, str]] = []
-    for component_index, raw_component in enumerate(raw_components, start=1):
+    component_rows = [
+        _required_tuple(
+            raw_component,
+            _COMPONENT_FIELD_COUNT,
+            path=f"components[{component_index - 1}]",
+        )
+        for component_index, raw_component in enumerate(raw_components, start=1)
+    ]
+    parent_indexes = _normalise_parent_indexes(
+        [
+            _required_index(component[0], path=f"components[{index}][0]")
+            for index, component in enumerate(component_rows)
+        ]
+    )
+    for component_index, (component, parent_index) in enumerate(
+        zip(component_rows, parent_indexes, strict=True),
+        start=1,
+    ):
         path = f"components[{component_index - 1}]"
-        component = _required_tuple(raw_component, _COMPONENT_FIELD_COUNT, path=path)
-        parent_index = _required_index(component[0], path=f"{path}[0]")
-        if parent_index < 0 or parent_index >= component_index:
-            _raise_topology(f"{path}[0]")
         components.append(
             _validate_component(
                 component,

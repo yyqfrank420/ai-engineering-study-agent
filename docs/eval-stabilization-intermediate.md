@@ -492,6 +492,16 @@ Most recent authoritative evidence:
   Cloud Run boundaries are 940, 970, and 1000 seconds so each outer layer retains 30 seconds for a
   typed terminal result and persistence. The complete admitted repair path still retains the final
   critic and synthesis reserves.
+- Diagnostic `31264351143` ran `graph-expansion` on exact head `1ac7ac7` while exact-head CI
+  passed. Moving the challenger to Sonnet reduced that stage from 140.737 to 32.058 seconds. Opus
+  planning took 111.089 seconds and Kimi topology generation took 177.457 seconds. The application
+  turn completed in 344.639 seconds, down from 719.136 seconds. Kimi returned provider-valid JSON,
+  then local validation rejected the fifth component's parent reference at `components[4][0]`.
+  No critic or patch ran.
+- Parent-reference decoding now preserves valid zero-based topology and also accepts a complete,
+  consistently one-based parent set by converting every parent reference together. Mixed conventions,
+  forward references, cycles, non-integers, and out-of-range indexes still fail closed. The topology
+  prompt includes concrete first-row and fifth-row bounds so the provider does not need the fallback.
 - Canonical run `31221851568` completed all Kimi provider calls. Two valid topology objects were
   discarded because one bounded title and one bounded responsibility exceeded presentation limits.
   Two other 33-node and 39-node candidates passed browser rendering, then their Sonnet reviews were
