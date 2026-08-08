@@ -377,12 +377,6 @@ async def test_anthropic_stream_once_without_semaphore(monkeypatch):
     import adapters.llm_adapter as llm
 
     class _Stream:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
         def __aiter__(self):
             return self
 
@@ -393,7 +387,8 @@ async def test_anthropic_stream_once_without_semaphore(monkeypatch):
             return _Event("content_block_delta", _Delta("text_delta", text="ok"))
 
     class _Messages:
-        def stream(self, **kwargs):
+        async def create(self, **kwargs):
+            assert kwargs["stream"] is True
             return _Stream()
 
     class _Client:
@@ -408,24 +403,40 @@ async def test_anthropic_stream_once_without_semaphore(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_anthropic_stream_once_supports_posthog_awaitable_stream(monkeypatch):
+async def test_anthropic_stream_once_uses_supported_posthog_streaming_path(
+    monkeypatch,
+):
     import adapters.llm_adapter as llm
+    from anthropic.resources import AsyncMessages
+    from posthog.ai.anthropic import AsyncAnthropic as PostHogAsyncAnthropic
 
-    async def wrapped_stream():
+    captured = []
+
+    async def create(_messages, **kwargs):
+        assert kwargs["stream"] is True
+
         async def events():
             yield _Event("content_block_delta", _Delta("text_delta", text="ok"))
 
         return events()
 
-    client = SimpleNamespace(
-        messages=SimpleNamespace(stream=lambda **_kwargs: wrapped_stream())
+    posthog_client = SimpleNamespace(
+        privacy_mode=False,
+        capture=lambda **event: captured.append(event),
     )
+    client = PostHogAsyncAnthropic(
+        api_key="sk-ant-test",
+        posthog_client=posthog_client,
+    )
+    monkeypatch.setattr(AsyncMessages, "create", create)
     monkeypatch.setattr(llm, "_get_anthropic_stream_semaphore", lambda: None)
     monkeypatch.setattr(llm, "_get_anthropic_client", lambda: client)
 
     events = await _collect(llm._anthropic_stream_once({"model": "m"}))
+    await client.close()
 
     assert events[0].delta.text == "ok"
+    assert captured[0]["event"] == "$ai_generation"
 
 
 @pytest.mark.asyncio

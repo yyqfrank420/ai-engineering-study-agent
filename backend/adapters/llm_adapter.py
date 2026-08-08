@@ -546,19 +546,20 @@ async def _anthropic_stream_once(kwargs: dict) -> AsyncGenerator[object, None]:
 async def _iterate_anthropic_stream(
     sdk_kwargs: dict,
 ) -> AsyncGenerator[object, None]:
-    """Iterate native Anthropic and PostHog-wrapped stream interfaces."""
-    stream = _get_anthropic_client().messages.stream(**sdk_kwargs)
-    if inspect.isawaitable(stream):
-        stream = await stream
-
-    if hasattr(stream, "__aenter__"):
-        async with stream as opened_stream:
-            async for event in opened_stream:
-                yield event
-        return
-
-    async for event in stream:
-        yield event
+    """Iterate the low-level streaming interface shared by both clients."""
+    stream = await _get_anthropic_client().messages.create(
+        **sdk_kwargs,
+        stream=True,
+    )
+    try:
+        async for event in stream:
+            yield event
+    finally:
+        close = getattr(stream, "aclose", None) or getattr(stream, "close", None)
+        if close is not None:
+            close_result = close()
+            if inspect.isawaitable(close_result):
+                await close_result
 
 
 async def stream_response(
