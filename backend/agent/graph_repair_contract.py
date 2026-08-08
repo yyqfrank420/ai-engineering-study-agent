@@ -32,6 +32,21 @@ _ASSESSMENT_FIELDS = {
 }
 
 
+def repair_scope_for_layers(layers: dict[str, Any]) -> str:
+    """Derive repair scope from the layer ownership that grants mutation authority."""
+    failed_layers = {
+        layer
+        for layer in REPAIR_LAYERS
+        if isinstance(layers.get(layer), dict)
+        and layers[layer].get("status") == "fail"
+    }
+    if not failed_layers:
+        return "none"
+    if failed_layers - {"render"}:
+        return "local"
+    return "global"
+
+
 def _unique_strings(value: Any, field: str, failures: list[str]) -> list[str]:
     if not isinstance(value, list) or not all(
         isinstance(item, str) and item.strip() for item in value
@@ -421,14 +436,11 @@ def validate_repair_contract(
             failures.append(
                 "connection additions require at least two declared endpoint identities"
             )
-    if scope == "none" and failed_layers:
-        failures.append("repair_scope none cannot contain a failed layer")
-    if scope == "local":
-        if not failed_layers.intersection({"components", "connections", "composition"}):
-            failures.append("repair_scope local requires a failed editable graph layer")
-    if scope == "global" and not failed_layers:
-        failures.append("repair_scope global requires at least one failed layer")
-    if scope != "none" and not failed_layers:
-        failures.append("a repair scope requires a failed layer")
+    if scope in {"none", "local", "global"} and isinstance(layers, dict):
+        derived_scope = repair_scope_for_layers(layers)
+        if scope != derived_scope:
+            failures.append(
+                f"repair_scope must be {derived_scope} for the failed layer ownership"
+            )
     if failures:
         raise ValueError("repair contract invalid: " + "; ".join(failures))

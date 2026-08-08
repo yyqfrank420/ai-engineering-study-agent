@@ -191,7 +191,7 @@ def _critic_state(*, graph=None, complexity="prototype"):
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v37"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v38"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -950,7 +950,7 @@ def test_graph_caused_render_failure_can_use_one_local_repair():
 def test_render_only_failure_cannot_enter_local_patch_lane():
     contract = _repair_contract(scope="local", failed_layer="render")
 
-    with pytest.raises(ValueError, match="requires a failed editable graph layer"):
+    with pytest.raises(ValueError, match="must be global for the failed layer ownership"):
         _validate_repair_contract(contract, graph={})
 
 
@@ -976,6 +976,73 @@ def test_protocol_tokens_are_normalized_without_touching_record_identity():
     assert normalized["repair_contract"]["layers"]["composition"][
         "composition_fields"
     ] == ["groups"]
+
+
+@pytest.mark.parametrize(
+    ("model_scope", "failed_layer", "expected_scope", "expected_route"),
+    [
+        ("global", "connections", "local", "revise"),
+        ("local", "render", "global", "reject"),
+        ("global", None, "none", "accept"),
+    ],
+)
+def test_repair_scope_is_derived_from_failed_layer_ownership(
+    model_scope,
+    failed_layer,
+    expected_scope,
+    expected_route,
+):
+    graph = _domain_graph()
+    payload = _passing_review_payload()
+    payload["repair_scope"] = model_scope
+    if failed_layer is not None:
+        finding_code = next(
+            index
+            for index, code in enumerate(_RUBRIC_CODES, start=1)
+            if _RUBRIC_CODE_OWNERS[code] == failed_layer
+        )
+        values = {
+            "status": "fail",
+            "score": 0.7,
+            "finding_codes": [finding_code],
+        }
+        if failed_layer == "connections":
+            values["edge_indexes"] = [0]
+        _set_model_layer(
+            payload,
+            failed_layer,
+            **values,
+        )
+
+    normalized = _canonicalise_review_protocol(
+        payload,
+        graph=graph,
+        deterministic_findings=[],
+        review_context=[],
+        require_topology_proofs=False,
+    )
+    _validate_review_protocol(
+        normalized,
+        require_topology_proofs=False,
+        graph=graph,
+        deterministic_findings=[],
+    )
+
+    assert normalized["repair_contract"]["repair_scope"] == expected_scope
+    assert (
+        _route_after_review(
+            {
+                "graph_changed": True,
+                "graph_data": {**graph, "design_origin": "applied"},
+                "graph_revision_count": 0,
+                "graph_review": {
+                    "approved": expected_scope == "none",
+                    **normalized,
+                },
+            }
+        )
+        == expected_route
+    )
 
 
 def test_failed_topology_proof_cannot_hide_behind_passing_layers():

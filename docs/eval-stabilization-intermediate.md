@@ -412,6 +412,18 @@ Most recent authoritative evidence:
   up to the existing 180-second ceiling. Patch admission decides the remaining repair budget after
   a failed verdict. This removes unused prototype work and gives the current gate priority over a
   speculative later stage.
+- Diagnostic `31256929226` ran `graph-expansion` on exact head `e645bf2`. All five logical model
+  calls completed without fallback. Kimi produced a 36-node, 58-edge, 5-group prototype candidate.
+  The private render had zero clipping or overlap, 14.68-pixel minimum text, and all eight overview
+  labels visible. Sonnet completed the depth-aware review in 64.356 seconds and rejected one
+  connections-layer reconciliation defect. The review carried model-owned `repair_scope=global`,
+  so routing withheld the candidate without calling the bounded Kimi patch. The run cost $0.771274;
+  no judge call ran.
+- Critic v38 derives repair scope from the server-owned MECE layer results. No failed layer maps to
+  `none`; any components, connections, or composition failure maps to `local`; a render-only failure
+  maps to `global`. Model scope remains a validated wire field for compatibility and cannot bypass
+  the bounded repair lane. A changed patch still requires a second independent review before
+  publication.
 - Canonical run `31221851568` completed all Kimi provider calls. Two valid topology objects were
   discarded because one bounded title and one bounded responsibility exceeded presentation limits.
   Two other 33-node and 39-node candidates passed browser rendering, then their Sonnet reviews were

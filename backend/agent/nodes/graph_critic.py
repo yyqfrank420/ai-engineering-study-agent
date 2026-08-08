@@ -14,6 +14,7 @@ from agent.graph_repair_contract import (
     APPROVAL_SCORE as _APPROVAL_SCORE,
     COMPOSITION_FIELDS as _COMPOSITION_FIELDS,
     REPAIR_LAYERS as _REPAIR_LAYERS,
+    repair_scope_for_layers as _repair_scope_for_layers,
     validate_repair_contract as _validate_repair_contract,
 )
 from agent.state import AgentState
@@ -36,7 +37,7 @@ class CriticProtocolError(ValueError):
         self.rule = rule if rule in _PROTOCOL_ERROR_RULES else None
 
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v37"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v38"
 # Sonnet 5 high effort can spend the full output allowance on adaptive thinking
 # before emitting the required scorecard. Medium keeps the review inside one call.
 _GRAPH_CRITIC_EFFORT = "medium"
@@ -831,6 +832,15 @@ def _canonicalise_review_protocol(
     ):
         raise ValueError("every deterministic finding must be classified exactly once")
 
+    derived_scope = _repair_scope_for_layers(canonical_layers)
+    if scope != derived_scope:
+        logger.info(
+            "Derived critic repair scope from failed layers: model_scope=%s derived_scope=%s",
+            scope,
+            derived_scope,
+        )
+    scope = derived_scope
+
     if not require_topology_proofs:
         return {
             "repair_contract": {"repair_scope": scope, "layers": canonical_layers},
@@ -1128,12 +1138,10 @@ the exact number of new groups, sequence records, or assumptions; use zero for u
 Every connection addition must have at least two endpoint identities across declared component
 additions and unique component or connection context nodes.
 
-Set `repair_scope` to `none` only when all four layers pass at 0.78 or above and have no
-blockers. Set it to `local` only when the complete repair can be made inside the failed graph layers
-and cited existing records or fields. A graph-caused visual defect may use local scope when render
-and at least one editable graph layer fail together; the graph layer identifies the records that can
-fix the next render. Set scope to `global` when the artifact needs broad redesign, renderer code must
-change, or render is the only failed layer.
+Set `repair_scope` to `none` when all four layers pass. Set it to `local` when components,
+connections, or composition fails, including a graph-caused render failure alongside an editable
+layer. Set it to `global` only when render is the sole failed layer and graph changes cannot repair
+the renderer.
 Copy every deterministic pre-review finding in the packet into the correct layer and localize it.
 </review_contract>
 
@@ -1374,20 +1382,7 @@ def _lock_unchanged_passed_layers(
     if not locked_layers:
         return review
 
-    failed_layers = {
-        layer
-        for layer in _REPAIR_LAYERS
-        if (layers.get(layer) or {}).get("status") == "fail"
-    }
-    editable_failures = failed_layers.intersection(
-        {"components", "connections", "composition"}
-    )
-    if not failed_layers:
-        contract["repair_scope"] = "none"
-    elif not editable_failures or contract.get("repair_scope") == "global":
-        contract["repair_scope"] = "global"
-    else:
-        contract["repair_scope"] = "local"
+    contract["repair_scope"] = _repair_scope_for_layers(layers)
     topology_proofs = review.get("topology_proofs") or []
     if "connections" in locked_layers:
         topology_proofs = deepcopy(prior_review.get("topology_proofs") or [])

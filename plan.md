@@ -25,9 +25,10 @@ The redesign stays outside the release-critical path. It begins after the curren
 ### Current status
 
 - Canonicalisation and final validation use the resolved architecture depth.
-- Critic v37 sends an empty proof object at prototype depth and keeps the full proof contract at production depth.
+- Critic v38 sends an empty proof object at prototype depth and keeps the full proof contract at production depth.
 - The active critic may borrow up to the existing 180-second ceiling. Patch admission assigns any remaining repair time after a failed verdict.
-- Focused critic and deadline verification pass: 147 tests, including the provider-schema regression.
+- Repair scope is derived from failed layer ownership, so editable defects enter one bounded patch and render-only defects fail closed.
+- Focused critic, patch, and workflow verification passes: 282 tests, including depth-specific schema and repair-scope regressions.
 - The next paid action is one exact-head `graph-expansion` diagnostic. Another failure requires new evidence before any retry.
 
 ### Tests
