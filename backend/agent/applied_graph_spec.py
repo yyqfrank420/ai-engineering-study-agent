@@ -253,16 +253,34 @@ def _required_text(value: Any, limit: int, *, path: str) -> str:
 
 
 def _coded_token(value: Any, codes: dict[int, str], *, path: str) -> str:
-    if isinstance(value, bool) or not isinstance(value, int):
+    if isinstance(value, bool):
         raise AppliedGraphSpecError(
             "graph_design_schema_invalid", path=path, rule="value_type"
         )
-    token = codes.get(value)
-    if token is None:
+    if isinstance(value, int):
+        token = codes.get(value)
+        if token is None:
+            raise AppliedGraphSpecError(
+                "graph_design_schema_invalid", path=path, rule="invalid_enum"
+            )
+        return token
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in codes.values():
+            logger.info("Normalized applied graph category token: path=%s", path)
+            return normalized
+        numeric_token = {str(code): token for code, token in codes.items()}.get(
+            normalized
+        )
+        if numeric_token is not None:
+            logger.info("Normalized applied graph category code: path=%s", path)
+            return numeric_token
         raise AppliedGraphSpecError(
             "graph_design_schema_invalid", path=path, rule="invalid_enum"
         )
-    return token
+    raise AppliedGraphSpecError(
+        "graph_design_schema_invalid", path=path, rule="value_type"
+    )
 
 
 def _required_index(value: Any, *, path: str) -> int:

@@ -6,7 +6,7 @@ Last updated: 2026-08-08
 
 Restore the current architecture pipeline and deploy it before starting the staged generation redesign.
 
-The current release now completes architecture planning, Kimi generation, private rendering, local repair, and post-patch review. Diagnostic `31257810429` exposed serial semantic defect discovery. Diagnostic `31259489721` exposed serial scorecard validation. Diagnostic `31261404727` then exposed model-owned completion state: the second valid review had to reproduce the first review's derived connection blocker strings exactly. Critic v41 keeps validated repair authority on the server and merges both independent reviews before the bounded repair.
+The current release now completes architecture planning, Kimi generation, private rendering, local repair, and post-patch review. Diagnostic `31257810429` exposed serial semantic defect discovery. Diagnostic `31259489721` exposed serial scorecard validation. Diagnostic `31261404727` exposed model-owned completion state, which critic v41 replaced with a server-owned merge. Diagnostic `31262285743` then exposed a direct schema/parser contradiction: the provider schema allowed categorical strings while the applied topology parser required integer codes. The parser now accepts only the finite canonical codebook names or their integer codes.
 
 The redesign stays outside the release-critical path. It begins after the current pipeline passes the targeted live diagnostic and production smoke test.
 
@@ -31,7 +31,7 @@ The redesign stays outside the release-critical path. It begins after the curren
 - The shared initial critic stage may borrow up to 195 seconds. The measured timing replay preserves 98 seconds for patching and 101 seconds for final review.
 - Repair scope is derived from failed layer ownership, so editable defects enter one bounded patch and render-only defects fail closed.
 - The exact `122b1fd` diagnostic completed all graph stages and proved the repair pipeline works. Its remaining failure was an unchanged defect omitted by the first critic.
-- All 147 critic tests pass locally. The next paid action remains one exact-head `graph-expansion` diagnostic after independent review, commit, and exact-head CI.
+- All 147 critic tests and 73 applied topology specification tests pass locally. The next paid action remains one exact-head `graph-expansion` diagnostic after independent review, commit, and exact-head CI.
 
 ### Tests
 

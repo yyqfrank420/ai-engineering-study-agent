@@ -189,12 +189,12 @@ def test_component_enum_positions_are_validated_server_side():
     assert caught.value.rule == "invalid_enum"
 
 
-def test_component_categorical_positions_require_integer_codes():
+def test_component_categorical_positions_reject_unknown_names():
     payload = _draft(4)
-    payload["root"][1] = "service"
+    payload["root"][1] = "model-serving-service"
     with pytest.raises(AppliedGraphSpecError) as caught:
         validate_applied_graph_topology(payload, applied_graph_spec("production"))
-    assert caught.value.rule == "value_type"
+    assert caught.value.rule == "invalid_enum"
 
 
 def test_wire_codebooks_are_disjoint_and_decode_exhaustively():
@@ -211,6 +211,7 @@ def test_wire_codebooks_are_disjoint_and_decode_exhaustively():
     for codebook in codebooks:
         for code, token in codebook.items():
             assert module._coded_token(code, codebook, path="$code") == token
+            assert module._coded_token(str(code), codebook, path="$code") == token
 
 
 @pytest.mark.parametrize(
@@ -246,8 +247,14 @@ def test_every_categorical_position_rejects_foreign_codes(
 
 @pytest.mark.parametrize(
     ("value", "rule"),
-    [(True, "value_type"), (1.0, "value_type"), ("101", "value_type"),
-     (-1, "invalid_enum"), (109, "invalid_enum")],
+    [
+        (True, "value_type"),
+        (1.0, "value_type"),
+        ("109", "invalid_enum"),
+        ("1" * 5000, "invalid_enum"),
+        (-1, "invalid_enum"),
+        (109, "invalid_enum"),
+    ],
 )
 def test_wire_codes_reject_invalid_scalar_values(value, rule):
     payload = _draft(4)
@@ -255,6 +262,30 @@ def test_wire_codes_reject_invalid_scalar_values(value, rule):
     with pytest.raises(AppliedGraphSpecError) as caught:
         validate_applied_graph_topology(payload, applied_graph_spec("production"))
     assert caught.value.rule == rule
+
+
+def test_canonical_category_representations_work_in_every_tuple_layout():
+    payload = _draft(4)
+    payload["root"][1] = "101"
+    payload["components"][0][2] = "decision"
+    payload["components"][0][6] = "control"
+    payload["components"][0][7] = "async"
+    payload["composition"]["groups"][0][1] = "runtime"
+    payload["connections"]["links"] = [
+        [0, 2, "reports feedback", "feedback", "sync"]
+    ]
+
+    graph = validate_applied_graph_topology(
+        payload, applied_graph_spec("production")
+    )
+
+    assert graph["nodes"][0]["type"] == "service"
+    assert graph["nodes"][1]["type"] == "decision"
+    assert graph["nodes"][0]["group_kind"] == "runtime"
+    assert graph["edges"][0]["flow"] == "control"
+    assert graph["edges"][0]["sync"] == "async"
+    assert graph["edges"][-1]["flow"] == "feedback"
+    assert graph["edges"][-1]["sync"] == "sync"
 
 
 @pytest.mark.parametrize("field_index", [0, 2])

@@ -469,6 +469,17 @@ Most recent authoritative evidence:
   permissions, derives status and scope, and validates the merged contract before Kimi receives it.
   The completion pass can add findings without restating the lower bound. It cannot revoke prior
   repair authority.
+- Diagnostic `31262285743` ran `graph-expansion` on exact head `3c2ceaa` while exact-head offline CI
+  passed. Opus planning and challenge completed, then Kimi returned a provider-valid topology. The
+  local parser rejected `root[1]` with `value_type` before rendering because the shared tuple schema
+  permits strings in every position while categorical decoding accepted only integer codes. Four
+  calls cost $0.602776; no critic, patch, or judge call ran.
+- Applied topology decoding now accepts either the documented integer code or its canonical finite
+  codebook name at every categorical position. It normalizes known decimal code strings, case, and
+  surrounding whitespace, then rejects unknown names, booleans, and foreign codes. Indexes remain
+  integer-only.
+  This resolves the provider-schema mismatch without another Kimi call or a provider-specific
+  positional schema.
 - Canonical run `31221851568` completed all Kimi provider calls. Two valid topology objects were
   discarded because one bounded title and one bounded responsibility exceeded presentation limits.
   Two other 33-node and 39-node candidates passed browser rendering, then their Sonnet reviews were
