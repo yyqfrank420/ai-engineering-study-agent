@@ -9,8 +9,11 @@ export const V_PAD = 72;
 export const MIN_COL_W = NODE_W + 84;
 export const VERTICAL_PAD = 32;
 export const VERTICAL_LEVEL_H = NODE_H + 12;
+export const VERTICAL_NODE_GAP = 24;
+export const VERTICAL_TRACK_GAP = 72;
 export const INITIAL_FIT_PADDING = 32;
-export const GRAPH_LAYOUT_VERSION = 7;
+export const GRAPH_LAYOUT_VERSION = 9;
+export const DIAGRAM_EVALUATION_VIEWPORT = { width: 1440, height: 960 } as const;
 
 export type GraphOrientation = 'horizontal' | 'vertical';
 
@@ -43,6 +46,227 @@ export function initialFitScale(
     (viewportWidth - 2 * INITIAL_FIT_PADDING) / layoutWidth,
     (viewportHeight - 2 * INITIAL_FIT_PADDING) / layoutHeight,
   );
+}
+
+export function boundLabelCenter(
+  position: { x: number; y: number },
+  size: { width: number; height: number },
+  bounds: { width: number; height: number },
+  padding = 4,
+): { x: number; y: number } {
+  const boundedCenter = (value: number, extent: number, labelExtent: number): number => {
+    if (extent <= 0) return 0;
+    const safePadding = Math.max(0, Math.min(padding, extent / 2));
+    const halfLabel = Math.max(0, labelExtent) / 2;
+    const minimum = Math.min(extent / 2, safePadding + halfLabel);
+    const maximum = Math.max(extent / 2, extent - safePadding - halfLabel);
+    return Math.min(maximum, Math.max(minimum, value));
+  };
+
+  return {
+    x: boundedCenter(position.x, bounds.width, size.width),
+    y: boundedCenter(position.y, bounds.height, size.height),
+  };
+}
+
+export interface VerticalLayoutPlan {
+  layoutWidth: number;
+  layoutHeight: number;
+  nodesPerRow: number;
+  scale: number;
+  levels: VerticalLevelPlacement[];
+}
+
+export interface VerticalLevelPlacement {
+  track: number;
+  direction: 1 | -1;
+  x: number;
+  y: number;
+  width: number;
+}
+
+/**
+ * Use the two-dimensional canvas for wide topology levels before shrinking the
+ * whole diagram. The virtual canvas may be wider than the visible viewport;
+ * auto-fit then chooses the largest readable scale across both dimensions.
+ */
+export function planVerticalLayout(
+  viewportWidth: number,
+  viewportHeight: number,
+  levelSizes: number[],
+): VerticalLayoutPlan {
+  const normalizedLevelSizes = (levelSizes.length > 0 ? levelSizes : [1])
+    .map(size => Math.max(1, Math.floor(size)));
+  const widestLevel = Math.max(1, ...normalizedLevelSizes);
+  const minimumNodesPerRow = Math.ceil(Math.sqrt(widestLevel));
+  let best: VerticalLayoutPlan | null = null;
+  const maximumTracks = Math.min(
+    normalizedLevelSizes.length,
+    Math.max(
+      1,
+      Math.floor(
+        (viewportWidth - 2 * H_PAD + VERTICAL_TRACK_GAP)
+        / (NODE_W + VERTICAL_TRACK_GAP),
+      ),
+    ),
+  );
+
+  for (
+    let nodesPerRow = minimumNodesPerRow;
+    nodesPerRow <= widestLevel;
+    nodesPerRow += 1
+  ) {
+    const levelRows = normalizedLevelSizes.map(size => Math.ceil(size / nodesPerRow));
+    for (let trackCount = 1; trackCount <= maximumTracks; trackCount += 1) {
+      const ranges = partitionVerticalLevels(
+        levelRows,
+        normalizedLevelSizes,
+        nodesPerRow,
+        trackCount,
+      );
+      const trackRows = ranges.map(([start, end]) => (
+        levelRows.slice(start, end).reduce((total, rows) => total + rows, 0)
+      ));
+      const trackWidths = ranges.map(([start, end]) => {
+        const populatedColumns = Math.max(
+          1,
+          ...normalizedLevelSizes
+            .slice(start, end)
+            .map(size => Math.min(size, nodesPerRow)),
+        );
+        return populatedColumns * NODE_W
+          + Math.max(0, populatedColumns - 1) * VERTICAL_NODE_GAP;
+      });
+      const contentWidth = trackWidths.reduce((total, value) => total + value, 0)
+        + Math.max(0, trackCount - 1) * VERTICAL_TRACK_GAP;
+      const layoutWidth = Math.max(viewportWidth, contentWidth + 2 * H_PAD);
+      const layoutHeight = 2 * VERTICAL_PAD
+        + Math.max(1, ...trackRows) * VERTICAL_LEVEL_H;
+      const scale = initialFitScale(
+        viewportWidth,
+        viewportHeight,
+        layoutWidth,
+        layoutHeight,
+      );
+      const contentStart = (layoutWidth - contentWidth) / 2;
+      const levels: VerticalLevelPlacement[] = [];
+      let trackX = contentStart;
+
+      ranges.forEach(([start, end], track) => {
+        const direction: 1 | -1 = track % 2 === 0 ? 1 : -1;
+        let rowsBefore = 0;
+        for (let level = start; level < end; level += 1) {
+          const rows = levelRows[level];
+          const rowOffset = direction === 1
+            ? rowsBefore
+            : trackRows[track] - rowsBefore - rows;
+          levels[level] = {
+            track,
+            direction,
+            x: trackX,
+            y: VERTICAL_PAD + rowOffset * VERTICAL_LEVEL_H,
+            width: trackWidths[track],
+          };
+          rowsBefore += rows;
+        }
+        trackX += trackWidths[track] + VERTICAL_TRACK_GAP;
+      });
+
+      const candidate = {
+        layoutWidth,
+        layoutHeight,
+        nodesPerRow,
+        scale,
+        levels,
+      };
+      if (
+        best === null
+        || scale > best.scale + 0.000_001
+        || (
+          Math.abs(scale - best.scale) <= 0.000_001
+          && layoutWidth * layoutHeight < best.layoutWidth * best.layoutHeight
+        )
+      ) {
+        best = candidate;
+      }
+    }
+  }
+
+  return best ?? {
+    layoutWidth: viewportWidth,
+    layoutHeight: 2 * VERTICAL_PAD + VERTICAL_LEVEL_H,
+    nodesPerRow: 1,
+    scale: initialFitScale(
+      viewportWidth,
+      viewportHeight,
+      viewportWidth,
+      2 * VERTICAL_PAD + VERTICAL_LEVEL_H,
+    ),
+    levels: [{
+      track: 0,
+      direction: 1,
+      x: (viewportWidth - NODE_W) / 2,
+      y: VERTICAL_PAD,
+      width: NODE_W,
+    }],
+  };
+}
+
+
+export function partitionVerticalLevels(
+  levelRows: number[],
+  levelSizes: number[],
+  nodesPerRow: number,
+  trackCount: number,
+): Array<[number, number]> {
+  interface PartitionState {
+    maximumRows: number;
+    totalWidth: number;
+    ranges: Array<[number, number]>;
+  }
+  const prefixRows = [0];
+  for (const rows of levelRows) prefixRows.push(prefixRows.at(-1)! + rows);
+  const table: Array<Array<PartitionState | null>> = Array.from(
+    { length: trackCount + 1 },
+    () => Array(levelRows.length + 1).fill(null),
+  );
+  table[0][0] = { maximumRows: 0, totalWidth: 0, ranges: [] };
+
+  for (let tracks = 1; tracks <= trackCount; tracks += 1) {
+    for (let end = tracks; end <= levelRows.length; end += 1) {
+      for (let start = tracks - 1; start < end; start += 1) {
+        const previous = table[tracks - 1][start];
+        if (!previous) continue;
+        const rows = prefixRows[end] - prefixRows[start];
+        const populatedColumns = Math.max(
+          1,
+          ...levelSizes
+            .slice(start, end)
+            .map(size => Math.min(size, nodesPerRow)),
+        );
+        const width = populatedColumns * NODE_W
+          + Math.max(0, populatedColumns - 1) * VERTICAL_NODE_GAP;
+        const candidate: PartitionState = {
+          maximumRows: Math.max(previous.maximumRows, rows),
+          totalWidth: previous.totalWidth + width,
+          ranges: [...previous.ranges, [start, end]],
+        };
+        const current = table[tracks][end];
+        if (
+          current === null
+          || candidate.maximumRows < current.maximumRows
+          || (
+            candidate.maximumRows === current.maximumRows
+            && candidate.totalWidth < current.totalWidth
+          )
+        ) {
+          table[tracks][end] = candidate;
+        }
+      }
+    }
+  }
+
+  return table[trackCount][levelRows.length]?.ranges ?? [[0, levelRows.length]];
 }
 
 export function filterRenderableEdges(

@@ -90,7 +90,7 @@ def calibration_passes(
 
 
 class EvaluationBudget:
-    def __init__(self, *, application_calls: int = 50, judge_calls: int = 16) -> None:
+    def __init__(self, *, application_calls: int = 64, judge_calls: int = 16) -> None:
         if application_calls <= 0 or judge_calls <= 0:
             raise ValueError("evaluation budgets must be positive")
         self.application_limit = application_calls

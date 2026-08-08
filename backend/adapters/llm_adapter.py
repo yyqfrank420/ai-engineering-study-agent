@@ -6,7 +6,8 @@
 #          Yields a ("provider_switch", "openai") tuple before the first OpenAI
 #          token so calling nodes can forward a browser notification.
 # Language: Python
-# Connects to: config.py (model names, API keys), agent nodes, api/sse_handler.py
+# Connects to: config.py (model names, API keys), agent nodes, api/sse_handler.py,
+#              PostHog AI Observability (posthog.ai.anthropic/openai wrapper clients)
 # Inputs:  model name, system prompt, messages list, optional thinking budget
 # Outputs: async generator yielding (event_type, content) tuples:
 #          ("thinking", text) | ("text", token) | ("done", "") |
@@ -16,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 from collections.abc import AsyncGenerator
 from functools import lru_cache
 import hashlib
@@ -32,37 +34,106 @@ logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
-def _get_anthropic_client():
-    import anthropic
+def get_posthog_client():
+    """Shared PostHog client for AI Observability. None is a valid, silent no-op.
 
-    return anthropic.AsyncAnthropic(
-        api_key=settings.anthropic_api_key,
+    A missing key must never break LLM calls — this client wraps the same
+    Anthropic/OpenAI client objects the app depends on for its core feature.
+    Locally, log loudly instead of raising so the guard can't 500 every chat.
+    """
+    if not settings.posthog_api_key:
+        if not settings.k_service:
+            logger.error(
+                "POSTHOG_API_KEY variable required by PostHog is missing or "
+                "un-configured, this causes events to be silently missed. "
+                "This error stops appearing once POSTHOG_API_KEY is configured"
+            )
+        return None
+    from posthog import Posthog
+
+    client = Posthog(settings.posthog_api_key, host=settings.posthog_host)
+    atexit.register(client.shutdown)
+    return client
+
+
+def create_anthropic_client(*, api_key: str):
+    """Create an Anthropic client with optional PostHog instrumentation."""
+    posthog_client = get_posthog_client()
+    if posthog_client is None:
+        from anthropic import AsyncAnthropic
+
+        return AsyncAnthropic(api_key=api_key, max_retries=0)
+
+    from posthog.ai.anthropic import AsyncAnthropic
+
+    return AsyncAnthropic(
+        api_key=api_key,
         max_retries=0,
+        posthog_client=posthog_client,
     )
+
+
+def create_openai_client(*, api_key: str, base_url: str | None = None):
+    """Create an OpenAI-compatible client with optional PostHog instrumentation."""
+    client_kwargs: dict[str, object] = {
+        "api_key": api_key,
+        "max_retries": 0,
+    }
+    if base_url is not None:
+        client_kwargs["base_url"] = base_url
+
+    posthog_client = get_posthog_client()
+    if posthog_client is None:
+        from openai import AsyncOpenAI
+
+        return AsyncOpenAI(**client_kwargs)
+
+    from posthog.ai.openai import AsyncOpenAI
+
+    return AsyncOpenAI(**client_kwargs, posthog_client=posthog_client)
+
+
+def build_posthog_properties(
+    *,
+    session_id: str | None = None,
+    is_production: bool | None = None,
+) -> dict[str, object]:
+    environment = settings.otel_environment.strip().lower() or "development"
+    properties: dict[str, object] = {
+        "environment": environment,
+        "is_production": (
+            environment == "production"
+            if is_production is None
+            else is_production
+        ),
+    }
+    if session_id:
+        properties["$ai_session_id"] = session_id
+    evaluation_run_id = settings.evaluation_run_id.strip()
+    if evaluation_run_id:
+        properties["evaluation_run_id"] = evaluation_run_id
+    return properties
+
+
+@lru_cache(maxsize=1)
+def _get_anthropic_client():
+    return create_anthropic_client(api_key=settings.anthropic_api_key)
 
 
 @lru_cache(maxsize=1)
 def _get_openai_client():
     if not settings.openai_api_key:
         return None
-    import openai
-
-    return openai.AsyncOpenAI(
-        api_key=settings.openai_api_key,
-        max_retries=0,
-    )
+    return create_openai_client(api_key=settings.openai_api_key)
 
 
 @lru_cache(maxsize=1)
 def _get_kimi_client():
     if not settings.moonshot_api_key:
         return None
-    import openai
-
-    return openai.AsyncOpenAI(
+    return create_openai_client(
         api_key=settings.moonshot_api_key,
         base_url=settings.moonshot_base_url,
-        max_retries=0,
     )
 
 # Maps Anthropic model name → OpenAI fallback model name.
@@ -83,6 +154,81 @@ _NON_RETRYABLE_ANTHROPIC_ERRORS = {
     "PermissionDeniedError",
     "UnprocessableEntityError",
 }
+
+
+def _build_streamer_kwargs(
+    streamer: object,
+    response_schema: dict | None,
+    posthog_distinct_id: str | None,
+    posthog_trace_id: str | None,
+    posthog_properties: dict | None,
+) -> dict[str, object]:
+    """Build keyword args for a streamer call without breaking tests that monkeypatch stubs.
+
+    Monkeypatched streamers in tests use ``*args`` signatures, and this avoids passing
+    keyword-only fields to them.
+    """
+    kwargs: dict[str, object] = {}
+    if response_schema is not None:
+        kwargs["response_schema"] = response_schema
+
+    try:
+        signature = inspect.signature(streamer)
+    except (TypeError, ValueError):
+        return kwargs if response_schema is not None else {}
+
+    has_var_keyword = any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in signature.parameters.values()
+    )
+    if has_var_keyword:
+        if posthog_distinct_id is not None:
+            kwargs["posthog_distinct_id"] = posthog_distinct_id
+        if posthog_trace_id is not None:
+            kwargs["posthog_trace_id"] = posthog_trace_id
+        if posthog_properties is not None:
+            kwargs["posthog_properties"] = posthog_properties
+        return kwargs
+
+    for name, value in (
+        ("posthog_distinct_id", posthog_distinct_id),
+        ("posthog_trace_id", posthog_trace_id),
+        ("posthog_properties", posthog_properties),
+    ):
+        if value is not None and name in signature.parameters:
+            kwargs[name] = value
+
+    if response_schema is not None and "response_schema" not in signature.parameters:
+        return {}
+
+    return kwargs
+
+
+class EvaluationProviderAttemptLimitExceeded(RuntimeError):
+    pass
+
+
+def _reserve_evaluation_provider_attempt() -> None:
+    run_id = settings.evaluation_run_id.strip()
+    limit = settings.evaluation_provider_attempt_limit
+    if not run_id and limit == 0:
+        return
+    if not run_id or limit <= 0:
+        raise RuntimeError("Evaluation provider-attempt quota is misconfigured")
+
+    from storage.rate_limit_store import RateLimitDimension, reserve_rate_limit
+
+    reservation = reserve_rate_limit((RateLimitDimension(
+        scope="evaluation_run",
+        identifier=run_id,
+        event_type="llm_provider_attempt",
+        limit=limit,
+        window_s=24 * 60 * 60,
+    ),))
+    if reservation is None:
+        raise EvaluationProviderAttemptLimitExceeded(
+            "Evaluation provider-attempt limit exhausted before the next request"
+        )
 
 
 def _field(value: object, name: str, default=0):
@@ -111,6 +257,7 @@ def build_telemetry(
     *,
     user_id: str | None = None,
     thread_id: str | None = None,
+    is_production: bool | None = None,
     metadata: dict | None = None,
 ) -> dict:
     payload = {"operation": operation}
@@ -118,6 +265,8 @@ def build_telemetry(
         payload["user_id"] = user_id
     if thread_id:
         payload["thread_id"] = thread_id
+    if is_production is not None:
+        payload["is_production"] = is_production
     if metadata:
         payload["metadata"] = metadata
     return payload
@@ -139,6 +288,38 @@ def _is_non_retryable_anthropic_error(exc: Exception) -> bool:
     if type(exc).__name__ in _NON_RETRYABLE_ANTHROPIC_ERRORS:
         return True
     return getattr(exc, "status_code", None) in {400, 401, 403, 404, 422}
+
+
+def _anthropic_error_diagnostics(
+    exc: Exception,
+) -> tuple[object, object, object, str | None]:
+    # Provider error messages are untrusted. Return only stable fields and known
+    # structural diagnoses so logs cannot copy request content.
+    error_body = getattr(exc, "body", None)
+    error_payload = error_body.get("error") if isinstance(error_body, dict) else None
+    provider_error = (
+        error_payload.get("type") if isinstance(error_payload, dict) else None
+    )
+    provider_message = (
+        error_payload.get("message") if isinstance(error_payload, dict) else None
+    )
+    normalized_message = (
+        " ".join(provider_message.lower().split())
+        if isinstance(provider_message, str)
+        else ""
+    )
+    diagnostic = (
+        "schema_compilation_too_large"
+        if "compiled grammar is too large" in normalized_message
+        or "schema is too complex for compilation" in normalized_message
+        else None
+    )
+    return (
+        getattr(exc, "status_code", None),
+        getattr(exc, "request_id", None),
+        provider_error,
+        diagnostic,
+    )
 
 
 def _is_non_retryable_chat_error(exc: Exception) -> bool:
@@ -181,6 +362,9 @@ async def _chat_completions_stream(
     top_p: float | None = None,
     max_output_tokens: int | None = None,
     response_schema: dict | None = None,
+    posthog_distinct_id: str | None = None,
+    posthog_trace_id: str | None = None,
+    posthog_properties: dict | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
     """Stream one OpenAI-compatible Chat Completions response."""
     completion_messages = [
@@ -214,6 +398,18 @@ async def _chat_completions_stream(
                 "schema": response_schema,
             },
         }
+    if get_posthog_client() is not None:
+        if posthog_distinct_id:
+            kwargs["posthog_distinct_id"] = posthog_distinct_id
+        if posthog_trace_id:
+            kwargs["posthog_trace_id"] = posthog_trace_id
+        if posthog_properties:
+            kwargs["posthog_properties"] = posthog_properties
+    # posthog-python's OpenAI wrapper has no kwarg to override the detected
+    # provider, so Kimi calls (routed through it via Moonshot's base_url) are
+    # attributed to "openai" in PostHog's own $ai_provider field. The app's
+    # own telemetry (record_llm_telemetry / llm_call_completed) still records
+    # the true "kimi" provider independently of PostHog.
 
     stream = await client.chat.completions.create(**kwargs)
     finish_reason: str | None = None
@@ -294,6 +490,9 @@ async def _openai_stream(
     top_p: float | None = None,
     max_output_tokens: int | None = None,
     response_schema: dict | None = None,
+    posthog_distinct_id: str | None = None,
+    posthog_trace_id: str | None = None,
+    posthog_properties: dict | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
     client = _get_openai_client()
     if client is None:
@@ -309,6 +508,9 @@ async def _openai_stream(
         top_p,
         max_output_tokens,
         response_schema,
+        posthog_distinct_id,
+        posthog_trace_id,
+        posthog_properties,
     ):
         yield event
 
@@ -322,6 +524,9 @@ async def _kimi_stream(
     top_p: float | None = None,
     max_output_tokens: int | None = None,
     response_schema: dict | None = None,
+    posthog_distinct_id: str | None = None,
+    posthog_trace_id: str | None = None,
+    posthog_properties: dict | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
     client = _get_kimi_client()
     if client is None:
@@ -337,6 +542,9 @@ async def _kimi_stream(
         top_p,
         max_output_tokens,
         response_schema,
+        posthog_distinct_id,
+        posthog_trace_id,
+        posthog_properties,
     ):
         yield event
 
@@ -348,18 +556,35 @@ async def _anthropic_stream_once(kwargs: dict) -> AsyncGenerator[object, None]:
     if semaphore is None:
         if queue_wait_observer:
             queue_wait_observer(0)
-        async with _get_anthropic_client().messages.stream(**sdk_kwargs) as stream:
-            async for event in stream:
-                yield event
+        async for event in _iterate_anthropic_stream(sdk_kwargs):
+            yield event
         return
 
     queued_at = time.perf_counter()
     async with semaphore:
         if queue_wait_observer:
             queue_wait_observer(max(0, int((time.perf_counter() - queued_at) * 1000)))
-        async with _get_anthropic_client().messages.stream(**sdk_kwargs) as stream:
-            async for event in stream:
-                yield event
+        async for event in _iterate_anthropic_stream(sdk_kwargs):
+            yield event
+
+
+async def _iterate_anthropic_stream(
+    sdk_kwargs: dict,
+) -> AsyncGenerator[object, None]:
+    """Iterate the low-level streaming interface shared by both clients."""
+    stream = await _get_anthropic_client().messages.create(
+        **sdk_kwargs,
+        stream=True,
+    )
+    try:
+        async for event in stream:
+            yield event
+    finally:
+        close = getattr(stream, "aclose", None) or getattr(stream, "close", None)
+        if close is not None:
+            close_result = close()
+            if inspect.isawaitable(close_result):
+                await close_result
 
 
 async def stream_response(
@@ -415,12 +640,35 @@ async def stream_response(
         # Protected evaluation repeats stable role prompts often enough to
         # recover Anthropic's cache-write premium within the cache lifetime.
         system_block["cache_control"] = {"type": "ephemeral"}
+    # PostHog AI Observability identity: one session per conversation (thread_id),
+    # one trace per turn (request_id) shared by every call the turn makes.
+    telemetry_details = telemetry or {}
+    telemetry_metadata = telemetry_details.get("metadata") or {}
+    posthog_distinct_id = telemetry_details.get("user_id")
+    posthog_trace_id = telemetry_metadata.get("request_id")
+    posthog_session_id = telemetry_details.get("thread_id")
+    telemetry_is_production = telemetry_details.get("is_production")
+    posthog_properties = build_posthog_properties(
+        session_id=posthog_session_id,
+        is_production=(
+            telemetry_is_production
+            if isinstance(telemetry_is_production, bool)
+            else None
+        ),
+    )
     kwargs: dict = {
         "model":      model,
         "max_tokens": effective_max_output_tokens,
         "system":     [system_block],
         "messages":   messages,
     }
+    if get_posthog_client() is not None:
+        if posthog_distinct_id:
+            kwargs["posthog_distinct_id"] = posthog_distinct_id
+        if posthog_trace_id:
+            kwargs["posthog_trace_id"] = posthog_trace_id
+        if posthog_properties:
+            kwargs["posthog_properties"] = posthog_properties
     uses_adaptive_effort = _uses_adaptive_effort(model)
     effective_effort = effort or _effort_from_legacy_budget(thinking_budget)
     if uses_adaptive_effort:
@@ -548,6 +796,22 @@ async def stream_response(
             status=status,
         )
 
+    def _record_cancellation(
+        attempt_usage: dict[str, object],
+        attempt_started: float,
+    ) -> None:
+        attempt_usage["status"] = (
+            "cancelled_incomplete_usage"
+            if attempt_usage["accepted"]
+            and not attempt_usage["usage_complete"]
+            else "cancelled"
+        )
+        attempt_usage["error_type"] = "CancelledError"
+        attempt_usage["duration_ms"] = max(
+            1, int((time.perf_counter() - attempt_started) * 1000)
+        )
+        _record("error", error_type="CancelledError")
+
     async def _stream_chat_completions_route(
         chat_model: str,
         *,
@@ -584,6 +848,7 @@ async def stream_response(
             else 1
         )
         for route_attempt in range(1, attempt_limit + 1):
+            _reserve_evaluation_provider_attempt()
             provider_attempts += 1
             attempt_started = time.perf_counter()
             attempt_usage: dict[str, object] = {
@@ -610,10 +875,15 @@ async def stream_response(
                     top_p,
                     effective_max_output_tokens,
                 )
-                response = (
-                    streamer(*stream_args, response_schema=response_schema)
-                    if response_schema is not None
-                    else streamer(*stream_args)
+                response = streamer(
+                    *stream_args,
+                    **_build_streamer_kwargs(
+                        streamer,
+                        response_schema,
+                        posthog_distinct_id,
+                        posthog_trace_id,
+                        posthog_properties,
+                    ),
                 )
                 async for event in response:
                     if event[0] == "text":
@@ -653,6 +923,9 @@ async def stream_response(
                 )
                 _record("success")
                 return
+            except asyncio.CancelledError:
+                _record_cancellation(attempt_usage, attempt_started)
+                raise
             except Exception as exc:
                 accepted = bool(attempt_usage["accepted"])
                 attempt_usage["status"] = (
@@ -696,6 +969,7 @@ async def stream_response(
     for attempt in range(1, settings.llm_max_retries + 1):
         tokens_yielded = False
         finish_reason: str | None = None
+        _reserve_evaluation_provider_attempt()
         provider_attempts += 1
         attempt_started = time.perf_counter()
         attempt_usage: dict[str, object] = {
@@ -787,6 +1061,9 @@ async def stream_response(
             yield ("done", "")
             return   # Anthropic succeeded
 
+        except asyncio.CancelledError:
+            _record_cancellation(attempt_usage, attempt_started)
+            raise
         except Exception as exc:
             last_exc = exc
             attempt_usage["status"] = (
@@ -803,11 +1080,19 @@ async def stream_response(
                 # Already sent partial output — can't replay safely, surface the error
                 _record("error", error_type=type(exc).__name__)
                 raise
+            status, request_id, provider_error, diagnostic = (
+                _anthropic_error_diagnostics(exc)
+            )
             logger.warning(
-                "[llm] Anthropic attempt %s/%s failed: %s",
+                "[llm] Anthropic attempt %s/%s failed: %s status=%s "
+                "request_id=%s provider_error=%s diagnostic=%s",
                 attempt,
                 settings.llm_max_retries,
                 type(exc).__name__,
+                status,
+                request_id,
+                provider_error,
+                diagnostic,
             )
             if _is_non_retryable_anthropic_error(exc):
                 break
@@ -831,12 +1116,41 @@ async def stream_response(
         raise last_exc  # type: ignore[misc]
 
 
-def _anthropic_response_schema(value):
+_JSON_SCHEMA_NAMED_SCHEMA_MAPS = {
+    "$defs",
+    "definitions",
+    "dependentSchemas",
+    "patternProperties",
+    "properties",
+}
+_ANTHROPIC_UNSUPPORTED_SCHEMA_CONSTRAINTS = {
+    "minimum",
+    "maximum",
+    "minItems",
+    "maxItems",
+    "minLength",
+    "maxLength",
+}
+
+
+def _anthropic_response_schema(value, *, named_schema_map: bool = False):
+    # Raw output_config schemas bypass the SDK's Pydantic transformer. Anthropic
+    # does not compile these constraints, so callers enforce them after parsing.
+    # Names inside `properties` and other schema maps are user-defined and must
+    # survive even when a field happens to share an unsupported keyword's name.
     if isinstance(value, dict):
+        if named_schema_map:
+            return {
+                key: _anthropic_response_schema(child)
+                for key, child in value.items()
+            }
         return {
-            key: _anthropic_response_schema(child)
+            key: _anthropic_response_schema(
+                child,
+                named_schema_map=key in _JSON_SCHEMA_NAMED_SCHEMA_MAPS,
+            )
             for key, child in value.items()
-            if key not in {"minItems", "maxItems"}
+            if key not in _ANTHROPIC_UNSUPPORTED_SCHEMA_CONSTRAINTS
         }
     if isinstance(value, list):
         return [_anthropic_response_schema(child) for child in value]
