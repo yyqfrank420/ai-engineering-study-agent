@@ -65,7 +65,11 @@ def test_architecture_roles_follow_graph_request_intent(message, expected):
 
 
 def test_failed_review_gets_at_most_one_bounded_revision():
-    from agent.graph import _repair_attempt_summary, _route_after_review, _route_after_revision
+    from agent.graph import (
+        _repair_attempt_summary,
+        _route_after_review,
+        _route_after_revision,
+    )
 
     assert _repair_attempt_summary(0) == "before a reviewed revision could complete"
     assert _repair_attempt_summary(1) == "after 1 reviewed revision"
@@ -79,11 +83,16 @@ def test_failed_review_gets_at_most_one_bounded_revision():
 
     assert _route_after_review({**failed, "graph_revision_count": 0}) == "revise"
     assert _route_after_review({**failed, "graph_revision_count": 1}) == "reject"
-    assert _route_after_review({
-        **failed,
-        "graph_revision_count": 0,
-        "graph_review": {"approved": False, "terminal": True},
-    }) == "reject"
+    assert (
+        _route_after_review(
+            {
+                **failed,
+                "graph_revision_count": 0,
+                "graph_review": {"approved": False, "terminal": True},
+            }
+        )
+        == "reject"
+    )
     assert _route_after_revision({**failed, "graph_changed": True}) == "review"
     assert _route_after_revision({**failed, "graph_changed": False}) == "reject"
 
@@ -99,33 +108,41 @@ def test_patch_admission_uses_available_time_after_following_reserve():
         + settings.agent_orchestration_reserve_s
     )
     with pytest.raises(StageAdmissionDenied):
-        patch_timeout_seconds({
-            "terminal_deadline_s": time.monotonic() + following_reserve_s - 1,
-        })
+        patch_timeout_seconds(
+            {
+                "terminal_deadline_s": time.monotonic() + following_reserve_s - 1,
+            }
+        )
 
-    timeout_s = patch_timeout_seconds({
-        "terminal_deadline_s": time.monotonic() + following_reserve_s + 10,
-    })
+    timeout_s = patch_timeout_seconds(
+        {
+            "terminal_deadline_s": time.monotonic() + following_reserve_s + 10,
+        }
+    )
     assert 0 < timeout_s <= 10
 
-    full_timeout_s = patch_timeout_seconds({
-        "terminal_deadline_s": (
-            time.monotonic()
-            + following_reserve_s
-            + settings.graph_patch_timeout_s
-            + 5
-        ),
-    })
+    full_timeout_s = patch_timeout_seconds(
+        {
+            "terminal_deadline_s": (
+                time.monotonic()
+                + following_reserve_s
+                + settings.graph_patch_timeout_s
+                + 5
+            ),
+        }
+    )
     assert full_timeout_s == pytest.approx(settings.graph_patch_timeout_s + 5)
 
-    max_timeout_s = patch_timeout_seconds({
-        "terminal_deadline_s": (
-            time.monotonic()
-            + following_reserve_s
-            + settings.graph_builder_max_timeout_s
-            + 5
-        ),
-    })
+    max_timeout_s = patch_timeout_seconds(
+        {
+            "terminal_deadline_s": (
+                time.monotonic()
+                + following_reserve_s
+                + settings.graph_builder_max_timeout_s
+                + 5
+            ),
+        }
+    )
     assert max_timeout_s == settings.graph_builder_max_timeout_s
 
 
@@ -176,18 +193,22 @@ def test_initial_design_and_review_preserve_the_complete_patch_path():
         + settings.agent_orchestration_reserve_s
     )
     with pytest.raises(StageAdmissionDenied):
-        design_timeout_seconds({
-            "terminal_deadline_s": time.monotonic() + after_initial_design_s - 1,
-        })
+        design_timeout_seconds(
+            {
+                "terminal_deadline_s": time.monotonic() + after_initial_design_s - 1,
+            }
+        )
 
-    borrowed_timeout_s = design_timeout_seconds({
-        "terminal_deadline_s": (
-            time.monotonic()
-            + after_initial_design_s
-            + settings.graph_design_timeout_s
-            + 5
-        ),
-    })
+    borrowed_timeout_s = design_timeout_seconds(
+        {
+            "terminal_deadline_s": (
+                time.monotonic()
+                + after_initial_design_s
+                + settings.graph_design_timeout_s
+                + 5
+            ),
+        }
+    )
     assert borrowed_timeout_s == pytest.approx(settings.graph_design_timeout_s + 5)
 
     after_initial_review_s = (
@@ -229,17 +250,12 @@ def test_critics_borrow_time_without_spending_the_remaining_path():
         borrowed_timeout_s = critic_timeout_seconds(
             {
                 "terminal_deadline_s": (
-                    time.monotonic()
-                    + reserve_s
-                    + settings.graph_critic_timeout_s
-                    + 5
+                    time.monotonic() + reserve_s + settings.graph_critic_timeout_s + 5
                 ),
             },
             revision_count=revision_count,
         )
-        assert borrowed_timeout_s == pytest.approx(
-            settings.graph_critic_timeout_s + 5
-        )
+        assert borrowed_timeout_s == pytest.approx(settings.graph_critic_timeout_s + 5)
 
         max_timeout_s = critic_timeout_seconds(
             {
@@ -256,8 +272,12 @@ def test_critics_borrow_time_without_spending_the_remaining_path():
 
     assert design_timeout_seconds({}) == settings.graph_design_timeout_s
     assert patch_timeout_seconds({}) == settings.graph_patch_timeout_s
-    assert critic_timeout_seconds({}, revision_count=0) == settings.graph_critic_timeout_s
-    assert critic_timeout_seconds({}, revision_count=1) == settings.graph_critic_timeout_s
+    assert (
+        critic_timeout_seconds({}, revision_count=0) == settings.graph_critic_timeout_s
+    )
+    assert (
+        critic_timeout_seconds({}, revision_count=1) == settings.graph_critic_timeout_s
+    )
 
 
 def test_graph_stage_caps_for_one_complete_patch_fit_terminal_window():
@@ -314,11 +334,13 @@ def test_rejected_candidate_restores_immutable_approved_graph_baseline():
 
     approved = {"title": "Approved", "nodes": [], "edges": [], "sequence": []}
     rejected = {"title": "Rejected", "nodes": [], "edges": [], "sequence": []}
-    restored = _restore_approved_graph_state({
-        "approved_graph_data": approved,
-        "graph_data": rejected,
-        "graph_changed": True,
-    })
+    restored = _restore_approved_graph_state(
+        {
+            "approved_graph_data": approved,
+            "graph_data": rejected,
+            "graph_changed": True,
+        }
+    )
 
     assert restored["graph_data"] == approved
     assert restored["graph_data"] is not approved
@@ -353,9 +375,7 @@ async def test_langgraph_can_verify_one_bounded_repair_then_publish(monkeypatch)
             "graph_data": {
                 "design_origin": "applied",
                 "title": (
-                    "First draft"
-                    if revision_count == 0
-                    else f"Repair {revision_count}"
+                    "First draft" if revision_count == 0 else f"Repair {revision_count}"
                 ),
                 "nodes": [],
                 "edges": [],
@@ -401,9 +421,6 @@ async def test_langgraph_can_verify_one_bounded_repair_then_publish(monkeypatch)
     async def fake_synth(state):
         return {**state, "response_text": "reviewed answer"}
 
-    async def fake_enrich(_state, _tools):
-        return None
-
     monkeypatch.setattr(agent_graph, "orchestrator_route", fake_route)
     monkeypatch.setattr(agent_graph, "run_search_phase", fake_search)
     monkeypatch.setattr(agent_graph, "architect_node", fake_architect)
@@ -412,8 +429,6 @@ async def test_langgraph_can_verify_one_bounded_repair_then_publish(monkeypatch)
     monkeypatch.setattr(agent_graph, "maybe_expand_with_search_tool", fake_expand)
     monkeypatch.setattr(agent_graph, "graph_critic_node", fake_review)
     monkeypatch.setattr(agent_graph, "orchestrator_synthesise", fake_synth)
-    monkeypatch.setattr(agent_graph, "maybe_start_node_enrichment", fake_enrich)
-
     result = await agent_graph.run_agent(_state(send), [], [], [])
 
     assert reviews == ["First draft", "Repair 1"]

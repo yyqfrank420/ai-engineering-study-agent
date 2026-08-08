@@ -26,6 +26,9 @@ _ASSESSMENT_FIELDS = {
     "sequence_indexes",
     "assumption_indexes",
     "reason",
+    "context_node_ids",
+    "addition_count",
+    "composition_append_counts",
 }
 
 
@@ -94,10 +97,14 @@ def validate_repair_contract(
     failed_layers: set[str] = set()
     all_findings: list[str] = []
     classified_deterministic_ids: list[str] = []
+    addition_counts: dict[str, int] = {}
+    composition_append_counts: dict[str, dict[str, int]] = {}
     for layer in REPAIR_LAYERS:
         assessment = layers.get(layer)
         if not isinstance(assessment, dict) or set(assessment) != _ASSESSMENT_FIELDS:
-            failures.append(f"{layer} assessment must contain exactly the required fields")
+            failures.append(
+                f"{layer} assessment must contain exactly the required fields"
+            )
             continue
         status = assessment.get("status")
         if status not in {"pass", "fail"}:
@@ -130,6 +137,11 @@ def validate_repair_contract(
         selected_node_ids = _unique_strings(
             assessment.get("node_ids"), f"{layer}.node_ids", failures
         )
+        context_node_ids = _unique_strings(
+            assessment.get("context_node_ids"),
+            f"{layer}.context_node_ids",
+            failures,
+        )
         selected_group_ids = _unique_strings(
             assessment.get("group_ids"), f"{layer}.group_ids", failures
         )
@@ -151,6 +163,34 @@ def validate_repair_contract(
         reason = assessment.get("reason")
         if not isinstance(reason, str) or not reason.strip():
             failures.append(f"{layer}.reason must be a non-empty string")
+        addition_count = assessment.get("addition_count")
+        if (
+            isinstance(addition_count, bool)
+            or not isinstance(addition_count, int)
+            or addition_count < 0
+        ):
+            failures.append(f"{layer}.addition_count must be a non-negative integer")
+            addition_count = 0
+        addition_counts[layer] = addition_count
+        if layer not in {"components", "connections"} and addition_count:
+            failures.append(f"{layer} cannot add graph records")
+        append_counts = assessment.get("composition_append_counts")
+        if not isinstance(append_counts, dict) or any(
+            field not in {"groups", "sequence", "assumptions"}
+            or isinstance(count, bool)
+            or not isinstance(count, int)
+            or count <= 0
+            for field, count in (
+                append_counts.items() if isinstance(append_counts, dict) else []
+            )
+        ):
+            failures.append(
+                f"{layer}.composition_append_counts must map composition fields to positive integers"
+            )
+            append_counts = {}
+        composition_append_counts[layer] = append_counts
+        if layer != "composition" and append_counts:
+            failures.append(f"{layer} cannot append composition records")
 
         raw_edges = assessment.get("edge_selectors")
         selected_edges: list[tuple[str, str, str]] = []
@@ -184,8 +224,12 @@ def validate_repair_contract(
 
         if any(node_id not in node_ids for node_id in selected_node_ids):
             failures.append(f"{layer}.node_ids contains an unknown node")
+        if any(node_id not in node_ids for node_id in context_node_ids):
+            failures.append(f"{layer}.context_node_ids contains an unknown node")
         if any(selector not in edge_selectors for selector in selected_edges):
-            failures.append(f"{layer}.edge_selectors contains an edge absent from the graph")
+            failures.append(
+                f"{layer}.edge_selectors contains an edge absent from the graph"
+            )
         if any(group_id not in group_ids for group_id in selected_group_ids):
             failures.append(f"{layer}.group_ids contains an unknown group")
         if any(field not in COMPOSITION_FIELDS for field in selected_fields):
@@ -234,13 +278,41 @@ def validate_repair_contract(
             if selected_group_ids and "groups" not in selected_fields:
                 failures.append("composition.group_ids requires the groups field")
             if selected_sequence_indexes and "sequence" not in selected_fields:
-                failures.append("composition.sequence_indexes requires the sequence field")
+                failures.append(
+                    "composition.sequence_indexes requires the sequence field"
+                )
             if selected_assumption_indexes and "assumptions" not in selected_fields:
                 failures.append(
                     "composition.assumption_indexes requires the assumptions field"
                 )
-            if status == "fail" and not selected_fields:
-                failures.append("a failed composition layer must cite an editable field")
+            if status == "fail" and scope == "local" and not selected_fields:
+                failures.append(
+                    "a failed composition layer must cite an editable field"
+                )
+            if any(field not in selected_fields for field in append_counts):
+                failures.append(
+                    "composition append counts require their editable composition fields"
+                )
+        if (
+            layer == "components"
+            and status == "fail"
+            and scope == "local"
+            and not selected_node_ids
+            and addition_count == 0
+        ):
+            failures.append(
+                "a failed components layer must cite a node or declare additions"
+            )
+        if (
+            layer == "connections"
+            and status == "fail"
+            and scope == "local"
+            and not selected_edges
+            and addition_count == 0
+        ):
+            failures.append(
+                "a failed connections layer must cite an edge or declare additions"
+            )
 
         if status == "fail":
             failed_layers.add(layer)
@@ -255,16 +327,25 @@ def validate_repair_contract(
                 failures.append(
                     f"{layer} {status} status cannot classify deterministic findings"
                 )
-            if any((
-                selected_node_ids,
-                selected_edges,
-                selected_group_ids,
-                selected_fields,
-                selected_sequence_indexes,
-                selected_assumption_indexes,
-            )):
+            if any(
+                (
+                    selected_node_ids,
+                    selected_edges,
+                    selected_group_ids,
+                    selected_fields,
+                    selected_sequence_indexes,
+                    selected_assumption_indexes,
+                    context_node_ids,
+                )
+            ):
                 failures.append(
                     f"{layer} {status} status cannot expose editable selectors"
+                )
+            if addition_count:
+                failures.append(f"{layer} {status} status cannot add records")
+            if append_counts:
+                failures.append(
+                    f"{layer} {status} status cannot append composition records"
                 )
         if (
             status == "pass"
@@ -287,11 +368,59 @@ def validate_repair_contract(
         )
     if len(classified_deterministic_ids) != len(set(classified_deterministic_ids)):
         failures.append("each deterministic finding ID must be classified exactly once")
-    if (
-        deterministic_finding_owners is not None
-        and set(classified_deterministic_ids) != set(deterministic_finding_owners)
-    ):
-        failures.append("every supplied deterministic finding ID must be classified exactly once")
+    if deterministic_finding_owners is not None and set(
+        classified_deterministic_ids
+    ) != set(deterministic_finding_owners):
+        failures.append(
+            "every supplied deterministic finding ID must be classified exactly once"
+        )
+    components = layers.get("components") if isinstance(layers, dict) else None
+    connections = layers.get("connections") if isinstance(layers, dict) else None
+    composition = layers.get("composition") if isinstance(layers, dict) else None
+    component_additions = addition_counts.get("components", 0)
+    connection_additions = addition_counts.get("connections", 0)
+    if isinstance(components, dict) and component_additions > 0:
+        if not (
+            isinstance(connections, dict)
+            and connections.get("status") == "fail"
+            and connection_additions > 0
+        ):
+            failures.append(
+                "component additions require connection addition permission"
+            )
+        if graph.get("groups") and not (
+            isinstance(composition, dict)
+            and composition.get("status") == "fail"
+            and "groups" in (composition.get("composition_fields") or [])
+        ):
+            failures.append(
+                "component additions in a grouped graph require editable groups"
+            )
+        elif graph.get("groups") and not (
+            composition.get("group_ids")
+            or composition_append_counts.get("composition", {}).get("groups", 0)
+        ):
+            failures.append(
+                "component additions in a grouped graph require an editable existing group or a declared group append"
+            )
+    if connection_additions > 0:
+        connection_context = set(
+            connections.get("context_node_ids", [])
+            if isinstance(connections, dict)
+            else []
+        )
+        component_context = set(
+            components.get("context_node_ids", [])
+            if isinstance(components, dict)
+            else []
+        )
+        available_endpoint_count = component_additions + len(
+            connection_context | component_context
+        )
+        if available_endpoint_count < 2:
+            failures.append(
+                "connection additions require at least two declared endpoint identities"
+            )
     if scope == "none" and failed_layers:
         failures.append("repair_scope none cannot contain a failed layer")
     if scope == "local":

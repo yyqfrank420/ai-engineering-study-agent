@@ -101,8 +101,7 @@ def _response_schema(
                 "additionalProperties": False,
                 "required": list(dimensions),
                 "properties": {
-                    dimension: _dimension_schema(source_ids)
-                    for dimension in dimensions
+                    dimension: _dimension_schema(source_ids) for dimension in dimensions
                 },
             }
         },
@@ -128,7 +127,11 @@ def _add_bounded_sources(
     *,
     max_chars: int = 500,
 ) -> None:
-    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, sort_keys=True)
+    text = (
+        value
+        if isinstance(value, str)
+        else json.dumps(value, ensure_ascii=False, sort_keys=True)
+    )
     words = text.split()
     if not words:
         return
@@ -142,7 +145,7 @@ def _add_bounded_sources(
                 current = []
                 current_length = 0
             chunks.extend(
-                word[offset:offset + max_chars]
+                word[offset : offset + max_chars]
                 for offset in range(0, len(word), max_chars)
             )
             continue
@@ -160,6 +163,28 @@ def _add_bounded_sources(
         sources[f"{prefix}-{index}"] = chunk
 
 
+def _add_graph_sources(
+    sources: dict[str, str],
+    prefix: str,
+    graph: dict[str, Any],
+) -> None:
+    summary = {
+        key: value
+        for key, value in graph.items()
+        if key not in {"nodes", "edges", "assumptions", "groups", "sequence"}
+    }
+    _add_bounded_sources(sources, f"{prefix}-summary", summary)
+    for index, node in enumerate(graph.get("nodes") or [], start=1):
+        _add_bounded_sources(sources, f"{prefix}-node-{index}", node)
+    for index, edge in enumerate(graph.get("edges") or [], start=1):
+        _add_bounded_sources(sources, f"{prefix}-edge-{index}", edge)
+    for index, assumption in enumerate(graph.get("assumptions") or [], start=1):
+        _add_bounded_sources(sources, f"{prefix}-assumption-{index}", assumption)
+    for index, group in enumerate(graph.get("groups") or [], start=1):
+        _add_bounded_sources(sources, f"{prefix}-group-{index}", group)
+    _add_bounded_sources(sources, f"{prefix}-sequence", graph.get("sequence") or [])
+
+
 def _artifact_sources(evidence: dict[str, Any]) -> dict[str, str]:
     sources: dict[str, str] = {}
     turns = evidence.get("turns")
@@ -167,31 +192,35 @@ def _artifact_sources(evidence: dict[str, Any]) -> dict[str, str]:
         for index, turn in enumerate(turns, start=1):
             answer = turn.get("answer") if isinstance(turn, dict) else turn
             _add_bounded_sources(sources, f"turn-{index}-answer", str(answer or ""))
+            if not isinstance(turn, dict):
+                continue
+            graph = turn.get("graph")
+            if isinstance(graph, dict):
+                _add_graph_sources(sources, f"turn-{index}-graph", graph)
+            render_identity = {
+                key: turn[key]
+                for key in (
+                    "rendered_graph_version",
+                    "rendered_node_ids",
+                    "rendered_edge_identities",
+                )
+                if turn.get(key) is not None
+            }
+            if render_identity:
+                _add_bounded_sources(sources, f"turn-{index}-render", render_identity)
     else:
         _add_bounded_sources(sources, "answer", str(evidence.get("answer") or ""))
     graph = evidence.get("graph")
     if isinstance(graph, dict):
-        summary = {
-            key: value
-            for key, value in graph.items()
-            if key not in {"nodes", "edges", "assumptions", "groups", "sequence"}
-        }
-        _add_bounded_sources(sources, "graph-summary", summary)
-        for index, node in enumerate(graph.get("nodes") or [], start=1):
-            _add_bounded_sources(sources, f"graph-node-{index}", node)
-        for index, edge in enumerate(graph.get("edges") or [], start=1):
-            _add_bounded_sources(sources, f"graph-edge-{index}", edge)
-        for index, assumption in enumerate(graph.get("assumptions") or [], start=1):
-            _add_bounded_sources(sources, f"graph-assumption-{index}", assumption)
-        for index, group in enumerate(graph.get("groups") or [], start=1):
-            _add_bounded_sources(sources, f"graph-group-{index}", group)
-        _add_bounded_sources(sources, "graph-sequence", graph.get("sequence") or [])
+        _add_graph_sources(sources, "graph", graph)
     for index, chunk in enumerate(evidence.get("retrieval_evidence") or [], start=1):
         if not isinstance(chunk, dict):
             continue
         metadata = {key: value for key, value in chunk.items() if key != "text"}
         _add_bounded_sources(sources, f"retrieval-{index}-metadata", metadata)
-        _add_bounded_sources(sources, f"retrieval-{index}-text", str(chunk.get("text") or ""))
+        _add_bounded_sources(
+            sources, f"retrieval-{index}-text", str(chunk.get("text") or "")
+        )
     for index, result in enumerate(evidence.get("research_evidence") or [], start=1):
         _add_bounded_sources(sources, f"research-{index}-result", result)
     for index, event in enumerate(evidence.get("events") or [], start=1):
@@ -247,8 +276,10 @@ class SemanticJudge:
         provider: str | None = None,
     ) -> None:
         selected_provider = (
-            provider or os.getenv("EVAL_JUDGE_PROVIDER", DEFAULT_JUDGE_PROVIDER)
-        ).strip().lower()
+            (provider or os.getenv("EVAL_JUDGE_PROVIDER", DEFAULT_JUDGE_PROVIDER))
+            .strip()
+            .lower()
+        )
         if selected_provider not in {"openai", "anthropic"}:
             raise RuntimeError(
                 f"unsupported EVAL_JUDGE_PROVIDER: {selected_provider or '(empty)'}"
@@ -261,7 +292,11 @@ class SemanticJudge:
             else DEFAULT_JUDGE_MODEL
         )
         self.model = model or os.getenv("EVAL_JUDGE_MODEL", "") or default_model
-        key_env = "ANTHROPIC_API_KEY" if selected_provider == "anthropic" else "OPENAI_API_KEY"
+        key_env = (
+            "ANTHROPIC_API_KEY"
+            if selected_provider == "anthropic"
+            else "OPENAI_API_KEY"
+        )
         key = api_key or os.getenv(key_env, "")
         if not key:
             raise RuntimeError(f"{key_env} is required for semantic evaluation")
@@ -293,13 +328,17 @@ class SemanticJudge:
                     "format": {
                         "type": "json_schema",
                         "schema": _anthropic_response_schema(schema),
-                    }
+                    },
                 },
             )
             if response.stop_reason == "refusal":
-                raise RuntimeError("Anthropic judge refused the structured-output request")
+                raise RuntimeError(
+                    "Anthropic judge refused the structured-output request"
+                )
             if response.stop_reason == "max_tokens":
-                raise RuntimeError("Anthropic judge reached the maximum output token limit")
+                raise RuntimeError(
+                    "Anthropic judge reached the maximum output token limit"
+                )
             content = "".join(
                 block.text
                 for block in response.content
@@ -350,7 +389,9 @@ class SemanticJudge:
         expected = case.rubric_dimensions
         actual = set(raw.dimensions)
         if actual != set(expected):
-            raise RuntimeError(f"judge dimensions must be exactly {expected}; got {sorted(actual)}")
+            raise RuntimeError(
+                f"judge dimensions must be exactly {expected}; got {sorted(actual)}"
+            )
         _validate_evidence(raw, artifact_sources)
         usage = response.usage
         return JudgeResult(
@@ -387,12 +428,16 @@ async def judge_with_transport_retry(
         try:
             if on_attempt:
                 on_attempt()
-            return await asyncio.wait_for(judge.judge(corpus, case, evidence), timeout=60)
+            return await asyncio.wait_for(
+                judge.judge(corpus, case, evidence), timeout=60
+            )
         except _RETRYABLE_JUDGE_ERRORS as exc:
             last_error = exc
             if attempt == 0:
                 await asyncio.sleep(1)
-    raise RuntimeError("judge provider remained unavailable after one bounded retry") from last_error
+    raise RuntimeError(
+        "judge provider remained unavailable after one bounded retry"
+    ) from last_error
 
 
 def estimated_judge_cost_usd(result: JudgeResult) -> float:

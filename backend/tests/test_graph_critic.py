@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 
 import pytest
 from config import settings
@@ -15,6 +16,7 @@ from agent.nodes.graph_critic import (
     _canonicalise_review_protocol,
     _deterministic_render_review,
     _deterministic_review,
+    _lock_unchanged_passed_layers,
     _review_packet,
     _validate_repair_contract,
     _validate_review_protocol,
@@ -56,6 +58,11 @@ def _layer(status="pass", score=0.9, *, findings=None, **selectors):
         "composition_fields": list(selectors.get("composition_fields") or []),
         "sequence_indexes": list(selectors.get("sequence_indexes") or []),
         "assumption_indexes": list(selectors.get("assumption_indexes") or []),
+        "context_node_ids": list(selectors.get("context_node_ids") or []),
+        "addition_count": int(selectors.get("addition_count", 0)),
+        "composition_append_counts": dict(
+            selectors.get("composition_append_counts") or {}
+        ),
         "reason": "The artifact layer was assessed against the request.",
     }
 
@@ -68,9 +75,15 @@ def _repair_contract(
     score=0.9,
     layer_selectors=None,
 ):
-    layers = {layer: _layer(score=score) for layer in (
-        "components", "connections", "composition", "render",
-    )}
+    layers = {
+        layer: _layer(score=score)
+        for layer in (
+            "components",
+            "connections",
+            "composition",
+            "render",
+        )
+    }
     if failed_layer is not None:
         selectors = (layer_selectors or {}).get(failed_layer, {})
         layers[failed_layer] = _layer(
@@ -93,8 +106,10 @@ def _model_layer(layer):
     }
     if layer == "components":
         assessment["node_indexes"] = []
+        assessment["addition_count"] = 0
     elif layer == "connections":
         assessment["edge_indexes"] = []
+        assessment["addition_count"] = 0
     elif layer == "composition":
         assessment.update(
             {
@@ -102,6 +117,9 @@ def _model_layer(layer):
                 "composition_fields": [],
                 "sequence_indexes": [],
                 "assumption_indexes": [],
+                "group_addition_count": 0,
+                "sequence_addition_count": 0,
+                "assumption_addition_count": 0,
             }
         )
     return [assessment[field] for field in _MODEL_LAYER_FIELDS[layer]]
@@ -136,14 +154,17 @@ def _passing_review_payload(*, strengths=None, advice=None, topology_proofs=None
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v34"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v36"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
     assert "rejoins the gate" in _GRAPH_CRITIC_SYSTEM
     assert "inspect directed paths, not vocabulary" in _GRAPH_CRITIC_SYSTEM
     assert "Carrying a retry key is not durable" in _GRAPH_CRITIC_SYSTEM
-    assert "Rejection stops before execution and is not compensation" in _GRAPH_CRITIC_SYSTEM
+    assert (
+        "Rejection stops before execution and is not compensation"
+        in _GRAPH_CRITIC_SYSTEM
+    )
     assert "Sanitization does" in _GRAPH_CRITIC_SYSTEM
     assert "not make retrieved text trusted" in _GRAPH_CRITIC_SYSTEM
     assert "items 17-27 are blocking" in _GRAPH_CRITIC_SYSTEM
@@ -154,6 +175,7 @@ def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
     assert "partition/order or event-time semantics" in _GRAPH_CRITIC_SYSTEM
     assert "replay/checkpoint" in _GRAPH_CRITIC_SYSTEM
     assert "compatible schema evolution" in _GRAPH_CRITIC_SYSTEM
+    assert "at least two endpoint identities" in _GRAPH_CRITIC_SYSTEM
 
 
 def test_repair_contract_has_exactly_four_mece_layers_without_duplicate_selectors():
@@ -177,10 +199,58 @@ def test_repair_contract_has_exactly_four_mece_layers_without_duplicate_selector
     _validate_repair_contract(contract, graph=graph)
 
     assert list(contract["layers"]) == [
-        "components", "connections", "composition", "render",
+        "components",
+        "connections",
+        "composition",
+        "render",
     ]
     contract["layers"]["connections"]["edge_selectors"] *= 2
     with pytest.raises(ValueError, match="must not contain duplicates"):
+        _validate_repair_contract(contract, graph=graph)
+
+
+def test_component_additions_require_connection_additions():
+    graph = {
+        "nodes": [{"id": "intake"}, {"id": "gate"}],
+        "edges": [{"source": "intake", "target": "gate", "label": "submit"}],
+        "groups": [],
+    }
+    contract = _repair_contract(
+        scope="local",
+        failed_layer="components",
+        layer_selectors={"components": {"addition_count": 1}},
+    )
+
+    with pytest.raises(ValueError, match="connection"):
+        _validate_repair_contract(contract, graph=graph)
+
+
+def test_component_additions_in_a_grouped_graph_require_composition_groups():
+    graph = {
+        "nodes": [{"id": "intake"}, {"id": "gate"}],
+        "edges": [{"source": "intake", "target": "gate", "label": "submit"}],
+        "groups": [
+            {
+                "id": "runtime",
+                "label": "Runtime",
+                "kind": "runtime",
+                "nodeIds": ["intake", "gate"],
+            }
+        ],
+    }
+    contract = _repair_contract(
+        scope="local",
+        failed_layer="components",
+        layer_selectors={"components": {"addition_count": 1}},
+    )
+    contract["layers"]["connections"] = _layer(
+        "fail",
+        0.7,
+        findings=["Connect the missing component."],
+        addition_count=1,
+    )
+
+    with pytest.raises(ValueError, match="groups"):
         _validate_repair_contract(contract, graph=graph)
 
 
@@ -207,11 +277,12 @@ def test_all_four_artifact_layers_must_be_scored():
 
     layer_schema = _GRAPH_CRITIC_RESPONSE_SCHEMA["properties"]["layers"]
     assert list(layer_schema["properties"]) == [
-        "components", "connections", "composition", "render",
+        "components",
+        "connections",
+        "composition",
+        "render",
     ]
-    assert layer_schema["properties"]["components"] == {
-        "$ref": "#/$defs/layer_row"
-    }
+    assert layer_schema["properties"]["components"] == {"$ref": "#/$defs/layer_row"}
     assert (
         set(
             _GRAPH_CRITIC_RESPONSE_SCHEMA["properties"]["topology_proofs"]["properties"]
@@ -244,7 +315,10 @@ def test_model_indexes_are_expanded_to_exact_locked_selectors():
     )
 
     assert list(normalized["repair_contract"]["layers"]) == [
-        "components", "connections", "composition", "render",
+        "components",
+        "connections",
+        "composition",
+        "render",
     ]
     assert normalized["repair_contract"]["layers"]["connections"]["edge_selectors"] == [
         {"source": "intake", "target": "gate", "label": "submit"}
@@ -256,9 +330,7 @@ def test_model_indexes_are_expanded_to_exact_locked_selectors():
 
 
 def test_critic_schema_keeps_named_layers_without_repeating_rubric_names():
-    layer_schemas = _GRAPH_CRITIC_RESPONSE_SCHEMA["properties"]["layers"][
-        "properties"
-    ]
+    layer_schemas = _GRAPH_CRITIC_RESPONSE_SCHEMA["properties"]["layers"]["properties"]
     for layer in ("components", "connections", "composition", "render"):
         assert layer_schemas[layer] == {"$ref": "#/$defs/layer_row"}
     schema_text = json.dumps(_GRAPH_CRITIC_RESPONSE_SCHEMA, separators=(",", ":"))
@@ -398,9 +470,7 @@ def test_every_numbered_rubric_code_expands_to_its_canonical_finding():
     )
 
     for layer in _MODEL_LAYER_FIELDS:
-        assert normalized["repair_contract"]["layers"][layer][
-            "blocking_findings"
-        ] == [
+        assert normalized["repair_contract"]["layers"][layer]["blocking_findings"] == [
             f"Repair {code.replace('_', ' ')} in the {layer} layer."
             for code in _RUBRIC_CODES
             if _RUBRIC_CODE_OWNERS[code] == layer
@@ -435,6 +505,13 @@ def test_rubric_codes_cannot_unlock_a_layer_they_do_not_own(layer, code, owner):
 
 @pytest.mark.parametrize("finding_codes", [[17], [5]])
 def test_failed_topology_proof_requires_connections_code_17(finding_codes):
+    graph = {
+        "nodes": [
+            {"id": "source", "label": "Source"},
+            {"id": "target", "label": "Target"},
+        ],
+        "edges": [],
+    }
     payload = _passing_review_payload()
     guarantee = sorted(_TOPOLOGY_PROOF_GUARANTEES)[0]
     payload["topology_proofs"][guarantee] = ["fail", [], []]
@@ -445,13 +522,15 @@ def test_failed_topology_proof_requires_connections_code_17(finding_codes):
         status="fail",
         score=0.7,
         finding_codes=finding_codes,
+        context_node_indexes=[0, 1],
+        addition_count=1,
     )
 
     if finding_codes == [5]:
         with pytest.raises(ValueError, match="topology_enforced_guarantees"):
             _canonicalise_review_protocol(
                 payload,
-                graph={"edges": []},
+                graph=graph,
                 deterministic_findings=[],
                 review_context=[],
             )
@@ -459,20 +538,19 @@ def test_failed_topology_proof_requires_connections_code_17(finding_codes):
 
     normalized = _canonicalise_review_protocol(
         payload,
-        graph={"edges": []},
+        graph=graph,
         deterministic_findings=[],
         review_context=[],
     )
-    assert normalized["topology_proofs"][0]["reason"].startswith(
-        "Repair the failed "
+    assert normalized["topology_proofs"][0]["reason"].startswith("Repair the failed ")
+    assert (
+        normalized["topology_proofs"][0]["reason"]
+        in normalized["repair_contract"]["layers"]["connections"]["blocking_findings"]
     )
-    assert normalized["topology_proofs"][0]["reason"] in normalized[
-        "repair_contract"
-    ]["layers"]["connections"]["blocking_findings"]
     _validate_review_protocol(
         normalized,
         require_topology_proofs=True,
-        graph={"edges": []},
+        graph=graph,
     )
 
 
@@ -559,6 +637,7 @@ def test_missing_record_context_is_actionable_without_unlocking_node_anchors():
         finding_codes=[4],
         context_indexes=[0],
         context_node_indexes=[0, 1],
+        addition_count=1,
     )
 
     normalized = _canonicalise_review_protocol(
@@ -571,6 +650,8 @@ def test_missing_record_context_is_actionable_without_unlocking_node_anchors():
 
     assert layer["node_ids"] == []
     assert layer["edge_selectors"] == []
+    assert layer["context_node_ids"] == ["approval", "executor"]
+    assert layer["addition_count"] == 1
     assert layer["blocking_findings"] == [
         "Repair safe action boundary in the connections layer.",
         "Repair context for the connections layer. Node anchors: approval "
@@ -701,7 +782,9 @@ def test_feedback_edge_finding_cannot_fail_components_while_connections_passes()
         deterministic_finding_indexes=[0],
     )
 
-    with pytest.raises(ValueError, match="belongs to the connections layer, not components"):
+    with pytest.raises(
+        ValueError, match="belongs to the connections layer, not components"
+    ):
         _canonicalise_review_protocol(
             payload,
             graph=graph,
@@ -721,7 +804,9 @@ def test_repair_contract_validation_enforces_deterministic_finding_owner():
         },
     )
 
-    with pytest.raises(ValueError, match="belongs to the connections layer, not components"):
+    with pytest.raises(
+        ValueError, match="belongs to the connections layer, not components"
+    ):
         _validate_repair_contract(
             contract,
             graph={},
@@ -827,8 +912,8 @@ def test_failed_topology_proof_cannot_hide_behind_passing_layers():
     ],
 )
 def test_repair_scope_controls_review_routing(scope, approved, expected):
-    failed_layer = None if scope == "none" else (
-        "render" if scope == "global" else "components"
+    failed_layer = (
+        None if scope == "none" else ("render" if scope == "global" else "components")
     )
     state = {
         "graph_changed": True,
@@ -846,8 +931,270 @@ def test_repair_scope_controls_review_routing(scope, approved, expected):
     assert _route_after_review(state) == expected
 
 
+def test_unchanged_passed_layers_remain_locked_after_a_local_repair():
+    baseline = _domain_graph()
+    for index, node in enumerate(baseline["nodes"]):
+        node["id"] = f"node_{index}"
+    edge = baseline["edges"][0]
+    prior_contract = _repair_contract(
+        scope="local",
+        failed_layer="connections",
+        layer_selectors={
+            "connections": {
+                "edge_selectors": [
+                    {
+                        "source": edge["source"],
+                        "target": edge["target"],
+                        "label": edge["label"],
+                    }
+                ]
+            }
+        },
+    )
+    candidate = deepcopy(baseline)
+    candidate["edges"][0]["description"] = "Carries the repaired bounded event."
+    current_contract = _repair_contract(
+        scope="local",
+        failed_layer="components",
+        layer_selectors={"components": {"node_ids": [candidate["nodes"][0]["id"]]}},
+    )
+
+    review = _lock_unchanged_passed_layers(
+        {
+            "repair_baseline_graph_data": baseline,
+            "graph_review": {
+                "repair_contract": prior_contract,
+                "topology_proofs": [],
+            },
+        },
+        {"repair_contract": current_contract, "topology_proofs": []},
+        candidate,
+    )
+
+    assert review["approved"] is True
+    assert review["repair_contract"]["repair_scope"] == "none"
+    assert review["repair_contract"]["layers"]["components"]["status"] == "pass"
+    assert review["repair_contract"]["layers"]["components"]["node_ids"] == []
+    assert set(review["locked_layers"]) == {"components"}
+
+
+def test_layer_lock_rechecks_connections_when_endpoint_meaning_changes():
+    baseline = _domain_graph()
+    for index, node in enumerate(baseline["nodes"]):
+        node["id"] = f"node_{index}"
+    prior_contract = _repair_contract(
+        scope="local",
+        failed_layer="components",
+        layer_selectors={"components": {"node_ids": [baseline["nodes"][0]["id"]]}},
+    )
+    candidate = deepcopy(baseline)
+    candidate["nodes"][0]["description"] = "Now owns a different boundary."
+    edge = candidate["edges"][0]
+    current_contract = _repair_contract(
+        scope="local",
+        failed_layer="connections",
+        layer_selectors={
+            "connections": {
+                "edge_selectors": [
+                    {
+                        "source": edge["source"],
+                        "target": edge["target"],
+                        "label": edge["label"],
+                    }
+                ]
+            }
+        },
+    )
+
+    review = _lock_unchanged_passed_layers(
+        {
+            "repair_baseline_graph_data": baseline,
+            "graph_review": {
+                "repair_contract": prior_contract,
+                "topology_proofs": [],
+            },
+        },
+        {"repair_contract": current_contract, "topology_proofs": []},
+        candidate,
+    )
+
+    assert review["repair_contract"]["layers"]["connections"]["status"] == "fail"
+    assert "connections" not in review.get("locked_layers", [])
+
+
+def test_layer_lock_rechecks_composition_when_component_meaning_changes():
+    baseline = _domain_graph()
+    baseline["title"] = "Campaign control loop"
+    for index, node in enumerate(baseline["nodes"]):
+        node["id"] = f"node_{index}"
+    prior_contract = _repair_contract(
+        scope="local",
+        failed_layer="components",
+        layer_selectors={"components": {"node_ids": [baseline["nodes"][0]["id"]]}},
+    )
+    candidate = deepcopy(baseline)
+    candidate["nodes"][0]["description"] = "Now owns a different product boundary."
+    current_contract = _repair_contract(
+        scope="local",
+        failed_layer="composition",
+        layer_selectors={"composition": {"composition_fields": ["title"]}},
+    )
+
+    review = _lock_unchanged_passed_layers(
+        {
+            "repair_baseline_graph_data": baseline,
+            "graph_review": {
+                "repair_contract": prior_contract,
+                "topology_proofs": [],
+            },
+        },
+        {"repair_contract": current_contract, "topology_proofs": []},
+        candidate,
+    )
+
+    assert review["repair_contract"]["layers"]["composition"]["status"] == "fail"
+    assert "composition" not in review.get("locked_layers", [])
+
+
+def test_layer_lock_rechecks_connections_when_endpoint_technology_changes():
+    baseline = _domain_graph()
+    for index, node in enumerate(baseline["nodes"]):
+        node["id"] = f"node_{index}"
+        node["technology"] = "Bounded application service"
+    prior_contract = _repair_contract(
+        scope="local",
+        failed_layer="components",
+        layer_selectors={"components": {"node_ids": [baseline["nodes"][0]["id"]]}},
+    )
+    candidate = deepcopy(baseline)
+    candidate["nodes"][0]["technology"] = "Untrusted vector retrieval corpus"
+    edge = candidate["edges"][0]
+    current_contract = _repair_contract(
+        scope="local",
+        failed_layer="connections",
+        layer_selectors={
+            "connections": {
+                "edge_selectors": [
+                    {
+                        "source": edge["source"],
+                        "target": edge["target"],
+                        "label": edge["label"],
+                    }
+                ]
+            }
+        },
+    )
+
+    review = _lock_unchanged_passed_layers(
+        {
+            "repair_baseline_graph_data": baseline,
+            "graph_review": {
+                "repair_contract": prior_contract,
+                "topology_proofs": [],
+            },
+        },
+        {"repair_contract": current_contract, "topology_proofs": []},
+        candidate,
+    )
+
+    assert review["repair_contract"]["layers"]["connections"]["status"] == "fail"
+    assert "connections" not in review.get("locked_layers", [])
+
+
+def test_layer_lock_never_erases_a_current_deterministic_finding():
+    graph = _domain_graph()
+    for index, node in enumerate(graph["nodes"]):
+        node["id"] = f"node_{index}"
+    current_contract = _repair_contract(
+        scope="local",
+        failed_layer="components",
+        layer_selectors={
+            "components": {
+                "node_ids": [graph["nodes"][0]["id"]],
+                "deterministic_finding_ids": ["deterministic_1"],
+            }
+        },
+    )
+
+    review = _lock_unchanged_passed_layers(
+        {
+            "repair_baseline_graph_data": deepcopy(graph),
+            "graph_review": {
+                "repair_contract": _repair_contract(),
+                "topology_proofs": [],
+            },
+        },
+        {"repair_contract": current_contract, "topology_proofs": []},
+        graph,
+        deterministic_findings=[
+            {
+                "id": "deterministic_1",
+                "finding": "Repair the component identity.",
+                "owner_layer": "components",
+            }
+        ],
+    )
+
+    assert review["approved"] is False
+    assert review["repair_contract"]["layers"]["components"][
+        "deterministic_finding_ids"
+    ] == ["deterministic_1"]
+
+
+def test_layer_lock_promotes_a_render_only_residual_to_global_scope():
+    baseline = _domain_graph()
+    for index, node in enumerate(baseline["nodes"]):
+        node["id"] = f"node_{index}"
+    edge = baseline["edges"][0]
+    prior_contract = _repair_contract(
+        scope="local",
+        failed_layer="connections",
+        layer_selectors={
+            "connections": {
+                "edge_selectors": [
+                    {
+                        "source": edge["source"],
+                        "target": edge["target"],
+                        "label": edge["label"],
+                    }
+                ]
+            }
+        },
+    )
+    candidate = deepcopy(baseline)
+    candidate["edges"][0]["description"] = "Carries the repaired event."
+    current_contract = _repair_contract(
+        scope="local",
+        failed_layer="components",
+        layer_selectors={"components": {"node_ids": [candidate["nodes"][0]["id"]]}},
+    )
+    current_contract["layers"]["render"] = _layer(
+        "fail",
+        0.6,
+        findings=["The rendered topology is clipped."],
+    )
+
+    review = _lock_unchanged_passed_layers(
+        {
+            "repair_baseline_graph_data": baseline,
+            "graph_review": {
+                "repair_contract": prior_contract,
+                "topology_proofs": [],
+            },
+        },
+        {"repair_contract": current_contract, "topology_proofs": []},
+        candidate,
+    )
+
+    assert review["repair_contract"]["repair_scope"] == "global"
+    assert review["review_status"] == "completed"
+    assert review["terminal"] is True
+
+
 def test_required_topology_proofs_reject_missing_or_invented_edges():
-    graph = {"edges": [{"source": "proposal", "target": "gate", "label": "submit proposal"}]}
+    graph = {
+        "edges": [{"source": "proposal", "target": "gate", "label": "submit proposal"}]
+    }
     value = [
         {
             "guarantee": guarantee,
@@ -863,13 +1210,17 @@ def test_required_topology_proofs_reject_missing_or_invented_edges():
             "learning_and_release",
         )
     ]
-    value.append({
-        "guarantee": "state_effect_reconciliation",
-        "status": "pass",
-        "edge_evidence": [{"source": "gate", "target": "writer", "label": "release action"}],
-        "route_claims": [{"source": "gate", "target": "writer"}],
-        "reason": "The action is supposedly reserved before execution.",
-    })
+    value.append(
+        {
+            "guarantee": "state_effect_reconciliation",
+            "status": "pass",
+            "edge_evidence": [
+                {"source": "gate", "target": "writer", "label": "release action"}
+            ],
+            "route_claims": [{"source": "gate", "target": "writer"}],
+            "reason": "The action is supposedly reserved before execution.",
+        }
+    )
 
     with pytest.raises(ValueError, match="edge absent from the graph"):
         _validate_review_protocol(
@@ -885,11 +1236,15 @@ def test_required_topology_proofs_reject_missing_or_invented_edges():
 
 
 def test_required_topology_proofs_accept_exact_citations_from_semantic_reviewer():
-    graph = {"edges": [{"source": "proposal", "target": "gate", "label": "submit proposal"}]}
+    graph = {
+        "edges": [{"source": "proposal", "target": "gate", "label": "submit proposal"}]
+    }
     value = [
         {
             "guarantee": guarantee,
-            "status": "pass" if guarantee == "authorization_and_compensation" else "not_applicable",
+            "status": "pass"
+            if guarantee == "authorization_and_compensation"
+            else "not_applicable",
             "edge_evidence": (
                 [{"source": "proposal", "target": "gate", "label": "submit proposal"}]
                 if guarantee == "authorization_and_compensation"
@@ -900,15 +1255,19 @@ def test_required_topology_proofs_accept_exact_citations_from_semantic_reviewer(
                 if guarantee == "authorization_and_compensation"
                 else []
             ),
-            "reason": "The cited path is present." if guarantee == "authorization_and_compensation" else "This flow class is absent.",
+            "reason": "The cited path is present."
+            if guarantee == "authorization_and_compensation"
+            else "This flow class is absent.",
         }
-        for guarantee in sorted({
-            "state_effect_reconciliation",
-            "authorization_and_compensation",
-            "retrieval_and_reuse_trust",
-            "audit_and_provenance",
-            "learning_and_release",
-        })
+        for guarantee in sorted(
+            {
+                "state_effect_reconciliation",
+                "authorization_and_compensation",
+                "retrieval_and_reuse_trust",
+                "audit_and_provenance",
+                "learning_and_release",
+            }
+        )
     ]
 
     _validate_review_protocol(
@@ -939,7 +1298,9 @@ def test_topology_witness_rejects_unproved_direction_or_cycle(route_claims, matc
     proofs = [
         {
             "guarantee": guarantee,
-            "status": "pass" if guarantee == "authorization_and_compensation" else "not_applicable",
+            "status": "pass"
+            if guarantee == "authorization_and_compensation"
+            else "not_applicable",
             "edge_evidence": (
                 [graph["edges"][0]]
                 if guarantee == "authorization_and_compensation"
@@ -971,7 +1332,9 @@ def test_topology_witness_rejects_disconnected_padding():
     proofs = [
         {
             "guarantee": guarantee,
-            "status": "pass" if guarantee == "authorization_and_compensation" else "not_applicable",
+            "status": "pass"
+            if guarantee == "authorization_and_compensation"
+            else "not_applicable",
             "edge_evidence": (
                 graph["edges"] if guarantee == "authorization_and_compensation" else []
             ),
@@ -1003,10 +1366,14 @@ def test_topology_witness_rejects_disconnected_padding():
         ("learning_and_release", "Canary Release Gate"),
     ],
 )
-def test_topology_applicability_is_owned_by_semantic_review_not_label_regex(guarantee, label):
+def test_topology_applicability_is_owned_by_semantic_review_not_label_regex(
+    guarantee, label
+):
     graph = {
         "nodes": [{"id": "visible", "label": label}],
-        "edges": [{"source": "visible", "target": "outcome", "label": "returns result"}],
+        "edges": [
+            {"source": "visible", "target": "outcome", "label": "returns result"}
+        ],
     }
     value = [
         {
@@ -1048,15 +1415,30 @@ def test_production_gate_accepts_cache_write_owned_by_acceptance_gate():
         ],
         "edges": [
             {"source": "generator", "target": "validator", "label": "submit candidate"},
-            {"source": "validator", "target": "cache", "label": "write accepted answer"},
-            {"source": "validator", "target": "fallback", "label": "reject ungrounded answer"},
+            {
+                "source": "validator",
+                "target": "cache",
+                "label": "write accepted answer",
+            },
+            {
+                "source": "validator",
+                "target": "fallback",
+                "label": "reject ungrounded answer",
+            },
             {"source": "fallback", "target": "delivery", "label": "deliver abstention"},
             {"source": "cache", "target": "delivery", "label": "serve scoped answer"},
-            {"source": "delivery", "target": "generator", "label": "return measured outcome", "flow": "feedback"},
+            {
+                "source": "delivery",
+                "target": "generator",
+                "label": "return measured outcome",
+                "flow": "feedback",
+            },
         ],
     }
 
-    review = _deterministic_review("Design a production RAG workflow", graph, "production")
+    review = _deterministic_review(
+        "Design a production RAG workflow", graph, "production"
+    )
 
     assert review["approved"] is True
     assert not any("cache writes" in item for item in review["missing"])
@@ -1073,12 +1455,23 @@ def test_production_gate_does_not_treat_approval_audit_store_as_a_decision():
         ],
         "edges": [
             {"source": "entry", "target": "ledger", "label": "records reviewed permit"},
-            {"source": "ledger", "target": "outcome", "label": "publishes audit projection"},
-            {"source": "outcome", "target": "entry", "label": "returns measured outcome", "flow": "feedback"},
+            {
+                "source": "ledger",
+                "target": "outcome",
+                "label": "publishes audit projection",
+            },
+            {
+                "source": "outcome",
+                "target": "entry",
+                "label": "returns measured outcome",
+                "flow": "feedback",
+            },
         ],
     }
 
-    review = _deterministic_review("Design an audited permit workflow", graph, "production")
+    review = _deterministic_review(
+        "Design an audited permit workflow", graph, "production"
+    )
 
     assert not any("rejection/cancellation" in item for item in review["missing"])
 
@@ -1096,8 +1489,16 @@ def test_production_gate_does_not_treat_approved_registry_as_a_decision():
             {"id": "outcome", "label": "Definition Outcome", "type": "service"},
         ],
         "edges": [
-            {"source": "entry", "target": "registry", "label": "register approved version"},
-            {"source": "registry", "target": "outcome", "label": "publish immutable version"},
+            {
+                "source": "entry",
+                "target": "registry",
+                "label": "register approved version",
+            },
+            {
+                "source": "registry",
+                "target": "outcome",
+                "label": "publish immutable version",
+            },
             {
                 "source": "outcome",
                 "target": "entry",
@@ -1134,11 +1535,17 @@ def test_approval_owner_accepts_separate_approval_and_rejection_routes():
                 "label": "return measured outcome",
                 "flow": "feedback",
             },
-            {"source": "terminal", "target": "entry", "label": "return rejection outcome"},
+            {
+                "source": "terminal",
+                "target": "entry",
+                "label": "return rejection outcome",
+            },
         ],
     }
 
-    review = _deterministic_review("Design a controlled external action", graph, "production")
+    review = _deterministic_review(
+        "Design a controlled external action", graph, "production"
+    )
 
     assert review["approved"] is True
 
@@ -1162,11 +1569,17 @@ def test_approval_owner_may_persist_both_outcomes_in_complete_durable_envelope()
                     "Persists policy version, expiry, and idempotency key before any lease."
                 ),
             },
-            {"source": "lifecycle", "target": "terminal", "label": "publish decision outcome"},
+            {
+                "source": "lifecycle",
+                "target": "terminal",
+                "label": "publish decision outcome",
+            },
         ],
     }
 
-    review = _deterministic_review("Design a controlled clinical action", graph, "production")
+    review = _deterministic_review(
+        "Design a controlled clinical action", graph, "production"
+    )
 
     assert review["approved"] is True
     assert not any("approval decision" in item for item in review["missing"])
@@ -1182,16 +1595,35 @@ def test_release_controller_may_own_promotion_and_rollback_for_registry_canary()
             {"id": "outcome", "label": "Canary Outcome", "type": "service"},
         ],
         "edges": [
-            {"source": "registry", "target": "controller", "label": "supplies immutable release"},
+            {
+                "source": "registry",
+                "target": "controller",
+                "label": "supplies immutable release",
+            },
             {"source": "controller", "target": "runtime", "label": "deploy canary"},
-            {"source": "controller", "target": "runtime", "label": "promote full production"},
-            {"source": "controller", "target": "registry", "label": "rollback to prior release"},
+            {
+                "source": "controller",
+                "target": "runtime",
+                "label": "promote full production",
+            },
+            {
+                "source": "controller",
+                "target": "registry",
+                "label": "rollback to prior release",
+            },
             {"source": "runtime", "target": "outcome", "label": "measure canary"},
-            {"source": "outcome", "target": "controller", "label": "returns measured outcome", "flow": "feedback"},
+            {
+                "source": "outcome",
+                "target": "controller",
+                "label": "returns measured outcome",
+                "flow": "feedback",
+            },
         ],
     }
 
-    review = _deterministic_review("Design a controlled model release", graph, "production")
+    review = _deterministic_review(
+        "Design a controlled model release", graph, "production"
+    )
 
     assert review["approved"] is True
     assert not any("canary" in item.lower() for item in review["missing"])
@@ -1218,13 +1650,28 @@ def test_reservation_store_description_does_not_make_it_an_executor():
                 "technology": "Signed target envelope",
                 "description": "Binds policy version, expiry, and idempotency key.",
             },
-            {"source": "reservation", "target": "executor", "label": "lease reserved operation"},
-            {"source": "executor", "target": "outcome", "label": "execute campaign change"},
-            {"source": "outcome", "target": "policy", "label": "return measured outcome", "flow": "feedback"},
+            {
+                "source": "reservation",
+                "target": "executor",
+                "label": "lease reserved operation",
+            },
+            {
+                "source": "executor",
+                "target": "outcome",
+                "label": "execute campaign change",
+            },
+            {
+                "source": "outcome",
+                "target": "policy",
+                "label": "return measured outcome",
+                "flow": "feedback",
+            },
         ],
     }
 
-    review = _deterministic_review("Design an automatic campaign workflow", graph, "production")
+    review = _deterministic_review(
+        "Design an automatic campaign workflow", graph, "production"
+    )
 
     assert review["approved"] is True
     assert not any("durable reservation state" in item for item in review["missing"])
@@ -1239,10 +1686,22 @@ def test_read_only_external_adapter_is_not_treated_as_effect_executor():
             {"id": "reconciler", "label": "Query Reconciler", "type": "service"},
         ],
         "edges": [
-            {"source": "reservation", "target": "adapter", "label": "lease reserved query"},
+            {
+                "source": "reservation",
+                "target": "adapter",
+                "label": "lease reserved query",
+            },
             {"source": "adapter", "target": "target", "label": "query campaign status"},
-            {"source": "target", "target": "reconciler", "label": "return campaign status"},
-            {"source": "reconciler", "target": "adapter", "label": "NOT_FOUND retry read"},
+            {
+                "source": "target",
+                "target": "reconciler",
+                "label": "return campaign status",
+            },
+            {
+                "source": "reconciler",
+                "target": "adapter",
+                "label": "NOT_FOUND retry read",
+            },
             {
                 "source": "reconciler",
                 "target": "reservation",
@@ -1252,7 +1711,9 @@ def test_read_only_external_adapter_is_not_treated_as_effect_executor():
         ],
     }
 
-    review = _deterministic_review("Design a read-only campaign status lookup", graph, "production")
+    review = _deterministic_review(
+        "Design a read-only campaign status lookup", graph, "production"
+    )
 
     assert review["approved"] is True
     assert not any("durable reservation" in item for item in review["missing"])
@@ -1268,8 +1729,16 @@ def test_distinct_reconciliation_branch_may_contrast_other_outcomes_and_share_au
             {"id": "audit", "label": "Audit Log", "type": "datastore"},
         ],
         "edges": [
-            {"source": "ledger", "target": "adapter", "label": "lease reserved operation"},
-            {"source": "adapter", "target": "target", "label": "apply fulfilment mutation"},
+            {
+                "source": "ledger",
+                "target": "adapter",
+                "label": "lease reserved operation",
+            },
+            {
+                "source": "adapter",
+                "target": "target",
+                "label": "apply fulfilment mutation",
+            },
             {"source": "target", "target": "reconciler", "label": "return status"},
             {
                 "source": "reconciler",
@@ -1286,9 +1755,13 @@ def test_distinct_reconciliation_branch_may_contrast_other_outcomes_and_share_au
         ],
     }
 
-    review = _deterministic_review("Design a fulfilment integration", graph, "production")
+    review = _deterministic_review(
+        "Design a fulfilment integration", graph, "production"
+    )
 
-    assert not any("distinct reconciliation branches" in item for item in review["missing"])
+    assert not any(
+        "distinct reconciliation branches" in item for item in review["missing"]
+    )
 
 
 def test_domain_specific_connected_topology_passes_local_structural_checks():
@@ -1299,8 +1772,16 @@ def test_domain_specific_connected_topology_passes_local_structural_checks():
             {"id": "resolution", "label": "Passenger Resolution"},
         ],
         "edges": [
-            {"source": "report", "target": "router", "label": "submits verified bag record"},
-            {"source": "router", "target": "resolution", "label": "returns recovery outcome"},
+            {
+                "source": "report",
+                "target": "router",
+                "label": "submits verified bag record",
+            },
+            {
+                "source": "router",
+                "target": "resolution",
+                "label": "returns recovery outcome",
+            },
         ],
     }
 
@@ -1318,12 +1799,30 @@ def _domain_graph():
     return {
         "design_origin": "applied",
         "nodes": [
-            {"label": "Campaign Objective", "description": "Defines ROAS objective and spend constraints"},
-            {"label": "Event Quality Gate", "description": "Validates conversion and attribution events"},
-            {"label": "Creative Optimizer", "description": "Chooses copy variants for an audience"},
-            {"label": "Approval Policy", "description": "Approves risky actions and writes an audit record"},
-            {"label": "Channel Executor", "description": "Applies idempotent targeting and bid changes"},
-            {"label": "Outcome Attribution", "description": "Observes attributed revenue and campaign outcomes"},
+            {
+                "label": "Campaign Objective",
+                "description": "Defines ROAS objective and spend constraints",
+            },
+            {
+                "label": "Event Quality Gate",
+                "description": "Validates conversion and attribution events",
+            },
+            {
+                "label": "Creative Optimizer",
+                "description": "Chooses copy variants for an audience",
+            },
+            {
+                "label": "Approval Policy",
+                "description": "Approves risky actions and writes an audit record",
+            },
+            {
+                "label": "Channel Executor",
+                "description": "Applies idempotent targeting and bid changes",
+            },
+            {
+                "label": "Outcome Attribution",
+                "description": "Observes attributed revenue and campaign outcomes",
+            },
         ],
         "edges": [
             {
@@ -1374,13 +1873,29 @@ def test_feedback_flow_is_a_loop_without_renderer_specific_metadata(query, label
     graph = {
         "design_origin": "applied",
         "nodes": [
-            {"id": "entry", "label": labels[0], "description": "Captures a verified request."},
-            {"id": "decision", "label": labels[1], "description": "Owns the bounded decision."},
-            {"id": "outcome", "label": labels[2], "description": "Records the measured outcome."},
+            {
+                "id": "entry",
+                "label": labels[0],
+                "description": "Captures a verified request.",
+            },
+            {
+                "id": "decision",
+                "label": labels[1],
+                "description": "Owns the bounded decision.",
+            },
+            {
+                "id": "outcome",
+                "label": labels[2],
+                "description": "Records the measured outcome.",
+            },
         ],
         "edges": [
             {"source": "entry", "target": "decision", "label": "sends verified input"},
-            {"source": "decision", "target": "outcome", "label": "records bounded result"},
+            {
+                "source": "decision",
+                "target": "outcome",
+                "label": "records bounded result",
+            },
             {
                 "source": "outcome",
                 "target": "decision",
@@ -1418,15 +1933,22 @@ def test_generic_book_vocabulary_is_rejected_before_publication():
         "nodes": [
             {"label": label, "description": "Generic book concept"}
             for label in (
-                "Agent", "Tool Use", "Planning", "Evaluation", "Foundation Model", "Generation"
+                "Agent",
+                "Tool Use",
+                "Planning",
+                "Evaluation",
+                "Foundation Model",
+                "Generation",
             )
         ],
-        "edges": [{
-            "source": "agent",
-            "target": "planning",
-            "label": "returns measured outcome",
-            "type": "loop",
-        }],
+        "edges": [
+            {
+                "source": "agent",
+                "target": "planning",
+                "label": "returns measured outcome",
+                "type": "loop",
+            }
+        ],
     }
 
     review = _deterministic_review(
@@ -1456,8 +1978,7 @@ def test_one_standalone_generic_label_is_rejected_before_publication():
 def test_disconnected_architecture_is_rejected_before_publication():
     graph = _domain_graph()
     graph["nodes"] = [
-        {**node, "id": f"node_{index}"}
-        for index, node in enumerate(graph["nodes"])
+        {**node, "id": f"node_{index}"} for index, node in enumerate(graph["nodes"])
     ]
 
     review = _deterministic_review(
@@ -1473,9 +1994,21 @@ def test_disconnected_architecture_is_rejected_before_publication():
 def test_read_only_design_does_not_invent_an_external_write_boundary():
     graph = {
         "nodes": [
-            {"id": "request", "label": "Research Request", "description": "Captures the research question"},
-            {"id": "retriever", "label": "Evidence Retriever", "description": "Retrieves cited source passages"},
-            {"id": "composer", "label": "Answer Composer", "description": "Builds a grounded answer"},
+            {
+                "id": "request",
+                "label": "Research Request",
+                "description": "Captures the research question",
+            },
+            {
+                "id": "retriever",
+                "label": "Evidence Retriever",
+                "description": "Retrieves cited source passages",
+            },
+            {
+                "id": "composer",
+                "label": "Answer Composer",
+                "description": "Builds a grounded answer",
+            },
         ],
         "edges": [
             {
@@ -1510,8 +2043,16 @@ def test_explicit_optimisation_request_requires_a_measured_feedback_edge():
             {"id": "result", "label": "Allocation Result"},
         ],
         "edges": [
-            {"source": "input", "target": "decision", "label": "supplies measured evidence"},
-            {"source": "decision", "target": "result", "label": "returns bounded allocation"},
+            {
+                "source": "input",
+                "target": "decision",
+                "label": "supplies measured evidence",
+            },
+            {
+                "source": "decision",
+                "target": "result",
+                "label": "returns bounded allocation",
+            },
         ],
     }
 
@@ -1527,16 +2068,19 @@ def test_explicit_optimisation_request_requires_a_measured_feedback_edge():
 
 def test_render_gate_rejects_overlap_clipping_or_missing_capture():
     graph = {"nodes": [{"id": "a"}, {"id": "b"}], "edges": []}
-    review = _deterministic_render_review(graph, {
-        "report": {
-            "rendered_nodes": 2,
-            "rendered_edges": 0,
-            "overlap_count": 1,
-            "clipped_nodes": 1,
-            "clipped_edges": 1,
-            "minimum_text_px": 8,
+    review = _deterministic_render_review(
+        graph,
+        {
+            "report": {
+                "rendered_nodes": 2,
+                "rendered_edges": 0,
+                "overlap_count": 1,
+                "clipped_nodes": 1,
+                "clipped_edges": 1,
+                "minimum_text_px": 12,
+            },
         },
-    })
+    )
 
     assert review["approved"] is False
     assert review["terminal"] is True
@@ -1547,41 +2091,50 @@ def test_render_gate_rejects_overlap_clipping_or_missing_capture():
 
 def test_render_gate_accepts_a_complete_readable_browser_capture():
     graph = {"nodes": [{"id": "a"}, {"id": "b"}], "edges": []}
-    review = _deterministic_render_review(graph, {
-        "screenshot_base64": "valid-bounded-image",
-        "report": {
-            "rendered_nodes": 2,
-            "rendered_edges": 0,
-            "overlap_count": 0,
-            "clipped_nodes": 0,
-            "clipped_edges": 0,
-            "minimum_text_px": 7,
+    review = _deterministic_render_review(
+        graph,
+        {
+            "screenshot_base64": "valid-bounded-image",
+            "report": {
+                "rendered_nodes": 2,
+                "rendered_edges": 0,
+                "overlap_count": 0,
+                "clipped_nodes": 0,
+                "clipped_edges": 0,
+                "minimum_text_px": 11,
+            },
         },
-    })
+    )
 
     assert review["approved"] is True
     assert review["terminal"] is False
 
 
 def test_render_gate_rejects_missing_overview_and_group_labels_or_overlapping_zones():
-    graph = {"nodes": [{"id": "a"}, {"id": "b"}], "edges": [{"source": "a", "target": "b"}]}
-    review = _deterministic_render_review(graph, {
-        "screenshot_base64": "valid-bounded-image",
-        "report": {
-            "rendered_nodes": 2,
-            "rendered_edges": 1,
-            "overlap_count": 0,
-            "clipped_nodes": 0,
-            "clipped_edges": 0,
-            "minimum_text_px": 7,
-            "overview_required_edge_labels": 1,
-            "visible_overview_required_edge_labels": 0,
-            "grouped_nodes": 2,
-            "group_labelled_nodes": 1,
-            "visible_group_boundaries": 2,
-            "group_boundary_overlap_count": 1,
+    graph = {
+        "nodes": [{"id": "a"}, {"id": "b"}],
+        "edges": [{"source": "a", "target": "b"}],
+    }
+    review = _deterministic_render_review(
+        graph,
+        {
+            "screenshot_base64": "valid-bounded-image",
+            "report": {
+                "rendered_nodes": 2,
+                "rendered_edges": 1,
+                "overlap_count": 0,
+                "clipped_nodes": 0,
+                "clipped_edges": 0,
+                "minimum_text_px": 11,
+                "overview_required_edge_labels": 1,
+                "visible_overview_required_edge_labels": 0,
+                "grouped_nodes": 2,
+                "group_labelled_nodes": 1,
+                "visible_group_boundaries": 2,
+                "group_boundary_overlap_count": 1,
+            },
         },
-    })
+    )
 
     assert review["approved"] is False
     assert review["terminal"] is True
@@ -1592,17 +2145,20 @@ def test_render_gate_rejects_missing_overview_and_group_labels_or_overlapping_zo
 
 def test_render_gate_accepts_legacy_reports_without_new_visual_metrics():
     graph = {"nodes": [{"id": "a"}], "edges": []}
-    review = _deterministic_render_review(graph, {
-        "screenshot_base64": "legacy-image",
-        "report": {
-            "rendered_nodes": 1,
-            "rendered_edges": 0,
-            "overlap_count": 0,
-            "clipped_nodes": 0,
-            "clipped_edges": 0,
-            "minimum_text_px": 7,
+    review = _deterministic_render_review(
+        graph,
+        {
+            "screenshot_base64": "legacy-image",
+            "report": {
+                "rendered_nodes": 1,
+                "rendered_edges": 0,
+                "overlap_count": 0,
+                "clipped_nodes": 0,
+                "clipped_edges": 0,
+                "minimum_text_px": 11,
+            },
         },
-    })
+    )
 
     assert review["approved"] is True
 
@@ -1638,7 +2194,7 @@ async def test_semantic_critic_reviews_the_private_rendered_image(
                 "overlap_count": 0,
                 "clipped_nodes": 0,
                 "clipped_edges": 0,
-                "minimum_text_px": 8,
+                "minimum_text_px": 12,
             },
         }
 
@@ -1648,33 +2204,49 @@ async def test_semantic_critic_reviews_the_private_rendered_image(
     )
     graph = _domain_graph()
     graph["design_origin"] = "applied"
-    result = await graph_critic_node({
-        "graph_data": graph,
-        "graph_changed": True,
-        "user_message": "Design a production growth marketing agent system",
-        "evidence_bundle": {
-            "checklist": [{"area": "evaluation", "question": "Measure outcomes"}],
-            "book_evidence": [{"chapter": 1, "page_number": 8, "text": "Evaluate measured outcomes."}],
-            "research_context": "- [Current source](https://example.com): current evidence",
-        },
-        "architect_plan": {
-            "diagram_requirements": [architect_tail],
-            "runtime_flow": ["full-plan-duplicate-must-not-ship"],
-        },
-        "challenger_review": {
-            "risks": [
-                {"area": "safety", "risk": "Unapproved writes", "mitigation": "Approval gate"},
-                {"area": "completeness", "risk": challenger_tail, "mitigation": "Keep it visible"},
-            ],
-            "status_update": "challenger-status-must-not-ship",
-        },
-        "complexity": "prototype",
-        "send": send,
-        "await_diagram_evaluation": await_diagram,
-        "user_id": "user-1",
-        "session_id": "thread-1",
-        "graph_revision_count": revision_count,
-    })
+    result = await graph_critic_node(
+        {
+            "graph_data": graph,
+            "graph_changed": True,
+            "user_message": "Design a production growth marketing agent system",
+            "evidence_bundle": {
+                "checklist": [{"area": "evaluation", "question": "Measure outcomes"}],
+                "book_evidence": [
+                    {
+                        "chapter": 1,
+                        "page_number": 8,
+                        "text": "Evaluate measured outcomes.",
+                    }
+                ],
+                "research_context": "- [Current source](https://example.com): current evidence",
+            },
+            "architect_plan": {
+                "diagram_requirements": [architect_tail],
+                "runtime_flow": ["full-plan-duplicate-must-not-ship"],
+            },
+            "challenger_review": {
+                "risks": [
+                    {
+                        "area": "safety",
+                        "risk": "Unapproved writes",
+                        "mitigation": "Approval gate",
+                    },
+                    {
+                        "area": "completeness",
+                        "risk": challenger_tail,
+                        "mitigation": "Keep it visible",
+                    },
+                ],
+                "status_update": "challenger-status-must-not-ship",
+            },
+            "complexity": "prototype",
+            "send": send,
+            "await_diagram_evaluation": await_diagram,
+            "user_id": "user-1",
+            "session_id": "thread-1",
+            "graph_revision_count": revision_count,
+        }
+    )
 
     assert result["graph_review"]["approved"] is True
     assert captured["effort"] == expected_effort
@@ -1705,34 +2277,44 @@ def test_review_packet_keeps_semantics_and_omits_duplicate_internal_metadata():
     graph = _domain_graph()
     for index, node in enumerate(graph["nodes"], start=1):
         node["id"] = f"node-{index}"
-    graph.update({
-        "version": "private-version",
-        "resolved_complexity": "production",
-        "groups": [{
-            "id": "runtime",
-            "label": "Runtime",
-            "kind": "runtime",
-            "nodeIds": [node["id"] for node in graph["nodes"]],
-        }],
-        "sequence": [{
-            "step": 1,
-            "nodes": [graph["nodes"][0]["id"]],
-            "description": "Enter the runtime path",
-        }],
-        "assumptions": ["The campaign API supports exact-action approval."],
-    })
-    graph["nodes"][0].update({
-        "technology": "Internal presentation subtitle",
-        "detail": "Deferred detail",
-        "layer": "architecture",
-        "design_origin": "applied",
-    })
-    graph["edges"][0].update({
-        "technology": "Internal edge subtitle",
-        "description": graph["edges"][0]["label"],
-        "edge_id": "private-edge-id",
-        "relation": "private-relation",
-    })
+    graph.update(
+        {
+            "version": "private-version",
+            "resolved_complexity": "production",
+            "groups": [
+                {
+                    "id": "runtime",
+                    "label": "Runtime",
+                    "kind": "runtime",
+                    "nodeIds": [node["id"] for node in graph["nodes"]],
+                }
+            ],
+            "sequence": [
+                {
+                    "step": 1,
+                    "nodes": [graph["nodes"][0]["id"]],
+                    "description": "Enter the runtime path",
+                }
+            ],
+            "assumptions": ["The campaign API supports exact-action approval."],
+        }
+    )
+    graph["nodes"][0].update(
+        {
+            "technology": "Internal presentation subtitle",
+            "detail": "Deferred detail",
+            "layer": "architecture",
+            "design_origin": "applied",
+        }
+    )
+    graph["edges"][0].update(
+        {
+            "technology": "Internal edge subtitle",
+            "description": graph["edges"][0]["label"],
+            "edge_id": "private-edge-id",
+            "relation": "private-relation",
+        }
+    )
     packet = _review_packet(
         {
             "architect_plan": {
@@ -1740,11 +2322,13 @@ def test_review_packet_keeps_semantics_and_omits_duplicate_internal_metadata():
                 "runtime_flow": ["Duplicate planning prose"],
             },
             "challenger_review": {
-                "risks": [{
-                    "area": "safety",
-                    "risk": "Approval can go stale.",
-                    "mitigation": "Revalidate immediately before execution.",
-                }],
+                "risks": [
+                    {
+                        "area": "safety",
+                        "risk": "Approval can go stale.",
+                        "mitigation": "Revalidate immediately before execution.",
+                    }
+                ],
                 "missing_requirements": ["Confirm the source of truth."],
                 "tradeoffs": ["Freshness adds one read."],
                 "status_update": "Duplicate progress prose",
@@ -1773,10 +2357,17 @@ def test_review_packet_keeps_semantics_and_omits_duplicate_internal_metadata():
     assert len(candidate["edges"]) == len(graph["edges"])
     assert candidate["nodes"][0]["description"] == graph["nodes"][0]["description"]
     assert set(candidate["nodes"][0]) <= {
-        "id", "label", "type", "description",
+        "id",
+        "label",
+        "type",
+        "description",
     }
     assert set(candidate["edges"][0]) <= {
-        "source", "target", "label", "flow", "sync",
+        "source",
+        "target",
+        "label",
+        "flow",
+        "sync",
     }
     assert candidate["groups"] == graph["groups"]
     assert candidate["sequence"] == graph["sequence"]
@@ -1798,9 +2389,11 @@ async def test_terse_followup_still_reviews_every_changed_applied_graph(monkeypa
 
     async def fake_stream_llm(**_kwargs):
         calls["critic"] += 1
-        return _structured_response(_passing_review_payload(
-            strengths=["The requested approval path remains domain specific."],
-        ))
+        return _structured_response(
+            _passing_review_payload(
+                strengths=["The requested approval path remains domain specific."],
+            )
+        )
 
     async def await_diagram(graph):
         calls["render"] += 1
@@ -1812,7 +2405,7 @@ async def test_terse_followup_still_reviews_every_changed_applied_graph(monkeypa
                 "overlap_count": 0,
                 "clipped_nodes": 0,
                 "clipped_edges": 0,
-                "minimum_text_px": 8,
+                "minimum_text_px": 12,
             },
         }
 
@@ -1823,17 +2416,19 @@ async def test_terse_followup_still_reviews_every_changed_applied_graph(monkeypa
         "agent.nodes.graph_critic.stream_structured_llm",
         fake_stream_llm,
     )
-    result = await graph_critic_node({
-        "graph_data": _domain_graph(),
-        "graph_changed": True,
-        "user_message": "expand the approval path",
-        "design_query": "growth marketing multi-agent system expand the approval path",
-        "complexity": "prototype",
-        "send": send,
-        "await_diagram_evaluation": await_diagram,
-        "user_id": "user-1",
-        "session_id": "thread-1",
-    })
+    result = await graph_critic_node(
+        {
+            "graph_data": _domain_graph(),
+            "graph_changed": True,
+            "user_message": "expand the approval path",
+            "design_query": "growth marketing multi-agent system expand the approval path",
+            "complexity": "prototype",
+            "send": send,
+            "await_diagram_evaluation": await_diagram,
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        }
+    )
 
     assert result["graph_review"]["approved"] is True
     assert calls == {"critic": 1, "render": 1}
@@ -1853,7 +2448,7 @@ async def test_hard_render_failure_skips_the_paid_semantic_critic(monkeypatch):
                 "overlap_count": 1,
                 "clipped_nodes": 0,
                 "clipped_edges": 0,
-                "minimum_text_px": 8,
+                "minimum_text_px": 12,
             },
         }
 
@@ -1864,23 +2459,26 @@ async def test_hard_render_failure_skips_the_paid_semantic_critic(monkeypatch):
         "agent.nodes.graph_critic.stream_structured_llm",
         fail_stream_llm,
     )
-    result = await graph_critic_node({
-        "graph_data": _domain_graph(),
-        "graph_changed": True,
-        "user_message": "growth marketing multi-agent system",
-        "complexity": "prototype",
-        "send": send,
-        "await_diagram_evaluation": await_diagram,
-        "user_id": "user-1",
-        "session_id": "thread-1",
-    })
+    result = await graph_critic_node(
+        {
+            "graph_data": _domain_graph(),
+            "graph_changed": True,
+            "user_message": "growth marketing multi-agent system",
+            "complexity": "prototype",
+            "send": send,
+            "await_diagram_evaluation": await_diagram,
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        }
+    )
 
     assert result["graph_review"]["approved"] is False
     assert any("overlapping" in item for item in result["graph_review"]["missing"])
     assert result["graph_review"]["terminal"] is True
+    assert result["graph_review"]["review_status"] == "completed"
+    assert "repair_contract" not in result["graph_review"]
     assert (
-        result["graph_review"]["failure_code"]
-        == "diagram_evaluation_layout_rejected"
+        result["graph_review"]["failure_code"] == "diagram_evaluation_layout_rejected"
     )
 
 
@@ -1893,9 +2491,11 @@ async def test_missing_browser_evaluation_fails_closed_before_paid_semantic_revi
     async def fake_stream_llm(**_kwargs):
         nonlocal calls
         calls += 1
-        return _structured_response(_passing_review_payload(
-            strengths=["The runtime path is explicit."],
-        ))
+        return _structured_response(
+            _passing_review_payload(
+                strengths=["The runtime path is explicit."],
+            )
+        )
 
     async def await_diagram(_graph):
         raise TimeoutError("browser did not respond")
@@ -1908,16 +2508,18 @@ async def test_missing_browser_evaluation_fails_closed_before_paid_semantic_revi
         fake_stream_llm,
     )
     graph = _domain_graph()
-    result = await graph_critic_node({
-        "graph_data": graph,
-        "graph_changed": True,
-        "user_message": "growth marketing multi-agent system",
-        "complexity": "prototype",
-        "send": send,
-        "await_diagram_evaluation": await_diagram,
-        "user_id": "user-1",
-        "session_id": "thread-1",
-    })
+    result = await graph_critic_node(
+        {
+            "graph_data": graph,
+            "graph_changed": True,
+            "user_message": "growth marketing multi-agent system",
+            "complexity": "prototype",
+            "send": send,
+            "await_diagram_evaluation": await_diagram,
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        }
+    )
 
     assert calls == 0
     assert result["graph_review"]["approved"] is False
@@ -1928,7 +2530,9 @@ async def test_missing_browser_evaluation_fails_closed_before_paid_semantic_revi
 @pytest.mark.asyncio
 async def test_deterministic_domain_findings_reach_semantic_localization(monkeypatch):
     calls = []
-    finding = "Replace generic book concepts with domain-owned component responsibilities."
+    finding = (
+        "Replace generic book concepts with domain-owned component responsibilities."
+    )
 
     async def fake_stream_llm(**kwargs):
         calls.append(kwargs)
@@ -1954,7 +2558,7 @@ async def test_deterministic_domain_findings_reach_semantic_localization(monkeyp
                 "overlap_count": 0,
                 "clipped_nodes": 0,
                 "clipped_edges": 0,
-                "minimum_text_px": 8,
+                "minimum_text_px": 12,
             },
         }
 
@@ -1977,16 +2581,18 @@ async def test_deterministic_domain_findings_reach_semantic_localization(monkeyp
         for index in range(len(graph["nodes"]) - 1)
     ]
     graph["nodes"][0]["label"] = "Agent"
-    result = await graph_critic_node({
-        "graph_data": graph,
-        "graph_changed": True,
-        "user_message": "growth marketing multi-agent system",
-        "complexity": "prototype",
-        "send": send,
-        "await_diagram_evaluation": await_diagram,
-        "user_id": "user-1",
-        "session_id": "thread-1",
-    })
+    result = await graph_critic_node(
+        {
+            "graph_data": graph,
+            "graph_changed": True,
+            "user_message": "growth marketing multi-agent system",
+            "complexity": "prototype",
+            "send": send,
+            "await_diagram_evaluation": await_diagram,
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        }
+    )
 
     assert result["graph_review"]["approved"] is False
     assert result["graph_review"]["repair_contract"]["repair_scope"] == "local"
@@ -2020,7 +2626,7 @@ async def test_malformed_structured_review_fails_closed_without_retry(monkeypatc
                 "overlap_count": 0,
                 "clipped_nodes": 0,
                 "clipped_edges": 0,
-                "minimum_text_px": 8,
+                "minimum_text_px": 12,
             },
         }
 
@@ -2031,16 +2637,18 @@ async def test_malformed_structured_review_fails_closed_without_retry(monkeypatc
         "agent.nodes.graph_critic.stream_structured_llm",
         fake_stream_llm,
     )
-    result = await graph_critic_node({
-        "graph_data": _domain_graph(),
-        "graph_changed": True,
-        "user_message": "growth marketing multi-agent system",
-        "complexity": "prototype",
-        "send": send,
-        "await_diagram_evaluation": await_diagram,
-        "user_id": "user-1",
-        "session_id": "thread-1",
-    })
+    result = await graph_critic_node(
+        {
+            "graph_data": _domain_graph(),
+            "graph_changed": True,
+            "user_message": "growth marketing multi-agent system",
+            "complexity": "prototype",
+            "send": send,
+            "await_diagram_evaluation": await_diagram,
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        }
+    )
 
     assert result["graph_review"]["approved"] is False
     assert result["graph_review"]["terminal"] is True
@@ -2064,9 +2672,11 @@ async def test_browser_render_time_is_deducted_from_one_absolute_critic_deadline
 
     async def fake_stream_llm(**kwargs):
         calls.append(kwargs)
-        return _structured_response(_passing_review_payload(
-            strengths=["The runtime path is explicit."],
-        ))
+        return _structured_response(
+            _passing_review_payload(
+                strengths=["The runtime path is explicit."],
+            )
+        )
 
     async def await_diagram(graph):
         clock["now"] += 7.0
@@ -2078,7 +2688,7 @@ async def test_browser_render_time_is_deducted_from_one_absolute_critic_deadline
                 "overlap_count": 0,
                 "clipped_nodes": 0,
                 "clipped_edges": 0,
-                "minimum_text_px": 8,
+                "minimum_text_px": 12,
             },
         }
 
@@ -2090,17 +2700,19 @@ async def test_browser_render_time_is_deducted_from_one_absolute_critic_deadline
         "agent.nodes.graph_critic.stream_structured_llm",
         fake_stream_llm,
     )
-    result = await graph_critic_node({
-        "graph_data": _domain_graph(),
-        "graph_changed": True,
-        "user_message": "growth marketing multi-agent system",
-        "complexity": "prototype",
-        "send": send,
-        "await_diagram_evaluation": await_diagram,
-        "user_id": "user-1",
-        "session_id": "thread-1",
-        "_graph_stage_deadline_s": 145.0,
-    })
+    result = await graph_critic_node(
+        {
+            "graph_data": _domain_graph(),
+            "graph_changed": True,
+            "user_message": "growth marketing multi-agent system",
+            "complexity": "prototype",
+            "send": send,
+            "await_diagram_evaluation": await_diagram,
+            "user_id": "user-1",
+            "session_id": "thread-1",
+            "_graph_stage_deadline_s": 145.0,
+        }
+    )
 
     assert result["graph_review"]["approved"] is True
     assert len(calls) == 1
@@ -2150,7 +2762,7 @@ async def test_invalid_structured_review_contract_fails_closed(
                 "overlap_count": 0,
                 "clipped_nodes": 0,
                 "clipped_edges": 0,
-                "minimum_text_px": 8,
+                "minimum_text_px": 12,
             },
         }
 
@@ -2161,21 +2773,27 @@ async def test_invalid_structured_review_contract_fails_closed(
         "agent.nodes.graph_critic.stream_structured_llm",
         fake_stream_llm,
     )
-    result = await graph_critic_node({
-        "graph_data": _domain_graph(),
-        "graph_changed": True,
-        "user_message": "growth marketing multi-agent system",
-        "complexity": "prototype",
-        "send": send,
-        "await_diagram_evaluation": await_diagram,
-        "user_id": "user-1",
-        "session_id": "thread-1",
-    })
+    result = await graph_critic_node(
+        {
+            "graph_data": _domain_graph(),
+            "graph_changed": True,
+            "user_message": "growth marketing multi-agent system",
+            "complexity": "prototype",
+            "send": send,
+            "await_diagram_evaluation": await_diagram,
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        }
+    )
 
     assert result["graph_review"]["approved"] is False
     assert result["graph_review"]["terminal"] is True
-    assert result["graph_review"]["failure_code"] == "semantic_review_unavailable"
-    assert len(calls) == 1
+    assert result["graph_review"]["failure_code"] == "semantic_review_protocol_invalid"
+    assert result["graph_review"]["review_status"] == "unavailable"
+    assert "repair_contract" not in result["graph_review"]
+    assert len(calls) == 2
+    assert calls[1]["effort"] == "low"
+    assert calls[1]["telemetry"]["operation"] == "graph_critic_protocol_correction"
     assert render_calls == 1
 
 
@@ -2247,7 +2865,7 @@ def test_production_critic_protocol_accepts_complete_topology_proofs():
 
 
 @pytest.mark.asyncio
-async def test_malformed_topology_proofs_fail_closed_without_retry(monkeypatch):
+async def test_malformed_topology_proofs_get_one_bounded_correction(monkeypatch):
     graph = _domain_graph()
     edge = graph["edges"][0]
     evidence_edge = {
@@ -2272,7 +2890,7 @@ async def test_malformed_topology_proofs_fail_closed_without_retry(monkeypatch):
                 "overlap_count": 0,
                 "clipped_nodes": 0,
                 "clipped_edges": 0,
-                "minimum_text_px": 8,
+                "minimum_text_px": 12,
             },
         }
 
@@ -2294,35 +2912,39 @@ async def test_malformed_topology_proofs_fail_closed_without_retry(monkeypatch):
             "revision_instruction": "",
         },
     )
-    result = await graph_critic_node({
-        "graph_data": graph,
-        "graph_changed": True,
-        "user_message": "production growth marketing multi-agent system",
-        "complexity": "production",
-        "send": send,
-        "await_diagram_evaluation": await_diagram,
-        "user_id": "user-1",
-        "session_id": "thread-1",
-    })
+    result = await graph_critic_node(
+        {
+            "graph_data": graph,
+            "graph_changed": True,
+            "user_message": "production growth marketing multi-agent system",
+            "complexity": "production",
+            "send": send,
+            "await_diagram_evaluation": await_diagram,
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        }
+    )
 
     assert result["graph_review"]["approved"] is False
     assert result["graph_review"]["terminal"] is True
-    assert result["graph_review"]["failure_code"] == "semantic_review_unavailable"
-    assert len(calls) == 1
+    assert result["graph_review"]["failure_code"] == "semantic_review_protocol_invalid"
+    assert result["graph_review"]["review_status"] == "unavailable"
+    assert len(calls) == 2
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("finish_reason", "failure_code"),
+    ("finish_reason", "failure_code", "call_count"),
     [
-        ("max_tokens", "semantic_review_output_truncated"),
-        (None, "semantic_review_unavailable"),
+        ("max_tokens", "semantic_review_output_truncated", 1),
+        (None, "semantic_review_protocol_invalid", 2),
     ],
 )
 async def test_incomplete_structured_review_fails_closed_without_retry(
     monkeypatch,
     finish_reason,
     failure_code,
+    call_count,
 ):
     calls = []
 
@@ -2344,7 +2966,7 @@ async def test_incomplete_structured_review_fails_closed_without_retry(
                 "overlap_count": 0,
                 "clipped_nodes": 0,
                 "clipped_edges": 0,
-                "minimum_text_px": 8,
+                "minimum_text_px": 12,
             },
         }
 
@@ -2355,25 +2977,25 @@ async def test_incomplete_structured_review_fails_closed_without_retry(
         "agent.nodes.graph_critic.stream_structured_llm",
         fake_stream_llm,
     )
-    result = await graph_critic_node({
-        "graph_data": _domain_graph(),
-        "graph_changed": True,
-        "user_message": "growth marketing multi-agent system",
-        "complexity": "prototype",
-        "send": send,
-        "await_diagram_evaluation": await_diagram,
-        "user_id": "user-1",
-        "session_id": "thread-1",
-    })
+    result = await graph_critic_node(
+        {
+            "graph_data": _domain_graph(),
+            "graph_changed": True,
+            "user_message": "growth marketing multi-agent system",
+            "complexity": "prototype",
+            "send": send,
+            "await_diagram_evaluation": await_diagram,
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        }
+    )
 
-    assert len(calls) == 1
+    assert len(calls) == call_count
     assert result["graph_review"]["approved"] is False
     assert result["graph_review"]["terminal"] is True
     assert result["graph_review"]["failure_code"] == failure_code
-    assert any(
-        "semantic architecture review did not complete" in item
-        for item in result["graph_review"]["missing"]
-    )
+    assert result["graph_review"]["review_status"] == "unavailable"
+    assert "missing" not in result["graph_review"]
 
 
 @pytest.mark.asyncio
@@ -2382,9 +3004,11 @@ async def test_valid_first_semantic_review_uses_one_call(monkeypatch):
 
     async def fake_stream_llm(**kwargs):
         calls.append(kwargs)
-        return _structured_response(_passing_review_payload(
-            strengths=["The runtime path is explicit."],
-        ))
+        return _structured_response(
+            _passing_review_payload(
+                strengths=["The runtime path is explicit."],
+            )
+        )
 
     async def await_diagram(graph):
         return {
@@ -2395,7 +3019,7 @@ async def test_valid_first_semantic_review_uses_one_call(monkeypatch):
                 "overlap_count": 0,
                 "clipped_nodes": 0,
                 "clipped_edges": 0,
-                "minimum_text_px": 8,
+                "minimum_text_px": 12,
             },
         }
 
@@ -2406,16 +3030,18 @@ async def test_valid_first_semantic_review_uses_one_call(monkeypatch):
         "agent.nodes.graph_critic.stream_structured_llm",
         fake_stream_llm,
     )
-    result = await graph_critic_node({
-        "graph_data": _domain_graph(),
-        "graph_changed": True,
-        "user_message": "growth marketing multi-agent system",
-        "complexity": "prototype",
-        "send": send,
-        "await_diagram_evaluation": await_diagram,
-        "user_id": "user-1",
-        "session_id": "thread-1",
-    })
+    result = await graph_critic_node(
+        {
+            "graph_data": _domain_graph(),
+            "graph_changed": True,
+            "user_message": "growth marketing multi-agent system",
+            "complexity": "prototype",
+            "send": send,
+            "await_diagram_evaluation": await_diagram,
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        }
+    )
 
     assert result["graph_review"]["approved"] is True
     assert len(calls) == 1
@@ -2424,7 +3050,9 @@ async def test_valid_first_semantic_review_uses_one_call(monkeypatch):
 
 def test_semantic_review_wire_has_only_fixed_scorecard_fields():
     assert set(_GRAPH_CRITIC_RESPONSE_SCHEMA["properties"]) == {
-        "repair_scope", "layers", "topology_proofs",
+        "repair_scope",
+        "layers",
+        "topology_proofs",
     }
     schema_text = json.dumps(_GRAPH_CRITIC_RESPONSE_SCHEMA)
     assert "blocking_findings" not in schema_text
@@ -2436,14 +3064,20 @@ def test_semantic_review_wire_has_only_fixed_scorecard_fields():
 def test_semantic_review_failure_classifies_truncated_protocol_output():
     from agent.nodes.graph_critic import _semantic_review_failure_code
 
-    assert _semantic_review_failure_code(
-        ValueError("invalid JSON"),
-        '{"approved":false',
-    ) == "semantic_review_output_truncated"
-    assert _semantic_review_failure_code(
-        TimeoutError("provider unavailable"),
-        "",
-    ) == "semantic_review_timeout"
+    assert (
+        _semantic_review_failure_code(
+            ValueError("invalid JSON"),
+            '{"approved":false',
+        )
+        == "semantic_review_output_truncated"
+    )
+    assert (
+        _semantic_review_failure_code(
+            TimeoutError("provider unavailable"),
+            "",
+        )
+        == "semantic_review_timeout"
+    )
 
 
 @pytest.mark.asyncio
@@ -2465,7 +3099,7 @@ async def test_semantic_critic_outage_fails_closed(monkeypatch):
                 "overlap_count": 0,
                 "clipped_nodes": 0,
                 "clipped_edges": 0,
-                "minimum_text_px": 8,
+                "minimum_text_px": 12,
             },
         }
 
@@ -2476,16 +3110,18 @@ async def test_semantic_critic_outage_fails_closed(monkeypatch):
         "agent.nodes.graph_critic.stream_structured_llm",
         fail_stream_llm,
     )
-    result = await graph_critic_node({
-        "graph_data": _domain_graph(),
-        "graph_changed": True,
-        "user_message": "growth marketing multi-agent system",
-        "complexity": "prototype",
-        "send": send,
-        "await_diagram_evaluation": await_diagram,
-        "user_id": "user-1",
-        "session_id": "thread-1",
-    })
+    result = await graph_critic_node(
+        {
+            "graph_data": _domain_graph(),
+            "graph_changed": True,
+            "user_message": "growth marketing multi-agent system",
+            "complexity": "prototype",
+            "send": send,
+            "await_diagram_evaluation": await_diagram,
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        }
+    )
 
     assert calls == 1
     assert result["graph_review"]["approved"] is False
@@ -2494,7 +3130,5 @@ async def test_semantic_critic_outage_fails_closed(monkeypatch):
     assert any(
         event.get("failure_code") == "semantic_review_timeout" for event in events
     )
-    assert any(
-        "semantic architecture review did not complete" in item
-        for item in result["graph_review"]["missing"]
-    )
+    assert result["graph_review"]["review_status"] == "unavailable"
+    assert "missing" not in result["graph_review"]

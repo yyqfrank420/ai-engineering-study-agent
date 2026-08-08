@@ -213,6 +213,7 @@ async def test_multi_turn_browser_case_sends_each_step_sequentially(monkeypatch)
     assert step_order == [0, 1]
     assert maximum_active == 1
     assert [event["step"] for event in events] == [0, 1]
+    assert [event["eval_turn"] for event in events] == [1, 2]
 
 
 @pytest.mark.asyncio
@@ -251,6 +252,169 @@ async def test_multi_turn_case_stops_after_unexpected_timeout_error(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_required_graph_notice_stops_before_a_later_graph(monkeypatch):
+    from eval.browser_runner import BrowserQualityError, _send_case_steps
+
+    case = load_corpus().by_id["graph-expansion"]
+    step_order = []
+
+    async def fake_send_step(page, sent_case, step_index, frames, *, timeout_seconds):
+        del page, sent_case, frames, timeout_seconds
+        step_order.append(step_index)
+        if step_index == 0:
+            return [{"type": "graph_notice"}, {"type": "done"}]
+        return [
+            {
+                "type": "graph_data",
+                "data": {"version": "graph-v1", "nodes": [], "edges": []},
+            },
+            {"type": "done"},
+        ]
+
+    monkeypatch.setattr("eval.browser_runner._send_step", fake_send_step)
+    with pytest.raises(BrowserQualityError) as raised:
+        await _send_case_steps(None, case, [], [], timeout_seconds=390)
+
+    assert raised.value.code == "required_graph_withheld"
+    assert step_order == [0]
+
+
+def test_required_graph_notice_wins_over_same_turn_graph_resync():
+    from eval.browser_runner import _required_graph_turn_failure
+
+    case = load_corpus().by_id["graph-expansion"]
+    failure = _required_graph_turn_failure(
+        case,
+        0,
+        [
+            {"type": "graph_notice"},
+            {"type": "graph_data", "data": {"nodes": [], "edges": []}},
+        ],
+    )
+
+    assert failure is not None
+    assert failure[0] == "required_graph_withheld"
+
+
+def test_required_graph_turn_without_notice_requires_graph_data():
+    from eval.browser_runner import _required_graph_turn_failure
+
+    case = load_corpus().by_id["graph-expansion"]
+
+    assert _required_graph_turn_failure(case, 0, [{"type": "done"}]) == (
+        "required_graph_missing",
+        "case graph-expansion turn 1 required graph_data",
+    )
+
+
+@pytest.mark.asyncio
+async def test_required_graph_turn_must_render_before_the_next_turn(monkeypatch):
+    from eval.browser_runner import BrowserQualityError, _send_case_steps
+
+    case = load_corpus().by_id["graph-expansion"]
+    step_order: list[int] = []
+
+    class IdentityLocator:
+        async def evaluate_all(self, _script):
+            return []
+
+    class Canvas:
+        def locator(self, _selector):
+            return IdentityLocator()
+
+        async def get_attribute(self, _name):
+            return "stale-version"
+
+    class Page:
+        def locator(self, selector):
+            assert selector == '[data-testid="graph-canvas"]'
+            return Canvas()
+
+    async def fake_send_step(page, sent_case, step_index, frames, *, timeout_seconds):
+        del page, sent_case, frames, timeout_seconds
+        step_order.append(step_index)
+        return [
+            {
+                "type": "graph_data",
+                "data": {
+                    "version": f"graph-{step_index}",
+                    "nodes": [{"id": "source"}, {"id": "target"}],
+                    "edges": [
+                        {"source": "source", "target": "target", "label": "sends"}
+                    ],
+                },
+            },
+            {"type": "done"},
+        ]
+
+    monkeypatch.setattr("eval.browser_runner._send_step", fake_send_step)
+    with pytest.raises(BrowserQualityError) as raised:
+        await _send_case_steps(Page(), case, [], [], timeout_seconds=390)
+
+    assert raised.value.code == "required_graph_turn_render_mismatch"
+    assert step_order == [0]
+
+
+def test_required_graph_turn_rejects_missing_and_reused_versions():
+    from eval.browser_runner import _required_graph_turn_failure
+
+    case = load_corpus().by_id["graph-expansion"]
+    graph = {"nodes": [{"id": "source"}], "edges": []}
+
+    assert _required_graph_turn_failure(
+        case,
+        0,
+        [{"type": "graph_data", "data": graph}],
+        set(),
+    ) == (
+        "required_graph_version_missing",
+        "case graph-expansion turn 1 graph_data has no version",
+    )
+    versioned = {**graph, "version": "graph-v1"}
+    assert _required_graph_turn_failure(
+        case,
+        1,
+        [{"type": "graph_data", "data": versioned}],
+        {"graph-v1"},
+    ) == (
+        "required_graph_version_reused",
+        "case graph-expansion turn 2 reused graph version graph-v1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_required_graph_turn_rejects_wrong_same_count_dom_identity(monkeypatch):
+    from eval.browser_runner import _required_graph_turn_render_failure
+
+    case = load_corpus().by_id["graph-expansion"]
+    graph = {
+        "version": "graph-v2",
+        "nodes": [{"id": "source"}, {"id": "target"}],
+        "edges": [{"source": "source", "target": "target", "label": "sends"}],
+    }
+
+    async def stale_dom(_page, _graph):
+        return {
+            "node_ids": ["old-source", "old-target"],
+            "edges": [
+                {"source": "old-source", "target": "old-target", "label": "sends"}
+            ],
+            "version": "graph-v2",
+        }
+
+    monkeypatch.setattr("eval.browser_runner._graph_dom_state", stale_dom)
+    failure = await _required_graph_turn_render_failure(
+        object(),
+        case,
+        0,
+        [{"type": "graph_data", "data": graph}],
+    )
+
+    assert failure is not None
+    assert failure[0] == "required_graph_turn_node_identity_mismatch"
+
+
+@pytest.mark.asyncio
 async def test_expected_error_case_can_continue_to_a_later_turn(monkeypatch):
     from eval.browser_runner import _send_case_steps
 
@@ -258,7 +422,7 @@ async def test_expected_error_case_can_continue_to_a_later_turn(monkeypatch):
     case = original.model_copy(
         update={
             "deterministic": original.deterministic.model_copy(
-                update={"error_expected": True}
+                update={"error_expected": True, "graph_emitted": False}
             )
         }
     )
@@ -314,7 +478,11 @@ async def test_browser_turn_timing_captures_request_identifiers(monkeypatch):
             ]
         )
         return [
-            frame["message"] for frame in frames if frame["direction"] == "received"
+            {
+                "type": "graph_data",
+                "data": {"version": "graph-v1", "nodes": [], "edges": []},
+            },
+            *[frame["message"] for frame in frames if frame["direction"] == "received"],
         ]
 
     monkeypatch.setattr("eval.browser_runner._send_step", fake_send_step)
@@ -691,9 +859,9 @@ async def test_browser_timeout_finalization_keeps_partial_results_and_telemetry(
     assert report["dashboard_smoke"]["passed"] is True
     assert report["finalization_failures"] == []
     assert json.loads(output.read_text(encoding="utf-8"))["status"] == "timed_out"
-    assert 'tests="2" failures="1"' in (
-        tmp_path / "browser-junit.xml"
-    ).read_text(encoding="utf-8")
+    assert 'tests="2" failures="1"' in (tmp_path / "browser-junit.xml").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_current_research_cases_require_verifiable_web_sources():
@@ -762,6 +930,133 @@ def test_web_research_does_not_accept_a_book_citation_as_current_evidence():
     assert not any("citation" in failure for failure in web_cited)
 
 
+def test_graph_renderability_checks_declared_edges_in_the_live_dom():
+    from eval.browser_runner import _deterministic_failure_details
+
+    case = load_corpus().by_id["graph-renderability"]
+    graph = {
+        "nodes": [{"id": "source"}, {"id": "target"}],
+        "edges": [{"source": "source", "target": "target", "label": "sends"}],
+    }
+    events = [
+        *[
+            {"type": "worker_status", "worker": worker, "status": "ready"}
+            for worker in case.deterministic.workers_include
+        ],
+        {"type": "graph_data", "data": graph},
+        {"type": "done"},
+    ]
+
+    details = _deterministic_failure_details(
+        case,
+        events,
+        rendered_nodes=2,
+        rendered_edges=0,
+    )
+
+    assert any(detail["code"] == "graph_edge_render_mismatch" for detail in details)
+
+
+def test_graph_renderability_rejects_a_stale_larger_canvas_and_version():
+    from eval.browser_runner import _deterministic_failure_details
+
+    case = load_corpus().by_id["graph-renderability"]
+    graph = {
+        "version": "current-graph",
+        "nodes": [{"id": "source"}, {"id": "target"}],
+        "edges": [{"source": "source", "target": "target", "label": "sends"}],
+    }
+    events = [
+        *[
+            {"type": "worker_status", "worker": worker, "status": "ready"}
+            for worker in case.deterministic.workers_include
+        ],
+        {"type": "graph_data", "data": graph},
+        {"type": "done"},
+    ]
+
+    details = _deterministic_failure_details(
+        case,
+        events,
+        rendered_nodes=3,
+        rendered_edges=2,
+        rendered_graph_version="stale-graph",
+    )
+
+    assert {detail["code"] for detail in details} >= {
+        "graph_render_mismatch",
+        "graph_edge_render_mismatch",
+        "graph_version_render_mismatch",
+    }
+
+
+def test_auto_graph_mode_rejects_wrong_same_count_dom_identity():
+    from eval.browser_runner import _deterministic_failure_details
+
+    case = load_corpus().by_id["research"]
+    graph = {
+        "version": "current-graph",
+        "nodes": [{"id": "source"}, {"id": "target"}],
+        "edges": [{"source": "source", "target": "target", "label": "sends"}],
+    }
+    events = [
+        *[
+            {"type": "worker_status", "worker": worker, "status": "ready"}
+            for worker in case.deterministic.workers_include
+        ],
+        {"type": "graph_data", "data": graph},
+        {"type": "done"},
+    ]
+
+    details = _deterministic_failure_details(
+        case,
+        events,
+        rendered_nodes=2,
+        rendered_edges=1,
+        rendered_graph_version="current-graph",
+        rendered_node_ids=["old-source", "old-target"],
+        rendered_edge_identities=[
+            {"source": "old-source", "target": "old-target", "label": "sends"}
+        ],
+    )
+
+    assert {detail["code"] for detail in details} >= {
+        "graph_node_identity_mismatch",
+        "graph_edge_identity_mismatch",
+    }
+
+
+def test_auto_graph_mode_rejects_versionless_graph():
+    from eval.browser_runner import _deterministic_failure_details
+
+    case = load_corpus().by_id["research"]
+    graph = {
+        "nodes": [{"id": "source"}, {"id": "target"}],
+        "edges": [{"source": "source", "target": "target", "label": "sends"}],
+    }
+    events = [
+        *[
+            {"type": "worker_status", "worker": worker, "status": "ready"}
+            for worker in case.deterministic.workers_include
+        ],
+        {"type": "graph_data", "data": graph},
+        {"type": "done"},
+    ]
+
+    details = _deterministic_failure_details(
+        case,
+        events,
+        rendered_nodes=2,
+        rendered_edges=1,
+        rendered_node_ids=["source", "target"],
+        rendered_edge_identities=[
+            {"source": "source", "target": "target", "label": "sends"}
+        ],
+    )
+
+    assert "graph_version_missing" in {detail["code"] for detail in details}
+
+
 @pytest.mark.asyncio
 async def test_node_followup_missing_graph_skips_activation_and_reports_graph_failure():
     from eval.browser_runner import (
@@ -771,10 +1066,14 @@ async def test_node_followup_missing_graph_skips_activation_and_reports_graph_fa
 
     class ActivationForbiddenPage:
         def get_by_role(self, *_args, **_kwargs):
-            raise AssertionError("node activation must not start without an accepted graph")
+            raise AssertionError(
+                "node activation must not start without an accepted graph"
+            )
 
         def expect_request(self, *_args, **_kwargs):
-            raise AssertionError("activation request must not start without an accepted graph")
+            raise AssertionError(
+                "activation request must not start without an accepted graph"
+            )
 
         def locator(self, *_args, **_kwargs):
             raise AssertionError("node locator must not run without an accepted graph")
@@ -1020,7 +1319,9 @@ def test_approved_hash_is_content_addressed(tmp_path):
         load_corpus(require_approved=True, path=path)
 
 
-def test_approval_changes_do_not_change_behavior_identity_but_invalidate_approval(tmp_path):
+def test_approval_changes_do_not_change_behavior_identity_but_invalidate_approval(
+    tmp_path,
+):
     raw = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
     path = tmp_path / "cases.json"
     path.write_text(json.dumps(raw), encoding="utf-8")
@@ -1307,7 +1608,9 @@ def test_selective_replay_rejects_unattributed_ambiguous_or_graph_telemetry():
         for item in missing_telemetry["application_telemetry"]
         if item["thread_id"] != "thread-memory"
     ]
-    with pytest.raises(EvidenceReplayError, match="threads have no application telemetry"):
+    with pytest.raises(
+        EvidenceReplayError, match="threads have no application telemetry"
+    ):
         subset_browser_capture(
             missing_telemetry,
             selected_case_ids=("memory",),
@@ -1354,12 +1657,14 @@ def test_selective_replay_writes_authenticated_hash_provenance(tmp_path):
         expected_source_case_ids=_REPLAY_PR_CASES,
     )
 
-    assert provenance["source"]["browser_capture_sha256"] == hashlib.sha256(
-        source_path.read_bytes()
-    ).hexdigest()
-    assert provenance["derived"]["browser_capture_sha256"] == hashlib.sha256(
-        output_path.read_bytes()
-    ).hexdigest()
+    assert (
+        provenance["source"]["browser_capture_sha256"]
+        == hashlib.sha256(source_path.read_bytes()).hexdigest()
+    )
+    assert (
+        provenance["derived"]["browser_capture_sha256"]
+        == hashlib.sha256(output_path.read_bytes()).hexdigest()
+    )
     assert provenance["selection"]["case_ids"] == [
         "memory",
         "graph-off",

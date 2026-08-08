@@ -3,15 +3,14 @@ import type { GraphCandidate } from '../../types';
 import { agentTransport } from '../../services/agentTransport';
 import { D3Graph } from './D3Graph';
 import { measureDiagram } from './diagramMeasurement';
+import { DIAGRAM_EVALUATION_VIEWPORT } from './graphLayout';
 
 
 interface HiddenGraphEvaluatorProps {
   candidate: GraphCandidate | null;
-  viewport: { width: number; height: number };
 }
 
-
-export function HiddenGraphEvaluator({ candidate, viewport }: HiddenGraphEvaluatorProps) {
+export function HiddenGraphEvaluator({ candidate }: HiddenGraphEvaluatorProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const submittedRef = useRef<string | null>(null);
   const [layoutReadyEvaluationId, setLayoutReadyEvaluationId] = useState<string | null>(null);
@@ -28,7 +27,7 @@ export function HiddenGraphEvaluator({ candidate, viewport }: HiddenGraphEvaluat
       if (!svg || cancelled) return;
       const report = measureDiagram(svg);
       try {
-        const screenshot = await rasteriseSvg(svg, viewport);
+        const screenshot = await rasteriseSvg(svg, DIAGRAM_EVALUATION_VIEWPORT);
         if (cancelled) return;
         await submitWithRetry(
           candidate.evaluationId,
@@ -56,7 +55,7 @@ export function HiddenGraphEvaluator({ candidate, viewport }: HiddenGraphEvaluat
     return () => {
       cancelled = true;
     };
-  }, [candidate, layoutReadyEvaluationId, viewport]);
+  }, [candidate, layoutReadyEvaluationId]);
 
   if (!candidate) return null;
   return (
@@ -68,8 +67,8 @@ export function HiddenGraphEvaluator({ candidate, viewport }: HiddenGraphEvaluat
         position: 'fixed',
         left: '-12000px',
         top: 0,
-        width: viewport.width,
-        height: viewport.height,
+        width: DIAGRAM_EVALUATION_VIEWPORT.width,
+        height: DIAGRAM_EVALUATION_VIEWPORT.height,
         opacity: 0,
         pointerEvents: 'none',
         zIndex: -1,

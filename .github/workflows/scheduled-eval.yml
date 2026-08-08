@@ -264,7 +264,7 @@ jobs:
           approval_args=()
           case_args=()
           if [ "$CORPUS_STATUS" = approved ]; then
-            approval_args+=(--require-approved-corpus --manual-review-policy report-only)
+            approval_args+=(--require-approved-corpus --manual-review-policy blocking)
           fi
           if [ "$EVAL_SUITE" = diagnostic ]; then
             read -r -a selected_cases <<< "$EVAL_CASE_IDS"

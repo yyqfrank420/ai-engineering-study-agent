@@ -17,7 +17,7 @@ import json
 from adapters.llm_adapter import build_telemetry
 from agent.complexity import (
     is_applied_system_design_request,
-    is_existing_graph_edit_request,
+    resolve_graph_operation,
     resolve_complexity,
 )
 from agent.context_manager import maybe_condense_history
@@ -263,11 +263,15 @@ async def orchestrator_route(state: AgentState) -> AgentState:
     Sets state["route"] to "memory" or "search".
     """
     send = state["send"]
-    await send({"type": "worker_status", "worker": "orchestrator", "status": "Routing…"})
+    await send(
+        {"type": "worker_status", "worker": "orchestrator", "status": "Routing…"}
+    )
 
-    if is_existing_graph_edit_request(
-        state.get("user_message", ""), state.get("graph_data")
-    ):
+    graph_intent = state.get("graph_intent") or resolve_graph_operation(
+        state.get("user_message", ""),
+        state.get("graph_data"),
+    )
+    if graph_intent in {"create", "edit"}:
         return {**state, "route": "search"}
 
     if _is_memory_followup(state.get("user_message", ""), state.get("history") or []):
@@ -385,7 +389,9 @@ async def quick_synthesise(state: AgentState) -> AgentState:
     Uses Opus 5 at high effort with a short direct prompt — no RAG, no graph.
     """
     send = state["send"]
-    await send({"type": "worker_status", "worker": "orchestrator", "status": "Looking it up…"})
+    await send(
+        {"type": "worker_status", "worker": "orchestrator", "status": "Looking it up…"}
+    )
 
     history = state.get("history") or []
     messages = [
@@ -451,11 +457,13 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
         design_query = f"{design_query} {current_graph.get('title', '')}".strip()
     profile = resolve_complexity(state.get("complexity", "auto"), design_query)
 
-    await send({
-        "type": "worker_status",
-        "worker": "orchestrator",
-        "status": f"Reasoning through the {profile.resolved} design and trade-offs…",
-    })
+    await send(
+        {
+            "type": "worker_status",
+            "worker": "orchestrator",
+            "status": f"Reasoning through the {profile.resolved} design and trade-offs…",
+        }
+    )
 
     # Existing graphs can re-sync immediately. A changed graph stays private
     # until the complete walkthrough is buffered, so users never see a half-
@@ -485,7 +493,9 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
 
     graph_block = ""
     if state.get("graph_data"):
-        graph_block = f"\nCurrent graph:\n{_format_graph_context(state['graph_data'])}\n\n"
+        graph_block = (
+            f"\nCurrent graph:\n{_format_graph_context(state['graph_data'])}\n\n"
+        )
 
     brief_block = ""
     if state.get("architect_plan"):
@@ -525,13 +535,15 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
     )
     synthesis_timeout_s = synthesis_timeout_seconds(state)
     if current_graph:
-        await send({
-            "type": "workflow_progress",
-            "phase": "explain",
-            "status": "active",
-            "title": "Finishing the design walkthrough",
-            "detail": "The approved diagram stays private until its complete explanation is ready.",
-        })
+        await send(
+            {
+                "type": "workflow_progress",
+                "phase": "explain",
+                "status": "active",
+                "title": "Finishing the design walkthrough",
+                "detail": "The approved diagram stays private until its complete explanation is ready.",
+            }
+        )
         buffered_blocks: list[dict] = []
         synthesis_degraded = False
 
@@ -559,27 +571,31 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
             telemetry=telemetry,
             send=explanation_send,
             graph_version=current_graph.get("version"),
-            allowed_node_ids={str(node.get("id")) for node in current_graph.get("nodes") or []},
+            allowed_node_ids={
+                str(node.get("id")) for node in current_graph.get("nodes") or []
+            },
         )
         if delay_changed_graph:
             await send({"type": "graph_data", "data": current_graph})
             for block in buffered_blocks:
                 await send(block)
-        await send({
-            "type": "workflow_progress",
-            "phase": "explain",
-            "status": "degraded" if synthesis_degraded else "complete",
-            "title": (
-                "Design ready with a bounded walkthrough"
-                if synthesis_degraded
-                else "Design and walkthrough ready"
-            ),
-            "detail": (
-                "The architecture is available with the explanation completed before its latency budget."
-                if synthesis_degraded
-                else "The complete architecture is now available to explore and steer."
-            ),
-        })
+        await send(
+            {
+                "type": "workflow_progress",
+                "phase": "explain",
+                "status": "degraded" if synthesis_degraded else "complete",
+                "title": (
+                    "Design ready with a bounded walkthrough"
+                    if synthesis_degraded
+                    else "Design and walkthrough ready"
+                ),
+                "detail": (
+                    "The architecture is available with the explanation completed before its latency budget."
+                    if synthesis_degraded
+                    else "The complete architecture is now available to explore and steer."
+                ),
+            }
+        )
     else:
         response_text = await stream_llm(
             model=settings.orchestrator_model,
@@ -614,10 +630,12 @@ def _format_route_graph_context(graph_data: dict | None) -> str:
     if not graph_data:
         return "(no graph available)"
     title = graph_data.get("title") or "Untitled graph"
-    node_labels = ", ".join(node.get("label", "?") for node in (graph_data.get("nodes") or []))
+    node_labels = ", ".join(
+        node.get("label", "?") for node in (graph_data.get("nodes") or [])
+    )
     if not node_labels:
         node_labels = "(no nodes)"
-    return f'{title} — nodes: [{node_labels}]'
+    return f"{title} — nodes: [{node_labels}]"
 
 
 def _format_chunks(chunks: list[dict]) -> str:
@@ -625,7 +643,9 @@ def _format_chunks(chunks: list[dict]) -> str:
         return "(no retrieved sections)"
     parts = []
     for i, chunk in enumerate(chunks, 1):
-        citation = f"Chapter {chunk.get('chapter', '?')}, p.{chunk.get('page_number', '?')}"
+        citation = (
+            f"Chapter {chunk.get('chapter', '?')}, p.{chunk.get('page_number', '?')}"
+        )
         parts.append(f"[{i}] {citation}\n{chunk.get('text', '')[:800]}")
     return "\n\n".join(parts)
 
@@ -650,7 +670,9 @@ def _format_graph_context(graph_data: dict) -> str:
         tier = node.get("tier")
         lane_text = "bottom lane" if lane == "bottom" else ""
         tier_text = f"{tier} tier" if tier else ""
-        extras = " | ".join(part for part in (tech, lane_text, tier_text, description) if part)
+        extras = " | ".join(
+            part for part in (tech, lane_text, tier_text, description) if part
+        )
         node_lines.append(f"- {node_id} ({label})" + (f": {extras}" if extras else ""))
 
     edge_lines = []
@@ -674,11 +696,13 @@ def _format_graph_context(graph_data: dict) -> str:
         step_no = step.get("step", "?")
         active_nodes = ", ".join(step.get("nodes") or [])
         description = step.get("description", "").strip()
-        summary = f"step {step_no}: {active_nodes}" if active_nodes else f"step {step_no}"
+        summary = (
+            f"step {step_no}: {active_nodes}" if active_nodes else f"step {step_no}"
+        )
         sequence_lines.append(summary + (f" — {description}" if description else ""))
 
     group_lines = []
-    for group in (graph_data.get("groups") or []):
+    for group in graph_data.get("groups") or []:
         label = group.get("label", "?")
         node_ids = ", ".join(group.get("nodeIds") or [])
         group_lines.append(f"- {label}: {node_ids}")
@@ -705,7 +729,12 @@ def _format_graph_context(graph_data: dict) -> str:
         if str(item).strip()
     ]
     if assumptions:
-        parts.append("Design assumptions:\n" + "\n".join(f"- {item}" for item in assumptions))
+        parts.append(
+            "Design assumptions:\n" + "\n".join(f"- {item}" for item in assumptions)
+        )
     if sequence_lines:
-        parts.append("Sequence (step badges on flow edges):\n" + "\n".join(f"- {line}" for line in sequence_lines))
+        parts.append(
+            "Sequence (step badges on flow edges):\n"
+            + "\n".join(f"- {line}" for line in sequence_lines)
+        )
     return "\n\n".join(parts)

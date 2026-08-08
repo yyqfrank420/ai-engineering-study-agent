@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from adapters.llm_adapter import build_telemetry
+from agent.architecture_rubric import RUBRIC_CODES, RUBRIC_CODE_OWNERS
 from agent.architecture_playbook import format_evidence_bundle
 from agent.complexity import resolve_complexity
 from agent.deadlines import critic_timeout_seconds as _configured_critic_timeout_seconds
@@ -22,12 +23,15 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v34"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v36"
 # Sonnet 5 high effort can spend the full output allowance on adaptive thinking
 # before emitting the required scorecard. Medium keeps the review inside one call.
 _GRAPH_CRITIC_EFFORT = "medium"
+_GRAPH_CRITIC_CORRECTION_EFFORT = "low"
+_GRAPH_CRITIC_CORRECTION_MAX_TOKENS = 8192
 _GRAPH_STAGE_DEADLINE_KEY = "_graph_stage_deadline_s"
 _GRAPH_STAGE_FINALIZATION_HEADROOM_S = 1.0
+_MINIMUM_PUBLISHED_TEXT_PX = 11.0
 _TOPOLOGY_PROOF_GUARANTEES = {
     "state_effect_reconciliation",
     "authorization_and_compensation",
@@ -57,64 +61,8 @@ def _strict_object_schema(properties: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-_RUBRIC_CODES = (
-    "domain_specificity",
-    "objective_fidelity",
-    "runtime_completeness",
-    "safe_action_boundary",
-    "edge_semantics",
-    "assumption_hygiene",
-    "selected_depth",
-    "novice_clarity",
-    "logical_flow",
-    "succinctness",
-    "mece_scope",
-    "authored_composition",
-    "brief_coverage",
-    "branch_completion",
-    "independent_risk_coverage",
-    "gate_preserving_reuse",
-    "topology_enforced_guarantees",
-    "controlled_external_effects",
-    "race_and_ambiguity_safety",
-    "canonical_state_and_trust",
-    "controlled_learning_and_release",
-    "safe_factual_failure",
-    "pre_effect_durability_and_freshness",
-    "complete_reconciliation",
-    "complete_trust_and_release_scope",
-    "state_order_integrity",
-    "streaming_integrity",
-)
-_RUBRIC_CODE_OWNERS = {
-    "domain_specificity": "components",
-    "objective_fidelity": "components",
-    "runtime_completeness": "connections",
-    "safe_action_boundary": "connections",
-    "edge_semantics": "connections",
-    "assumption_hygiene": "composition",
-    "selected_depth": "components",
-    "novice_clarity": "render",
-    "logical_flow": "connections",
-    "succinctness": "components",
-    "mece_scope": "components",
-    "authored_composition": "composition",
-    "brief_coverage": "components",
-    "branch_completion": "connections",
-    "independent_risk_coverage": "components",
-    "gate_preserving_reuse": "connections",
-    "topology_enforced_guarantees": "connections",
-    "controlled_external_effects": "connections",
-    "race_and_ambiguity_safety": "connections",
-    "canonical_state_and_trust": "connections",
-    "controlled_learning_and_release": "connections",
-    "safe_factual_failure": "connections",
-    "pre_effect_durability_and_freshness": "connections",
-    "complete_reconciliation": "connections",
-    "complete_trust_and_release_scope": "connections",
-    "state_order_integrity": "connections",
-    "streaming_integrity": "connections",
-}
+_RUBRIC_CODES = RUBRIC_CODES
+_RUBRIC_CODE_OWNERS = RUBRIC_CODE_OWNERS
 _RUBRIC_CODEBOOK = ", ".join(
     f"{index}={name}[{_RUBRIC_CODE_OWNERS[name]}]"
     for index, name in enumerate(_RUBRIC_CODES, start=1)
@@ -129,6 +77,7 @@ _MODEL_LAYER_FIELDS = {
         "context_indexes",
         "context_node_indexes",
         "node_indexes",
+        "addition_count",
     ),
     "connections": (
         "status",
@@ -138,6 +87,7 @@ _MODEL_LAYER_FIELDS = {
         "context_indexes",
         "context_node_indexes",
         "edge_indexes",
+        "addition_count",
     ),
     "composition": (
         "status",
@@ -150,6 +100,9 @@ _MODEL_LAYER_FIELDS = {
         "composition_fields",
         "sequence_indexes",
         "assumption_indexes",
+        "group_addition_count",
+        "sequence_addition_count",
+        "assumption_addition_count",
     ),
     "render": (
         "status",
@@ -167,7 +120,13 @@ _MODEL_LAYER_OUTPUT_EXAMPLE = ",\n".join(
     + ": "
     + json.dumps(
         [
-            "pass|fail" if field == "status" else 0.0 if field == "score" else []
+            "pass|fail"
+            if field == "status"
+            else 0.0
+            if field == "score"
+            else 0
+            if field.endswith("addition_count")
+            else []
             for field in fields
         ],
         ensure_ascii=False,
@@ -175,8 +134,7 @@ _MODEL_LAYER_OUTPUT_EXAMPLE = ",\n".join(
     for layer, fields in _MODEL_LAYER_FIELDS.items()
 )
 _MODEL_LAYER_FIELD_LEGEND = "\n".join(
-    f"- {layer}: {', '.join(fields)}."
-    for layer, fields in _MODEL_LAYER_FIELDS.items()
+    f"- {layer}: {', '.join(fields)}." for layer, fields in _MODEL_LAYER_FIELDS.items()
 )
 
 # Anthropic compiles response schemas into a grammar. Repeating the full object schema for
@@ -188,6 +146,7 @@ _MODEL_LAYER_ROW_SCHEMA = {
         "anyOf": [
             {"type": "string"},
             {"type": "number"},
+            {"type": "boolean"},
             {
                 "type": "array",
                 "items": {"anyOf": [{"type": "integer"}, {"type": "string"}]},
@@ -221,10 +180,7 @@ _GRAPH_CRITIC_RESPONSE_SCHEMA = {
                 "enum": ["none", "local", "global"],
             },
             "layers": _strict_object_schema(
-                {
-                    layer: {"$ref": "#/$defs/layer_row"}
-                    for layer in _MODEL_LAYER_FIELDS
-                }
+                {layer: {"$ref": "#/$defs/layer_row"} for layer in _MODEL_LAYER_FIELDS}
             ),
             "topology_proofs": _strict_object_schema(
                 {
@@ -289,9 +245,7 @@ def _semantic_graph_projection(graph: dict[str, Any]) -> dict[str, Any]:
             ("step", "nodes", "description"),
         ),
         "assumptions": [
-            item
-            for item in (graph.get("assumptions") or [])
-            if isinstance(item, str)
+            item for item in (graph.get("assumptions") or []) if isinstance(item, str)
         ],
     }
 
@@ -309,9 +263,7 @@ def _challenger_concerns(value: Any) -> dict[str, Any]:
             if isinstance(item, str)
         ],
         "tradeoffs": [
-            item
-            for item in (review.get("tradeoffs") or [])
-            if isinstance(item, str)
+            item for item in (review.get("tradeoffs") or []) if isinstance(item, str)
         ],
     }
 
@@ -363,7 +315,9 @@ def _review_packet(
     }
 
 
-def _critic_message(packet: dict[str, Any], render_result: dict[str, Any]) -> dict[str, Any]:
+def _critic_message(
+    packet: dict[str, Any], render_result: dict[str, Any]
+) -> dict[str, Any]:
     review_text = (
         "Review the following untrusted architecture packet against the system contract. "
         "Return only the schema-constrained review object.\n"
@@ -377,14 +331,16 @@ def _critic_message(packet: dict[str, Any], render_result: dict[str, Any]) -> di
             if render_result.get("media_type") == "image/png"
             else "image/jpeg"
         )
-        content.append({
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": media_type,
-                "data": screenshot,
-            },
-        })
+        content.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": screenshot,
+                },
+            }
+        )
     return {"role": "user", "content": content}
 
 
@@ -395,6 +351,8 @@ def _semantic_review_failure_code(exc: Exception, raw: str) -> str:
     message = str(exc).lower()
     if "truncated" in message or (raw and not stripped.endswith("}")):
         return "semantic_review_output_truncated"
+    if isinstance(exc, (ValueError, json.JSONDecodeError)):
+        return "semantic_review_protocol_invalid"
     return "semantic_review_unavailable"
 
 
@@ -427,6 +385,12 @@ def _unique_model_indexes(value: Any, *, path: str, size: int) -> list[int]:
         raise ValueError(f"{path} must contain valid zero-based indexes")
     if len(value) != len(set(value)):
         raise ValueError(f"{path} must not contain duplicates")
+    return value
+
+
+def _model_addition_count(value: Any, *, path: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{path} must be a non-negative integer")
     return value
 
 
@@ -558,7 +522,9 @@ def _deterministic_finding_owners(
         text = finding.get("finding") if isinstance(finding, dict) else None
         owner_layer = finding.get("owner_layer") if isinstance(finding, dict) else None
         if not isinstance(finding_id, str) or not finding_id.strip():
-            raise ValueError(f"deterministic_findings[{index}].id must be a non-empty string")
+            raise ValueError(
+                f"deterministic_findings[{index}].id must be a non-empty string"
+            )
         if not isinstance(text, str) or not text.strip():
             raise ValueError(
                 f"deterministic_findings[{index}].finding must be a non-empty string"
@@ -716,6 +682,11 @@ def _canonicalise_review_protocol(
             "composition_fields": [],
             "sequence_indexes": [],
             "assumption_indexes": [],
+            "context_node_ids": [
+                str(nodes[index].get("id") or "") for index in context_node_indexes
+            ],
+            "addition_count": 0,
+            "composition_append_counts": {},
             "reason": (
                 "The artifact layer passed the rubric."
                 if status == "pass"
@@ -731,6 +702,10 @@ def _canonicalise_review_protocol(
             canonical["node_ids"] = [
                 str(nodes[index].get("id") or "") for index in indexes
             ]
+            canonical["addition_count"] = _model_addition_count(
+                assessment.get("addition_count"),
+                path="layers.components.addition_count",
+            )
         elif layer == "connections":
             indexes = _unique_model_indexes(
                 assessment.get("edge_indexes"),
@@ -745,6 +720,10 @@ def _canonicalise_review_protocol(
                 }
                 for index in indexes
             ]
+            canonical["addition_count"] = _model_addition_count(
+                assessment.get("addition_count"),
+                path="layers.connections.addition_count",
+            )
         elif layer == "composition":
             indexes = _unique_model_indexes(
                 assessment.get("group_indexes"),
@@ -769,6 +748,33 @@ def _canonicalise_review_protocol(
                 path="layers.composition.assumption_indexes",
                 size=len(assumptions),
             )
+            canonical["composition_append_counts"] = {
+                field: count
+                for field, count in (
+                    (
+                        "groups",
+                        _model_addition_count(
+                            assessment.get("group_addition_count"),
+                            path="layers.composition.group_addition_count",
+                        ),
+                    ),
+                    (
+                        "sequence",
+                        _model_addition_count(
+                            assessment.get("sequence_addition_count"),
+                            path="layers.composition.sequence_addition_count",
+                        ),
+                    ),
+                    (
+                        "assumptions",
+                        _model_addition_count(
+                            assessment.get("assumption_addition_count"),
+                            path="layers.composition.assumption_addition_count",
+                        ),
+                    ),
+                )
+                if count > 0
+            }
         canonical_layers[layer] = canonical
     if sorted(classified_deterministic_indexes) != list(
         range(len(deterministic_findings))
@@ -881,10 +887,13 @@ def critic_timeout_seconds(state: AgentState, revision_count: int) -> float:
     deadline = state.get(_GRAPH_STAGE_DEADLINE_KEY)  # type: ignore[typeddict-item]
     if not isinstance(deadline, (int, float)):
         return configured_timeout_s
-    remaining_s = float(deadline) - time.monotonic() - _GRAPH_STAGE_FINALIZATION_HEADROOM_S
+    remaining_s = (
+        float(deadline) - time.monotonic() - _GRAPH_STAGE_FINALIZATION_HEADROOM_S
+    )
     if remaining_s <= 0:
         raise TimeoutError("graph critic deadline exhausted before semantic review")
     return min(configured_timeout_s, remaining_s)
+
 
 _FEEDBACK_LOOP_REQUEST = re.compile(
     r"\b(?:closed[- ]loop|feedback loop|self[- ]improv\w*|"
@@ -893,9 +902,7 @@ _FEEDBACK_LOOP_REQUEST = re.compile(
     re.I,
 )
 
-_FEEDBACK_EDGE_FINDING = (
-    "Add the measured outcome feedback edge required by the requested optimisation or learning loop."
-)
+_FEEDBACK_EDGE_FINDING = "Add the measured outcome feedback edge required by the requested optimisation or learning loop."
 _GENERIC_COMPONENT_FINDING = (
     "Replace generic book concepts with domain-owned component responsibilities."
 )
@@ -929,21 +936,26 @@ Compare the diagram with the user's exact request. Check all of the following:
 4. safe action boundary: external mutations have policy, approval, audit, or rollback controls;
 5. edge semantics: edges say what data or command moves and in which direction;
 6. assumption hygiene: important unknowns are explicit instead of invented as facts;
-7. selected depth: production designs include failure, observability, and rollout concerns.
-8. novice clarity: a newcomer can identify the entry, main path, controls, and outcome without help;
-9. logical flow: edge direction and the stated sequence agree with the described runtime behavior;
-10. succinctness: labels and responsibilities are concise rather than repetitive;
+7. selected depth: component responsibilities name the production owners for failure handling,
+   observability, and rollout when those concerns apply.
+8. novice clarity: the screenshot makes the authored entry, main path, controls, and outcome easy to
+   locate. Missing semantic records belong to their graph layer instead of render.
+9. logical flow: directed edge paths agree with the runtime behavior. Sequence ordering belongs to
+   authored composition and must be scored there.
+10. succinctness: node labels and responsibilities are concise rather than repetitive;
 11. MECE scope: major responsibilities have clear homes without needless duplicates, while
     cross-cutting evaluation, security, and observability may intentionally span components.
-12. authored composition: named zones, an obvious entry-to-outcome runtime spine, parallel work that
-    visibly rejoins, explicit decision/failure paths, a separate operational plane, and, when a
-    repeated decision exists, feedback to the owner of that next decision.
-13. brief coverage: every material item in the diagram acceptance checklist is visibly implemented
-    in a responsibility or edge, allowing coherent consolidation rather than demanding one box each;
+12. authored composition: the title, named zones, sequence, and assumptions organize the authored
+    graph without contradicting its records. Missing components, edges, or paths belong to their
+    owning layers.
+13. brief coverage: every checklist item that requires a responsibility has a component owner.
+    Missing transitions and path semantics belong to connections, and stated unknowns belong to
+    composition;
 14. branch completion: every normal, alternate, rejection, and fallback route rejoins or reaches an
     observable outcome, and conditional controls have a bypass for requests they do not govern.
-15. independent-risk coverage: material challenger findings are addressed in the design or retained
-    as explicit assumptions; the candidate must not silently discard a critical control concern.
+15. independent-risk coverage: every material challenger risk that requires a responsibility has a
+    named component owner. Required control paths belong to connections, and retained unknowns belong
+    to composition.
 16. gate-preserving reuse: caches, replay, retries, and shortcuts cannot serve or execute an artifact
     before its required validation, authorization, policy, or approval gate; reuse stores accepted
     post-gate artifacts or rejoins the gate with the relevant identity and version scope.
@@ -1025,8 +1037,9 @@ Use `finding_codes` only for a clear omission or defect that makes the diagram u
 unusable, or fails an explicit part of the user's request at the selected depth. The owner in the
 rubric codebook is authoritative. `components` owns node records. `connections` owns edge records.
 `composition` owns title, groups, sequence, and assumptions. `render` owns the screenshot and
-layout. These four ownership sets partition the scored artifact. If one defect requires changes in
-multiple layers, fail each owner with a code assigned to that owner. Optional hardening or a
+layout. These four ownership sets partition the mutable artifact. Score each layer against the full
+graph context, then classify the defect by the fields that must change. If one defect requires
+changes in multiple layers, fail each owner with a code assigned to that owner. Optional hardening or a
 different valid design preference must not produce a finding code or rejection. Accept consolidated
 responsibilities when their descriptions and edges make the boundary clear. Concise node
 descriptions are expected.
@@ -1047,6 +1060,12 @@ Each supplied deterministic finding names its authoritative `owner_layer`. Class
 under that layer by its zero-based packet index exactly once.
 A passing layer exposes no selectors or context and has no blockers. All four artifact layers are
 mandatory for every reviewed candidate and must be marked pass or fail.
+Set each component or connection `addition_count` to the exact number of missing records required
+by the cited defect. Existing-record defects and every passing layer use zero. Context node indexes
+are read-only anchors for those additions. In composition, use the three addition-count fields for
+the exact number of new groups, sequence records, or assumptions; use zero for unchanged collections.
+Every connection addition must have at least two endpoint identities across declared component
+additions and unique component or connection context nodes.
 
 Set `repair_scope` to `none` only when all four layers pass at 0.78 or above and have no
 blockers. Set it to `local` only when the complete repair can be made inside the failed graph layers
@@ -1103,6 +1122,196 @@ the complete repair set in this response.
 """
 
 
+async def _request_critic_scorecard(
+    state: AgentState,
+    *,
+    review_packet: dict[str, Any],
+    render_result: dict[str, Any],
+    resolved_complexity: str,
+    revision_count: int,
+    correction: tuple[str, str] | None = None,
+) -> StructuredLLMResponse:
+    message = _critic_message(review_packet, render_result)
+    operation = "graph_critic"
+    effort = _GRAPH_CRITIC_EFFORT
+    max_output_tokens = settings.graph_qa_max_completion_tokens
+    if correction is not None:
+        operation = "graph_critic_protocol_correction"
+        effort = _GRAPH_CRITIC_CORRECTION_EFFORT
+        max_output_tokens = min(
+            settings.graph_qa_max_completion_tokens,
+            _GRAPH_CRITIC_CORRECTION_MAX_TOKENS,
+        )
+        invalid_response, validation_error = correction
+        message["content"].append(
+            {
+                "type": "text",
+                "text": (
+                    "Your prior scorecard failed protocol validation. Correct the scorecard only. "
+                    "Keep every valid judgment unchanged and obey the exact row ownership, selector, "
+                    "and topology-proof contracts.\n"
+                    f"Validation error: {validation_error[:1000]}\n"
+                    f"Prior scorecard: {invalid_response[:12000]}"
+                ),
+            }
+        )
+    return await stream_structured_llm(
+        model=settings.graph_qa_model,
+        system=_GRAPH_CRITIC_SYSTEM + _GRAPH_CRITIC_COMPACT_PROTOCOL,
+        messages=[message],
+        response_schema=_GRAPH_CRITIC_RESPONSE_SCHEMA,
+        temperature=settings.graph_temperature,
+        effort=effort,
+        telemetry=build_telemetry(
+            operation,
+            user_id=state.get("user_id"),
+            thread_id=state.get("session_id"),
+            metadata={
+                "complexity_resolved": resolved_complexity,
+                "revision_count": revision_count,
+                "request_id": state.get("request_id"),
+                "client_request_id": state.get("client_request_id"),
+                "prompt_version": _GRAPH_CRITIC_PROMPT_VERSION,
+                "protocol_correction": correction is not None,
+            },
+        ),
+        timeout_seconds=critic_timeout_seconds(state, revision_count),
+        max_output_tokens=max_output_tokens,
+    )
+
+
+def _completed_critic_review(
+    response: StructuredLLMResponse,
+    *,
+    graph: dict[str, Any],
+    deterministic_findings: list[dict[str, str]],
+    review_context: list[str],
+    require_topology_proofs: bool,
+) -> dict[str, Any]:
+    payload = _canonicalise_review_protocol(
+        _parse_complete_response(response),
+        graph=graph,
+        deterministic_findings=deterministic_findings,
+        review_context=review_context,
+    )
+    _validate_review_protocol(
+        payload,
+        require_topology_proofs=require_topology_proofs,
+        graph=graph,
+        deterministic_findings=deterministic_findings,
+    )
+    return _review_from_repair_contract(payload)
+
+
+def _layer_fingerprint(graph: dict[str, Any], layer: str) -> str:
+    node_semantic_fields = ("id", "label", "type", "technology", "description")
+    edge_semantic_fields = (
+        "source",
+        "target",
+        "label",
+        "technology",
+        "sync",
+        "flow",
+        "description",
+        "type",
+    )
+    layer_payload = {
+        "components": _project_records(
+            graph.get("nodes"),
+            node_semantic_fields,
+        ),
+        "connections": {
+            "nodes": _project_records(
+                graph.get("nodes"),
+                node_semantic_fields,
+            ),
+            "edges": _project_records(
+                graph.get("edges"),
+                edge_semantic_fields,
+            ),
+        },
+        "composition": {
+            **{field: graph.get(field) for field in _COMPOSITION_FIELDS},
+            "nodes": _project_records(graph.get("nodes"), node_semantic_fields),
+            "edges": _project_records(
+                graph.get("edges"),
+                edge_semantic_fields,
+            ),
+        },
+        "render": {key: value for key, value in graph.items() if key != "version"},
+    }[layer]
+    return json.dumps(layer_payload, sort_keys=True, separators=(",", ":"))
+
+
+def _lock_unchanged_passed_layers(
+    state: AgentState,
+    review: dict[str, Any],
+    graph: dict[str, Any],
+    *,
+    deterministic_findings: list[dict[str, str]] | None = None,
+    require_topology_proofs: bool = False,
+) -> dict[str, Any]:
+    baseline = state.get("repair_baseline_graph_data")
+    prior_review = state.get("graph_review")
+    if not isinstance(baseline, dict) or not isinstance(prior_review, dict):
+        return review
+    prior_contract = prior_review.get("repair_contract")
+    contract = review.get("repair_contract")
+    if not isinstance(prior_contract, dict) or not isinstance(contract, dict):
+        return review
+    prior_layers = prior_contract.get("layers")
+    layers = contract.get("layers")
+    if not isinstance(prior_layers, dict) or not isinstance(layers, dict):
+        return review
+
+    locked_layers: list[str] = []
+    for layer in _REPAIR_LAYERS:
+        prior_layer = prior_layers.get(layer)
+        if (
+            isinstance(prior_layer, dict)
+            and prior_layer.get("status") == "pass"
+            and not (layers.get(layer) or {}).get("deterministic_finding_ids")
+            and _layer_fingerprint(baseline, layer) == _layer_fingerprint(graph, layer)
+        ):
+            layers[layer] = deepcopy(prior_layer)
+            locked_layers.append(layer)
+    if not locked_layers:
+        return review
+
+    failed_layers = {
+        layer
+        for layer in _REPAIR_LAYERS
+        if (layers.get(layer) or {}).get("status") == "fail"
+    }
+    editable_failures = failed_layers.intersection(
+        {"components", "connections", "composition"}
+    )
+    if not failed_layers:
+        contract["repair_scope"] = "none"
+    elif not editable_failures or contract.get("repair_scope") == "global":
+        contract["repair_scope"] = "global"
+    else:
+        contract["repair_scope"] = "local"
+    topology_proofs = review.get("topology_proofs") or []
+    if "connections" in locked_layers:
+        topology_proofs = deepcopy(prior_review.get("topology_proofs") or [])
+    locked_payload = {
+        "repair_contract": contract,
+        "strengths": review.get("strengths") or [],
+        "advice": review.get("advice") or [],
+        "topology_proofs": topology_proofs,
+    }
+    _validate_review_protocol(
+        locked_payload,
+        require_topology_proofs=require_topology_proofs,
+        graph=graph,
+        deterministic_findings=deterministic_findings or [],
+    )
+    locked_review = _review_from_repair_contract(locked_payload)
+    locked_review["locked_layers"] = locked_layers
+    return locked_review
+
+
 async def graph_critic_node(state: AgentState) -> AgentState:
     graph = state.get("graph_data")
     query = state.get("design_query") or state.get("user_message", "")
@@ -1115,11 +1324,13 @@ async def graph_critic_node(state: AgentState) -> AgentState:
 
     profile = resolve_complexity(state.get("complexity", "auto"), query)
     revision_count = int(state.get("graph_revision_count", 0))
-    await state["send"]({
-        "type": "worker_status",
-        "worker": "critic",
-        "status": "Checking domain coverage, control boundaries, and failure modes…",
-    })
+    await state["send"](
+        {
+            "type": "worker_status",
+            "worker": "critic",
+            "status": "Checking domain coverage, control boundaries, and failure modes…",
+        }
+    )
     deterministic_review = _deterministic_review(query, graph, profile.resolved)
     deterministic_findings = [
         {"id": f"deterministic_{index}", **finding}
@@ -1131,13 +1342,15 @@ async def graph_critic_node(state: AgentState) -> AgentState:
     render_unavailable_reason: str | None = None
     await_render = state.get("await_diagram_evaluation")
     if callable(await_render):
-        await state["send"]({
-            "type": "workflow_progress",
-            "phase": "render",
-            "status": "active",
-            "title": "Rendering the candidate privately",
-            "detail": "The diagram stays hidden while the browser checks its real layout.",
-        })
+        await state["send"](
+            {
+                "type": "workflow_progress",
+                "phase": "render",
+                "status": "active",
+                "title": "Rendering the candidate privately",
+                "detail": "The diagram stays hidden while the browser checks its real layout.",
+            }
+        )
         try:
             candidate_render_result = await await_render(graph)
         except TimeoutError:
@@ -1161,16 +1374,18 @@ async def graph_critic_node(state: AgentState) -> AgentState:
                         ),
                         reason="The deterministic browser layout gate rejected the rendered artifact.",
                     )
-                    await state["send"]({
-                        "type": "workflow_progress",
-                        "phase": "review",
-                        "status": "rejected",
-                        "title": "Diagram did not pass the clarity gate",
-                        "detail": str(
-                            review.get("revision_instruction")
-                            or "The answer will continue without this diagram."
-                        )[:260],
-                    })
+                    await state["send"](
+                        {
+                            "type": "workflow_progress",
+                            "phase": "review",
+                            "status": "rejected",
+                            "title": "Diagram did not pass the clarity gate",
+                            "detail": str(
+                                review.get("revision_instruction")
+                                or "The answer will continue without this diagram."
+                            )[:260],
+                        }
+                    )
                     return {**state, "graph_review": review}
             else:
                 render_unavailable_reason = "missing"
@@ -1178,20 +1393,20 @@ async def graph_critic_node(state: AgentState) -> AgentState:
         render_unavailable_reason = "transport_unavailable"
     if render_unavailable_reason:
         failure_code = f"diagram_evaluation_{render_unavailable_reason}"
-        review = _terminal_review(
-            failed_layer="render",
-            findings=["The private browser render did not complete."],
+        review = _reviewer_failure(
             failure_code=failure_code,
             reason="The private browser render did not complete.",
         )
-        await state["send"]({
-            "type": "workflow_progress",
-            "phase": "review",
-            "status": "rejected",
-            "failure_code": failure_code,
-            "title": "Private render did not complete",
-            "detail": "The diagram will stay unpublished until browser rendering and visual QA complete.",
-        })
+        await state["send"](
+            {
+                "type": "workflow_progress",
+                "phase": "review",
+                "status": "rejected",
+                "failure_code": failure_code,
+                "title": "Private render did not complete",
+                "detail": "The diagram will stay unpublished until browser rendering and visual QA complete.",
+            }
+        )
         return {**state, "graph_review": review}
     raw = ""
     try:
@@ -1203,69 +1418,98 @@ async def graph_critic_node(state: AgentState) -> AgentState:
             render_result=render_result,
             deterministic_findings=deterministic_findings,
         )
-        response = await stream_structured_llm(
-            model=settings.graph_qa_model,
-            system=_GRAPH_CRITIC_SYSTEM + _GRAPH_CRITIC_COMPACT_PROTOCOL,
-            messages=[_critic_message(review_packet, render_result)],
-            response_schema=_GRAPH_CRITIC_RESPONSE_SCHEMA,
-            temperature=settings.graph_temperature,
-            effort=_GRAPH_CRITIC_EFFORT,
-            telemetry=build_telemetry(
-                "graph_critic",
-                user_id=state.get("user_id"),
-                thread_id=state.get("session_id"),
-                metadata={
-                    "complexity_resolved": profile.resolved,
-                    "revision_count": revision_count,
-                    "request_id": state.get("request_id"),
-                    "client_request_id": state.get("client_request_id"),
-                    "prompt_version": _GRAPH_CRITIC_PROMPT_VERSION,
-                },
-            ),
-            timeout_seconds=critic_timeout_seconds(state, revision_count),
-            max_output_tokens=settings.graph_qa_max_completion_tokens,
+        response = await _request_critic_scorecard(
+            state,
+            review_packet=review_packet,
+            render_result=render_result,
+            resolved_complexity=profile.resolved,
+            revision_count=revision_count,
         )
         raw = response.text
-        payload = _canonicalise_review_protocol(
-            _parse_complete_response(response),
-            graph=graph,
+        try:
+            review = _completed_critic_review(
+                response,
+                graph=graph,
+                deterministic_findings=deterministic_findings,
+                review_context=review_packet["review_context"],
+                require_topology_proofs=profile.resolved == "production",
+            )
+        except (ValueError, json.JSONDecodeError) as protocol_error:
+            if (
+                _semantic_review_failure_code(protocol_error, raw)
+                == "semantic_review_output_truncated"
+            ):
+                raise
+            logger.warning(
+                "Critic protocol invalid; requesting one correction: type=%s",
+                type(protocol_error).__name__,
+            )
+            response = await _request_critic_scorecard(
+                state,
+                review_packet=review_packet,
+                render_result=render_result,
+                resolved_complexity=profile.resolved,
+                revision_count=revision_count,
+                correction=(raw, str(protocol_error)),
+            )
+            raw = response.text
+            review = _completed_critic_review(
+                response,
+                graph=graph,
+                deterministic_findings=deterministic_findings,
+                review_context=review_packet["review_context"],
+                require_topology_proofs=profile.resolved == "production",
+            )
+        review = _lock_unchanged_passed_layers(
+            state,
+            review,
+            graph,
             deterministic_findings=deterministic_findings,
-            review_context=review_packet["review_context"],
-        )
-        _validate_review_protocol(
-            payload,
             require_topology_proofs=profile.resolved == "production",
-            graph=graph,
-            deterministic_findings=deterministic_findings,
         )
-        review = _review_from_repair_contract(payload)
     except Exception as exc:
         # Structural checks cannot prove semantic control boundaries. Fail closed
         # rather than publishing a plausible but unaudited architecture.
-        logger.warning("Model review unavailable; rejecting unaudited graph: %s", type(exc).__name__)
         failure_code = _semantic_review_failure_code(exc, raw)
-        review = _terminal_review(
-            failed_layer="components",
-            findings=["The independent semantic architecture review did not complete."],
+        logger.warning(
+            "Model review unavailable; rejecting unaudited graph: type=%s code=%s",
+            type(exc).__name__,
+            failure_code,
+        )
+        review = _reviewer_failure(
             failure_code=failure_code,
             reason="The independent semantic architecture review did not complete.",
         )
-    await state["send"]({
-        "type": "workflow_progress",
-        "phase": "review",
-        "status": "complete" if review.get("approved") else "rejected",
-        "failure_code": review.get("failure_code"),
-        "title": "Diagram passed the clarity gate" if review.get("approved") else "Diagram did not pass the clarity gate",
-        "detail": (
-            "The rendered design is ready to publish."
-            if review.get("approved")
-            else str(review.get("revision_instruction") or "The answer will continue without this diagram.")[:260]
-        ),
-    })
+    review_unavailable = review.get("review_status") == "unavailable"
+    await state["send"](
+        {
+            "type": "workflow_progress",
+            "phase": "review",
+            "status": "complete" if review.get("approved") else "rejected",
+            "failure_code": review.get("failure_code"),
+            "title": (
+                "Diagram passed the clarity gate"
+                if review.get("approved")
+                else "Independent review did not complete"
+                if review_unavailable
+                else "Diagram did not pass the clarity gate"
+            ),
+            "detail": (
+                "The rendered design is ready to publish."
+                if review.get("approved")
+                else str(
+                    review.get("revision_instruction")
+                    or "The answer will continue without this diagram."
+                )[:260]
+            ),
+        }
+    )
     return {**state, "graph_review": review}
 
 
-def _deterministic_review(query: str, graph: dict[str, Any], resolved_complexity: str) -> dict[str, Any]:
+def _deterministic_review(
+    query: str, graph: dict[str, Any], resolved_complexity: str
+) -> dict[str, Any]:
     # Broad semantic completeness belongs to the independent model review.
     # Local checks enforce the small set of observable publication contracts
     # that must never regress, even during a model-provider incident.
@@ -1276,18 +1520,33 @@ def _deterministic_review(query: str, graph: dict[str, Any], resolved_complexity
     # optional render hint, and the browser layout already treats either form
     # as a feedback route. Do not spend a model repair on equivalent metadata.
     if _FEEDBACK_LOOP_REQUEST.search(query) and not any(
-        edge.get("type") == "loop" or edge.get("flow") == "feedback"
-        for edge in edges
+        edge.get("type") == "loop" or edge.get("flow") == "feedback" for edge in edges
     ):
         missing.append(_FEEDBACK_EDGE_FINDING)
 
     generic_labels = {
-        "agent", "application", "cost", "evaluation", "foundation model", "generation",
-        "language model", "latency", "memory", "planning", "quality", "sampling", "tool use",
+        "agent",
+        "application",
+        "cost",
+        "evaluation",
+        "foundation model",
+        "generation",
+        "language model",
+        "latency",
+        "memory",
+        "planning",
+        "quality",
+        "sampling",
+        "tool use",
     }
-    if any(str(node.get("label") or "").strip().lower() in generic_labels for node in nodes):
+    if any(
+        str(node.get("label") or "").strip().lower() in generic_labels for node in nodes
+    ):
         missing.append(_GENERIC_COMPONENT_FINDING)
-    if any(str(node.get("technology") or "").strip().lower().startswith("book ") for node in nodes):
+    if any(
+        str(node.get("technology") or "").strip().lower().startswith("book ")
+        for node in nodes
+    ):
         missing.append(_BOOK_PROVENANCE_FINDING)
 
     node_ids = [str(node.get("id")) for node in nodes if node.get("id")]
@@ -1321,7 +1580,9 @@ def _deterministic_review(query: str, graph: dict[str, Any], resolved_complexity
     return {
         "approved": not missing and score >= 0.78,
         "score": score,
-        "strengths": ["The diagram passed deterministic structure checks"] if not missing else [],
+        "strengths": ["The diagram passed deterministic structure checks"]
+        if not missing
+        else [],
         "missing": missing,
         "deterministic_findings": deterministic_findings,
         "revision_instruction": " ".join(missing),
@@ -1343,27 +1604,35 @@ def _deterministic_render_review(
     expected_nodes = len(graph.get("nodes") or [])
     expected_edges = len(graph.get("edges") or [])
     if int(report.get("rendered_nodes") or 0) != expected_nodes:
-        missing.append("Ensure every architecture node is visible in the rendered canvas.")
+        missing.append(
+            "Ensure every architecture node is visible in the rendered canvas."
+        )
     if int(report.get("overlap_count") or 0) > 0:
-        missing.append("Remove overlapping node cards or labels in the rendered layout.")
+        missing.append(
+            "Remove overlapping node cards or labels in the rendered layout."
+        )
     if int(report.get("rendered_edges") or 0) != expected_edges:
         missing.append("Ensure every declared edge is visible in the rendered diagram.")
     if int(report.get("clipped_nodes") or 0) > 0:
         missing.append("Fit every node fully inside the initial viewport.")
     if int(report.get("clipped_edges") or 0) > 0:
         missing.append("Fit every edge fully inside the initial viewport.")
-    if float(report.get("minimum_text_px") or 0) < 6:
+    if float(report.get("minimum_text_px") or 0) < _MINIMUM_PUBLISHED_TEXT_PX:
         missing.append("Increase the smallest rendered text to a readable size.")
     if "overview_required_edge_labels" in report:
         required_labels = int(report.get("overview_required_edge_labels") or 0)
         visible_labels = int(report.get("visible_overview_required_edge_labels") or 0)
         if visible_labels < required_labels:
-            missing.append("Show every overview-required edge label in the initial viewport.")
+            missing.append(
+                "Show every overview-required edge label in the initial viewport."
+            )
     if "grouped_nodes" in report:
         grouped_nodes = int(report.get("grouped_nodes") or 0)
         labelled_nodes = int(report.get("group_labelled_nodes") or 0)
         if labelled_nodes < grouped_nodes:
-            missing.append("Show a group label on every node assigned to a responsibility zone.")
+            missing.append(
+                "Show a group label on every node assigned to a responsibility zone."
+            )
     if (
         "group_boundary_overlap_count" in report
         and int(report.get("group_boundary_overlap_count") or 0) > 0
@@ -1373,7 +1642,9 @@ def _deterministic_render_review(
     return {
         "approved": not missing,
         "score": score,
-        "strengths": ["The browser render passed deterministic visibility checks"] if not missing else [],
+        "strengths": ["The browser render passed deterministic visibility checks"]
+        if not missing
+        else [],
         "missing": missing,
         "revision_instruction": " ".join(missing),
         # Layout geometry belongs to the deterministic renderer. Asking the
@@ -1450,7 +1721,9 @@ def _validate_review_protocol(
     )
     if require_topology_proofs:
         if not isinstance(topology_proofs, list):
-            failures.append("topology_proofs is required as a JSON array at production depth")
+            failures.append(
+                "topology_proofs is required as a JSON array at production depth"
+            )
         else:
             if len(topology_proofs) != len(_TOPOLOGY_PROOF_GUARANTEES):
                 failures.append(
@@ -1488,7 +1761,9 @@ def _validate_review_protocol(
                     )
                 reason = proof.get("reason")
                 if not isinstance(reason, str) or not reason.strip():
-                    failures.append(f"topology_proofs[{index}].reason must be a non-empty string")
+                    failures.append(
+                        f"topology_proofs[{index}].reason must be a non-empty string"
+                    )
                 evidence = proof.get("edge_evidence")
                 if not isinstance(evidence, list):
                     failures.append(
@@ -1497,11 +1772,19 @@ def _validate_review_protocol(
                     continue
                 evidence_edges: list[tuple[str, str, str]] = []
                 for evidence_index, edge in enumerate(evidence):
-                    if not isinstance(edge, dict) or set(edge) != {
-                        "source", "target", "label",
-                    } or any(
-                        not isinstance(edge.get(field), str) or not edge[field].strip()
-                        for field in ("source", "target", "label")
+                    if (
+                        not isinstance(edge, dict)
+                        or set(edge)
+                        != {
+                            "source",
+                            "target",
+                            "label",
+                        }
+                        or any(
+                            not isinstance(edge.get(field), str)
+                            or not edge[field].strip()
+                            for field in ("source", "target", "label")
+                        )
                     ):
                         failures.append(
                             f"topology_proofs[{index}].edge_evidence[{evidence_index}] "
@@ -1510,7 +1793,11 @@ def _validate_review_protocol(
                         continue
                     edge_tuple = (edge["source"], edge["target"], edge["label"])
                     evidence_edges.append(edge_tuple)
-                    if status == "pass" and graph is not None and edge_tuple not in graph_edges:
+                    if (
+                        status == "pass"
+                        and graph is not None
+                        and edge_tuple not in graph_edges
+                    ):
                         failures.append(
                             f"topology_proofs[{index}].edge_evidence[{evidence_index}] "
                             "cites an edge absent from the graph"
@@ -1550,9 +1837,13 @@ def _validate_review_protocol(
                         failures.append(
                             f"topology_proofs[{index}].route_claims must not contain duplicates"
                         )
-                if status == "pass" and len(evidence_edges) == len(evidence) and (
-                    isinstance(route_claims, list)
-                    and len(route_pairs) == len(route_claims)
+                if (
+                    status == "pass"
+                    and len(evidence_edges) == len(evidence)
+                    and (
+                        isinstance(route_claims, list)
+                        and len(route_pairs) == len(route_claims)
+                    )
                 ):
                     try:
                         _validate_witness_subgraph(
@@ -1568,9 +1859,9 @@ def _validate_review_protocol(
                     failures.append(
                         f"topology_proofs[{index}] {status} cannot cite proof evidence"
                     )
-            if set(guarantees) != _TOPOLOGY_PROOF_GUARANTEES or len(
-                guarantees
-            ) != len(set(guarantees)):
+            if set(guarantees) != _TOPOLOGY_PROOF_GUARANTEES or len(guarantees) != len(
+                set(guarantees)
+            ):
                 failures.append(
                     "topology_proofs must use every required guarantee exactly once"
                 )
@@ -1581,7 +1872,8 @@ def _validate_review_protocol(
         failures.append("topology_proofs must be a JSON array of objects")
 
     failed_proofs = [
-        proof for proof in (topology_proofs or [])
+        proof
+        for proof in (topology_proofs or [])
         if isinstance(proof, dict) and proof.get("status") == "fail"
     ]
     if failed_proofs and isinstance(payload.get("repair_contract"), dict):
@@ -1623,10 +1915,7 @@ def _review_from_repair_contract(
         for layer in _REPAIR_LAYERS
         for finding in layers[layer]["blocking_findings"]
     ]
-    layer_scores = [
-        float(layers[layer]["score"])
-        for layer in _REPAIR_LAYERS
-    ]
+    layer_scores = [float(layers[layer]["score"]) for layer in _REPAIR_LAYERS]
     approved = (
         contract["repair_scope"] == "none"
         and not findings
@@ -1640,6 +1929,7 @@ def _review_from_repair_contract(
     review = {
         "approved": approved,
         "score": min(layer_scores),
+        "review_status": "completed",
         "strengths": _clean_list(payload.get("strengths")),
         "missing": findings,
         "advice": _clean_list(payload.get("advice")),
@@ -1652,28 +1942,6 @@ def _review_from_repair_contract(
     return review
 
 
-def _layer_assessment(
-    status: str,
-    score: float,
-    reason: str,
-    *,
-    findings: list[str] | None = None,
-) -> dict[str, Any]:
-    return {
-        "status": status,
-        "score": score,
-        "blocking_findings": list(findings or []),
-        "deterministic_finding_ids": [],
-        "node_ids": [],
-        "edge_selectors": [],
-        "group_ids": [],
-        "composition_fields": [],
-        "sequence_indexes": [],
-        "assumption_indexes": [],
-        "reason": reason,
-    }
-
-
 def _terminal_review(
     *,
     failed_layer: str,
@@ -1681,26 +1949,30 @@ def _terminal_review(
     failure_code: str,
     reason: str,
 ) -> dict[str, Any]:
-    layers = {
-        layer: _layer_assessment(
-            "fail" if layer == failed_layer else "not_evaluated",
-            0.0,
-            reason if layer == failed_layer else "Review stopped at the terminal gate.",
-            findings=findings if layer == failed_layer else [],
-        )
-        for layer in _REPAIR_LAYERS
-    }
-    contract = {"repair_scope": "global", "layers": layers}
     return {
         "approved": False,
-        "score": 0.0,
+        "review_status": "completed",
         "strengths": [],
         "missing": findings,
         "advice": [],
         "topology_proofs": [],
-        "revision_instruction": " ".join(findings)[:800],
-        "repair_contract": contract,
+        "revision_instruction": reason + " " + " ".join(findings)[:800],
+        "failed_layer": failed_layer,
         "terminal": True,
+        "failure_code": failure_code,
+    }
+
+
+def _reviewer_failure(*, failure_code: str, reason: str) -> dict[str, Any]:
+    """Represent reviewer availability outside the four artifact layers."""
+    return {
+        "approved": False,
+        "strengths": [],
+        "advice": [],
+        "topology_proofs": [],
+        "revision_instruction": reason,
+        "terminal": True,
+        "review_status": "unavailable",
         "failure_code": failure_code,
     }
 

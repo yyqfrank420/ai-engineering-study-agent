@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { GraphEdge } from '../../types';
 import {
+  boundLabelCenter,
   filterRenderableEdges,
   initialFitScale,
   overviewEdgeLabelOpacity,
+  partitionVerticalLevels,
   planVerticalLayout,
   selectOverviewEdgeIndices,
   selectGraphOrientation,
@@ -29,6 +31,19 @@ describe('graph layout policy', () => {
     expect(initialFitScale(760, 500, 760, tenLevelLayoutHeight)).toBeGreaterThanOrEqual(0.5);
   });
 
+  it('bounds edge-label centers inside the fitted layout', () => {
+    expect(boundLabelCenter(
+      { x: 8, y: 152 },
+      { width: 113, height: 13 },
+      { width: 1440, height: 880 },
+    )).toEqual({ x: 60.5, y: 152 });
+    expect(boundLabelCenter(
+      { x: 1432, y: 878 },
+      { width: 113, height: 13 },
+      { width: 1440, height: 880 },
+    )).toEqual({ x: 1379.5, y: 869.5 });
+  });
+
   it.each([
     ['25-node mixed topology', [2, 2, 3, 2, 1, 3, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1]],
     ['37-node deep topology', [4, 2, 2, 2, 4, 3, 1, 1, 1, 1, 2, 1, 1, 1, 2, 1, 1, 1, 1, 3, 1, 1]],
@@ -40,6 +55,64 @@ describe('graph layout policy', () => {
     expect((levelSizes as number[]).reduce((total, size) => total + size, 0)).toBeGreaterThanOrEqual(25);
     expect(15.36 * plan.scale).toBeGreaterThanOrEqual(6);
     expect(plan.nodesPerRow).toBeGreaterThan(1);
+  });
+
+  it('packs deep levels into deterministic alternating tracks', () => {
+    const levelSizes = Array.from({ length: 42 }, () => 1);
+    const plan = planVerticalLayout(1440, 960, levelSizes);
+    const tracks = [...new Set(plan.levels.map(level => level.track))];
+
+    expect(plan.levels).toHaveLength(42);
+    expect(plan.scale).toBeGreaterThanOrEqual(0.9);
+    expect(tracks.length).toBeGreaterThan(1);
+    expect(plan.levels.map(level => level.track)).toEqual(
+      [...plan.levels.map(level => level.track)].sort((left, right) => left - right),
+    );
+    for (const track of tracks) {
+      const placements = plan.levels.filter(level => level.track === track);
+      expect(new Set(placements.map(level => level.direction))).toEqual(
+        new Set([track % 2 === 0 ? 1 : -1]),
+      );
+      const yValues = placements.map(level => level.y);
+      expect(yValues).toEqual(
+        [...yValues].sort((left, right) => (track % 2 === 0 ? left - right : right - left)),
+      );
+    }
+    expect(planVerticalLayout(1440, 960, levelSizes)).toEqual(plan);
+  });
+
+  it('keeps a mixed 40-node topology above publication text size', () => {
+    const levelSizes = [5, 5, 4, 4, 3, ...Array.from({ length: 19 }, () => 1)];
+    const plan = planVerticalLayout(1440, 960, levelSizes);
+
+    expect(levelSizes.reduce((total, size) => total + size, 0)).toBe(40);
+    expect(plan.levels).toHaveLength(levelSizes.length);
+    expect(plan.nodesPerRow).toBeGreaterThanOrEqual(3);
+    expect(15.36 * plan.scale).toBeGreaterThanOrEqual(12);
+    expect(plan.levels.every(level => (
+      level.y >= VERTICAL_PAD
+      && level.y + VERTICAL_LEVEL_H <= plan.layoutHeight - VERTICAL_PAD + VERTICAL_LEVEL_H
+    ))).toBe(true);
+  });
+
+  it.each([
+    [[1, 1, 5, 1, 1], 3],
+    [[1, 8, 1], 3],
+  ])('preserves the parallel shape of %j', (levelSizes, minimumNodesPerRow) => {
+    const plan = planVerticalLayout(760, 500, levelSizes as number[]);
+
+    expect(plan.nodesPerRow).toBeGreaterThanOrEqual(minimumNodesPerRow);
+  });
+
+  it('finds the minimum-height contiguous partition before minimizing width', () => {
+    const rows = [1, 1, 1, 3, 1];
+    const ranges = partitionVerticalLevels(rows, rows, 1, 3);
+    const loads = ranges.map(([start, end]) => (
+      rows.slice(start, end).reduce((total, value) => total + value, 0)
+    ));
+
+    expect(ranges).toEqual([[0, 3], [3, 4], [4, 5]]);
+    expect(Math.max(...loads)).toBe(3);
   });
 
   it('keeps backward edges when both endpoints exist', () => {

@@ -221,10 +221,11 @@ PYTHONPATH=backend python -m eval.calibration \
 With the approved corpus, deterministic failures block immediately. A clear
 semantic failure gets one independent second judgment; two clear failures block. A
 borderline grade or judge disagreement requires manual review. PR and scheduled
-monitoring use the explicit `report-only` policy for an approved corpus: the report,
-JUnit skip, HTML evidence, and GitHub warning remain visible, but review is not
-mislabeled as broken CI. Deterministic, confirmed semantic, and infrastructure
-failures still exit non-zero under either policy. No
+evaluation use the blocking policy for an approved corpus, so every fresh manual-review
+decision blocks promotion. Report-only is restricted in code to approved semantic
+capture replay, where no new application answer or candidate deployment is created.
+Deterministic, confirmed semantic, and infrastructure failures exit non-zero under
+either policy. No
 critical dimension may fail, and at least 85% of non-critical dimensions must pass.
 
 ## Immutable judge-calibration evidence

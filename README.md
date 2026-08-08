@@ -62,7 +62,7 @@ Relevant docs:
 - **Graph layout persistence** (2026-04-05): Pan/zoom + node positions saved per graph, restored on session reload. Debounced 400ms frontend cache → `PUT /api/threads/{id}/graph`.
 - **Cold-start UX contract**: Explicit `Prepare` button shows real server milestones and unlocks Send only after the retrieval index is ready.
 - **Three-way routing**: SIMPLE (Opus 5 high effort) / MEMORY (session history) / SEARCH (RAG + architecture workflow).
-- **Explicit design roles**: Opus 5 xhigh writes and reviews the architecture brief, Kimi K3 low builds graph JSON, Kimi K3 max applies typed repairs, and Sonnet 5 high owns graph QA.
+- **Explicit design roles**: Opus 5 xhigh writes and reviews the architecture brief, Kimi K3 low builds graph JSON, Kimi K3 high applies typed repairs, Sonnet 5 medium owns graph QA, and Sonnet 5 high owns the protected semantic judge.
 - **D3 architecture diagram**: Interactive graph with step-by-step walkthrough and node detail enrichment.
 - **Protected live evaluation**: Browser journeys, deterministic graph contracts, and reviewed semantic rubrics run against isolated no-traffic Cloud Run revisions.
 - **Selective evidence reuse**: Audited per-case evidence composition avoids repeating already-passing paid evaluations while requiring exact evidence for the unresolved case.

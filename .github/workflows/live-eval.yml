@@ -283,7 +283,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           EVAL_JUDGE_PROVIDER: anthropic
           EVAL_JUDGE_MODEL: claude-sonnet-5
-        run: ./scripts/ci live --suite pr --target "$CANDIDATE_URL" --input artifacts/live-eval/browser-results.json --output artifacts/live-eval/live-results.json --require-approved-corpus --manual-review-policy report-only
+        run: ./scripts/ci live --suite pr --target "$CANDIDATE_URL" --input artifacts/live-eval/browser-results.json --output artifacts/live-eval/live-results.json --require-approved-corpus --manual-review-policy blocking
 
       - name: Record deployment identity
         if: always()

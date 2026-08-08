@@ -14,6 +14,7 @@ import pytest
 
 # ── ChatRequest field validation ──────────────────────────────────────────────
 
+
 class TestChatRequestValidation:
     """Validates that new mode-control fields accept valid values and
     coerce invalid values to sensible defaults rather than raising 422."""
@@ -179,7 +180,9 @@ def test_complexity_profiles_describe_depth_without_shaping_graph_counts(request
 def test_self_improving_applied_system_defaults_to_production_depth():
     from agent.complexity import resolve_complexity
 
-    profile = resolve_complexity("auto", "self-improving AI system for performance marketing")
+    profile = resolve_complexity(
+        "auto", "self-improving AI system for performance marketing"
+    )
 
     assert profile.resolved == "production"
 
@@ -349,6 +352,7 @@ def test_common_imperative_graph_edits_enter_the_patch_lane(message):
         "Update React components",
         "When should I add labels to training data?",
         "Should I update React components?",
+        "Please explain how to add nodes to a graph",
         "Describe the architecture",
         "How does system design work?",
         "Tell me what's new in system design",
@@ -393,6 +397,135 @@ def test_existing_graph_intent_separates_local_edit_and_new_artifact():
     assert is_new_applied_graph_request("Design a fraud detection system", graph)
 
 
+def test_graph_operation_resolver_handles_ambiguous_mutation_language_once():
+    from agent.complexity import resolve_graph_operation
+
+    applied = {
+        "design_origin": "applied",
+        "nodes": [{"id": "monitoring", "label": "Monitoring"}],
+        "groups": [],
+    }
+    canonical = {**applied, "design_origin": "canonical"}
+
+    assert (
+        resolve_graph_operation(
+            "Design a fraud detection system and add monitoring components",
+            applied,
+        )
+        == "create"
+    )
+    assert resolve_graph_operation("Expand monitoring", applied) == "edit"
+    assert resolve_graph_operation("Expand monitoring", canonical) == "edit"
+    assert resolve_graph_operation("Add Prometheus", applied) == "edit"
+    assert resolve_graph_operation("Update React components", applied) is None
+    assert (
+        resolve_graph_operation(
+            "Can you explain how to add components to a graph?",
+            applied,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Could you add Prometheus?",
+        "Make monitoring more detailed",
+        "Increase monitoring coverage",
+        "Improve monitoring",
+        "Include Prometheus in monitoring",
+        "Replace Cache service with Redis",
+        "Rebuild API Gateway service",
+        "Redesign Cache service for production",
+        "Design the Cache service with Redis",
+        "Design the Cache node with Redis",
+        "Draw an improved Monitoring service",
+        "Show Cache service with Redis",
+        "Diagram the API Gateway service with auth",
+        "Enhance Monitoring",
+        "Enhance the observability layer",
+        "Modernize Cache service",
+    ],
+)
+def test_local_component_requests_remain_incremental_edits(message):
+    from agent.complexity import resolve_graph_operation
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [
+            {"id": "cache", "label": "Cache service"},
+            {"id": "gateway", "label": "API Gateway service"},
+            {"id": "monitoring", "label": "Monitoring"},
+        ],
+        "groups": [],
+    }
+
+    assert resolve_graph_operation(message, graph) == "edit"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Keep the current graph unchanged and add citations to the answer.",
+        "Keep the current graph as-is, but update the explanation.",
+        "Do not change the diagram, but add citations.",
+        "Preserve the diagram and revise the tradeoffs.",
+    ],
+)
+def test_answer_edits_cannot_borrow_a_graph_reference_from_another_clause(message):
+    from agent.complexity import resolve_graph_operation
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "monitoring", "label": "Monitoring"}],
+        "groups": [],
+    }
+
+    assert resolve_graph_operation(message, graph) is None
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Show me a fraud detection system architecture",
+        "Diagram a fraud detection system",
+        "Visualize a fraud detection system",
+        "How would you design a fraud detection system?",
+    ],
+)
+def test_new_design_intent_does_not_depend_on_existing_graph_state(message):
+    from agent.complexity import resolve_graph_operation
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "monitoring", "label": "Monitoring"}],
+        "groups": [],
+    }
+
+    assert resolve_graph_operation(message, None) == "create"
+    assert resolve_graph_operation(message, graph) == "create"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Expand monitoring",
+        "Add Prometheus",
+        (
+            "Expand the monitoring component while preserving the original graph "
+            "topic and existing components."
+        ),
+    ],
+)
+def test_rejected_graph_followup_fails_as_an_edit_instead_of_selecting_canonical(
+    message,
+):
+    from agent.complexity import resolve_graph_operation
+
+    assert resolve_graph_operation(message, None) == "edit"
+
+
 @pytest.mark.parametrize(
     "message",
     [
@@ -426,6 +559,7 @@ def test_explicit_new_artifact_requests_replace_the_prior_domain(message):
 
 # ── research_worker._format_results ──────────────────────────────────────────
 
+
 class TestFormatResults:
     """Unit-tests the result formatting logic in isolation — no network calls."""
 
@@ -453,7 +587,9 @@ class TestFormatResults:
 
         raw = [
             self._make_result("https://reddit.com/r/ml", "Noise", "noise body"),
-            self._make_result("https://aws.amazon.com/blogs/ml", "AWS Blog", "useful content"),
+            self._make_result(
+                "https://aws.amazon.com/blogs/ml", "AWS Blog", "useful content"
+            ),
         ]
         result = _format_results(raw, noise_domains=["reddit.com"])
         assert "reddit.com" not in result
@@ -495,7 +631,7 @@ class TestFormatResults:
         from agent.nodes.research_worker import _format_results
 
         long_title = "X" * 200
-        long_body  = "Y" * 200
+        long_body = "Y" * 200
         raw = [self._make_result("https://example.com", long_title, long_body)]
         result = _format_results(raw, noise_domains=[])
         # Ellipsis markers should appear
@@ -506,7 +642,11 @@ class TestFormatResults:
     def test_bullet_format_has_domain_title_body(self):
         from agent.nodes.research_worker import _format_results
 
-        raw = [self._make_result("https://docs.anthropic.com/guide", "Claude Docs", "Helpful text")]
+        raw = [
+            self._make_result(
+                "https://docs.anthropic.com/guide", "Claude Docs", "Helpful text"
+            )
+        ]
         result = _format_results(raw, noise_domains=[])
         assert result.startswith("- Claude Docs — <https://docs.anthropic.com/guide>")
         assert "Claude Docs" in result
@@ -524,14 +664,20 @@ class TestFormatResults:
 
         raw = [
             self._make_result("javascript:alert(1)", "Unsafe", "body"),
-            self._make_result("https://user@example.com/private", "Credentials", "body"),
+            self._make_result(
+                "https://user@example.com/private", "Credentials", "body"
+            ),
             self._make_result("https://example.com/public", "Public", "body"),
         ]
 
-        assert _format_results(raw, noise_domains=[]) == "- Public — <https://example.com/public>: body"
+        assert (
+            _format_results(raw, noise_domains=[])
+            == "- Public — <https://example.com/public>: body"
+        )
 
 
 # ── research_worker_node error resilience ─────────────────────────────────────
+
 
 class TestResearchWorkerResilience:
     """Verifies that DDG failures don't crash the pipeline."""
@@ -543,13 +689,13 @@ class TestResearchWorkerResilience:
             events.append(event)
 
         return {
-            "user_message":      "RAG pipeline architecture",
-            "research_context":  "",
-            "complexity":        "auto",
-            "graph_mode":        "auto",
-            "research_enabled":  True,
-            "send":              send,
-            "_events":           events,
+            "user_message": "RAG pipeline architecture",
+            "research_context": "",
+            "complexity": "auto",
+            "graph_mode": "auto",
+            "research_enabled": True,
+            "send": send,
+            "_events": events,
         }
 
     def test_ddg_exception_returns_empty_context(self, monkeypatch):
@@ -568,7 +714,10 @@ class TestResearchWorkerResilience:
 
         assert result["research_context"] == ""
         assert result["research_status"] == "unavailable"
-        assert any("unavailable" in event.get("status", "").lower() for event in state["_events"])
+        assert any(
+            "unavailable" in event.get("status", "").lower()
+            for event in state["_events"]
+        )
 
     def test_worker_emits_status_event(self, monkeypatch):
         """A worker_status event is always sent, even before the search runs."""
@@ -580,8 +729,10 @@ class TestResearchWorkerResilience:
         asyncio.new_event_loop().run_until_complete(rw.research_worker_node(state))
 
         events = state["_events"]
-        assert any(e.get("type") == "worker_status" and e.get("worker") == "research"
-                   for e in events)
+        assert any(
+            e.get("type") == "worker_status" and e.get("worker") == "research"
+            for e in events
+        )
 
     def test_empty_ddg_results_returns_empty_context(self, monkeypatch):
         """Empty search results produce an empty research_context."""
@@ -603,11 +754,13 @@ class TestResearchWorkerResilience:
         monkeypatch.setattr(
             rw,
             "_run_ddg_searches",
-            lambda _queries, _limit: [{
-                "href": "https://example.com/report",
-                "title": "Report",
-                "body": "Current evidence",
-            }],
+            lambda _queries, _limit: [
+                {
+                    "href": "https://example.com/report",
+                    "title": "Report",
+                    "body": "Current evidence",
+                }
+            ],
         )
         state = self._make_state()
 
@@ -616,7 +769,9 @@ class TestResearchWorkerResilience:
         assert result["research_status"] == "ready"
         assert state["_events"][-1]["sources"] == ["https://example.com/report"]
 
-    def test_success_emits_bounded_research_evidence_for_allowlisted_internal_identity(self, monkeypatch):
+    def test_success_emits_bounded_research_evidence_for_allowlisted_internal_identity(
+        self, monkeypatch
+    ):
         import agent.nodes.research_worker as rw
 
         monkeypatch.setattr(rw.settings, "db_schema", "public")
@@ -628,11 +783,13 @@ class TestResearchWorkerResilience:
         monkeypatch.setattr(
             rw,
             "_run_ddg_searches",
-            lambda _queries, _limit: [{
-                "href": "https://example.com/report",
-                "title": "Report",
-                "body": "Current external evidence",
-            }],
+            lambda _queries, _limit: [
+                {
+                    "href": "https://example.com/report",
+                    "title": "Report",
+                    "body": "Current external evidence",
+                }
+            ],
         )
         state = {**self._make_state(), "user_email": "eval@example.com"}
 
@@ -647,26 +804,37 @@ class TestResearchWorkerResilience:
             ],
         }
 
-    def test_success_does_not_emit_research_evidence_for_non_allowlisted_identity(self, monkeypatch):
+    def test_success_does_not_emit_research_evidence_for_non_allowlisted_identity(
+        self, monkeypatch
+    ):
         import agent.nodes.research_worker as rw
 
-        monkeypatch.setattr(rw.settings, "internal_test_email_allowlist_raw", "eval@example.com")
+        monkeypatch.setattr(
+            rw.settings, "internal_test_email_allowlist_raw", "eval@example.com"
+        )
         monkeypatch.setattr(
             rw,
             "_run_ddg_searches",
-            lambda _queries, _limit: [{
-                "href": "https://example.com/report",
-                "title": "Report",
-                "body": "Current external evidence",
-            }],
+            lambda _queries, _limit: [
+                {
+                    "href": "https://example.com/report",
+                    "title": "Report",
+                    "body": "Current external evidence",
+                }
+            ],
         )
         state = {**self._make_state(), "user_email": "customer@example.com"}
 
         asyncio.run(rw.research_worker_node(state))
 
-        assert [event["type"] for event in state["_events"]] == ["worker_status", "worker_status"]
+        assert [event["type"] for event in state["_events"]] == [
+            "worker_status",
+            "worker_status",
+        ]
 
-    def test_build_queries_uses_current_year_instead_of_hard_coded_year(self, monkeypatch):
+    def test_build_queries_uses_current_year_instead_of_hard_coded_year(
+        self, monkeypatch
+    ):
         from datetime import datetime
 
         import agent.nodes.research_worker as rw
@@ -684,16 +852,25 @@ class TestResearchWorkerResilience:
         assert queries[1] == "RAG operating model workflow decision points KPIs"
         assert queries[2] == "RAG best practices failure modes 2032"
 
-    def test_build_queries_researches_the_domain_function_behind_a_terse_design_seed(self):
+    def test_build_queries_researches_the_domain_function_behind_a_terse_design_seed(
+        self,
+    ):
         import agent.nodes.research_worker as rw
 
         queries = rw._build_queries("growth marketing multi-agent system")
 
-        assert queries[0].startswith("growth marketing multi-agent system reference architecture")
-        assert queries[1] == "growth marketing operating model workflow decision points KPIs"
+        assert queries[0].startswith(
+            "growth marketing multi-agent system reference architecture"
+        )
+        assert (
+            queries[1]
+            == "growth marketing operating model workflow decision points KPIs"
+        )
         assert queries[2].startswith("growth marketing best practices failure modes ")
 
-    def test_worker_researches_restored_design_query_for_terse_followup(self, monkeypatch):
+    def test_worker_researches_restored_design_query_for_terse_followup(
+        self, monkeypatch
+    ):
         import agent.nodes.research_worker as rw
 
         captured_queries = []
@@ -743,7 +920,13 @@ class TestResearchWorkerResilience:
                 calls.append((query, max_results))
                 if query == "bad":
                     raise RuntimeError("search failed")
-                return [{"href": f"https://example.com/{query}", "title": query, "body": "body"}]
+                return [
+                    {
+                        "href": f"https://example.com/{query}",
+                        "title": query,
+                        "body": "body",
+                    }
+                ]
 
         monkeypatch.setitem(sys.modules, "ddgs", types.SimpleNamespace(DDGS=_DDGS))
 
@@ -773,14 +956,18 @@ class TestResearchWorkerResilience:
             def text(self, query, max_results):
                 if len(sessions) == 1:
                     return []
-                return [{
-                    "href": "https://example.com/recovered",
-                    "title": query,
-                    "body": "recovered",
-                }]
+                return [
+                    {
+                        "href": "https://example.com/recovered",
+                        "title": query,
+                        "body": "recovered",
+                    }
+                ]
 
         monkeypatch.setitem(sys.modules, "ddgs", types.SimpleNamespace(DDGS=_DDGS))
-        monkeypatch.setattr("agent.nodes.research_worker.time.sleep", lambda _seconds: None)
+        monkeypatch.setattr(
+            "agent.nodes.research_worker.time.sleep", lambda _seconds: None
+        )
 
         results = _run_ddg_searches(["first", "second"], 2)
 

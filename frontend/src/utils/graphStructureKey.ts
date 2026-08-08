@@ -18,14 +18,16 @@ import type { GraphData } from '../types';
  * — only layout / transient state may differ.
  *
  * Accepts `null` for the hook's initial state (returns `'null'`).
- * When `graph.version` is present it short-circuits to avoid serialisation.
+ * The version participates in the key but never replaces the content identity.
+ * A repeated server version must not hide a changed graph payload.
  */
 export function graphStructureKey(graph: GraphData | null): string {
   if (!graph) return 'null';
-  if (graph.version) return `version:${graph.version}`;
   return JSON.stringify({
+    version: graph.version ?? null,
     title: graph.title,
     graph_type: graph.graph_type,
+    design_origin: graph.design_origin ?? null,
     nodes: graph.nodes.map((node) => ({
       id: node.id,
       label: node.label,
