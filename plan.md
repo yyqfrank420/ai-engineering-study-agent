@@ -6,7 +6,7 @@ Last updated: 2026-08-08
 
 Restore the current architecture pipeline and deploy it before starting the staged generation redesign.
 
-The current release now completes architecture planning, Kimi generation, private rendering, local repair, and post-patch review. Diagnostic `31257810429` exposed serial defect discovery in the critic: the second review found an unchanged cache gate defect that the first review missed. The pipeline withheld the graph after its one allowed repair.
+The current release now completes architecture planning, Kimi generation, private rendering, local repair, and post-patch review. Diagnostic `31257810429` exposed serial semantic defect discovery. Diagnostic `31259489721` then exposed serial scorecard validation after a valid private render. Critic v40 corrects its invalid example, derives redundant status and score state, and reports all independent compact-row defects to one correction.
 
 The redesign stays outside the release-critical path. It begins after the current pipeline passes the targeted live diagnostic and production smoke test.
 
@@ -26,12 +26,12 @@ The redesign stays outside the release-critical path. It begins after the curren
 ### Current status
 
 - Canonicalisation and final validation use the resolved architecture depth.
-- Critic v39 sends an empty proof object at prototype depth and keeps the full proof contract at production depth.
+- Critic v40 sends an empty proof object at prototype depth and keeps the full proof contract at production depth.
 - An initial editable rejection receives one clean completion pass against the same graph and render. The server rejects any completion that drops prior findings or mutation authority.
 - The shared initial critic stage may borrow up to 195 seconds. The measured timing replay preserves 98 seconds for patching and 101 seconds for final review.
 - Repair scope is derived from failed layer ownership, so editable defects enter one bounded patch and render-only defects fail closed.
 - The exact `122b1fd` diagnostic completed all graph stages and proved the repair pipeline works. Its remaining failure was an unchanged defect omitted by the first critic.
-- Focused v39 critic and deadline verification passes. The next paid action remains one exact-head `graph-expansion` diagnostic after review, commit, and CI.
+- All 147 critic tests pass locally. The next paid action remains one exact-head `graph-expansion` diagnostic after independent review, commit, and exact-head CI.
 
 ### Tests
 

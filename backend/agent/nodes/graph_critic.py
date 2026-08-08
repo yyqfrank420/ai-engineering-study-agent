@@ -26,9 +26,18 @@ logger = logging.getLogger(__name__)
 
 _SAFE_PROTOCOL_PATH = re.compile(r"[A-Za-z0-9_$.\[\]]{1,96}")
 _PROTOCOL_ERROR_RULES = {
+    "duplicate_reference",
+    "incomplete_classification",
+    "invalid_contract",
     "invalid_enum",
+    "invalid_range",
+    "invalid_reference",
+    "invalid_shape",
+    "missing_finding",
     "missing_evidence",
     "non_monotonic_completion",
+    "ownership_mismatch",
+    "unexpected_context",
 }
 
 
@@ -41,11 +50,11 @@ class CriticProtocolError(ValueError):
         self.rule = rule if rule in _PROTOCOL_ERROR_RULES else None
 
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v39"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v40"
 # Sonnet 5 high effort can spend the full output allowance on adaptive thinking
 # before emitting the required scorecard. Medium keeps the review inside one call.
 _GRAPH_CRITIC_EFFORT = "medium"
-_GRAPH_CRITIC_CORRECTION_EFFORT = "low"
+_GRAPH_CRITIC_CORRECTION_EFFORT = "medium"
 _GRAPH_CRITIC_CORRECTION_MAX_TOKENS = 8192
 _GRAPH_STAGE_DEADLINE_KEY = "_graph_stage_deadline_s"
 _GRAPH_STAGE_FINALIZATION_HEADROOM_S = 1.0
@@ -137,9 +146,9 @@ _MODEL_LAYER_OUTPUT_EXAMPLE = ",\n".join(
     + ": "
     + json.dumps(
         [
-            "pass|fail"
+            "pass"
             if field == "status"
-            else 0.0
+            else 0.9
             if field == "score"
             else 0
             if field.endswith("addition_count")
@@ -402,6 +411,28 @@ def _protocol_error_coordinates(exc: Exception) -> tuple[str | None, str | None]
     return exc.path, exc.rule
 
 
+def _critic_protocol_error(exc: ValueError) -> CriticProtocolError:
+    """Convert model-contract failures to safe coordinates at the critic boundary."""
+    message = str(exc)
+    path_match = re.search(
+        r"(?:layers\.)?(components|connections|composition|render)"
+        r"(?:\.([A-Za-z_]+))?",
+        message,
+    )
+    path = "critic_scorecard"
+    if path_match:
+        path = f"layers.{path_match.group(1)}"
+        if path_match.group(2):
+            path += f".{path_match.group(2)}"
+    elif "topology_proofs" in message or "topology proof" in message:
+        path = "topology_proofs"
+    elif "repair_scope" in message:
+        path = "repair_scope"
+    elif "deterministic finding" in message:
+        path = "deterministic_findings"
+    return CriticProtocolError(message, path=path, rule="invalid_contract")
+
+
 def _parse_complete_response(response: StructuredLLMResponse) -> dict[str, Any]:
     if response.finish_reason == "max_tokens":
         raise ValueError("semantic review output was truncated")
@@ -438,6 +469,222 @@ def _model_addition_count(value: Any, *, path: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{path} must be a non-negative integer")
     return value
+
+
+def _preflight_review_protocol(
+    payload: dict[str, Any],
+    *,
+    graph: dict[str, Any],
+    deterministic_findings: list[dict[str, str]],
+    review_context: list[str],
+    require_topology_proofs: bool = False,
+) -> None:
+    """Report independent compact-row defects in one bounded correction."""
+    failures: list[tuple[str, str]] = []
+
+    def reject(path: str, rule: str) -> None:
+        coordinate = (path, rule)
+        if coordinate not in failures and len(failures) < 16:
+            failures.append(coordinate)
+
+    layers = payload.get("layers")
+    if not isinstance(layers, dict) or set(layers) != set(_MODEL_LAYER_FIELDS):
+        reject("layers", "invalid_shape")
+        layers = {}
+    sizes = {
+        "deterministic_finding_indexes": len(deterministic_findings),
+        "context_indexes": len(review_context),
+        "context_node_indexes": len(graph.get("nodes") or []),
+        "node_indexes": len(graph.get("nodes") or []),
+        "edge_indexes": len(graph.get("edges") or []),
+        "group_indexes": len(graph.get("groups") or []),
+        "sequence_indexes": len(graph.get("sequence") or []),
+        "assumption_indexes": len(graph.get("assumptions") or []),
+    }
+    classified_deterministic_indexes: list[int] = []
+    deterministic_owners = _deterministic_finding_owners(deterministic_findings)
+    for layer, fields in _MODEL_LAYER_FIELDS.items():
+        row = layers.get(layer)
+        row_path = f"layers.{layer}"
+        if not isinstance(row, list) or len(row) != len(fields):
+            reject(row_path, "invalid_shape")
+            continue
+        assessment = dict(zip(fields, row, strict=True))
+        status = assessment["status"]
+        if not isinstance(status, str) or status.strip().lower() not in {
+            "pass",
+            "fail",
+        }:
+            reject(f"{row_path}.status", "invalid_enum")
+        score = assessment["score"]
+        if (
+            isinstance(score, bool)
+            or not isinstance(score, (int, float))
+            or not 0 <= float(score) <= 1
+        ):
+            reject(f"{row_path}.score", "invalid_range")
+
+        finding_codes = assessment["finding_codes"]
+        if not isinstance(finding_codes, list) or not all(
+            isinstance(code, int)
+            and not isinstance(code, bool)
+            and 1 <= code <= len(_RUBRIC_CODES)
+            for code in finding_codes
+        ):
+            reject(f"{row_path}.finding_codes", "invalid_reference")
+            finding_codes = []
+        elif len(finding_codes) != len(set(finding_codes)):
+            reject(f"{row_path}.finding_codes", "duplicate_reference")
+        for code in finding_codes:
+            if _RUBRIC_CODE_OWNERS[_RUBRIC_CODES[code - 1]] != layer:
+                reject(f"{row_path}.finding_codes", "ownership_mismatch")
+
+        valid_indexes: dict[str, list[int]] = {}
+        for field in fields:
+            if field not in sizes:
+                continue
+            value = assessment[field]
+            path = f"{row_path}.{field}"
+            if not isinstance(value, list) or not all(
+                isinstance(index, int)
+                and not isinstance(index, bool)
+                and 0 <= index < sizes[field]
+                for index in value
+            ):
+                reject(path, "invalid_reference")
+                valid_indexes[field] = []
+            elif len(value) != len(set(value)):
+                reject(path, "duplicate_reference")
+                valid_indexes[field] = value
+            else:
+                valid_indexes[field] = value
+
+        deterministic_indexes = valid_indexes.get(
+            "deterministic_finding_indexes", []
+        )
+        classified_deterministic_indexes.extend(deterministic_indexes)
+        for index in deterministic_indexes:
+            finding_id = deterministic_findings[index]["id"]
+            if deterministic_owners[finding_id] != layer:
+                reject(
+                    f"{row_path}.deterministic_finding_indexes",
+                    "ownership_mismatch",
+                )
+
+        for field in fields:
+            if not field.endswith("addition_count"):
+                continue
+            value = assessment[field]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                reject(f"{row_path}.{field}", "invalid_range")
+        if "composition_fields" in assessment:
+            value = assessment["composition_fields"]
+            if not isinstance(value, list) or not all(
+                isinstance(item, str) and item in _COMPOSITION_FIELDS
+                for item in value
+            ):
+                reject(f"{row_path}.composition_fields", "invalid_reference")
+            elif len(value) != len(set(value)):
+                reject(f"{row_path}.composition_fields", "duplicate_reference")
+
+        normalized_status = status.strip().lower() if isinstance(status, str) else None
+        has_blocker = bool(finding_codes or deterministic_indexes)
+        if normalized_status == "fail" and not has_blocker:
+            reject(row_path, "missing_finding")
+        if (
+            not has_blocker
+            and isinstance(score, (int, float))
+            and not isinstance(score, bool)
+            and float(score) < _APPROVAL_SCORE
+        ):
+            reject(row_path, "missing_finding")
+        if not has_blocker and (
+            valid_indexes.get("context_indexes")
+            or valid_indexes.get("context_node_indexes")
+        ):
+            reject(row_path, "unexpected_context")
+
+    if require_topology_proofs:
+        proofs = payload.get("topology_proofs")
+        if not isinstance(proofs, dict) or set(proofs) != _TOPOLOGY_PROOF_GUARANTEES:
+            reject("topology_proofs", "invalid_shape")
+            proofs = {}
+        nodes = graph.get("nodes") or []
+        edges = graph.get("edges") or []
+        for guarantee in sorted(_TOPOLOGY_PROOF_GUARANTEES):
+            path = f"topology_proofs.{guarantee}"
+            row = proofs.get(guarantee)
+            if not isinstance(row, list) or len(row) != len(_MODEL_PROOF_FIELDS):
+                reject(path, "invalid_shape")
+                continue
+            proof = dict(zip(_MODEL_PROOF_FIELDS, row, strict=True))
+            status = proof["status"]
+            normalized_status = (
+                status.strip().lower() if isinstance(status, str) else None
+            )
+            if normalized_status not in {"pass", "fail", "not_applicable"}:
+                reject(f"{path}.status", "invalid_enum")
+            try:
+                edge_indexes = _unique_model_indexes(
+                    proof["edge_indexes"],
+                    path=f"{path}.edge_indexes",
+                    size=len(edges),
+                )
+            except ValueError:
+                reject(f"{path}.edge_indexes", "invalid_reference")
+                edge_indexes = []
+            try:
+                route_index_pairs = _unique_model_route_pairs(
+                    proof["route_pairs"],
+                    path=f"{path}.route_pairs",
+                    node_count=len(nodes),
+                )
+            except ValueError:
+                reject(f"{path}.route_pairs", "invalid_reference")
+                route_index_pairs = []
+            if normalized_status == "pass":
+                evidence_edges = [
+                    (
+                        str(edges[index].get("source") or ""),
+                        str(edges[index].get("target") or ""),
+                        str(edges[index].get("label") or ""),
+                    )
+                    for index in edge_indexes
+                ]
+                route_pairs = [
+                    (
+                        str(nodes[source_index].get("id") or ""),
+                        str(nodes[target_index].get("id") or ""),
+                    )
+                    for source_index, target_index in route_index_pairs
+                ]
+                try:
+                    _validate_witness_subgraph(
+                        evidence_edges,
+                        route_pairs,
+                        path=path,
+                    )
+                except CriticProtocolError as exc:
+                    reject(path, exc.rule or "invalid_contract")
+                except ValueError:
+                    reject(path, "invalid_contract")
+            elif normalized_status in {"fail", "not_applicable"} and (
+                edge_indexes or route_index_pairs
+            ):
+                reject(path, "unexpected_context")
+
+    if sorted(classified_deterministic_indexes) != list(
+        range(len(deterministic_findings))
+    ):
+        reject("deterministic_findings", "incomplete_classification")
+    if failures:
+        summary = "; ".join(f"{path}:{rule}" for path, rule in failures)
+        path, rule = failures[0]
+        raise CriticProtocolError(
+            "critic scorecard preflight invalid: " + summary,
+            path=path,
+            rule=rule,
+        )
 
 
 def _unique_model_route_pairs(
@@ -700,10 +947,25 @@ def _canonicalise_review_protocol(
             path=f"layers.{layer}.context_node_indexes",
             size=len(nodes),
         )
-        if status == "pass" and (context_indexes or context_node_indexes):
-            raise ValueError(f"passing {layer} layer cannot cite repair context")
         if status == "fail" and not finding_codes and not deterministic_indexes:
             raise ValueError(f"failed {layer} layer requires a finding code")
+        derived_status = "fail" if finding_codes or deterministic_indexes else "pass"
+        if status != derived_status:
+            logger.info(
+                "Derived critic layer status from blockers: layer=%s model_status=%s "
+                "derived_status=%s",
+                layer,
+                status,
+                derived_status,
+            )
+        status = derived_status
+        if status == "pass" and (context_indexes or context_node_indexes):
+            raise ValueError(f"passing {layer} layer cannot cite repair context")
+        score = (
+            float(score)
+            if status == "pass"
+            else min(float(score), _APPROVAL_SCORE - 0.01)
+        )
         context_findings = (
             [
                 _context_finding(
@@ -1141,6 +1403,11 @@ are read-only anchors for those additions. In composition, use the three additio
 the exact number of new groups, sequence records, or assumptions; use zero for unchanged collections.
 Every connection addition must have at least two endpoint identities across declared component
 additions and unique component or connection context nodes.
+Component additions also require connection additions. When the candidate has groups, component
+additions require a failed composition row with `groups` in `composition_fields` and either an
+editable existing group or a declared group addition. Every composition addition count requires its
+matching field in `composition_fields`. These are one repair plan across MECE owners, so fail every
+owner whose records must change.
 
 Set `repair_scope` to `none` when all four layers pass. Set it to `local` when components,
 connections, or composition fails, including a graph-caused render failure alongside an editable
@@ -1257,8 +1524,10 @@ async def _request_critic_scorecard(
             {
                 "type": "text",
                 "text": (
-                    "Your prior scorecard failed protocol validation. Correct the scorecard only. "
-                    "Keep every valid judgment unchanged and obey the exact "
+                    "Your prior scorecard failed protocol validation. Correct it and run the clean "
+                    "completeness pass before the one allowed repair. Keep every valid judgment "
+                    "unchanged, add every independent blocking defect the prior pass missed, and "
+                    "obey the exact "
                     f"{correction_contracts}.\n"
                     f"Validation error: {validation_error[:1000]}\n"
                     f"Prior scorecard: {invalid_response[:12000]}"
@@ -1396,19 +1665,32 @@ def _completed_critic_review(
     review_context: list[str],
     require_topology_proofs: bool,
 ) -> dict[str, Any]:
-    payload = _canonicalise_review_protocol(
-        _parse_complete_response(response),
-        graph=graph,
-        deterministic_findings=deterministic_findings,
-        review_context=review_context,
-        require_topology_proofs=require_topology_proofs,
-    )
-    _validate_review_protocol(
-        payload,
-        require_topology_proofs=require_topology_proofs,
-        graph=graph,
-        deterministic_findings=deterministic_findings,
-    )
+    try:
+        raw_payload = _parse_complete_response(response)
+        _preflight_review_protocol(
+            raw_payload,
+            graph=graph,
+            deterministic_findings=deterministic_findings,
+            review_context=review_context,
+            require_topology_proofs=require_topology_proofs,
+        )
+        payload = _canonicalise_review_protocol(
+            raw_payload,
+            graph=graph,
+            deterministic_findings=deterministic_findings,
+            review_context=review_context,
+            require_topology_proofs=require_topology_proofs,
+        )
+        _validate_review_protocol(
+            payload,
+            require_topology_proofs=require_topology_proofs,
+            graph=graph,
+            deterministic_findings=deterministic_findings,
+        )
+    except CriticProtocolError:
+        raise
+    except ValueError as exc:
+        raise _critic_protocol_error(exc) from exc
     return _review_from_repair_contract(payload)
 
 
@@ -1605,6 +1887,10 @@ async def graph_critic_node(state: AgentState) -> AgentState:
         )
         return {**state, "graph_review": review}
     raw = ""
+    validation_stage = "initial"
+    protocol_corrected = False
+    error_path: str | None = None
+    error_rule: str | None = None
     try:
         review_packet = _review_packet(
             state,
@@ -1639,11 +1925,13 @@ async def graph_critic_node(state: AgentState) -> AgentState:
             error_path, error_rule = _protocol_error_coordinates(protocol_error)
             logger.warning(
                 "Critic protocol invalid; requesting one correction: "
-                "type=%s path=%s rule=%s",
+                "type=%s stage=%s path=%s rule=%s",
                 type(protocol_error).__name__,
+                validation_stage,
                 error_path,
                 error_rule,
             )
+            validation_stage = "correction"
             response = await _request_critic_scorecard(
                 state,
                 review_packet=review_packet,
@@ -1660,7 +1948,9 @@ async def graph_critic_node(state: AgentState) -> AgentState:
                 review_context=review_packet["review_context"],
                 require_topology_proofs=profile.resolved == "production",
             )
-        if _needs_repair_completion(review, revision_count):
+            protocol_corrected = True
+        if _needs_repair_completion(review, revision_count) and not protocol_corrected:
+            validation_stage = "completion"
             response = await _request_critic_scorecard(
                 state,
                 review_packet=review_packet,
@@ -1692,9 +1982,10 @@ async def graph_critic_node(state: AgentState) -> AgentState:
         error_path, error_rule = _protocol_error_coordinates(exc)
         logger.warning(
             "Model review unavailable; rejecting unaudited graph: "
-            "type=%s code=%s path=%s rule=%s",
+            "type=%s code=%s stage=%s path=%s rule=%s",
             type(exc).__name__,
             failure_code,
+            validation_stage,
             error_path,
             error_rule,
         )
@@ -1703,29 +1994,36 @@ async def graph_critic_node(state: AgentState) -> AgentState:
             reason="The independent semantic architecture review did not complete.",
         )
     review_unavailable = review.get("review_status") == "unavailable"
-    await state["send"](
-        {
-            "type": "workflow_progress",
-            "phase": "review",
-            "status": "complete" if review.get("approved") else "rejected",
-            "failure_code": review.get("failure_code"),
-            "title": (
-                "Diagram passed the clarity gate"
-                if review.get("approved")
-                else "Independent review did not complete"
-                if review_unavailable
-                else "Diagram did not pass the clarity gate"
-            ),
-            "detail": (
-                "The rendered design is ready to publish."
-                if review.get("approved")
-                else str(
-                    review.get("revision_instruction")
-                    or "The answer will continue without this diagram."
-                )[:260]
-            ),
-        }
-    )
+    progress_event = {
+        "type": "workflow_progress",
+        "phase": "review",
+        "status": "complete" if review.get("approved") else "rejected",
+        "failure_code": review.get("failure_code"),
+        "title": (
+            "Diagram passed the clarity gate"
+            if review.get("approved")
+            else "Independent review did not complete"
+            if review_unavailable
+            else "Diagram did not pass the clarity gate"
+        ),
+        "detail": (
+            "The rendered design is ready to publish."
+            if review.get("approved")
+            else str(
+                review.get("revision_instruction")
+                or "The answer will continue without this diagram."
+            )[:260]
+        ),
+    }
+    if review_unavailable and error_path and error_rule:
+        progress_event.update(
+            {
+                "validation_stage": validation_stage,
+                "validation_path": error_path,
+                "validation_rule": error_rule,
+            }
+        )
+    await state["send"](progress_event)
     return {**state, "graph_review": review}
 
 

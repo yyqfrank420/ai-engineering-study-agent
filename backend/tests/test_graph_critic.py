@@ -21,6 +21,7 @@ from agent.nodes.graph_critic import (
     _deterministic_review,
     _lock_unchanged_passed_layers,
     _needs_repair_completion,
+    _preflight_review_protocol,
     _require_monotonic_repair_completion,
     _review_packet,
     _validate_repair_contract,
@@ -193,7 +194,7 @@ def _critic_state(*, graph=None, complexity="prototype"):
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v39"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v40"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -368,6 +369,128 @@ def test_model_indexes_are_expanded_to_exact_locked_selectors():
         "blocking_findings"
     ] == ["Repair edge semantics in the connections layer."]
     _validate_repair_contract(normalized["repair_contract"], graph=graph)
+
+
+def test_model_status_and_score_are_derived_from_blockers():
+    graph = {
+        "nodes": [{"id": "intake"}, {"id": "gate"}],
+        "edges": [{"source": "intake", "target": "gate", "label": "submit"}],
+    }
+    payload = _passing_review_payload()
+    _set_model_layer(
+        payload,
+        "connections",
+        status="pass",
+        score=0.95,
+        finding_codes=[5],
+        edge_indexes=[0],
+    )
+
+    normalized = _canonicalise_review_protocol(
+        payload,
+        graph=graph,
+        deterministic_findings=[],
+        review_context=[],
+        require_topology_proofs=False,
+    )
+    layers = normalized["repair_contract"]["layers"]
+
+    assert layers["connections"]["status"] == "fail"
+    assert layers["connections"]["score"] < 0.78
+    assert layers["components"]["status"] == "pass"
+    assert layers["components"]["score"] == 0.9
+
+
+def test_scorecard_preflight_rejects_low_score_without_a_blocker():
+    payload = _passing_review_payload(topology_proofs={})
+    _set_model_layer(payload, "components", score=0.0)
+
+    with pytest.raises(CriticProtocolError) as caught:
+        _preflight_review_protocol(
+            payload,
+            graph={},
+            deterministic_findings=[],
+            review_context=[],
+        )
+
+    assert caught.value.path == "layers.components"
+    assert caught.value.rule == "missing_finding"
+
+
+def test_scorecard_preflight_reports_independent_row_defects_together():
+    payload = _passing_review_payload(topology_proofs={})
+    _set_model_layer(payload, "components", node_indexes=[4])
+    _set_model_layer(payload, "connections", edge_indexes=[7])
+
+    with pytest.raises(CriticProtocolError) as caught:
+        _preflight_review_protocol(
+            payload,
+            graph={"nodes": [], "edges": []},
+            deterministic_findings=[],
+            review_context=[],
+        )
+
+    assert "layers.components.node_indexes:invalid_reference" in str(caught.value)
+    assert "layers.connections.edge_indexes:invalid_reference" in str(caught.value)
+
+
+def test_scorecard_preflight_reports_independent_proof_defects_together():
+    payload = _passing_review_payload()
+    guarantees = sorted(_TOPOLOGY_PROOF_GUARANTEES)[:2]
+    for guarantee in guarantees:
+        payload["topology_proofs"][guarantee] = ["pass", [], []]
+
+    with pytest.raises(CriticProtocolError) as caught:
+        _preflight_review_protocol(
+            payload,
+            graph={"nodes": [], "edges": []},
+            deterministic_findings=[],
+            review_context=[],
+            require_topology_proofs=True,
+        )
+
+    for guarantee in guarantees:
+        assert f"topology_proofs.{guarantee}:missing_evidence" in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_protocol_correction_receives_all_repair_algebra_defects(monkeypatch):
+    invalid = _passing_review_payload(topology_proofs={})
+    _set_model_layer(invalid, "components", node_indexes=[0])
+    connection_code = next(
+        index
+        for index, code in enumerate(_RUBRIC_CODES, start=1)
+        if _RUBRIC_CODE_OWNERS[code] == "connections"
+    )
+    _set_model_layer(
+        invalid,
+        "connections",
+        status="fail",
+        score=0.7,
+        finding_codes=[connection_code],
+        addition_count=1,
+    )
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        payload = invalid if len(calls) == 1 else _passing_review_payload(
+            topology_proofs={}
+        )
+        return _structured_response(payload)
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+    graph = _domain_graph()
+    graph["nodes"][0]["id"] = "selected"
+    result = await graph_critic_node(_critic_state(graph=graph))
+
+    assert result["graph_review"]["approved"] is True
+    correction = calls[1]["messages"][0]["content"][-1]["text"]
+    assert "pass status cannot expose editable selectors" in correction
+    assert "connection additions require at least two" in correction
 
 
 def test_critic_schema_keeps_named_layers_without_repeating_rubric_names():
@@ -650,7 +773,13 @@ def test_failed_topology_proof_requires_connections_code_17(finding_codes):
 @pytest.mark.parametrize(
     ("field", "value", "deterministic_findings", "review_context", "match"),
     [
-        ("finding_codes", [1], [], [], "cannot contain blocking findings"),
+        (
+            "finding_codes",
+            [1],
+            [],
+            [],
+            "failed components layer must cite a node or declare additions",
+        ),
         (
             "deterministic_finding_indexes",
             [0],
@@ -662,7 +791,7 @@ def test_failed_topology_proof_requires_connections_code_17(finding_codes):
                 }
             ],
             [],
-            "cannot classify deterministic findings",
+            "failed components layer must cite a node or declare additions",
         ),
         ("node_indexes", [0], [], [], "cannot expose editable selectors"),
         (
@@ -1204,7 +1333,7 @@ async def test_initial_local_rejection_gets_one_monotonic_completion_pass(monkey
 
 
 @pytest.mark.asyncio
-async def test_protocol_correction_can_feed_the_completion_pass(monkeypatch):
+async def test_protocol_correction_is_the_clean_completion_pass(monkeypatch):
     calls = []
     invalid = _passing_review_payload()
     _set_model_layer(invalid, "components", status="invalid")
@@ -1238,8 +1367,10 @@ async def test_protocol_correction_can_feed_the_completion_pass(monkeypatch):
     assert [call["telemetry"]["operation"] for call in calls] == [
         "graph_critic",
         "graph_critic_protocol_correction",
-        "graph_critic_repair_completion",
     ]
+    correction = calls[1]["messages"][0]["content"][-1]["text"]
+    assert "clean completeness pass" in correction
+    assert "add every independent blocking defect" in correction
 
 
 def test_unchanged_passed_layers_remain_locked_after_a_local_repair():
@@ -3076,18 +3207,24 @@ async def test_protocol_correction_logs_safe_coordinates(
     _set_model_layer(invalid, "components", status="PRIVATE_SENTINEL")
     valid = _passing_review_payload()
     calls = []
+    events = []
 
     async def fake_stream_llm(**kwargs):
         calls.append(kwargs)
         response = valid if recovers and len(calls) == 2 else invalid
         return _structured_response(response)
 
+    async def send(event):
+        events.append(event)
+
     caplog.set_level("WARNING", logger="agent.nodes.graph_critic")
     monkeypatch.setattr(
         "agent.nodes.graph_critic.stream_structured_llm",
         fake_stream_llm,
     )
-    result = await graph_critic_node(_critic_state())
+    state = _critic_state()
+    state["send"] = send
+    result = await graph_critic_node(state)
 
     assert result["graph_review"]["approved"] is recovers
     assert len(calls) == 2
@@ -3109,6 +3246,10 @@ async def test_protocol_correction_logs_safe_coordinates(
             result["graph_review"]["failure_code"]
             == "semantic_review_protocol_invalid"
         )
+        review_event = events[-1]
+        assert review_event["validation_stage"] == "correction"
+        assert review_event["validation_path"] == "layers.components.status"
+        assert review_event["validation_rule"] == "invalid_enum"
 
 
 @pytest.mark.asyncio
@@ -3182,7 +3323,7 @@ async def test_invalid_structured_review_contract_fails_closed(
     assert len(calls) == 2
     assert calls[0]["response_schema"] == _GRAPH_CRITIC_PROTOTYPE_RESPONSE_SCHEMA
     assert "state_effect_reconciliation" not in calls[0]["system"]
-    assert calls[1]["effort"] == "low"
+    assert calls[1]["effort"] == "medium"
     assert "topology guarantee" not in calls[1]["system"]
     correction_text = calls[1]["messages"][0]["content"][-1]["text"]
     assert "topology-proof contracts" not in correction_text
@@ -3339,7 +3480,7 @@ async def test_malformed_topology_proofs_get_one_bounded_correction(
     assert calls[0]["response_schema"] == _GRAPH_CRITIC_RESPONSE_SCHEMA
     assert "state_effect_reconciliation" in calls[0]["system"]
     assert "Preserve every required proof" in calls[0]["system"]
-    assert calls[1]["effort"] == "low"
+    assert calls[1]["effort"] == "medium"
     correction_text = calls[1]["messages"][0]["content"][-1]["text"]
     assert "topology-proof contracts" in correction_text
     assert f"path=topology_proofs.{malformed_guarantee}" in caplog.text

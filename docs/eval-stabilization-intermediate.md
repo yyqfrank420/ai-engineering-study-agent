@@ -443,6 +443,19 @@ Most recent authoritative evidence:
   post-patch review keep one critic pass. The shared critic stage may borrow saved upstream time up
   to 195 seconds. A replay of the measured run offsets leaves 98 seconds for Kimi and 101 seconds
   for the final critic inside the existing terminal deadline and downstream reserves.
+- Diagnostic `31259489721` ran `graph-expansion` on exact head `93bc29b`. Opus architect and
+  challenger, Kimi construction, the private render, and both Sonnet protocol attempts completed.
+  The 48-node, 71-edge, 5-group prototype graph passed deterministic and browser checks. The initial
+  critic and its low-effort correction each returned provider-valid JSON that failed the Python
+  scorecard contract. No completeness pass or Kimi repair ran. Six calls cost $0.816763. Retained
+  evidence records `ValueError` without a path, so the exact model-owned value is unavailable.
+- Critic v40 removes the known serial protocol traps before another paid run. Its generated pass-row
+  example now uses a valid `0.9` score. The server derives layer status from blockers, places failed
+  scores below the publish threshold, rejects low scores that omit a blocker, and derives repair scope.
+  A bounded preflight reports independent layer-row and production-proof defects together to one
+  medium-effort correction and completeness audit. The prompt states the existing component, connection,
+  endpoint, and grouped-composition permission dependencies. Every terminal protocol rejection emits
+  a safe validation stage, path, and rule in the captured workflow event without retaining model text.
 - Canonical run `31221851568` completed all Kimi provider calls. Two valid topology objects were
   discarded because one bounded title and one bounded responsibility exceeded presentation limits.
   Two other 33-node and 39-node candidates passed browser rendering, then their Sonnet reviews were
