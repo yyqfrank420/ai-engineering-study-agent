@@ -137,6 +137,10 @@ jobs:
     concurrency:
       group: staging-live-eval-global
       cancel-in-progress: false
+    env:
+      EVALUATION_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      EVALUATION_PROVIDER_ATTEMPT_LIMIT: 64
+      OTEL_ENVIRONMENT: staging
     permissions:
       contents: read
       id-token: write
@@ -227,8 +231,6 @@ jobs:
         name: Deploy digest as a no-traffic staging revision
         env:
           REVISION_TAG: eval-${{ github.run_id }}-${{ github.run_attempt }}
-          EVALUATION_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-          EVALUATION_PROVIDER_ATTEMPT_LIMIT: 64
         run: |
           gcloud run deploy "$STAGING_SERVICE" \
             --project "$PROJECT_ID" \
@@ -283,9 +285,6 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           EVAL_JUDGE_PROVIDER: anthropic
           EVAL_JUDGE_MODEL: claude-sonnet-5
-          EVALUATION_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-          EVALUATION_PROVIDER_ATTEMPT_LIMIT: 64
-          OTEL_ENVIRONMENT: staging
         run: ./scripts/ci live --suite pr --target "$CANDIDATE_URL" --input artifacts/live-eval/browser-results.json --output artifacts/live-eval/live-results.json --require-approved-corpus --manual-review-policy blocking
 
       - name: Record deployment identity
