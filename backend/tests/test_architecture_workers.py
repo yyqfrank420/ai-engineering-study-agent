@@ -7,10 +7,13 @@ from agent.nodes.architecture_workers import (
     _ARCHITECT_PROMPT_VERSION,
     _ARCHITECT_RESPONSE_SCHEMA,
     _ARCHITECT_SYSTEM,
+    _CHALLENGER_MAX_OUTPUT_TOKENS,
     _CHALLENGER_RESPONSE_SCHEMA,
     _CHALLENGER_SYSTEM,
+    _apply_source_backed_plan_locks,
     _is_complete_architect_plan,
     _normalise_architect,
+    _normalise_challenger,
     _validate_reviewed_plan_transition,
     _worker_context,
     architect_node,
@@ -78,7 +81,8 @@ def test_architecture_roles_reason_about_enforced_control_paths():
     assert "compatible schema evolution" in _ARCHITECT_SYSTEM
     assert "complete JSON under 12,000 characters" in _ARCHITECT_SYSTEM
     assert "single downstream design authority" in _CHALLENGER_SYSTEM
-    assert "complete JSON under 14,000 characters" in _CHALLENGER_SYSTEM
+    assert "targeted correction audit, not an essay" in _CHALLENGER_SYSTEM
+    assert "complete JSON under 12,000 characters" in _CHALLENGER_SYSTEM
 
 
 def test_architecture_worker_schemas_require_every_declared_object_field():
@@ -88,13 +92,35 @@ def test_architecture_worker_schemas_require_every_declared_object_field():
         _ARCHITECT_RESPONSE_SCHEMA["properties"]["decisions"]["items"],
         _CHALLENGER_RESPONSE_SCHEMA,
         _CHALLENGER_RESPONSE_SCHEMA["properties"]["accepted_plan"],
-        _CHALLENGER_RESPONSE_SCHEMA["properties"]["removed_candidate_items"]["items"],
         _CHALLENGER_RESPONSE_SCHEMA["properties"]["risks"]["items"],
     )
 
     for schema in schemas:
         assert schema["additionalProperties"] is False
         assert set(schema["required"]) == set(schema["properties"])
+
+    assert "removed_candidate_items" not in _CHALLENGER_RESPONSE_SCHEMA["properties"]
+    assert _CHALLENGER_RESPONSE_SCHEMA["properties"]["risks"]["maxItems"] == 5
+    assert _CHALLENGER_RESPONSE_SCHEMA["properties"]["tradeoffs"]["maxItems"] == 4
+
+
+def test_challenger_audit_is_bounded_even_if_a_provider_ignores_the_schema():
+    review = _normalise_challenger(
+        {
+            "accepted_plan": _complete_plan(),
+            "risks": [
+                {"area": "scope", "risk": f"risk-{index}", "mitigation": "fix"}
+                for index in range(8)
+            ],
+            "missing_requirements": [f"missing-{index}" for index in range(8)],
+            "tradeoffs": [f"tradeoff-{index}" for index in range(8)],
+            "status_update": "Reviewed.",
+        }
+    )
+
+    assert len(review["risks"]) == 5
+    assert len(review["missing_requirements"]) == 5
+    assert len(review["tradeoffs"]) == 4
 
 
 def test_complete_architect_plan_may_have_no_material_assumptions():
@@ -370,8 +396,47 @@ async def test_challenger_failure_stops_graph_input(monkeypatch):
     assert captured["model"] == settings.graph_qa_model
     assert "Primary architect candidate" in captured["messages"][0]["content"]
     assert captured["timeout_seconds"] == settings.architecture_role_timeout_s
-    assert captured["max_output_tokens"] == settings.architecture_max_completion_tokens
+    assert captured["max_output_tokens"] == _CHALLENGER_MAX_OUTPUT_TOKENS
     assert captured["response_schema"] is _CHALLENGER_RESPONSE_SCHEMA
+
+
+@pytest.mark.asyncio
+async def test_challenger_reports_a_specific_incomplete_plan_code(monkeypatch):
+    events = []
+
+    async def incomplete_model(**_kwargs):
+        return _structured_response(
+            {
+                "accepted_plan": _complete_plan(actors=[]),
+                "risks": [],
+                "missing_requirements": [],
+                "tradeoffs": [],
+                "status_update": "No complete plan.",
+            }
+        )
+
+    async def send(event):
+        events.append(event)
+
+    monkeypatch.setattr(
+        "agent.nodes.architecture_workers.stream_structured_llm",
+        incomplete_model,
+    )
+    result = await challenger_node(
+        {
+            "is_applied_design": True,
+            "design_query": "Design a model-serving stack.",
+            "user_message": "Design a model-serving stack.",
+            "complexity": "prototype",
+            "evidence_bundle": {},
+            "architecture_ready": True,
+            "architect_plan": _complete_plan(),
+            "send": send,
+        }
+    )
+
+    assert result == {"challenger_review": {}, "architecture_ready": False}
+    assert events[-1]["failure_code"] == "architecture_review_incomplete"
 
 
 @pytest.mark.asyncio
@@ -397,13 +462,6 @@ async def test_challenger_replaces_the_candidate_with_one_reviewed_plan(monkeypa
         return _structured_response(
             {
                 "accepted_plan": accepted_plan,
-                "removed_candidate_items": [
-                    {
-                        "field": "required_capabilities",
-                        "value": "Coordinate multi-region lease fencing and an outbox fleet",
-                        "reason": "It is deferred enterprise scope outside the requested v1.",
-                    }
-                ],
                 "risks": [
                     {
                         "area": "scope",
@@ -427,8 +485,8 @@ async def test_challenger_replaces_the_candidate_with_one_reviewed_plan(monkeypa
     result = await challenger_node(
         {
             "is_applied_design": True,
-            "design_query": "Design a production model-serving stack.",
-            "user_message": "Design a production model-serving stack.",
+            "design_query": "Design a production model-serving stack. Run on the user's private GPU cluster.",
+            "user_message": "Design a production model-serving stack. Run on the user's private GPU cluster.",
             "complexity": "prototype",
             "evidence_bundle": {},
             "architecture_ready": True,
@@ -462,144 +520,97 @@ async def test_challenger_replaces_the_candidate_with_one_reviewed_plan(monkeypa
     assert "Primary architect candidate" in captured["messages"][0]["content"]
 
 
-def test_reviewed_plan_rejects_silent_commitment_removal():
+def test_reviewed_plan_can_rewrite_or_remove_architect_generated_content():
     candidate = _complete_plan(
-        diagram_requirements=[
-            "Show the request path",
-            "Show the private deployment boundary",
-        ]
+        actors=["Product application", "Invented compliance board"],
+        diagram_requirements=["Draw a global control plane"],
+        runtime_flow=["Authorize", "Run a global election", "Infer"],
     )
-    accepted = _complete_plan(diagram_requirements=["Show the request path"])
+    accepted = _complete_plan(
+        actors=["Product application"],
+        diagram_requirements=["Show one bounded request path"],
+        runtime_flow=["Authorize", "Infer", "Return"],
+    )
 
-    with pytest.raises(ValueError, match="without a removal decision"):
-        _validate_reviewed_plan_transition(candidate, accepted, [])
-
-    _validate_reviewed_plan_transition(
+    reviewed = _apply_source_backed_plan_locks(
         candidate,
         accepted,
-        [
-            {
-                "field": "diagram_requirements",
-                "value": "Show the private deployment boundary",
-                "reason": "The user did not request a private deployment.",
-            }
-        ],
+        source_request="Design a production model-serving stack.",
     )
-
-
-@pytest.mark.parametrize(
-    ("field", "candidate_values", "accepted_values"),
-    [
-        ("actors", ["Product application", "Compliance reviewer"], ["Product application"]),
-        ("inputs", ["Authorized request", "Policy decision"], ["Authorized request"]),
-        ("runtime_flow", ["Authorize", "Infer", "Return"], ["Authorize", "Return"]),
-    ],
-)
-def test_reviewed_plan_audits_removed_actors_and_inputs(
-    field,
-    candidate_values,
-    accepted_values,
-):
-    candidate = _complete_plan(**{field: candidate_values})
-    accepted = _complete_plan(**{field: accepted_values})
-
-    with pytest.raises(ValueError, match="without a removal decision"):
-        _validate_reviewed_plan_transition(candidate, accepted, [])
-
     _validate_reviewed_plan_transition(
-        candidate,
-        accepted,
-        [
-            {
-                "field": field,
-                "value": next(
-                    value for value in candidate_values if value not in accepted_values
-                ),
-                "reason": "The role or input was outside the requested scope.",
-            }
-        ],
+        reviewed,
+        source_request="Design a production model-serving stack.",
     )
 
-
-@pytest.mark.parametrize(
-    ("field", "identity_field", "candidate_item"),
-    [
-        (
-            "evidence_basis",
-            "claim",
-            {
-                "claim": "Use regional failover.",
-                "basis": "engineering_recommendation",
-                "evidence_ref": "reliability review",
-            },
-        ),
-        (
-            "decisions",
-            "decision",
-            {
-                "area": "release",
-                "decision": "Use regional failover",
-                "why": "The candidate assumed a multi-region launch.",
-            },
-        ),
-    ],
-)
-def test_reviewed_plan_audits_removed_evidence_and_decisions(
-    field,
-    identity_field,
-    candidate_item,
-):
-    candidate = _complete_plan(**{field: [candidate_item]})
-    accepted = _complete_plan(**{field: []})
-
-    with pytest.raises(ValueError, match="without a removal decision"):
-        _validate_reviewed_plan_transition(candidate, accepted, [])
-
-    _validate_reviewed_plan_transition(
-        candidate,
-        accepted,
-        [
-            {
-                "field": field,
-                "value": candidate_item[identity_field],
-                "reason": "The candidate item was outside the requested launch scope.",
-            }
-        ],
-    )
+    assert reviewed["actors"] == ["Product application"]
+    assert reviewed["diagram_requirements"] == ["Show one bounded request path"]
+    assert "global election" not in json.dumps(reviewed)
 
 
-def test_reviewed_plan_never_drops_explicit_constraints_or_user_evidence():
+def test_reviewed_plan_locks_verifiable_user_constraints_and_evidence():
     candidate = _complete_plan(
-        constraints=["Keep all data in region"],
+        constraints=["keep all data in region", "Invented GPU requirement"],
         evidence_basis=[
             {
                 "claim": "Data residency is required.",
                 "basis": "user",
                 "evidence_ref": "keep all data in region",
-            }
+            },
+            {
+                "claim": "A private GPU is required.",
+                "basis": "user",
+                "evidence_ref": "invented private GPU",
+            },
         ],
     )
 
-    with pytest.raises(ValueError, match="explicit user constraints"):
-        _validate_reviewed_plan_transition(candidate, _complete_plan(), [])
+    reviewed = _apply_source_backed_plan_locks(
+        candidate,
+        _complete_plan(),
+        source_request="Design the service and keep all data in region.",
+    )
 
-    with pytest.raises(ValueError, match="user-sourced evidence"):
-        _validate_reviewed_plan_transition(
-            candidate,
-            _complete_plan(constraints=["Keep all data in region"]),
-            [],
-        )
+    assert reviewed["constraints"] == ["keep all data in region"]
+    assert reviewed["evidence_basis"] == [candidate["evidence_basis"][0]]
+    _validate_reviewed_plan_transition(
+        reviewed,
+        source_request="Design the service and keep all data in region.",
+    )
 
-    with pytest.raises(ValueError, match="explicit user constraints"):
-        _validate_reviewed_plan_transition(
-            _complete_plan(),
+
+def test_reviewed_plan_prefers_corrected_user_evidence_for_the_same_source_quote():
+    candidate = _complete_plan(
+        evidence_basis=[
+            {
+                "claim": "Use one fixed region forever.",
+                "basis": "user",
+                "evidence_ref": "keep all data in region",
+            }
+        ]
+    )
+    corrected = {
+        "claim": "Keep request data inside the required region.",
+        "basis": "user",
+        "evidence_ref": "keep all data in region",
+    }
+
+    reviewed = _apply_source_backed_plan_locks(
+        candidate,
+        _complete_plan(evidence_basis=[corrected]),
+        source_request="Design the service and keep all data in region.",
+    )
+
+    assert reviewed["evidence_basis"] == [corrected]
+
+
+@pytest.mark.parametrize(
+    ("accepted", "code"),
+    [
+        (
             _complete_plan(constraints=["Invented residency requirement"]),
-            [],
-        )
-
-    with pytest.raises(ValueError, match="user-sourced evidence"):
-        _validate_reviewed_plan_transition(
-            _complete_plan(),
+            "architecture_review_constraint_provenance",
+        ),
+        (
             _complete_plan(
                 evidence_basis=[
                     {
@@ -609,8 +620,18 @@ def test_reviewed_plan_never_drops_explicit_constraints_or_user_evidence():
                     }
                 ]
             ),
-            [],
+            "architecture_review_evidence_provenance",
+        ),
+    ],
+)
+def test_reviewed_plan_validation_has_specific_provenance_codes(accepted, code):
+    with pytest.raises(ValueError) as exc_info:
+        _validate_reviewed_plan_transition(
+            accepted,
+            source_request="Design the service.",
         )
+
+    assert exc_info.value.code == code
 
 
 @pytest.mark.asyncio
