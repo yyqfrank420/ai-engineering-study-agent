@@ -88,16 +88,11 @@ def design_timeout_seconds(state: dict[str, Any]) -> float:
     )
 
 
-def critic_timeout_seconds(state: dict[str, Any], revision_count: int) -> float:
+def critic_timeout_seconds(state: dict[str, Any]) -> float:
     downstream_reserve_s = (
         settings.graph_synthesis_timeout_s
         + settings.graph_finalization_reserve_s
     )
-    if revision_count == 0:
-        downstream_reserve_s += (
-            settings.graph_patch_timeout_s
-            + settings.graph_critic_timeout_s
-        )
     return _stage_timeout(
         state,
         max_s=settings.graph_critic_max_timeout_s,

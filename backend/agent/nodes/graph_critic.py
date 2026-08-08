@@ -36,7 +36,7 @@ class CriticProtocolError(ValueError):
         self.rule = rule if rule in _PROTOCOL_ERROR_RULES else None
 
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v36"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v37"
 # Sonnet 5 high effort can spend the full output allowance on adaptive thinking
 # before emitting the required scorecard. Medium keeps the review inside one call.
 _GRAPH_CRITIC_EFFORT = "medium"
@@ -59,9 +59,8 @@ Response-size contract:
 - Use each rubric finding code at most once per layer. Select records by their zero-based positions
   in the candidate nodes, edges, groups, sequence, and assumptions arrays.
 - If a repair changes several artifact types, fail each owning layer with its own finding code and
-  indexes. Cite the smallest witness subgraph and directed endpoint claims for each topology
-  guarantee.
-- Passing layers have empty finding and selector arrays. Preserve every required layer and proof.
+  indexes.
+- Passing layers have empty finding and selector arrays. Preserve every required layer.
 """
 
 
@@ -185,29 +184,52 @@ _MODEL_PROOF_ROW_SCHEMA = {
     },
 }
 
-_GRAPH_CRITIC_RESPONSE_SCHEMA = {
-    **_strict_object_schema(
-        {
-            "repair_scope": {
-                "type": "string",
-                "enum": ["none", "local", "global"],
-            },
-            "layers": _strict_object_schema(
-                {layer: {"$ref": "#/$defs/layer_row"} for layer in _MODEL_LAYER_FIELDS}
-            ),
-            "topology_proofs": _strict_object_schema(
-                {
-                    guarantee: {"$ref": "#/$defs/proof_row"}
-                    for guarantee in sorted(_TOPOLOGY_PROOF_GUARANTEES)
-                }
-            ),
+
+def _critic_response_schema(*, require_topology_proofs: bool) -> dict[str, Any]:
+    topology_proofs = (
+        _strict_object_schema(
+            {
+                guarantee: {"$ref": "#/$defs/proof_row"}
+                for guarantee in sorted(_TOPOLOGY_PROOF_GUARANTEES)
+            }
+        )
+        if require_topology_proofs
+        else {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {},
         }
-    ),
-    "$defs": {
-        "layer_row": _MODEL_LAYER_ROW_SCHEMA,
-        "proof_row": _MODEL_PROOF_ROW_SCHEMA,
-    },
-}
+    )
+    definitions = {"layer_row": _MODEL_LAYER_ROW_SCHEMA}
+    if require_topology_proofs:
+        definitions["proof_row"] = _MODEL_PROOF_ROW_SCHEMA
+    return {
+        **_strict_object_schema(
+            {
+                "repair_scope": {
+                    "type": "string",
+                    "enum": ["none", "local", "global"],
+                },
+                "layers": _strict_object_schema(
+                    {
+                        layer: {"$ref": "#/$defs/layer_row"}
+                        for layer in _MODEL_LAYER_FIELDS
+                    }
+                ),
+                "topology_proofs": topology_proofs,
+            }
+        ),
+        "$defs": definitions,
+    }
+
+
+_GRAPH_CRITIC_RESPONSE_SCHEMA = _critic_response_schema(
+    require_topology_proofs=True
+)
+_GRAPH_CRITIC_PROTOTYPE_RESPONSE_SCHEMA = _critic_response_schema(
+    require_topology_proofs=False
+)
+
 
 _RENDER_REPORT_FIELDS = (
     "viewport_width",
@@ -922,8 +944,8 @@ def _canonicalise_review_protocol(
     }
 
 
-def critic_timeout_seconds(state: AgentState, revision_count: int) -> float:
-    configured_timeout_s = _configured_critic_timeout_seconds(state, revision_count)
+def critic_timeout_seconds(state: AgentState) -> float:
+    configured_timeout_s = _configured_critic_timeout_seconds(state)
     deadline = state.get(_GRAPH_STAGE_DEADLINE_KEY)  # type: ignore[typeddict-item]
     if not isinstance(deadline, (int, float)):
         return configured_timeout_s
@@ -1067,9 +1089,8 @@ bypass. Do not infer a missing control from a node name or an assumption.
 Never put a missing directed edge, state, branch, gate, or boundary in advice: that is a blocking
 failure under this contract. Advice is only for genuinely optional hardening of an already complete
 topology.
-Do not stop after finding the first defect. Finish all five topology proofs, trace every normal and
-alternate branch to its terminal/audit outcome, and report every independent blocking failure you
-can substantiate in one response. The designer receives at most one bounded repair.
+Do not stop after finding the first defect. Report every independent blocking failure you can
+substantiate in one response. The designer receives at most one bounded repair.
 Report the complete failure set so that repair can resolve the candidate without an open-ended
 redesign loop.
 
@@ -1123,25 +1144,14 @@ Return one JSON object and nothing else:
   "layers": {
 <layer_output_example>
   },
-  "topology_proofs": {
-    "audit_and_provenance": ["pass|fail|not_applicable", [], []],
-    "authorization_and_compensation": ["pass|fail|not_applicable", [], []],
-    "learning_and_release": ["pass|fail|not_applicable", [], []],
-    "retrieval_and_reuse_trust": ["pass|fail|not_applicable", [], []],
-    "state_effect_reconciliation": ["pass|fail|not_applicable", [], []]
-  }
+<topology_output_contract>
 }
 Layer row fields, in order:
 <layer_field_legend>
-Each topology proof row is status, edge_indexes, route_pairs. A route pair is
-`[source_node_index,target_node_index]` and claims directed reachability inside the cited edge
-subgraph. Every cited edge must participate in at least one claimed route. A same-node pair claims a
-nonempty directed cycle. Passing proofs require edges and route pairs. Failed and not-applicable
-proofs use empty evidence arrays. Finding codes are 1-based. Every index contains a zero-based
-position. Keep every row at its exact documented length.
+Finding codes are 1-based. Every index contains a zero-based position. Keep every row at its exact
+documented length.
 Use the numbered rubric code matching checklist items 1 through 27: <rubric_codebook>.
-A passing proof cites the complete actual witness subgraph. Use not_applicable only when that entire
-class of flow is absent. A failed proof also requires finding code 17 in connections.
+<topology_review_contract>
 </output_contract>"""
 
 _GRAPH_CRITIC_SYSTEM = (
@@ -1153,13 +1163,46 @@ _GRAPH_CRITIC_SYSTEM = (
 _GRAPH_CRITIC_SYSTEM += """
 
 <exhaustive_review_contract>
-Audit every acceptance-checklist item and every material directed path in one review. Report all
-independent blocking defects you can identify. Within each artifact layer, combine repeated instances
-of one defect into one finding with all affected selectors. Give every layer that must change its own
-blocker. Never defer a visible checklist defect to a later revision. The bounded patch must receive
-the complete repair set in this response.
+Audit every acceptance-checklist item in one review. Report all independent blocking defects you can
+identify. Within each artifact layer, combine repeated instances of one defect into one finding with
+all affected selectors. Give every layer that must change its own blocker. Never defer a visible
+checklist defect to a later revision. The bounded patch must receive the complete repair set in this
+response.
 </exhaustive_review_contract>
 """
+
+def _critic_system(*, require_topology_proofs: bool) -> str:
+    if not require_topology_proofs:
+        topology_output = '  "topology_proofs": {}'
+        topology_review = (
+            "Prototype depth does not require formal topology proof rows. Return the empty "
+            "topology_proofs object required by the schema."
+        )
+        return (
+            _GRAPH_CRITIC_SYSTEM.replace("<topology_output_contract>", topology_output)
+            .replace("<topology_review_contract>", topology_review)
+        )
+
+    topology_output = """  "topology_proofs": {
+  "audit_and_provenance": ["pass|fail|not_applicable", [], []],
+  "authorization_and_compensation": ["pass|fail|not_applicable", [], []],
+  "learning_and_release": ["pass|fail|not_applicable", [], []],
+  "retrieval_and_reuse_trust": ["pass|fail|not_applicable", [], []],
+  "state_effect_reconciliation": ["pass|fail|not_applicable", [], []]
+  }"""
+    topology_review = """Each topology proof row is status, edge_indexes, route_pairs. A route pair is
+`[source_node_index,target_node_index]` and claims directed reachability inside the cited edge
+subgraph. Every cited edge must participate in at least one claimed route. A same-node pair claims a
+nonempty directed cycle. Passing proofs require edges and route pairs. Failed and not-applicable
+proofs use empty evidence arrays. A passing proof cites the complete actual witness subgraph. Use
+not_applicable only when that entire class of flow is absent. A failed proof also requires finding
+code 17 in connections. Finish all five proofs and trace every normal and alternate branch to its
+terminal and audit outcomes. Cite the smallest witness subgraph and directed endpoint claims for
+each guarantee. Preserve every required proof."""
+    return (
+        _GRAPH_CRITIC_SYSTEM.replace("<topology_output_contract>", topology_output)
+        .replace("<topology_review_contract>", topology_review)
+    )
 
 
 async def _request_critic_scorecard(
@@ -1175,6 +1218,13 @@ async def _request_critic_scorecard(
     operation = "graph_critic"
     effort = _GRAPH_CRITIC_EFFORT
     max_output_tokens = settings.graph_qa_max_completion_tokens
+    require_topology_proofs = resolved_complexity == "production"
+    response_schema = (
+        _GRAPH_CRITIC_RESPONSE_SCHEMA
+        if require_topology_proofs
+        else _GRAPH_CRITIC_PROTOTYPE_RESPONSE_SCHEMA
+    )
+    system = _critic_system(require_topology_proofs=require_topology_proofs)
     if correction is not None:
         operation = "graph_critic_protocol_correction"
         effort = _GRAPH_CRITIC_CORRECTION_EFFORT
@@ -1183,13 +1233,18 @@ async def _request_critic_scorecard(
             _GRAPH_CRITIC_CORRECTION_MAX_TOKENS,
         )
         invalid_response, validation_error = correction
+        correction_contracts = "row ownership and selector contracts"
+        if require_topology_proofs:
+            correction_contracts = (
+                "row ownership, selector, and topology-proof contracts"
+            )
         message["content"].append(
             {
                 "type": "text",
                 "text": (
                     "Your prior scorecard failed protocol validation. Correct the scorecard only. "
-                    "Keep every valid judgment unchanged and obey the exact row ownership, selector, "
-                    "and topology-proof contracts.\n"
+                    "Keep every valid judgment unchanged and obey the exact "
+                    f"{correction_contracts}.\n"
                     f"Validation error: {validation_error[:1000]}\n"
                     f"Prior scorecard: {invalid_response[:12000]}"
                 ),
@@ -1197,9 +1252,9 @@ async def _request_critic_scorecard(
         )
     return await stream_structured_llm(
         model=settings.graph_qa_model,
-        system=_GRAPH_CRITIC_SYSTEM + _GRAPH_CRITIC_COMPACT_PROTOCOL,
+        system=system + _GRAPH_CRITIC_COMPACT_PROTOCOL,
         messages=[message],
-        response_schema=_GRAPH_CRITIC_RESPONSE_SCHEMA,
+        response_schema=response_schema,
         temperature=settings.graph_temperature,
         effort=effort,
         telemetry=build_telemetry(
@@ -1215,7 +1270,7 @@ async def _request_critic_scorecard(
                 "protocol_correction": correction is not None,
             },
         ),
-        timeout_seconds=critic_timeout_seconds(state, revision_count),
+        timeout_seconds=critic_timeout_seconds(state),
         max_output_tokens=max_output_tokens,
     )
 

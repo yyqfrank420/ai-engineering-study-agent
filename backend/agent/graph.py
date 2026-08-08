@@ -293,9 +293,8 @@ def build_agent_workflow(
     async def review_graph(state: AgentState) -> AgentState:
         if not state.get("graph_changed"):
             return await graph_critic_node(state)
-        revision_count = int(state.get("graph_revision_count", 0))
         try:
-            timeout_s = critic_timeout_seconds(state, revision_count)
+            timeout_s = critic_timeout_seconds(state)
             async with asyncio.timeout(timeout_s):
                 reviewed = await graph_critic_node(
                     _with_graph_stage_deadline(state, timeout_s)

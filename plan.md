@@ -6,7 +6,7 @@ Last updated: 2026-08-08
 
 Restore the current architecture pipeline and deploy it before starting the staged generation redesign.
 
-The current release has one evidence-backed blocker. Prototype graphs skip production topology proofs in the final validator, while the critic schema, prompt, and canonicalisation path still require and validate all five proofs. A provider-valid response can fail Python validation and suppress an otherwise usable graph.
+The current release reached graph review on exact head `41f4881`. It produced and rendered a valid 46-node, 67-edge prototype candidate. The critic timed out because the prototype wire contract still requested five production proof rows and deadline admission reserved time for a later repair before the first verdict existed.
 
 The redesign stays outside the release-critical path. It begins after the current pipeline passes the targeted live diagnostic and production smoke test.
 
@@ -19,7 +19,16 @@ The redesign stays outside the release-critical path. It begins after the curren
 3. Retain strict proof validation for production depth.
 4. Record safe validation paths and rule codes when critic output is rejected.
 5. Add paired prototype and production tests.
-6. Keep the existing whole-graph generation, private render, MECE review layers, locks, and one bounded local repair unchanged.
+6. Give the active critic verdict priority over speculative repair time while preserving synthesis and finalization.
+7. Keep whole-graph generation, private render, MECE review layers, locks, and one bounded local repair.
+
+### Current status
+
+- Canonicalisation and final validation use the resolved architecture depth.
+- Critic v37 sends an empty proof object at prototype depth and keeps the full proof contract at production depth.
+- The active critic may borrow up to the existing 180-second ceiling. Patch admission assigns any remaining repair time after a failed verdict.
+- Focused critic and deadline verification pass: 147 tests, including the provider-schema regression.
+- The next paid action is one exact-head `graph-expansion` diagnostic. Another failure requires new evidence before any retry.
 
 ### Tests
 

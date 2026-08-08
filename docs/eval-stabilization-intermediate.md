@@ -387,6 +387,31 @@ Most recent authoritative evidence:
   $0.682831; no judge call ran. The renderer now bounds every measured label candidate and fallback on
   both axes before collision checks. A 34-node, 64-edge multi-track regression covers the live level
   distribution without retaining domain-specific topology.
+- Diagnostic `31255291000` ran `graph-expansion` on exact head `41f4881`. Both Opus architect
+  attempts failed before token acceptance with Anthropic `overloaded_error`. Graph construction and
+  critic validation did not run. The written synthesis call cost $0.067999. A delayed retry was
+  permitted only after Cloud Run logs identified the provider error.
+- Diagnostic `31255655951` retried the same case and exact head. The first Opus architect attempt
+  received `overloaded_error`; its second attempt completed. The challenger and Kimi builder also
+  completed. Kimi produced a 46-node, 67-edge, 5-group prototype candidate. The private 1440x960
+  render showed all 46 nodes and 67 edges, zero clipping or overlap, 13.44-pixel minimum text, and
+  all eight required overview labels. Sonnet accepted the critic request, then the local stage
+  deadline cancelled it after 102.223 seconds without terminal output or usage. The candidate was
+  withheld as `semantic_review_timeout`; no repair or judge call ran. Fully priced calls cost
+  $0.669823. Known critic input and cache-write usage raises the known minimum to $0.717704, plus
+  unreported critic output or thinking.
+- The timeout exposed one depth contract across two boundaries. Prototype validation ignored
+  production topology proofs after a completed response, while the provider schema and prompt still
+  required five exhaustive proof rows. Initial critic admission also reserved 240 seconds for a
+  future patch and second critic before the first verdict existed. A prior completed prototype
+  critic on a smaller 33-node, 53-edge graph took 134.735 seconds, so the 102.223-second allowance
+  was already below observed demand.
+- Critic v37 gives prototype reviews a four-layer scorecard with an empty topology-proof object.
+  Production keeps all five proof rows and their directed witness contract. Critic admission now
+  preserves synthesis, finalization, and orchestration while allowing the active verdict to borrow
+  up to the existing 180-second ceiling. Patch admission decides the remaining repair budget after
+  a failed verdict. This removes unused prototype work and gives the current gate priority over a
+  speculative later stage.
 - Canonical run `31221851568` completed all Kimi provider calls. Two valid topology objects were
   discarded because one bounded title and one bounded responsibility exceeded presentation limits.
   Two other 33-node and 39-node candidates passed browser rendering, then their Sonnet reviews were

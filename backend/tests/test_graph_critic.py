@@ -8,6 +8,7 @@ from adapters.llm_adapter import _anthropic_response_schema
 from agent.nodes.graph_critic import (
     CriticProtocolError,
     _GRAPH_CRITIC_PROMPT_VERSION,
+    _GRAPH_CRITIC_PROTOTYPE_RESPONSE_SCHEMA,
     _GRAPH_CRITIC_RESPONSE_SCHEMA,
     _GRAPH_CRITIC_SYSTEM,
     _MODEL_LAYER_FIELDS,
@@ -15,6 +16,7 @@ from agent.nodes.graph_critic import (
     _RUBRIC_CODES,
     _TOPOLOGY_PROOF_GUARANTEES,
     _canonicalise_review_protocol,
+    _critic_system,
     _deterministic_render_review,
     _deterministic_review,
     _lock_unchanged_passed_layers,
@@ -146,11 +148,14 @@ def _passing_review_payload(*, strengths=None, advice=None, topology_proofs=None
                 "render",
             )
         },
-        "topology_proofs": topology_proofs
-        or {
-            guarantee: ["not_applicable", [], []]
-            for guarantee in sorted(_TOPOLOGY_PROOF_GUARANTEES)
-        },
+        "topology_proofs": (
+            topology_proofs
+            if topology_proofs is not None
+            else {
+                guarantee: ["not_applicable", [], []]
+                for guarantee in sorted(_TOPOLOGY_PROOF_GUARANTEES)
+            }
+        ),
     }
 
 
@@ -186,7 +191,7 @@ def _critic_state(*, graph=None, complexity="prototype"):
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v36"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v37"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -200,7 +205,9 @@ def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
     assert "Sanitization does" in _GRAPH_CRITIC_SYSTEM
     assert "not make retrieved text trusted" in _GRAPH_CRITIC_SYSTEM
     assert "items 17-27 are blocking" in _GRAPH_CRITIC_SYSTEM
-    assert "A passing proof cites the complete actual" in _GRAPH_CRITIC_SYSTEM
+    assert "A passing proof cites the complete actual" in _critic_system(
+        require_topology_proofs=True
+    )
     assert "Do not stop after finding the first defect" in _GRAPH_CRITIC_SYSTEM
     assert "event-stream systems define bounded" in _GRAPH_CRITIC_SYSTEM
     assert "backpressure and overload behavior" in _GRAPH_CRITIC_SYSTEM
@@ -372,6 +379,7 @@ def test_critic_schema_keeps_named_layers_without_repeating_rubric_names():
 
 def test_anthropic_schema_transform_preserves_critic_definitions_and_refs():
     transformed = _anthropic_response_schema(_GRAPH_CRITIC_RESPONSE_SCHEMA)
+    prototype = _anthropic_response_schema(_GRAPH_CRITIC_PROTOTYPE_RESPONSE_SCHEMA)
 
     assert transformed["$defs"] == _GRAPH_CRITIC_RESPONSE_SCHEMA["$defs"]
     assert transformed["properties"]["layers"]["properties"]["components"] == {
@@ -380,6 +388,14 @@ def test_anthropic_schema_transform_preserves_critic_definitions_and_refs():
     assert transformed["properties"]["topology_proofs"]["properties"][
         "state_effect_reconciliation"
     ] == {"$ref": "#/$defs/proof_row"}
+    assert prototype["$defs"] == {
+        "layer_row": _GRAPH_CRITIC_RESPONSE_SCHEMA["$defs"]["layer_row"]
+    }
+    assert prototype["properties"]["topology_proofs"] == {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {},
+    }
 
 
 @pytest.mark.parametrize("layer", list(_MODEL_LAYER_FIELDS))
@@ -2329,7 +2345,7 @@ async def test_semantic_critic_reviews_the_private_rendered_image(
 
     assert result["graph_review"]["approved"] is True
     assert captured["effort"] == expected_effort
-    assert captured["response_schema"] == _GRAPH_CRITIC_RESPONSE_SCHEMA
+    assert captured["response_schema"] == _GRAPH_CRITIC_PROTOTYPE_RESPONSE_SCHEMA
     content = captured["messages"][0]["content"]
     assert content[1] == {
         "type": "image",
@@ -2737,7 +2753,7 @@ async def test_malformed_structured_review_fails_closed_without_retry(monkeypatc
     assert calls[0]["timeout_seconds"] <= settings.graph_critic_timeout_s
     assert calls[0]["max_output_tokens"] == settings.graph_qa_max_completion_tokens
     assert calls[0]["effort"] == "medium"
-    assert calls[0]["response_schema"] == _GRAPH_CRITIC_RESPONSE_SCHEMA
+    assert calls[0]["response_schema"] == _GRAPH_CRITIC_PROTOTYPE_RESPONSE_SCHEMA
     assert render_calls == 1
 
 
@@ -2803,11 +2819,9 @@ async def test_browser_render_time_is_deducted_from_one_absolute_critic_deadline
 
 
 @pytest.mark.asyncio
-async def test_prototype_critic_ignores_production_topology_proof_rows(monkeypatch):
+async def test_prototype_critic_uses_depth_specific_wire_contract(monkeypatch):
     calls = []
-    payload = _passing_review_payload()
-    for guarantee in _TOPOLOGY_PROOF_GUARANTEES:
-        payload["topology_proofs"][guarantee] = ["pass", [], []]
+    payload = _passing_review_payload(topology_proofs={})
 
     async def fake_stream_llm(**kwargs):
         calls.append(kwargs)
@@ -2822,6 +2836,17 @@ async def test_prototype_critic_ignores_production_topology_proof_rows(monkeypat
     assert result["graph_review"]["approved"] is True
     assert result["graph_review"]["topology_proofs"] == []
     assert len(calls) == 1
+    assert calls[0]["response_schema"] == _GRAPH_CRITIC_PROTOTYPE_RESPONSE_SCHEMA
+    assert calls[0]["response_schema"]["properties"]["topology_proofs"] == {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {},
+    }
+    assert '"topology_proofs": {}' in calls[0]["system"]
+    assert "state_effect_reconciliation" not in calls[0]["system"]
+    assert "topology guarantee" not in calls[0]["system"]
+    assert "topology-proof contracts" not in calls[0]["system"]
+    assert "Preserve every required layer and proof" not in calls[0]["system"]
 
 
 @pytest.mark.asyncio
@@ -2939,7 +2964,12 @@ async def test_invalid_structured_review_contract_fails_closed(
     assert result["graph_review"]["review_status"] == "unavailable"
     assert "repair_contract" not in result["graph_review"]
     assert len(calls) == 2
+    assert calls[0]["response_schema"] == _GRAPH_CRITIC_PROTOTYPE_RESPONSE_SCHEMA
+    assert "state_effect_reconciliation" not in calls[0]["system"]
     assert calls[1]["effort"] == "low"
+    assert "topology guarantee" not in calls[1]["system"]
+    correction_text = calls[1]["messages"][0]["content"][-1]["text"]
+    assert "topology-proof contracts" not in correction_text
     assert calls[1]["telemetry"]["operation"] == "graph_critic_protocol_correction"
     assert render_calls == 1
 
@@ -3090,7 +3120,12 @@ async def test_malformed_topology_proofs_get_one_bounded_correction(
             == "semantic_review_protocol_invalid"
         )
     assert len(calls) == 2
+    assert calls[0]["response_schema"] == _GRAPH_CRITIC_RESPONSE_SCHEMA
+    assert "state_effect_reconciliation" in calls[0]["system"]
+    assert "Preserve every required proof" in calls[0]["system"]
     assert calls[1]["effort"] == "low"
+    correction_text = calls[1]["messages"][0]["content"][-1]["text"]
+    assert "topology-proof contracts" in correction_text
     assert f"path=topology_proofs.{malformed_guarantee}" in caplog.text
     assert "rule=missing_evidence" in caplog.text
 

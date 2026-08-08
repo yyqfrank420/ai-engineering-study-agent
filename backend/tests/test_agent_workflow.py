@@ -176,7 +176,7 @@ def test_architecture_admission_preserves_the_complete_downstream_path():
     assert 0 < timeout_s <= 10
 
 
-def test_initial_design_and_review_preserve_the_complete_patch_path():
+def test_initial_design_preserves_patch_path_and_review_preserves_finalization():
     from agent.deadlines import (
         StageAdmissionDenied,
         critic_timeout_seconds,
@@ -212,20 +212,17 @@ def test_initial_design_and_review_preserve_the_complete_patch_path():
     assert borrowed_timeout_s == pytest.approx(settings.graph_design_timeout_s + 5)
 
     after_initial_review_s = (
-        settings.graph_patch_timeout_s
-        + settings.graph_critic_timeout_s
-        + settings.graph_synthesis_timeout_s
+        settings.graph_synthesis_timeout_s
         + settings.graph_finalization_reserve_s
         + settings.agent_orchestration_reserve_s
     )
     with pytest.raises(StageAdmissionDenied):
         critic_timeout_seconds(
-            {"terminal_deadline_s": time.monotonic() + after_initial_review_s - 1},
-            revision_count=0,
+            {"terminal_deadline_s": time.monotonic() + after_initial_review_s - 1}
         )
 
 
-def test_critics_borrow_time_without_spending_the_remaining_path():
+def test_critics_prioritize_the_verdict_and_preserve_finalization():
     from agent.deadlines import (
         critic_timeout_seconds,
         design_timeout_seconds,
@@ -238,46 +235,33 @@ def test_critics_borrow_time_without_spending_the_remaining_path():
         + settings.graph_finalization_reserve_s
         + settings.agent_orchestration_reserve_s
     )
-    critic_reserves = {
-        0: (
-            settings.graph_patch_timeout_s
-            + settings.graph_critic_timeout_s
-            + final_reserve_s
-        ),
-        1: final_reserve_s,
-    }
-    for revision_count, reserve_s in critic_reserves.items():
-        borrowed_timeout_s = critic_timeout_seconds(
-            {
-                "terminal_deadline_s": (
-                    time.monotonic() + reserve_s + settings.graph_critic_timeout_s + 5
-                ),
-            },
-            revision_count=revision_count,
-        )
-        assert borrowed_timeout_s == pytest.approx(settings.graph_critic_timeout_s + 5)
+    borrowed_timeout_s = critic_timeout_seconds(
+        {
+            "terminal_deadline_s": (
+                time.monotonic()
+                + final_reserve_s
+                + settings.graph_critic_timeout_s
+                + 5
+            ),
+        }
+    )
+    assert borrowed_timeout_s == pytest.approx(settings.graph_critic_timeout_s + 5)
 
-        max_timeout_s = critic_timeout_seconds(
-            {
-                "terminal_deadline_s": (
-                    time.monotonic()
-                    + reserve_s
-                    + settings.graph_critic_max_timeout_s
-                    + 5
-                ),
-            },
-            revision_count=revision_count,
-        )
-        assert max_timeout_s == settings.graph_critic_max_timeout_s
+    max_timeout_s = critic_timeout_seconds(
+        {
+            "terminal_deadline_s": (
+                time.monotonic()
+                + final_reserve_s
+                + settings.graph_critic_max_timeout_s
+                + 5
+            ),
+        }
+    )
+    assert max_timeout_s == settings.graph_critic_max_timeout_s
 
     assert design_timeout_seconds({}) == settings.graph_design_timeout_s
     assert patch_timeout_seconds({}) == settings.graph_patch_timeout_s
-    assert (
-        critic_timeout_seconds({}, revision_count=0) == settings.graph_critic_timeout_s
-    )
-    assert (
-        critic_timeout_seconds({}, revision_count=1) == settings.graph_critic_timeout_s
-    )
+    assert critic_timeout_seconds({}) == settings.graph_critic_timeout_s
 
 
 def test_graph_stage_caps_for_one_complete_patch_fit_terminal_window():
