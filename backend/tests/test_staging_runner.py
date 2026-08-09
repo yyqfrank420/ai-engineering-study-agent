@@ -398,6 +398,17 @@ def test_extract_helpers_return_expected_values():
         {"nodes": [{"label": "Retriever"}, {"id": "missing-label"}]}
     ) == {"Retriever"}
     assert extract_response_text(events) == "Hello world"
+    assert extract_graph_data([
+        {"type": "graph_candidate", "data": {"title": "candidate"}},
+        {"type": "graph_data", "data": {"title": "Graph"}},
+    ])["title"] == "Graph"
+    assert (
+        extract_graph_data([
+            {"type": "graph_data", "data": {"title": "Graph"}},
+            {"type": "graph_candidate", "data": None},
+        ])
+        == {"title": "Graph"}
+    )
 
 
 def test_extract_response_text_includes_progressive_explanation_blocks():

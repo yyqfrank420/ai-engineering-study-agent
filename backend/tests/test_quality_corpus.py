@@ -307,6 +307,18 @@ def test_required_graph_turn_without_notice_requires_graph_data():
     )
 
 
+def test_required_graph_turn_accepts_graph_candidate():
+    from eval.browser_runner import _required_graph_turn_failure
+
+    case = load_corpus().by_id["graph-expansion"]
+
+    assert _required_graph_turn_failure(
+        case,
+        0,
+        [{"type": "graph_candidate", "data": {"version": "graph-cand", "nodes": [], "edges": []}}],
+    ) is None
+
+
 def test_graph_dom_inspection_is_only_enabled_for_renderable_graph_cases():
     from eval.browser_runner import _should_inspect_graph_dom
 
