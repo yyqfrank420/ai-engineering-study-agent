@@ -22,6 +22,7 @@ SECRET_MAP=(
   [ANTHROPIC_API_KEY]="anthropic-api-key"
   [MOONSHOT_API_KEY]="moonshot-api-key"
   [OPENAI_API_KEY]="openai-api-key"
+  [POSTHOG_API_KEY]="posthog-api-key"
   [SUPABASE_URL]="supabase-url"
   [SUPABASE_ANON_KEY]="supabase-anon-key"
   [SUPABASE_DB_URL]="supabase-db-url"

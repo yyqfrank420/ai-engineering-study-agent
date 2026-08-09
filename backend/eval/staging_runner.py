@@ -239,10 +239,13 @@ def extract_worker_statuses(events: list[dict], worker: str | None = None) -> li
 
 
 def extract_graph_data(events: list[dict]) -> dict | None:
-    graph_events = [event for event in events if event.get("type") == "graph_data"]
-    if not graph_events:
-        return None
-    return graph_events[-1].get("data")
+    for event in reversed(events):
+        event_type = event.get("type")
+        if event_type == "graph_data" or event_type == "graph_candidate":
+            data = event.get("data")
+            if isinstance(data, dict):
+                return data
+    return None
 
 
 def extract_graph_node_labels(graph_data: dict | None) -> set[str]:

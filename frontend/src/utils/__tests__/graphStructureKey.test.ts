@@ -44,8 +44,14 @@ describe('graphStructureKey', () => {
     expect(graphStructureKey(null)).toBe('null');
   });
 
-  it('uses explicit graph version when present', () => {
-    expect(graphStructureKey(graph({ version: '12' }))).toBe('version:12');
+  it('includes the version without hiding changed content', () => {
+    const original = graph({ version: '12' });
+    const changed = graph({
+      version: '12',
+      nodes: [{ ...original.nodes[0], id: 'replacement' }],
+    });
+
+    expect(graphStructureKey(original)).not.toBe(graphStructureKey(changed));
   });
 
   it('includes structural graph fields and ignores transient node fields', () => {
@@ -67,6 +73,7 @@ describe('graphStructureKey', () => {
     const base = graph();
 
     expect(graphStructureKey(graph({ title: 'Different' }))).not.toBe(graphStructureKey(base));
+    expect(graphStructureKey(graph({ design_origin: 'applied' }))).not.toBe(graphStructureKey(base));
     expect(graphStructureKey(graph({
       edges: [{ ...base.edges[0], label: 'different edge' }],
     }))).not.toBe(graphStructureKey(base));

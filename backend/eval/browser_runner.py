@@ -68,6 +68,12 @@ class FailureDetail(TypedDict):
     retryable: bool
 
 
+class GraphDomState(TypedDict):
+    node_ids: list[str]
+    edges: list[dict[str, str]]
+    version: str | None
+
+
 class BrowserInfrastructureError(RuntimeError):
     """A typed browser/auth/provider failure with an explicit retry policy."""
 
@@ -378,6 +384,149 @@ async def _send_step(
     return events
 
 
+def _required_graph_turn_failure(
+    case: EvaluationCase,
+    step_index: int,
+    events: list[dict[str, Any]],
+    seen_versions: set[str] | None = None,
+) -> tuple[str, str] | None:
+    if (
+        case.deterministic.graph_emitted is not True
+        or case.steps[step_index].ui.graph_mode != "on"
+    ):
+        return None
+    if any(event.get("type") == "graph_notice" for event in events):
+        return (
+            "required_graph_withheld",
+            f"case {case.id} turn {step_index + 1} required a graph but received "
+            "graph_notice",
+        )
+    graph = extract_graph_data(events)
+    if not graph:
+        return (
+            "required_graph_missing",
+            f"case {case.id} turn {step_index + 1} required graph_data",
+        )
+    version = graph.get("version")
+    if not isinstance(version, str) or not version.strip():
+        return (
+            "required_graph_version_missing",
+            f"case {case.id} turn {step_index + 1} graph_data has no version",
+        )
+    if seen_versions is not None and version in seen_versions:
+        return (
+            "required_graph_version_reused",
+            f"case {case.id} turn {step_index + 1} reused graph version {version}",
+        )
+    return None
+
+
+async def _required_graph_turn_render_failure(
+    page: Page | None,
+    case: EvaluationCase,
+    step_index: int,
+    events: list[dict[str, Any]],
+) -> tuple[str, str] | None:
+    if (
+        page is None
+        or not case.deterministic.graph_renderable
+        or case.deterministic.graph_emitted is not True
+        or case.steps[step_index].ui.graph_mode != "on"
+    ):
+        return None
+    graph = extract_graph_data(events)
+    if not graph:
+        return None
+    dom = await _graph_dom_state(page, graph)
+    expected_nodes = len(graph.get("nodes") or [])
+    expected_edges = len(graph.get("edges") or [])
+    if len(dom["node_ids"]) != expected_nodes:
+        return (
+            "required_graph_turn_render_mismatch",
+            f"case {case.id} turn {step_index + 1} rendered {len(dom['node_ids'])} "
+            f"nodes for a {expected_nodes}-node graph",
+        )
+    if len(dom["edges"]) != expected_edges:
+        return (
+            "required_graph_turn_edge_render_mismatch",
+            f"case {case.id} turn {step_index + 1} rendered {len(dom['edges'])} "
+            f"edges for a {expected_edges}-edge graph",
+        )
+    expected_node_ids = sorted(
+        str(node.get("id") or "") for node in (graph.get("nodes") or [])
+    )
+    if sorted(dom["node_ids"]) != expected_node_ids:
+        return (
+            "required_graph_turn_node_identity_mismatch",
+            f"case {case.id} turn {step_index + 1} rendered the wrong node identities",
+        )
+    expected_edge_identities = sorted(
+        (
+            str(edge.get("source") or ""),
+            str(edge.get("target") or ""),
+            str(edge.get("label") or ""),
+        )
+        for edge in (graph.get("edges") or [])
+    )
+    rendered_edge_identities = sorted(
+        (edge["source"], edge["target"], edge["label"]) for edge in dom["edges"]
+    )
+    if rendered_edge_identities != expected_edge_identities:
+        return (
+            "required_graph_turn_edge_identity_mismatch",
+            f"case {case.id} turn {step_index + 1} rendered the wrong edge identities",
+        )
+    graph_version = graph.get("version")
+    if graph_version and dom["version"] != graph_version:
+        return (
+            "required_graph_turn_version_mismatch",
+            f"case {case.id} turn {step_index + 1} did not render graph version "
+            f"{graph_version}",
+        )
+    return None
+
+
+def _should_inspect_graph_dom(
+    case: EvaluationCase,
+    graph: dict[str, Any] | None,
+) -> bool:
+    return bool(graph) and case.deterministic.graph_renderable is True
+
+
+async def _graph_dom_state(
+    page: Page,
+    graph: dict[str, Any] | None,
+) -> GraphDomState:
+    graph_version = graph.get("version") if isinstance(graph, dict) else None
+    wait_for_function = getattr(page, "wait_for_function", None)
+    if graph_version and callable(wait_for_function):
+        expected_version_js = json.dumps(graph_version)
+        try:
+            await wait_for_function(
+                f"""() => document.querySelector('[data-testid="graph-canvas"]')"""
+                f"""?.getAttribute('data-rendered-graph-version') === {expected_version_js}""",
+                timeout=10_000,
+            )
+        except PlaywrightTimeoutError:
+            pass
+    canvas = page.locator('[data-testid="graph-canvas"]')
+    node_ids = await canvas.locator("g.node").evaluate_all(
+        "elements => elements.map(element => element.getAttribute('data-node-id') || '')"
+    )
+    edges = await canvas.locator("path.edge-vis").evaluate_all(
+        """elements => elements.map(element => ({
+            source: element.getAttribute('data-source-id') || '',
+            target: element.getAttribute('data-target-id') || '',
+            label: element.getAttribute('data-edge-label') || '',
+        }))"""
+    )
+    return {
+        "node_ids": node_ids,
+        "edges": edges,
+        "version": await canvas.get_attribute("data-rendered-graph-version"),
+    }
+
+
 async def _send_case_steps(
     page: Page,
     case: EvaluationCase,
@@ -386,27 +535,32 @@ async def _send_case_steps(
     *,
     timeout_seconds: int,
     turn_timings: list[dict[str, Any]] | None = None,
+    turn_graphs: list[dict[str, Any]] | None = None,
 ) -> None:
     """Run a case's conversation turns in order on the same page and thread."""
+    seen_graph_versions: set[str] = set()
     for step_index in range(len(case.steps)):
         frame_start = len(frames)
         turn_started = time.monotonic()
         turn_started_at = time.time()
         step_events: list[dict[str, Any]] = []
         try:
-            step_events = await _send_step(
+            received_events = await _send_step(
                 page,
                 case,
                 step_index,
                 frames,
                 timeout_seconds=timeout_seconds,
             )
+            step_events = [
+                {**event, "eval_turn": step_index + 1} for event in received_events
+            ]
             events.extend(step_events)
         finally:
             step_frames = frames[frame_start:]
             if not step_events:
                 events.extend(
-                    frame["message"]
+                    {**frame["message"], "eval_turn": step_index + 1}
                     for frame in step_frames
                     if frame["direction"] == "received"
                 )
@@ -488,6 +642,43 @@ async def _send_case_steps(
                     f"case {case.id} turn {step_index + 1} returned an "
                     f"unexpected backend error: {message}",
                 )
+        graph_failure = _required_graph_turn_failure(
+            case,
+            step_index,
+            step_events,
+            seen_graph_versions,
+        )
+        if graph_failure is not None:
+            raise BrowserQualityError(*graph_failure)
+        turn_graph = extract_graph_data(step_events)
+        if turn_graph and isinstance(turn_graph.get("version"), str):
+            seen_graph_versions.add(turn_graph["version"])
+        try:
+            render_failure = await _required_graph_turn_render_failure(
+                page,
+                case,
+                step_index,
+                step_events,
+            )
+        except Exception as exc:
+            raise BrowserInfrastructureError(
+                "graph_dom_inspection_failed",
+                f"case {case.id} turn {step_index + 1} graph DOM inspection "
+                f"failed: {type(exc).__name__}: {exc}",
+            ) from exc
+        if render_failure is not None:
+            raise BrowserQualityError(*render_failure)
+        if turn_graphs is not None and turn_graph:
+            dom = await _graph_dom_state(page, turn_graph)
+            turn_graphs.append(
+                {
+                    "turn": step_index + 1,
+                    "graph": turn_graph,
+                    "rendered_graph_version": dom["version"],
+                    "rendered_node_ids": dom["node_ids"],
+                    "rendered_edge_identities": dom["edges"],
+                }
+            )
 
 
 def _thread_id(frames: list[dict[str, Any]]) -> str | None:
@@ -520,19 +711,13 @@ async def _node_followup_interaction_failure_details(
     graph: dict[str, Any] | None,
     existing_failure_details: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    if (
-        case.id != "node-followup"
-        or graph is None
-        or existing_failure_details
-    ):
+    if case.id != "node-followup" or graph is None or existing_failure_details:
         return []
 
     try:
         # Use the same accessible activation path available to keyboard users
         # and prove the optional refinement starts.
-        first_node = page.get_by_role(
-            "button", name=re.compile(r"^Explore ")
-        ).first
+        first_node = page.get_by_role("button", name=re.compile(r"^Explore ")).first
         async with page.expect_request(
             lambda request: (
                 request.method == "POST"
@@ -559,6 +744,10 @@ def _deterministic_failure_details(
     case: EvaluationCase,
     events: list[dict[str, Any]],
     rendered_nodes: int,
+    rendered_edges: int | None = None,
+    rendered_graph_version: str | None = None,
+    rendered_node_ids: list[str] | None = None,
+    rendered_edge_identities: list[dict[str, str]] | None = None,
 ) -> list[FailureDetail]:
     expected = case.deterministic
     failures: list[FailureDetail] = []
@@ -650,7 +839,7 @@ def _deterministic_failure_details(
     if (
         expected.graph_renderable
         and graph
-        and rendered_nodes < len(graph.get("nodes") or [])
+        and rendered_nodes != len(graph.get("nodes") or [])
     ):
         failures.append(
             _failure_detail(
@@ -659,6 +848,72 @@ def _deterministic_failure_details(
                 f"browser rendered {rendered_nodes} of {len(graph.get('nodes') or [])} graph nodes",
             )
         )
+    if (
+        expected.graph_renderable
+        and graph
+        and rendered_edges is not None
+        and rendered_edges != len(graph.get("edges") or [])
+    ):
+        failures.append(
+            _failure_detail(
+                "quality",
+                "graph_edge_render_mismatch",
+                f"browser rendered {rendered_edges} of "
+                f"{len(graph.get('edges') or [])} graph edges",
+            )
+        )
+    if expected.graph_renderable and graph:
+        graph_version = graph.get("version")
+        if not isinstance(graph_version, str) or not graph_version.strip():
+            failures.append(
+                _failure_detail(
+                    "quality",
+                    "graph_version_missing",
+                    "renderable graph_data has no graph version",
+                )
+            )
+        elif rendered_graph_version != graph_version:
+            failures.append(
+                _failure_detail(
+                    "quality",
+                    "graph_version_render_mismatch",
+                    f"browser rendered graph version {rendered_graph_version!r}, expected "
+                    f"{graph_version!r}",
+                )
+            )
+    if expected.graph_renderable and graph and rendered_node_ids is not None:
+        expected_node_ids = sorted(
+            str(node.get("id") or "") for node in (graph.get("nodes") or [])
+        )
+        if sorted(rendered_node_ids) != expected_node_ids:
+            failures.append(
+                _failure_detail(
+                    "quality",
+                    "graph_node_identity_mismatch",
+                    "browser rendered node identities from a different graph",
+                )
+            )
+    if expected.graph_renderable and graph and rendered_edge_identities is not None:
+        expected_edges = sorted(
+            (
+                str(edge.get("source") or ""),
+                str(edge.get("target") or ""),
+                str(edge.get("label") or ""),
+            )
+            for edge in (graph.get("edges") or [])
+        )
+        rendered_edges_identity = sorted(
+            (edge["source"], edge["target"], edge["label"])
+            for edge in rendered_edge_identities
+        )
+        if rendered_edges_identity != expected_edges:
+            failures.append(
+                _failure_detail(
+                    "quality",
+                    "graph_edge_identity_mismatch",
+                    "browser rendered edge identities from a different graph",
+                )
+            )
     if expected.streaming_complete and not any(
         event.get("type") == "done" for event in events
     ):
@@ -757,11 +1012,23 @@ def _deterministic_failures(
     case: EvaluationCase,
     events: list[dict[str, Any]],
     rendered_nodes: int,
+    rendered_edges: int | None = None,
+    rendered_graph_version: str | None = None,
+    rendered_node_ids: list[str] | None = None,
+    rendered_edge_identities: list[dict[str, str]] | None = None,
 ) -> list[str]:
     """Retain the v1 string contract while emitting typed details in captures."""
     return [
         failure["message"]
-        for failure in _deterministic_failure_details(case, events, rendered_nodes)
+        for failure in _deterministic_failure_details(
+            case,
+            events,
+            rendered_nodes,
+            rendered_edges,
+            rendered_graph_version,
+            rendered_node_ids,
+            rendered_edge_identities,
+        )
     ]
 
 
@@ -1014,6 +1281,10 @@ async def _run_case_with_retries(
                 "events": [],
                 "graph": None,
                 "rendered_nodes": 0,
+                "rendered_edges": 0,
+                "rendered_graph_version": None,
+                "rendered_node_ids": [],
+                "rendered_edge_identities": [],
                 "thread_id": None,
                 "screenshot": None,
                 "trace": None,
@@ -1088,6 +1359,7 @@ async def _run_browser_attempt(
     case_started = time.monotonic()
     case_events: list[dict[str, Any]] = []
     turn_timings: list[dict[str, Any]] = []
+    turn_graphs: list[dict[str, Any]] = []
     failure_details: list[FailureDetail] = []
     execution_state = "completed"
     try:
@@ -1133,6 +1405,7 @@ async def _run_browser_attempt(
                 case_events,
                 timeout_seconds=turn_timeout_seconds,
                 turn_timings=turn_timings,
+                turn_graphs=turn_graphs,
             )
         except asyncio.CancelledError:
             execution_state = "cancelled"
@@ -1148,11 +1421,18 @@ async def _run_browser_attempt(
 
         graph = extract_graph_data(case_events)
         rendered_nodes = 0
-        if not failure_details:
+        rendered_edges = 0
+        rendered_graph_version = None
+        rendered_node_ids: list[str] = []
+        rendered_edge_identities: list[dict[str, str]] = []
+        if not failure_details and _should_inspect_graph_dom(case, graph):
             try:
-                rendered_nodes = await page.locator(
-                    '[data-testid="graph-canvas"] g.node'
-                ).count()
+                dom = await _graph_dom_state(page, graph)
+                rendered_node_ids = dom["node_ids"]
+                rendered_edge_identities = dom["edges"]
+                rendered_nodes = len(rendered_node_ids)
+                rendered_edges = len(rendered_edge_identities)
+                rendered_graph_version = dom["version"]
             except Exception as exc:
                 failure_details.append(
                     _failure_detail(
@@ -1163,7 +1443,15 @@ async def _run_browser_attempt(
                 )
         if not failure_details:
             failure_details.extend(
-                _deterministic_failure_details(case, case_events, rendered_nodes)
+                _deterministic_failure_details(
+                    case,
+                    case_events,
+                    rendered_nodes,
+                    rendered_edges,
+                    rendered_graph_version,
+                    rendered_node_ids,
+                    rendered_edge_identities,
+                )
             )
         failure_details.extend(
             await _node_followup_interaction_failure_details(
@@ -1238,6 +1526,11 @@ async def _run_browser_attempt(
                 )
 
         answers = extract_response_turns(case_events)
+        graph_evidence_by_turn = {
+            int(item["turn"]): item
+            for item in turn_graphs
+            if isinstance(item.get("turn"), int)
+        }
         deterministic = [failure["message"] for failure in failure_details]
         result = {
             "id": case.id,
@@ -1251,6 +1544,7 @@ async def _run_browser_attempt(
             "turns": [
                 {
                     **timing,
+                    **graph_evidence_by_turn.get(timing["turn"], {}),
                     "prompt": case.steps[timing["turn"] - 1].prompt,
                     "answer": (
                         answers[timing["turn"] - 1]
@@ -1263,6 +1557,10 @@ async def _run_browser_attempt(
             "events": case_events,
             "graph": graph,
             "rendered_nodes": rendered_nodes,
+            "rendered_edges": rendered_edges,
+            "rendered_graph_version": rendered_graph_version,
+            "rendered_node_ids": rendered_node_ids,
+            "rendered_edge_identities": rendered_edge_identities,
             "thread_id": thread_id,
             "screenshot": screenshot_relative,
             "trace": str(trace.relative_to(artifact_dir)),
@@ -1538,6 +1836,10 @@ def _unfinished_case_result(
         "events": [],
         "graph": None,
         "rendered_nodes": 0,
+        "rendered_edges": 0,
+        "rendered_graph_version": None,
+        "rendered_node_ids": [],
+        "rendered_edge_identities": [],
         "thread_id": None,
         "thread_ids": [],
         "screenshot": None,
@@ -1563,7 +1865,10 @@ async def _finalize_timed_out_browser(args: argparse.Namespace) -> dict[str, Any
     if output_path.exists():
         try:
             candidate = json.loads(output_path.read_text(encoding="utf-8"))
-            if isinstance(candidate, dict) and candidate.get("kind") == "browser_capture":
+            if (
+                isinstance(candidate, dict)
+                and candidate.get("kind") == "browser_capture"
+            ):
                 checkpoint = candidate
         except (OSError, json.JSONDecodeError):
             checkpoint = {}
@@ -1636,8 +1941,7 @@ async def _finalize_timed_out_browser(args: argparse.Namespace) -> dict[str, Any
             dict.fromkeys(
                 str(thread_id)
                 for result in results
-                for thread_id in result.get("thread_ids")
-                or [result.get("thread_id")]
+                for thread_id in result.get("thread_ids") or [result.get("thread_id")]
                 if thread_id
             )
         )
@@ -1672,8 +1976,7 @@ async def _finalize_timed_out_browser(args: argparse.Namespace) -> dict[str, Any
             dashboard = await asyncio.to_thread(
                 _blocking_json_request,
                 "GET",
-                args.backend_target.rstrip("/")
-                + "/api/internal/dashboard/overview",
+                args.backend_target.rstrip("/") + "/api/internal/dashboard/overview",
                 None,
                 session["access_token"],
             )

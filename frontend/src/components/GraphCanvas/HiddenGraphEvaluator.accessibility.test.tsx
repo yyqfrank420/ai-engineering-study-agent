@@ -27,7 +27,6 @@ describe('HiddenGraphEvaluator accessibility boundary', () => {
             sequence: [],
           },
         }}
-        viewport={{ width: 960, height: 640 }}
       />,
     );
 
