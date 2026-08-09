@@ -107,6 +107,19 @@ def _should_send_graph_notice(state: AgentState) -> bool:
     return state.get("graph_mode", "auto") != "on"
 
 
+def _should_preserve_unreviewed_candidate(state: AgentState) -> bool:
+    graph = state.get("graph_data")
+    review = state.get("graph_review") or {}
+    return (
+        bool(state.get("graph_changed"))
+        and isinstance(graph, dict)
+        and graph.get("design_origin") == "applied"
+        and isinstance(review, dict)
+        and review.get("approved") is False
+        and review.get("review_status") == "unavailable"
+    )
+
+
 def _traced(name: str, node: AgentNode, **attributes) -> AgentNode:
     async def run(state: AgentState) -> AgentState:
         span_attributes = {
@@ -340,7 +353,8 @@ def build_agent_workflow(
         repair_summary = _repair_attempt_summary(
             int(state.get("graph_revision_count", 0))
         )
-        if not state.get("graph_notice_sent") and _should_send_graph_notice(state):
+        preserve_candidate = _should_preserve_unreviewed_candidate(state)
+        if not preserve_candidate and not state.get("graph_notice_sent") and _should_send_graph_notice(state):
             operation = state.get("graph_operation")
             failure_code = (
                 operation.get("failure_code") if isinstance(operation, dict) else None
@@ -369,11 +383,11 @@ def build_agent_workflow(
                     "message": message,
                 }
             )
-        restored = _restore_approved_graph_state(state)
+        restored = state if preserve_candidate else _restore_approved_graph_state(state)
         operation = state.get("graph_operation")
         return {
             **restored,
-            "graph_notice_sent": True,
+            "graph_notice_sent": preserve_candidate or state.get("graph_notice_sent", False),
             "graph_review": review,
             "graph_operation": (
                 {
@@ -548,19 +562,15 @@ async def run_agent(
         state.get("graph_data"),
     )
     graph_operation = state.get("graph_operation")
-    if graph_intent == "edit" and (
-        not _has_applied_graph(state.get("graph_data"))
-        or state.get("graph_mode") == "off"
-    ):
+    if graph_intent == "edit" and state.get("graph_mode") == "off":
         graph_operation = {
             "kind": "edit",
             "status": "failed",
-            "failure_code": (
-                "graph_mode_disabled"
-                if state.get("graph_mode") == "off"
-                else "graph_edit_target_unavailable"
-            ),
+            "failure_code": "graph_mode_disabled",
         }
+    elif graph_intent == "edit" and not _has_applied_graph(state.get("graph_data")):
+        graph_intent = "create"
+        graph_operation = None
     initial_state: AgentState = {
         **state,
         "graph_intent": graph_intent,
