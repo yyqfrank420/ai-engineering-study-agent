@@ -4,7 +4,7 @@
 //          SequenceBar. Manages which node popup is open.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import type { AuthSession, GraphCandidate, GraphData, GraphNode, GraphViewState, SelectedNode, WorkflowProgress } from '../../types';
 import { useGraph } from '../../hooks/useGraph';
 import { graphStructureKey } from '../../utils/graphStructureKey';
@@ -65,8 +65,6 @@ export function GraphCanvas({
   const [sequenceDismissal, setSequenceDismissal] = useState<{ key: string; dismissed: boolean } | null>(null);
   const [viewStateCache, setViewStateCache] = useState<Record<string, GraphViewState>>({});
   const [pendingPersistViewState, setPendingPersistViewState] = useState<GraphViewState | null>(null);
-  const canvasHostRef = useRef<HTMLDivElement>(null);
-  const [evaluationViewport, setEvaluationViewport] = useState<{ width: number; height: number } | null>(null);
   const graphContentKey = useMemo(() => graphStructureKey(graphData), [graphData]);
   const sequenceDismissed = sequenceDismissal?.key === graphContentKey && sequenceDismissal.dismissed;
   const graphViewKey = useMemo(() => {
@@ -83,32 +81,6 @@ export function GraphCanvas({
     ].join('::');
   }, [activeThreadId, graphData]);
   const persistedViewState = graphViewKey ? viewStateCache[graphViewKey] ?? graphData?.view_state ?? null : null;
-
-  useEffect(() => {
-    if (!graphCandidate || !canvasHostRef.current) return;
-    const host = canvasHostRef.current;
-    const recordViewport = (rect: Pick<DOMRectReadOnly, 'width' | 'height'>) => {
-      const width = Math.round(rect.width);
-      const height = Math.round(rect.height);
-      // SplitPane reveals this host from zero width. Do not evaluate against a
-      // guessed fallback while that transition is still establishing geometry.
-      if (width <= 0 || height <= 0) return;
-      setEvaluationViewport(previous => (
-        previous?.width === width && previous.height === height
-          ? previous
-          : { width, height }
-      ));
-    };
-
-    recordViewport(host.getBoundingClientRect());
-    if (typeof ResizeObserver === 'undefined') return;
-
-    const observer = new ResizeObserver((entries) => {
-      recordViewport(entries[0]?.contentRect ?? host.getBoundingClientRect());
-    });
-    observer.observe(host);
-    return () => observer.disconnect();
-  }, [graphCandidate]);
 
   useEffect(() => {
     if (!authSession || !activeThreadId || !graphData || !pendingPersistViewState) {
@@ -133,7 +105,7 @@ export function GraphCanvas({
     const latest = workflowProgress.at(-1);
     return (
       <>
-      <div ref={canvasHostRef} style={{
+      <div style={{
         flex: 1,
         display: 'flex',
         alignItems: 'center',
@@ -176,9 +148,7 @@ export function GraphCanvas({
           </>
         ) : 'Graph will appear here'}
       </div>
-      {evaluationViewport && (
-        <HiddenGraphEvaluator candidate={graphCandidate} viewport={evaluationViewport} />
-      )}
+      <HiddenGraphEvaluator candidate={graphCandidate} />
       </>
     );
   }
@@ -269,7 +239,7 @@ export function GraphCanvas({
       </div>
 
       {/* D3 canvas */}
-      <div ref={canvasHostRef} style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+      <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <div style={{ width: '100%', height: '100%', opacity: isBuilding ? 0.56 : 1, transition: 'opacity 180ms ease' }}>
           <D3Graph
             graphData={graphData}
@@ -341,9 +311,7 @@ export function GraphCanvas({
         />
       )}
     </div>
-    {evaluationViewport && (
-      <HiddenGraphEvaluator candidate={graphCandidate} viewport={evaluationViewport} />
-    )}
+    <HiddenGraphEvaluator candidate={graphCandidate} />
     </>
   );
 }

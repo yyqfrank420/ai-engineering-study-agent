@@ -30,6 +30,7 @@ from eval.live_runner import (
     _judge_payload,
     _load_resume_evaluations,
     _write_outputs,
+    evaluate,
 )
 from eval.quality_corpus import corpus_sha256, load_corpus
 from eval.semantic_gate import (
@@ -55,7 +56,10 @@ def result(*grades: tuple[str, str, bool]) -> JudgeResult:
 
 
 def test_deterministic_failure_blocks_without_semantic_override():
-    decision = decide_semantic_gate(result(("correctness", "pass", False)), deterministic_failures=("graph missing",))
+    decision = decide_semantic_gate(
+        result(("correctness", "pass", False)),
+        deterministic_failures=("graph missing",),
+    )
 
     assert decision.status == "fail"
     assert "graph missing" in decision.reason
@@ -85,19 +89,39 @@ def test_report_only_review_never_masks_clear_or_infrastructure_failures():
     assert _exit_code_for_statuses({"manual_review"}, "blocking") == 3
     assert _exit_code_for_statuses({"manual_review"}, "report-only") == 0
     assert _exit_code_for_statuses({"manual_review", "fail"}, "report-only") == 1
-    assert _exit_code_for_statuses({"manual_review", "infrastructure"}, "report-only") == 2
+    assert (
+        _exit_code_for_statuses({"manual_review", "infrastructure"}, "report-only") == 2
+    )
+
+
+@pytest.mark.asyncio
+async def test_report_only_policy_is_replay_only():
+    args = SimpleNamespace(
+        manual_review_policy="report-only",
+        require_approved_corpus=True,
+        capture_replay=False,
+    )
+
+    with pytest.raises(RuntimeError, match="approved semantic replay"):
+        await evaluate(args)
 
 
 def test_noncritical_pass_threshold_is_enforced():
     dimensions = tuple((f"d{i}", "pass" if i < 8 else "fail", False) for i in range(10))
 
     assert decide_semantic_gate(result(*dimensions)).status == "infrastructure"
-    assert decide_semantic_gate(result(*dimensions), result(*dimensions)).status == "fail"
+    assert (
+        decide_semantic_gate(result(*dimensions), result(*dimensions)).status == "fail"
+    )
 
 
 def test_calibration_requires_85_percent_agreement_and_at_most_one_critical_false_pass():
     expected = [("pass", False)] * 17 + [("fail", True)] * 3
-    acceptable = [("pass", False)] * 17 + [("pass", True), ("fail", True), ("fail", True)]
+    acceptable = [("pass", False)] * 17 + [
+        ("pass", True),
+        ("fail", True),
+        ("fail", True),
+    ]
     unsafe = [("pass", False)] * 17 + [("pass", True)] * 3
 
     assert calibration_passes(expected, acceptable) == (True, 0.95, 1)
@@ -122,13 +146,17 @@ def test_judge_evidence_uses_typed_bounded_artifact_sources():
         "events": [{"type": "done"}],
     }
     sources = _artifact_sources(evidence)
-    raw = _RawJudgment.model_validate({
-        "dimensions": {"correctness": {
-            "grade": "pass",
-            "evidence": [{"source_id": "answer-1"}],
-            "rationale": "The answer states the promotion guard.",
-        }},
-    })
+    raw = _RawJudgment.model_validate(
+        {
+            "dimensions": {
+                "correctness": {
+                    "grade": "pass",
+                    "evidence": [{"source_id": "answer-1"}],
+                    "rationale": "The answer states the promotion guard.",
+                }
+            },
+        }
+    )
 
     _validate_evidence(raw, sources)
 
@@ -142,13 +170,15 @@ def test_judge_evidence_uses_typed_bounded_artifact_sources():
 
 
 def test_judge_evidence_preserves_ordered_conversation_turns():
-    sources = _artifact_sources({
-        "answer": "legacy concatenated answer",
-        "turns": [
-            {"turn": 1, "answer": "First explanation."},
-            {"turn": 2, "answer": "Two concise mitigations."},
-        ],
-    })
+    sources = _artifact_sources(
+        {
+            "answer": "legacy concatenated answer",
+            "turns": [
+                {"turn": 1, "answer": "First explanation."},
+                {"turn": 2, "answer": "Two concise mitigations."},
+            ],
+        }
+    )
 
     assert sources == {
         "turn-1-answer-1": "First explanation.",
@@ -156,28 +186,74 @@ def test_judge_evidence_preserves_ordered_conversation_turns():
     }
 
 
-def test_judge_evidence_keeps_retrieval_text_and_provenance_separate():
-    sources = _artifact_sources({
-        "retrieval_evidence": [{
-            "query": "Why should eval data grow?",
-            "book": "AI Engineering",
-            "chapter": 8,
-            "page_number": 404,
-            "parent_chunk_id": "ai-engineering:8:404:0",
-            "text": "Evaluation examples can seed synthesized data.",
-        }],
-    })
+def test_judge_evidence_exposes_each_turn_graph_and_render_identity():
+    sources = _artifact_sources(
+        {
+            "turns": [
+                {
+                    "answer": "Initial architecture.",
+                    "graph": {
+                        "version": "graph-1",
+                        "nodes": [{"id": "original-monitor"}],
+                        "edges": [],
+                    },
+                    "rendered_graph_version": "graph-1",
+                    "rendered_node_ids": ["original-monitor"],
+                    "rendered_edge_identities": [],
+                },
+                {
+                    "answer": "Focused edit.",
+                    "graph": {
+                        "version": "graph-2",
+                        "nodes": [{"id": "replacement-monitor"}],
+                        "edges": [],
+                    },
+                    "rendered_graph_version": "graph-2",
+                    "rendered_node_ids": ["replacement-monitor"],
+                    "rendered_edge_identities": [],
+                },
+            ]
+        }
+    )
 
-    assert sources["retrieval-1-text-1"] == "Evaluation examples can seed synthesized data."
+    assert sources["turn-1-graph-node-1-1"] == '{"id": "original-monitor"}'
+    assert "original-monitor" in sources["turn-1-render-1"]
+    assert sources["turn-2-graph-node-1-1"] == '{"id": "replacement-monitor"}'
+
+
+def test_judge_evidence_keeps_retrieval_text_and_provenance_separate():
+    sources = _artifact_sources(
+        {
+            "retrieval_evidence": [
+                {
+                    "query": "Why should eval data grow?",
+                    "book": "AI Engineering",
+                    "chapter": 8,
+                    "page_number": 404,
+                    "parent_chunk_id": "ai-engineering:8:404:0",
+                    "text": "Evaluation examples can seed synthesized data.",
+                }
+            ],
+        }
+    )
+
+    assert (
+        sources["retrieval-1-text-1"]
+        == "Evaluation examples can seed synthesized data."
+    )
     assert '"page_number": 404' in sources["retrieval-1-metadata-1"]
     assert "text" not in sources["retrieval-1-metadata-1"]
 
-    research_sources = _artifact_sources({
-        "research_evidence": [{
-            "query": "current agent practice",
-            "result": "Report — <https://example.com/report>: external snippet",
-        }],
-    })
+    research_sources = _artifact_sources(
+        {
+            "research_evidence": [
+                {
+                    "query": "current agent practice",
+                    "result": "Report — <https://example.com/report>: external snippet",
+                }
+            ],
+        }
+    )
     assert "https://example.com/report" in research_sources["research-1-result-1"]
 
 
@@ -192,22 +268,26 @@ def test_judge_schema_has_exact_dimension_keys():
     assert dimensions["additionalProperties"] is False
     assert dimensions["required"] == ["correctness", "instruction_following"]
     assert set(dimensions["properties"]) == {"correctness", "instruction_following"}
-    assert (
-        dimensions["properties"]["correctness"]["properties"]["evidence"]
-        ["items"]["properties"]["source_id"]["enum"]
-        == ["turn-1-answer-1"]
-    )
+    assert dimensions["properties"]["correctness"]["properties"]["evidence"]["items"][
+        "properties"
+    ]["source_id"]["enum"] == ["turn-1-answer-1"]
 
 
 def test_judge_evidence_rejects_an_unknown_source():
-    sources = _artifact_sources({"answer": "answer text", "events": [{"status": "ready"}]})
-    raw = _RawJudgment.model_validate({
-        "dimensions": {"correctness": {
-            "grade": "pass",
-            "evidence": [{"source_id": "missing-source"}],
-            "rationale": "Invalid provenance.",
-        }},
-    })
+    sources = _artifact_sources(
+        {"answer": "answer text", "events": [{"status": "ready"}]}
+    )
+    raw = _RawJudgment.model_validate(
+        {
+            "dimensions": {
+                "correctness": {
+                    "grade": "pass",
+                    "evidence": [{"source_id": "missing-source"}],
+                    "rationale": "Invalid provenance.",
+                }
+            },
+        }
+    )
 
     with pytest.raises(RuntimeError, match="unknown artifact source"):
         _validate_evidence(raw, sources)
@@ -230,20 +310,29 @@ def test_judge_prompt_excludes_human_approval_labels():
 async def test_anthropic_judge_uses_direct_structured_output_schema(monkeypatch):
     corpus = load_corpus()
     case = corpus.cases[0]
-    create = AsyncMock(return_value=SimpleNamespace(
-        content=[SimpleNamespace(type="text", text=__import__("json").dumps({
-            "dimensions": {
-                dimension: {
-                    "grade": "pass",
-                    "evidence": [{"source_id": "answer-1"}],
-                    "rationale": "The cited artifact satisfies the rubric.",
-                }
-                for dimension in case.rubric_dimensions
-            },
-        }))],
-        stop_reason="end_turn",
-        usage=SimpleNamespace(input_tokens=123, output_tokens=45),
-    ))
+    create = AsyncMock(
+        return_value=SimpleNamespace(
+            content=[
+                SimpleNamespace(
+                    type="text",
+                    text=__import__("json").dumps(
+                        {
+                            "dimensions": {
+                                dimension: {
+                                    "grade": "pass",
+                                    "evidence": [{"source_id": "answer-1"}],
+                                    "rationale": "The cited artifact satisfies the rubric.",
+                                }
+                                for dimension in case.rubric_dimensions
+                            },
+                        }
+                    ),
+                )
+            ],
+            stop_reason="end_turn",
+            usage=SimpleNamespace(input_tokens=123, output_tokens=45),
+        )
+    )
     client = SimpleNamespace(messages=SimpleNamespace(create=create))
     constructor_calls = []
 
@@ -251,14 +340,15 @@ async def test_anthropic_judge_uses_direct_structured_output_schema(monkeypatch)
         constructor_calls.append(kwargs)
         return client
 
-    monkeypatch.setattr("eval.judge_adapter.AsyncAnthropic", fake_anthropic)
+    monkeypatch.setattr("eval.judge_adapter.create_anthropic_client", fake_anthropic)
+    monkeypatch.setattr("eval.judge_adapter.get_posthog_client", lambda: None)
     monkeypatch.setenv("EVAL_JUDGE_PROVIDER", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-test-key")
     monkeypatch.delenv("EVAL_JUDGE_MODEL", raising=False)
 
     judgment = await SemanticJudge().judge(corpus, case, {"answer": "Artifact text."})
 
-    assert constructor_calls == [{"api_key": "anthropic-test-key", "max_retries": 0}]
+    assert constructor_calls == [{"api_key": "anthropic-test-key"}]
     request = create.await_args.kwargs
     assert request["model"] == DEFAULT_ANTHROPIC_JUDGE_MODEL
     assert request["max_tokens"] == 8192
@@ -274,16 +364,63 @@ async def test_anthropic_judge_uses_direct_structured_output_schema(monkeypatch)
                     tuple(case.rubric_dimensions),
                 )
             ),
-        }
+        },
     }
     anthropic_schema = request["output_config"]["format"]["schema"]
     assert "minItems" not in __import__("json").dumps(anthropic_schema)
     assert "maxItems" not in __import__("json").dumps(anthropic_schema)
     assert "response_format" not in request
+    assert "posthog_properties" not in request
     assert judgment.provider == "anthropic"
     assert judgment.model == DEFAULT_ANTHROPIC_JUDGE_MODEL
     assert judgment.input_tokens == 123
     assert judgment.output_tokens == 45
+
+
+@pytest.mark.asyncio
+async def test_anthropic_judge_prefers_eval_judge_api_key(monkeypatch):
+    corpus = load_corpus()
+    case = corpus.cases[0]
+    create = AsyncMock(
+        return_value=SimpleNamespace(
+            content=[
+                SimpleNamespace(
+                    type="text",
+                    text=__import__("json").dumps(
+                        {
+                            "dimensions": {
+                                dimension: {
+                                    "grade": "pass",
+                                    "evidence": [{"source_id": "answer-1"}],
+                                    "rationale": "The cited artifact satisfies the rubric.",
+                                }
+                                for dimension in case.rubric_dimensions
+                            },
+                        }
+                    ),
+                )
+            ],
+            stop_reason="end_turn",
+            usage=SimpleNamespace(input_tokens=12, output_tokens=4),
+        )
+    )
+    client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    constructor_calls = []
+
+    def fake_anthropic(**kwargs):
+        constructor_calls.append(kwargs)
+        return client
+
+    monkeypatch.setattr("eval.judge_adapter.create_anthropic_client", fake_anthropic)
+    monkeypatch.setattr("eval.judge_adapter.get_posthog_client", lambda: None)
+    monkeypatch.setenv("EVAL_JUDGE_PROVIDER", "anthropic")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("EVAL_JUDGE_API_KEY", "anthropic-fallback-key")
+    monkeypatch.delenv("EVAL_JUDGE_MODEL", raising=False)
+
+    await SemanticJudge().judge(corpus, case, {"answer": "Artifact text."})
+
+    assert constructor_calls == [{"api_key": "anthropic-fallback-key"}]
 
 
 def test_semantic_replay_reuses_only_identity_bound_valid_judgments(tmp_path):
@@ -310,22 +447,26 @@ def test_semantic_replay_reuses_only_identity_bound_valid_judgments(tmp_path):
     }
     path = tmp_path / "resume.json"
     path.write_text(
-        __import__("json").dumps({
-            "kind": "live_gate",
-            "execution_mode": "semantic_replay",
-            "suite": "full",
-            "target": target,
-            "corpus_version": corpus.corpus_version,
-            "corpus_sha256": corpus_sha256(),
-            "release_identity": corpus.release_identity,
-            "evaluations": [{
-                "id": case.id,
-                "decision": "pass",
-                "reason": "judge passed every dimension",
-                "deterministic_failures": [],
-                "judgments": [judgment],
-            }],
-        }),
+        __import__("json").dumps(
+            {
+                "kind": "live_gate",
+                "execution_mode": "semantic_replay",
+                "suite": "full",
+                "target": target,
+                "corpus_version": corpus.corpus_version,
+                "corpus_sha256": corpus_sha256(),
+                "release_identity": corpus.release_identity,
+                "evaluations": [
+                    {
+                        "id": case.id,
+                        "decision": "pass",
+                        "reason": "judge passed every dimension",
+                        "deterministic_failures": [],
+                        "judgments": [judgment],
+                    }
+                ],
+            }
+        ),
         encoding="utf-8",
     )
     args = SimpleNamespace(
@@ -360,9 +501,10 @@ def test_semantic_judge_defaults_to_sonnet_5(monkeypatch):
     monkeypatch.delenv("EVAL_JUDGE_MODEL", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-test-key")
     monkeypatch.setattr(
-        "eval.judge_adapter.AsyncAnthropic",
+        "eval.judge_adapter.create_anthropic_client",
         lambda **_kwargs: client,
     )
+    monkeypatch.setattr("eval.judge_adapter.get_posthog_client", lambda: None)
 
     judge = SemanticJudge()
 
@@ -387,16 +529,19 @@ async def test_anthropic_judge_rejects_non_structured_responses(
 ):
     corpus = load_corpus()
     case = corpus.cases[0]
-    create = AsyncMock(return_value=SimpleNamespace(
-        content=content,
-        stop_reason=stop_reason,
-        usage=SimpleNamespace(input_tokens=1, output_tokens=1),
-    ))
+    create = AsyncMock(
+        return_value=SimpleNamespace(
+            content=content,
+            stop_reason=stop_reason,
+            usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+        )
+    )
     client = SimpleNamespace(messages=SimpleNamespace(create=create))
     monkeypatch.setattr(
-        "eval.judge_adapter.AsyncAnthropic",
+        "eval.judge_adapter.create_anthropic_client",
         lambda **_kwargs: client,
     )
+    monkeypatch.setattr("eval.judge_adapter.get_posthog_client", lambda: None)
 
     with pytest.raises(RuntimeError, match=message):
         await SemanticJudge(
@@ -406,23 +551,27 @@ async def test_anthropic_judge_rejects_non_structured_responses(
 
 
 def test_judge_payload_removes_duplicate_graph_events_and_internal_graph_metadata():
-    payload = _judge_payload({
-        "answer": "answer",
-        "graph": {
-            "title": "Candidate",
-            "nodes": [{
-                "id": "service",
-                "label": "Service",
-                "description": "Handles requests.",
-                "evidence_chunk_ids": ["private-internal-id"],
-            }],
-            "edges": [],
-        },
-        "events": [
-            {"type": "graph_data", "data": {"duplicate": True}},
-            {"type": "worker_status", "worker": "graph", "status": "ready"},
-        ],
-    })
+    payload = _judge_payload(
+        {
+            "answer": "answer",
+            "graph": {
+                "title": "Candidate",
+                "nodes": [
+                    {
+                        "id": "service",
+                        "label": "Service",
+                        "description": "Handles requests.",
+                        "evidence_chunk_ids": ["private-internal-id"],
+                    }
+                ],
+                "edges": [],
+            },
+            "events": [
+                {"type": "graph_data", "data": {"duplicate": True}},
+                {"type": "worker_status", "worker": "graph", "status": "ready"},
+            ],
+        }
+    )
 
     assert payload["graph"]["title"] == "Candidate"
     assert payload["graph"]["artifact_role"] == "browser-rendered diagram"
@@ -433,19 +582,21 @@ def test_judge_payload_removes_duplicate_graph_events_and_internal_graph_metadat
 
 
 def test_judge_payload_reconstructs_turns_and_discards_reset_drafts():
-    payload = _judge_payload({
-        "answer": "first answerobsolete draftrevised answer",
-        "events": [
-            {"type": "ready"},
-            {"type": "response_delta", "content": "first answer"},
-            {"type": "done"},
-            {"type": "ready"},
-            {"type": "response_delta", "content": "obsolete draft"},
-            {"type": "response_reset"},
-            {"type": "response_delta", "content": "revised answer"},
-            {"type": "done"},
-        ],
-    })
+    payload = _judge_payload(
+        {
+            "answer": "first answerobsolete draftrevised answer",
+            "events": [
+                {"type": "ready"},
+                {"type": "response_delta", "content": "first answer"},
+                {"type": "done"},
+                {"type": "ready"},
+                {"type": "response_delta", "content": "obsolete draft"},
+                {"type": "response_reset"},
+                {"type": "response_delta", "content": "revised answer"},
+                {"type": "done"},
+            ],
+        }
+    )
 
     assert payload["turns"] == [
         {"turn": 1, "answer": "first answer"},
@@ -454,35 +605,95 @@ def test_judge_payload_reconstructs_turns_and_discards_reset_drafts():
     assert "answer" not in payload
 
 
+def test_judge_payload_preserves_each_turn_graph_identity():
+    payload = _judge_payload(
+        {
+            "graph": {
+                "version": "graph-2",
+                "nodes": [{"id": "replacement", "label": "Replacement"}],
+                "edges": [],
+            },
+            "turns": [
+                {
+                    "turn": 1,
+                    "answer": "Initial architecture.",
+                    "graph": {
+                        "version": "graph-1",
+                        "nodes": [{"id": "original", "label": "Original"}],
+                        "edges": [],
+                    },
+                    "rendered_graph_version": "graph-1",
+                    "rendered_node_ids": ["original"],
+                    "rendered_edge_identities": [],
+                },
+                {
+                    "turn": 2,
+                    "answer": "Focused edit.",
+                    "graph": {
+                        "version": "graph-2",
+                        "nodes": [{"id": "replacement", "label": "Replacement"}],
+                        "edges": [],
+                    },
+                    "rendered_graph_version": "graph-2",
+                    "rendered_node_ids": ["replacement"],
+                    "rendered_edge_identities": [],
+                },
+            ],
+            "events": [],
+        }
+    )
+
+    assert [turn["graph"]["nodes"][0]["id"] for turn in payload["turns"]] == [
+        "original",
+        "replacement",
+    ]
+    assert [turn["rendered_graph_version"] for turn in payload["turns"]] == [
+        "graph-1",
+        "graph-2",
+    ]
+
+
 def test_judge_payload_bounds_and_preserves_retrieval_evidence():
-    payload = _judge_payload({
-        "answer": "Grounded answer (Chapter 8, p.404).",
-        "events": [
-            {
-                "type": "retrieval_evidence",
-                "query": "Why should eval data grow?",
-                "chunks": [{
-                    "book": "AI Engineering",
-                    "chapter": 8,
-                    "page_number": 404,
-                    "parent_chunk_id": "ai-engineering:8:404:0",
-                    "text": "x" * 25_000,
-                }],
-            },
-            {
-                "type": "research_evidence",
-                "query": "current practice",
-                "results": ["Report — <https://example.com/report>: current evidence"],
-            },
-        ],
-    })
+    payload = _judge_payload(
+        {
+            "answer": "Grounded answer (Chapter 8, p.404).",
+            "events": [
+                {
+                    "type": "retrieval_evidence",
+                    "eval_turn": 2,
+                    "query": "Why should eval data grow?",
+                    "chunks": [
+                        {
+                            "book": "AI Engineering",
+                            "chapter": 8,
+                            "page_number": 404,
+                            "parent_chunk_id": "ai-engineering:8:404:0",
+                            "text": "x" * 25_000,
+                        }
+                    ],
+                },
+                {
+                    "type": "research_evidence",
+                    "eval_turn": 2,
+                    "query": "current practice",
+                    "results": [
+                        "Report — <https://example.com/report>: current evidence"
+                    ],
+                },
+            ],
+        }
+    )
 
     assert payload["retrieval_evidence"][0]["page_number"] == 404
+    assert payload["retrieval_evidence"][0]["eval_turn"] == 2
     assert len(payload["retrieval_evidence"][0]["text"]) == 20_000
-    assert payload["research_evidence"] == [{
-        "query": "current practice",
-        "result": "Report — <https://example.com/report>: current evidence",
-    }]
+    assert payload["research_evidence"] == [
+        {
+            "query": "current practice",
+            "result": "Report — <https://example.com/report>: current evidence",
+            "eval_turn": 2,
+        }
+    ]
     assert payload["events"] == []
 
 
@@ -614,7 +825,7 @@ def test_calibration_report_uses_every_reviewed_case_and_dimension():
                         "dimensions": [
                             {"dimension": dimension, "grade": "pass"}
                             for dimension in case.rubric_dimensions
-                        ]
+                        ],
                     }
                 ],
             }
@@ -734,7 +945,9 @@ def test_approved_gate_rejects_an_uncalibrated_judge_provider():
         )
 
 
-def test_infrastructure_startup_failure_still_writes_review_artifacts(tmp_path, monkeypatch):
+def test_infrastructure_startup_failure_still_writes_review_artifacts(
+    tmp_path, monkeypatch
+):
     summary = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
     output = tmp_path / "live-results.json"

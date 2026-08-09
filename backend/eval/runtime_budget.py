@@ -17,10 +17,21 @@ def _live_budgets() -> dict[str, int]:
         for key, value in raw_budgets.items()
         if isinstance(value, int) and not isinstance(value, bool)
     }
-    if len(budgets) != len(raw_budgets) or any(
-        value <= 0 for value in budgets.values()
+    retry_count = budgets.get("browser_infrastructure_retry_count")
+    positive_budgets = {
+        key: value
+        for key, value in budgets.items()
+        if key != "browser_infrastructure_retry_count"
+    }
+    if (
+        len(budgets) != len(raw_budgets)
+        or any(value <= 0 for value in positive_budgets.values())
+        or retry_count is None
+        or retry_count < 0
     ):
-        raise ValueError("live evaluation budgets must be positive integers")
+        raise ValueError(
+            "live evaluation budgets must be positive integers; retry count may be zero"
+        )
     return budgets
 
 

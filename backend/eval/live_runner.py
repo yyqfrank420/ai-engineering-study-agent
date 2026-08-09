@@ -30,14 +30,18 @@ from eval.semantic_gate import EvaluationBudget, GateDecision, decide_semantic_g
 
 ROOT = Path(__file__).resolve().parents[2]
 QUALITY_MANIFEST = ROOT / "ci" / "quality.json"
-PROVIDER_FAILURE = re.compile(r"(?:rate.?limit|429|provider.*unavailable|timed?\s*out|connection.*failed)", re.I)
+PROVIDER_FAILURE = re.compile(
+    r"(?:rate.?limit|429|provider.*unavailable|timed?\s*out|connection.*failed)", re.I
+)
 ManualReviewPolicy = Literal["blocking", "report-only"]
 
 
 def _assert_approved_judge_identity(corpus: Any, judge: Any) -> None:
     identity = corpus.approval.calibration
     if identity.judge_release != JUDGE_PROMPT_RELEASE:
-        raise RuntimeError("active judge prompt release is not approved for this corpus")
+        raise RuntimeError(
+            "active judge prompt release is not approved for this corpus"
+        )
     if identity.judge_provider != getattr(judge, "provider", "openai"):
         raise RuntimeError("active judge provider is not approved for this corpus")
     if identity.judge_model != judge.model:
@@ -45,7 +49,9 @@ def _assert_approved_judge_identity(corpus: Any, judge: Any) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Apply deterministic and reviewed semantic gates")
+    parser = argparse.ArgumentParser(
+        description="Apply deterministic and reviewed semantic gates"
+    )
     parser.add_argument("--suite", required=True)
     parser.add_argument("--target", required=True, help="Backend candidate URL")
     parser.add_argument("--input", help="Browser capture JSON from eval.browser_runner")
@@ -90,11 +96,15 @@ def _load_capture(args: argparse.Namespace) -> dict[str, Any]:
         )
     capture = json.loads((ROOT / args.input).read_text(encoding="utf-8"))
     if capture.get("kind") != "browser_capture" or capture.get("suite") != args.suite:
-        raise RuntimeError("browser capture kind or suite does not match this live evaluation")
+        raise RuntimeError(
+            "browser capture kind or suite does not match this live evaluation"
+        )
     if capture.get("backend_target", "").rstrip("/") != args.target.rstrip("/"):
         raise RuntimeError("browser capture backend target does not match --target")
     if capture.get("corpus_sha256") != corpus_sha256():
-        raise RuntimeError("browser capture was produced with a different corpus manifest")
+        raise RuntimeError(
+            "browser capture was produced with a different corpus manifest"
+        )
     return capture
 
 
@@ -138,10 +148,14 @@ def _load_resume_evaluations(
         if evaluation.get("decision") not in {"pass", "manual_review", "fail"}:
             raise RuntimeError(f"resume report has an invalid decision for {case_id}")
         if evaluation.get("deterministic_failures"):
-            raise RuntimeError(f"resume judgment for {case_id} has deterministic failures")
+            raise RuntimeError(
+                f"resume judgment for {case_id} has deterministic failures"
+            )
         for judgment in judgments:
             if judgment.get("provider") != judge.provider:
-                raise RuntimeError(f"resume judge provider does not match for {case_id}")
+                raise RuntimeError(
+                    f"resume judge provider does not match for {case_id}"
+                )
             if judgment.get("model") != judge.model:
                 raise RuntimeError(f"resume judge model does not match for {case_id}")
             if judgment.get("prompt_release") != JUDGE_PROMPT_RELEASE:
@@ -149,18 +163,20 @@ def _load_resume_evaluations(
             dimensions = judgment.get("dimensions") or []
             names = [item.get("dimension") for item in dimensions]
             if names != list(case.rubric_dimensions):
-                raise RuntimeError(f"resume judgment dimensions do not match for {case_id}")
+                raise RuntimeError(
+                    f"resume judgment dimensions do not match for {case_id}"
+                )
             for dimension in dimensions:
                 evidence = dimension.get("evidence")
                 if not isinstance(evidence, list) or not 1 <= len(evidence) <= 3:
-                    raise RuntimeError(f"resume judgment evidence is invalid for {case_id}")
+                    raise RuntimeError(
+                        f"resume judgment evidence is invalid for {case_id}"
+                    )
         reusable[case_id] = evaluation
     return reusable
 
 
-def _judge_payload(result: dict[str, Any]) -> dict[str, Any]:
-    graph = result.get("graph")
-    compact_graph = None
+def _compact_judge_graph(graph: Any) -> dict[str, Any] | None:
     if isinstance(graph, dict):
         compact_graph = {
             key: graph[key]
@@ -180,7 +196,15 @@ def _judge_payload(result: dict[str, Any]) -> dict[str, Any]:
         compact_graph["nodes"] = [
             {
                 key: node[key]
-                for key in ("id", "label", "type", "technology", "description", "tier", "layer")
+                for key in (
+                    "id",
+                    "label",
+                    "type",
+                    "technology",
+                    "description",
+                    "tier",
+                    "layer",
+                )
                 if node.get(key) is not None
             }
             for node in graph.get("nodes") or []
@@ -195,36 +219,73 @@ def _judge_payload(result: dict[str, Any]) -> dict[str, Any]:
             for edge in graph.get("edges") or []
             if isinstance(edge, dict)
         ]
+        return compact_graph
+    return None
+
+
+def _compact_judge_turns(
+    turn_records: list[dict[str, Any]],
+    *,
+    answer_limit: int,
+) -> list[dict[str, Any]]:
+    compact_turns: list[dict[str, Any]] = []
+    for index, source in enumerate(turn_records, start=1):
+        answer = str(source.get("answer") or "")
+        compact_turn = {"turn": index, "answer": answer[:answer_limit]}
+        graph = _compact_judge_graph(source.get("graph"))
+        if graph is not None:
+            compact_turn.update(
+                {
+                    "graph": graph,
+                    "rendered_graph_version": source.get("rendered_graph_version"),
+                    "rendered_node_ids": source.get("rendered_node_ids") or [],
+                    "rendered_edge_identities": source.get("rendered_edge_identities")
+                    or [],
+                }
+            )
+        compact_turns.append(compact_turn)
+    return compact_turns
+
+
+def _judge_payload(result: dict[str, Any]) -> dict[str, Any]:
+    compact_graph = _compact_judge_graph(result.get("graph"))
     captured_turns = result.get("turns")
     if isinstance(captured_turns, list) and captured_turns:
-        turn_answers = [
-            str(turn.get("answer") or "") if isinstance(turn, dict) else str(turn or "")
+        captured_turn_records = [
+            turn if isinstance(turn, dict) else {"answer": str(turn or "")}
             for turn in captured_turns
         ]
     else:
-        turn_answers = extract_response_turns(result.get("events") or [])
-    turn_answers = [answer for answer in turn_answers if answer]
-    per_turn_limit = max(1, 40_000 // len(turn_answers)) if turn_answers else 0
+        captured_turn_records = [
+            {"answer": answer}
+            for answer in extract_response_turns(result.get("events") or [])
+        ]
+    per_turn_limit = (
+        max(1, 40_000 // len(captured_turn_records)) if captured_turn_records else 0
+    )
 
     retrieval_chunks: list[dict[str, Any]] = []
-    research_results: list[dict[str, str]] = []
+    research_results: list[dict[str, Any]] = []
     for event in result.get("events") or []:
         if event.get("type") == "research_evidence":
             query = str(event.get("query") or "")[:500]
+            eval_turn = event.get("eval_turn")
             event_results = event.get("results")
             if isinstance(event_results, list):
-                research_results.extend(
-                    {"query": query, "result": str(item)[:1_000]}
-                    for item in event_results[:6]
-                )
+                for item in event_results[:6]:
+                    result_record = {"query": query, "result": str(item)[:1_000]}
+                    if eval_turn is not None:
+                        result_record["eval_turn"] = eval_turn
+                    research_results.append(result_record)
             continue
         if event.get("type") != "retrieval_evidence":
             continue
         query = str(event.get("query") or "")[:500]
+        eval_turn = event.get("eval_turn")
         for chunk in event.get("chunks") or []:
             if not isinstance(chunk, dict):
                 continue
-            retrieval_chunks.append({
+            chunk_record = {
                 "query": query,
                 **{
                     key: chunk.get(key)
@@ -238,8 +299,13 @@ def _judge_payload(result: dict[str, Any]) -> dict[str, Any]:
                     )
                 },
                 "text": str(chunk.get("text") or ""),
-            })
-    retrieval_text_limit = max(500, 20_000 // len(retrieval_chunks)) if retrieval_chunks else 0
+            }
+            if eval_turn is not None:
+                chunk_record["eval_turn"] = eval_turn
+            retrieval_chunks.append(chunk_record)
+    retrieval_text_limit = (
+        max(500, 20_000 // len(retrieval_chunks)) if retrieval_chunks else 0
+    )
     for chunk in retrieval_chunks:
         chunk["text"] = chunk["text"][:retrieval_text_limit]
 
@@ -250,7 +316,8 @@ def _judge_payload(result: dict[str, Any]) -> dict[str, Any]:
         "events": [
             event
             for event in result.get("events") or []
-            if event.get("type") in {
+            if event.get("type")
+            in {
                 "worker_status",
                 "retrieval_notice",
                 "graph_notice",
@@ -260,11 +327,11 @@ def _judge_payload(result: dict[str, Any]) -> dict[str, Any]:
             }
         ],
     }
-    if turn_answers:
-        payload["turns"] = [
-            {"turn": index, "answer": answer[:per_turn_limit]}
-            for index, answer in enumerate(turn_answers, start=1)
-        ]
+    if captured_turn_records:
+        payload["turns"] = _compact_judge_turns(
+            captured_turn_records,
+            answer_limit=per_turn_limit,
+        )
     else:
         payload["answer"] = str(result.get("answer") or "")[:40_000]
     return payload
@@ -292,7 +359,11 @@ def _result_to_json(result) -> dict[str, Any]:
 
 
 def _classify_deterministic(failures: list[str]) -> str:
-    return "infrastructure" if any(PROVIDER_FAILURE.search(failure) for failure in failures) else "quality"
+    return (
+        "infrastructure"
+        if any(PROVIDER_FAILURE.search(failure) for failure in failures)
+        else "quality"
+    )
 
 
 def _exit_code_for_statuses(
@@ -311,9 +382,11 @@ def _exit_code_for_statuses(
 
 async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     manual_review_policy: ManualReviewPolicy = args.manual_review_policy
-    if manual_review_policy == "report-only" and not args.require_approved_corpus:
+    if manual_review_policy == "report-only" and (
+        not args.require_approved_corpus or not args.capture_replay
+    ):
         raise RuntimeError(
-            "report-only manual review requires --require-approved-corpus"
+            "report-only manual review is restricted to approved semantic replay"
         )
     manifest = _manifest()
     limits = manifest["live"]["budgets"]
@@ -322,8 +395,14 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     expected_ids = manifest["live"]["suites"].get(args.suite)
     if args.suite == "diagnostic":
         expected_ids = args.case
-        if not expected_ids or len(expected_ids) > 8 or len(expected_ids) != len(set(expected_ids)):
-            raise RuntimeError("diagnostic live suite requires one to eight unique --case values")
+        if (
+            not expected_ids
+            or len(expected_ids) > 8
+            or len(expected_ids) != len(set(expected_ids))
+        ):
+            raise RuntimeError(
+                "diagnostic live suite requires one to eight unique --case values"
+            )
         unknown = sorted(set(expected_ids) - set(corpus.by_id))
         if unknown:
             raise RuntimeError("unknown diagnostic live cases: " + ", ".join(unknown))
@@ -333,18 +412,26 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         raise RuntimeError(f"unknown live suite: {args.suite}")
     actual_ids = [result["id"] for result in capture["results"]]
     if expected_ids is not None and actual_ids != expected_ids:
-        raise RuntimeError(f"browser capture cases do not match suite: expected {expected_ids}, got {actual_ids}")
+        raise RuntimeError(
+            f"browser capture cases do not match suite: expected {expected_ids}, got {actual_ids}"
+        )
     if args.suite == "pr" and len(actual_ids) > limits["pr_cases"]:
         raise RuntimeError("PR case budget exceeded")
 
     is_pr_budget = args.suite in {"pr", "smoke", "diagnostic"}
     budget = EvaluationBudget(
-        application_calls=limits["application_calls"] if is_pr_budget else 150,
+        application_calls=(
+            limits["application_calls"]
+            if is_pr_budget
+            else limits["application_full_calls"]
+        ),
         judge_calls=limits["judge_calls"] if is_pr_budget else 40,
     )
     app_telemetry = capture.get("application_telemetry") or []
     if capture.get("results") and not app_telemetry:
-        raise RuntimeError("browser capture contains no application model-call telemetry")
+        raise RuntimeError(
+            "browser capture contains no application model-call telemetry"
+        )
     budget.record_application_calls(
         sum(max(1, int(call.get("provider_attempts") or 1)) for call in app_telemetry)
     )
@@ -380,7 +467,9 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
                 budget.record_judge_call()
             evaluations.append(resumed)
             continue
-        deterministic_failures = tuple(browser_result.get("deterministic_failures") or [])
+        deterministic_failures = tuple(
+            browser_result.get("deterministic_failures") or []
+        )
         if deterministic_failures:
             classification = _classify_deterministic(list(deterministic_failures))
             decision = GateDecision(
@@ -410,7 +499,10 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             )
             judgments.append(first)
             decision = decide_semantic_gate(first)
-            if decision.status == "infrastructure" and "second independent" in decision.reason:
+            if (
+                decision.status == "infrastructure"
+                and "second independent" in decision.reason
+            ):
                 second = await judge_with_transport_retry(
                     judge,
                     corpus,
@@ -421,7 +513,10 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
                 judgments.append(second)
                 decision = decide_semantic_gate(first, second)
         except Exception as exc:
-            decision = GateDecision("infrastructure", f"judge infrastructure failure: {type(exc).__name__}: {exc}")
+            decision = GateDecision(
+                "infrastructure",
+                f"judge infrastructure failure: {type(exc).__name__}: {exc}",
+            )
         evaluations.append(
             {
                 "id": case.id,
@@ -482,9 +577,7 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "estimated_cost": {
             "currency": "USD",
             "price_release": application_cost["price_release"],
-            "application_usd": (
-                0 if args.capture_replay else source_application_cost
-            ),
+            "application_usd": (0 if args.capture_replay else source_application_cost),
             "source_application_usd": source_application_cost,
             "judge_usd": judge_cost["total"]["estimated_usd"],
         },
@@ -495,7 +588,9 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
 
 def _write_outputs(path: Path, report: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
     report_only_review = report.get("manual_review_policy") == "report-only"
 
     def junit_outcome(item: dict[str, Any]) -> str:
@@ -581,9 +676,11 @@ def _write_outputs(path: Path, report: dict[str, Any]) -> None:
                 f"`{cost_policy.get('status', 'infrastructure')}` "
                 f"({cost_policy.get('mode', 'unknown')})"
             )
-            application_total = (cost_accounting.get("application") or {}).get(
-                "total", {}
-            ).get("estimated_usd")
+            application_total = (
+                (cost_accounting.get("application") or {})
+                .get("total", {})
+                .get("estimated_usd")
+            )
             lines.append(
                 "Application cost: "
                 + (
@@ -644,7 +741,9 @@ async def main() -> None:
     output = ROOT / args.output
     try:
         timeout_seconds = semantic_suite_timeout_seconds(args.suite)
-        report, exit_code = await asyncio.wait_for(evaluate(args), timeout=timeout_seconds)
+        report, exit_code = await asyncio.wait_for(
+            evaluate(args), timeout=timeout_seconds
+        )
     except TimeoutError:
         report = {
             "format_version": 1,

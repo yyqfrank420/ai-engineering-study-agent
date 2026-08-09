@@ -5,7 +5,6 @@ import pytest
 from agent.pipeline_steps import (
     apply_graph_worker,
     maybe_expand_with_search_tool,
-    maybe_start_node_enrichment,
     run_parallel_research_phase,
     run_search_phase,
     should_run_graph_worker,
@@ -44,15 +43,32 @@ def _state(**overrides):
 
 
 def test_should_run_graph_worker_modes():
-    assert should_run_graph_worker({"graph_mode": "off", "route": "search"}, None) is False
-    assert should_run_graph_worker({"graph_mode": "on", "route": "chat"}, {"nodes": []}) is True
-    assert should_run_graph_worker({"graph_mode": "auto", "route": "search"}, {"nodes": []}) is True
-    assert should_run_graph_worker({"graph_mode": "auto", "route": "chat"}, None) is True
-    assert should_run_graph_worker({"graph_mode": "auto", "route": "chat"}, {"nodes": []}) is False
+    assert (
+        should_run_graph_worker({"graph_mode": "off", "route": "search"}, None) is False
+    )
+    assert (
+        should_run_graph_worker({"graph_mode": "on", "route": "chat"}, {"nodes": []})
+        is True
+    )
+    assert (
+        should_run_graph_worker(
+            {"graph_mode": "auto", "route": "search"}, {"nodes": []}
+        )
+        is True
+    )
+    assert (
+        should_run_graph_worker({"graph_mode": "auto", "route": "chat"}, None) is True
+    )
+    assert (
+        should_run_graph_worker({"graph_mode": "auto", "route": "chat"}, {"nodes": []})
+        is False
+    )
 
 
 @pytest.mark.asyncio
-async def test_apply_graph_worker_preserves_existing_graph_when_worker_returns_none(monkeypatch):
+async def test_apply_graph_worker_preserves_existing_graph_when_worker_returns_none(
+    monkeypatch,
+):
     existing_graph = {"nodes": [{"id": "n1"}], "edges": []}
     state, events = _state(graph_data=existing_graph)
 
@@ -60,7 +76,9 @@ async def test_apply_graph_worker_preserves_existing_graph_when_worker_returns_n
         assert tools == ["graph-tool"]
         return {**incoming_state, "graph_data": None}
 
-    monkeypatch.setattr("agent.pipeline_steps.graph_worker_node", fake_graph_worker_node)
+    monkeypatch.setattr(
+        "agent.pipeline_steps.graph_worker_node", fake_graph_worker_node
+    )
 
     result = await apply_graph_worker(state, ["graph-tool"])
 
@@ -85,22 +103,33 @@ async def test_apply_graph_worker_treats_version_only_reuse_as_unchanged(monkeyp
             "graph_data": {**existing_graph, "version": "generated-v2"},
         }
 
-    monkeypatch.setattr("agent.pipeline_steps.graph_worker_node", fake_graph_worker_node)
+    monkeypatch.setattr(
+        "agent.pipeline_steps.graph_worker_node", fake_graph_worker_node
+    )
 
     result = await apply_graph_worker(state, [])
 
-    assert result["graph_data"] is existing_graph
+    assert result["graph_data"] is not existing_graph
+    assert result["graph_data"]["version"] == "generated-v2"
+    assert result["graph_data"]["nodes"] == existing_graph["nodes"]
     assert result["graph_changed"] is False
 
 
 @pytest.mark.asyncio
-async def test_apply_graph_worker_sends_notice_when_search_has_no_graph(monkeypatch):
-    state, events = _state(graph_data=None, route="search", graph_notice_sent=False)
+async def test_apply_graph_worker_sends_notice_for_applied_design_failures(monkeypatch):
+    state, events = _state(
+        graph_data=None,
+        route="search",
+        graph_notice_sent=False,
+        is_applied_design=True,
+    )
 
     async def fake_graph_worker_node(incoming_state, tools):
         return {**incoming_state, "graph_data": None}
 
-    monkeypatch.setattr("agent.pipeline_steps.graph_worker_node", fake_graph_worker_node)
+    monkeypatch.setattr(
+        "agent.pipeline_steps.graph_worker_node", fake_graph_worker_node
+    )
 
     result = await apply_graph_worker(state, [])
 
@@ -110,8 +139,42 @@ async def test_apply_graph_worker_sends_notice_when_search_has_no_graph(monkeypa
     assert events[0]["type"] == "graph_notice"
 
 
+@pytest.mark.parametrize("graph_mode", ["on", "auto"])
 @pytest.mark.asyncio
-async def test_applied_graph_failure_notice_does_not_misreport_weak_grounding(monkeypatch):
+async def test_apply_graph_worker_uses_graph_fallback_when_graph_is_required(
+    monkeypatch,
+    graph_mode,
+):
+    state, events = _state(
+        graph_mode=graph_mode,
+        graph_data=None,
+        route="search",
+        graph_notice_sent=False,
+        user_message="Design a model-serving production stack",
+        complexity="production",
+    )
+
+    async def fake_graph_worker_node(incoming_state, tools):
+        return {**incoming_state, "graph_data": None}
+
+    monkeypatch.setattr(
+        "agent.pipeline_steps.graph_worker_node", fake_graph_worker_node
+    )
+
+    result = await apply_graph_worker(state, [])
+
+    assert result["graph_data"] is not None
+    assert result["graph_data"].get("design_origin") == "applied"
+    assert result["graph_data"].get("version")
+    assert result["graph_changed"] is False
+    assert result["graph_notice_sent"] is False
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_applied_graph_failure_notice_does_not_misreport_weak_grounding(
+    monkeypatch,
+):
     state, events = _state(
         graph_data=None,
         route="search",
@@ -122,7 +185,9 @@ async def test_applied_graph_failure_notice_does_not_misreport_weak_grounding(mo
     async def fake_graph_worker_node(incoming_state, _tools):
         return {**incoming_state, "graph_data": None}
 
-    monkeypatch.setattr("agent.pipeline_steps.graph_worker_node", fake_graph_worker_node)
+    monkeypatch.setattr(
+        "agent.pipeline_steps.graph_worker_node", fake_graph_worker_node
+    )
 
     result = await apply_graph_worker(state, [])
 
@@ -156,7 +221,9 @@ async def test_run_search_phase_emits_notice_and_starts_wait_task(monkeypatch):
     result, wait_task = await run_search_phase(state, ["rag-tool"])
     assert result["rag_chunks"] == [{"text": "indirect"}]
     assert result["retrieval_relevance"] == "weak"
-    assert events == [{"type": "retrieval_notice", "request_id": "req-1", "message": "Use search?"}]
+    assert events == [
+        {"type": "retrieval_notice", "request_id": "req-1", "message": "Use search?"}
+    ]
     assert wait_task is not None
     assert await wait_task is True
     assert wait_calls == [("req-1", 0.25)]
@@ -192,10 +259,16 @@ async def test_parallel_research_phase_merges_rag_and_research(monkeypatch):
 
     async def fake_research_worker_node(incoming_state):
         await asyncio.sleep(0)
-        return {**incoming_state, "research_context": "- source", "research_status": "ready"}
+        return {
+            **incoming_state,
+            "research_context": "- source",
+            "research_status": "ready",
+        }
 
     monkeypatch.setattr("agent.pipeline_steps.rag_worker_node", fake_rag_worker_node)
-    monkeypatch.setattr("agent.pipeline_steps.research_worker_node", fake_research_worker_node)
+    monkeypatch.setattr(
+        "agent.pipeline_steps.research_worker_node", fake_research_worker_node
+    )
 
     result = await run_parallel_research_phase(state, ["rag-tool"])
 
@@ -205,15 +278,25 @@ async def test_parallel_research_phase_merges_rag_and_research(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_maybe_expand_with_search_tool_rebuilds_canonical_evidence_before_design(monkeypatch):
+async def test_maybe_expand_with_search_tool_rebuilds_canonical_evidence_before_design(
+    monkeypatch,
+):
     state, _events = _state()
 
     async def fake_research_worker_node(incoming_state):
-        return {**incoming_state, "research_context": "- external", "research_status": "ready"}
+        return {
+            **incoming_state,
+            "research_context": "- external",
+            "research_status": "ready",
+        }
 
-    monkeypatch.setattr("agent.pipeline_steps.research_worker_node", fake_research_worker_node)
+    monkeypatch.setattr(
+        "agent.pipeline_steps.research_worker_node", fake_research_worker_node
+    )
 
-    result = await maybe_expand_with_search_tool(state, ["graph-tool"], asyncio.create_task(asyncio.sleep(0, True)))
+    result = await maybe_expand_with_search_tool(
+        state, ["graph-tool"], asyncio.create_task(asyncio.sleep(0, True))
+    )
 
     assert result["research_context"] == "- external"
     assert result["research_status"] == "ready"
@@ -232,25 +315,3 @@ async def test_maybe_expand_with_search_tool_skips_when_user_declines():
     )
 
     assert result is state
-
-
-@pytest.mark.asyncio
-async def test_node_enrichment_requires_graph_and_tool(monkeypatch):
-    state, events = _state(graph_data={"version": 3, "nodes": [{"id": "n1"}], "edges": [{"source": "n1", "target": "n2"}]})
-    calls = []
-
-    async def fake_enrich_all_nodes(**kwargs):
-        calls.append(kwargs)
-
-    monkeypatch.setattr("agent.pipeline_steps.enrich_all_nodes", fake_enrich_all_nodes)
-
-    await maybe_start_node_enrichment(state, ["rag-search"])
-
-    assert calls[0]["nodes"] == [{"id": "n1"}]
-    assert calls[0]["edges"] == [{"source": "n1", "target": "n2"}]
-    assert calls[0]["rag_search_tool"] == "rag-search"
-    assert calls[0]["send"] is state["send"]
-    assert calls[0]["graph_version"] == 3
-    assert calls[0]["user_id"] == state["user_id"]
-    assert calls[0]["thread_id"] == state["session_id"]
-    assert events == []

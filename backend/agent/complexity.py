@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Literal
 
 from config import settings
 
@@ -117,6 +118,65 @@ _DESIGN_FOLLOWUP_PHRASES = (
     "subagent",
 )
 
+_GRAPH_EDIT_ACTION = re.compile(
+    r"\b(?:"
+    r"add(?:s|ed|ing)?|adjust(?:s|ed|ing)?|chang(?:e|es|ed|ing)|"
+    r"connect(?:s|ed|ing)?|correct(?:s|ed|ing)?|delet(?:e|es|ed|ing)|"
+    r"disconnect(?:s|ed|ing)?|edit(?:s|ed|ing)?|expand(?:s|ed|ing)?|"
+    r"enhanc(?:e|es|ed|ing)|fix(?:es|ed|ing)?|link(?:s|ed|ing)?|"
+    r"moderniz(?:e|es|ed|ing)|modify|modifies|modified|modifying|"
+    r"improv(?:e|es|ed|ing)|includ(?:e|es|ed|ing)|"
+    r"increas(?:e|es|ed|ing)|mak(?:e|es|ing)|mov(?:e|es|ed|ing)|"
+    r"remov(?:e|es|ed|ing)|renam(?:e|es|ed|ing)|"
+    r"rebuild(?:s|ing)?|redesign(?:s|ed|ing)?|redraw(?:s|n|ing)?|"
+    r"regenerat(?:e|es|ed|ing)|replac(?:e|es|ed|ing)|"
+    r"revis(?:e|es|ed|ing)|rework(?:s|ed|ing)?|start\s+over|"
+    r"unlink(?:s|ed|ing)?|updat(?:e|es|ed|ing)"
+    r")\b"
+)
+_GRAPH_EDIT_TARGET = re.compile(
+    r"\b(?:arrows?|edges?|groups?|lanes?|nodes?|sequences?|"
+    r"labels?(?=\s*(?:$|[.!?]))|titles?(?=\s*(?:$|[.!?])))\b"
+)
+_CURRENT_GRAPH_ARTIFACT = re.compile(
+    r"\b(?:the|this|current|existing|original|my|our|whole|entire|complete)\s+"
+    r"(?:architectures?|diagrams?|graphs?)"
+    r"(?!\s+(?:database|db|index|store)\b)"
+)
+_GRAPH_ARTIFACT_FIELD = re.compile(
+    r"\b(?:diagrams?|graphs?)\s+(?:components?|connections?|labels?|titles?)\b"
+)
+_NON_MUTATING_QUESTION = re.compile(
+    r"^(?:what|when|where|why|how|should|do(?!\s+not\b)|does|is|are|"
+    r"can\s+i|could\s+i|would\s+i)\b"
+)
+_NEW_GRAPH_ACTION = re.compile(
+    r"^(?:please\s+)?"
+    r"(?:(?:(?:can|could|would)\s+(?:you(?:\s+please)?|we)|"
+    r"how\s+would\s+(?:you|we)|let(?:'s|\s+us)|"
+    r"i\s+(?:want|need)(?:\s+you)?\s+to|"
+    r"i(?:'d|\s+would)\s+like(?:\s+you)?\s+to|help\s+me)\s+)?"
+    r"(?:we\s+(?:want|need)\s+to\s+)?"
+    r"(?:architect|build|create|design|diagram|draw|implement|map|show|"
+    r"visualise|visualize)\b"
+    r"(?!\s+(?:patterns?|principles?|theory|tradeoffs?|versus|vs\.?|or\s+buy)\b)"
+)
+_REPLACEMENT_GRAPH_ACTION = re.compile(r"^(?:please\s+)?(?:rebuild|redesign|replace)\b")
+_EMBEDDED_GRAPH_ACTION = re.compile(r"\b(?:diagram|draw|show|visualise|visualize)\w*\b")
+_NEGATED_GRAPH_EDIT_CLAUSE = re.compile(
+    r"^\s*(?:please\s+)?(?:do\s+not|don't|never|without)\b"
+)
+_EXPLANATION_REQUEST = re.compile(
+    r"^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?"
+    r"(?:explain|describe|tell\s+me\s+how)\b"
+)
+_NON_GRAPH_MUTATION_TARGET = re.compile(
+    r"\b(?:answer|citations?|explanation|graph\s+database|react\s+components?|"
+    r"subject|topic|training\s+data|tradeoffs?)\b"
+)
+_TOPIC_SWITCH_REQUEST = re.compile(
+    r"^(?:change\s+the\s+(?:subject|topic)|move\s+on|switch\s+to|talk\s+about)\b"
+)
 _OUTER_UNTRUSTED_EXPLANATION = re.compile(
     r"^(?:please\s+)?treat\b"
     r"(?=.{0,160}\b(?:quoted|untrusted)\b)"
@@ -178,10 +238,12 @@ def resolve_design_query(
     ]
     graph_parts: list[str] = []
     if graph_data:
-        graph_parts.extend([
-            str(graph_data.get("title") or ""),
-            str(graph_data.get("graph_type") or ""),
-        ])
+        graph_parts.extend(
+            [
+                str(graph_data.get("title") or ""),
+                str(graph_data.get("graph_type") or ""),
+            ]
+        )
         graph_parts.extend(
             str(node.get("label") or "")
             for node in (graph_data.get("nodes") or [])
@@ -189,6 +251,110 @@ def resolve_design_query(
         )
     parts = [*prior_user_messages[-3:], *graph_parts, message]
     return " ".join(part for part in parts if part).strip() or message
+
+
+def is_existing_graph_edit_request(query: str, graph_data: dict | None) -> bool:
+    """Classify an imperative mutation of the current applied graph."""
+    if not isinstance(graph_data, dict) or graph_data.get("design_origin") != "applied":
+        return False
+    return resolve_graph_operation(query, graph_data) == "edit"
+
+
+def resolve_graph_operation(
+    query: str,
+    graph_data: dict | None,
+) -> Literal["create", "edit"] | None:
+    """Resolve one graph mutation intent before routing or worker selection."""
+    text = _routing_intent_text(query)
+    if not text:
+        return None
+    applied_design_requested = is_applied_system_design_request(query)
+    clauses = [
+        clause.strip()
+        for clause in re.split(r"[,;\n]|\b(?:and|but|then)\b", text)
+        if clause.strip()
+    ]
+    authored_terms = tuple(
+        term
+        for collection in (
+            (graph_data or {}).get("nodes") or [],
+            (graph_data or {}).get("groups") or [],
+        )
+        for record in collection
+        if isinstance(record, dict)
+        for term in (
+            str(record.get("label") or "").strip().lower(),
+            str(record.get("id") or "").strip().lower().replace("_", " "),
+        )
+        if len(term) >= 3
+    )
+
+    def references_authored_record(clause: str) -> bool:
+        return any(
+            re.search(rf"(?<!\w){re.escape(term)}(?!\w)", clause)
+            for term in authored_terms
+        )
+
+    def references_current_design(clause: str) -> bool:
+        return bool(
+            _CURRENT_GRAPH_ARTIFACT.search(clause)
+            or _GRAPH_ARTIFACT_FIELD.search(clause)
+            or references_authored_record(clause)
+        )
+
+    def requests_graph_design(clause: str) -> bool:
+        return bool(
+            _NEW_GRAPH_ACTION.search(clause)
+            or _REPLACEMENT_GRAPH_ACTION.search(clause)
+            or (
+                _EMBEDDED_GRAPH_ACTION.search(clause)
+                and any(phrase in clause for phrase in _DESIGN_FLOW_PHRASES)
+            )
+        )
+
+    design_clauses = [clause for clause in clauses if requests_graph_design(clause)]
+    new_graph_requested = applied_design_requested and any(
+        not references_current_design(clause) for clause in design_clauses
+    )
+    if (
+        _TOPIC_SWITCH_REQUEST.match(text)
+        or _NON_MUTATING_QUESTION.match(text)
+        or _CONCEPT_QUESTION.match(text)
+        or _EXPLANATION_REQUEST.match(text)
+    ) and not new_graph_requested:
+        return None
+    if new_graph_requested:
+        return "create"
+    if any(references_current_design(clause) for clause in design_clauses):
+        return "edit"
+    if (
+        not isinstance(graph_data, dict)
+        and applied_design_requested
+        and not any(references_current_design(clause) for clause in clauses)
+    ):
+        return "create"
+
+    mutation_clauses = [
+        clause
+        for clause in clauses
+        if _GRAPH_EDIT_ACTION.search(clause)
+        and not _NEGATED_GRAPH_EDIT_CLAUSE.match(clause)
+    ]
+    if any(
+        references_current_design(clause) or _GRAPH_EDIT_TARGET.search(clause)
+        for clause in mutation_clauses
+    ):
+        return "edit"
+    if any(
+        not _NON_GRAPH_MUTATION_TARGET.search(clause) for clause in mutation_clauses
+    ):
+        return "edit"
+    return None
+
+
+def is_new_applied_graph_request(query: str, graph_data: dict | None) -> bool:
+    """Require explicit new-artifact intent before replacing an applied graph."""
+    return resolve_graph_operation(query, graph_data) == "create"
 
 
 def is_applied_system_design_request(query: str) -> bool:
@@ -244,15 +410,24 @@ def is_applied_system_design_request(query: str) -> bool:
     meaningful_terms = {
         term
         for term in re.findall(r"[a-z][a-z0-9-]{2,}", intent_text)
-        if term not in {"the", "and", "for", "with", "from", "into", "artificial", "intelligence"}
+        if term
+        not in {
+            "the",
+            "and",
+            "for",
+            "with",
+            "from",
+            "into",
+            "artificial",
+            "intelligence",
+        }
         and term.removesuffix("s") not in product_nouns
         and term not in {"ai", "agentic", "multi-agent"}
     }
     seed_words = re.findall(r"[a-z][a-z0-9-]*", intent_text)
-    terse_noun_phrase = (
-        len(seed_words) <= _DIRECT_PRODUCT_SEED_MAX_WORDS
-        and not re.search(r"[.!?:;]", intent_text)
-    )
+    terse_noun_phrase = len(
+        seed_words
+    ) <= _DIRECT_PRODUCT_SEED_MAX_WORDS and not re.search(r"[.!?:;]", intent_text)
     if terse_noun_phrase and product_nouns and meaningful_terms:
         return True
     # A request such as "agent that adjusts bids" describes an applied system;
@@ -268,7 +443,9 @@ def is_applied_system_design_request(query: str) -> bool:
 
 
 def resolve_complexity(requested: str, query: str) -> ComplexityProfile:
-    requested = requested if requested in {"auto", "low", "prototype", "production"} else "auto"
+    requested = (
+        requested if requested in {"auto", "low", "prototype", "production"} else "auto"
+    )
     if requested == "auto":
         text = _routing_intent_text(query)
         explanatory_flow = (

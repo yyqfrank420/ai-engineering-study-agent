@@ -13,6 +13,7 @@ import type { GraphData, GraphEdge, GraphGroup, GraphNode, GraphViewState } from
 import { graphStructureKey } from '../../utils/graphStructureKey';
 import { TYPE_STYLE, FALLBACK_STYLE } from '../../utils/graphColors';
 import {
+  boundLabelCenter,
   filterRenderableEdges,
   GRAPH_LAYOUT_VERSION,
   H_PAD,
@@ -23,10 +24,13 @@ import {
   NODE_RX,
   NODE_W,
   overviewEdgeLabelOpacity,
+  planVerticalLayout,
   selectOverviewEdgeIndices,
   selectGraphOrientation,
   VERTICAL_LEVEL_H,
+  VERTICAL_NODE_GAP,
   VERTICAL_PAD,
+  VERTICAL_TRACK_GAP,
   V_PAD,
   wrapNodeLabel,
   wrapNodeTechnology,
@@ -45,6 +49,13 @@ const GROUP_PALETTE = [
   { fill: 'rgba(244,63,94,0.05)',  stroke: 'rgba(244,63,94,0.25)',   label: '#fb7185' },
   { fill: 'rgba(20,184,166,0.05)', stroke: 'rgba(20,184,166,0.25)',  label: '#2dd4bf' },
 ];
+
+const MAX_PARALLEL_LANE_OFFSET = 18;
+
+function parallelLaneOffset(index: number, count: number): number {
+  if (count <= 1) return 0;
+  return MAX_PARALLEL_LANE_OFFSET * (2 * index / (count - 1) - 1);
+}
 
 // ── Topological column assignment ────────────────────────────────────────────
 // Strips back-edges (cycles) via iterative DFS, then runs longest-path on the
@@ -137,6 +148,11 @@ interface D3GraphProps {
 type RenderNode = GraphNode & {
   x: number;
   y: number;
+  topologyRank: number;
+  track: number;
+  trackDirection: 1 | -1;
+  trackX: number;
+  trackWidth: number;
 };
 
 type RenderLink = {
@@ -250,6 +266,7 @@ export function D3Graph({
     setEdgeTooltip(null);
 
     const svg = d3.select(svgRef.current);
+    svg.attr('data-rendered-graph-version', null);
     svg.selectAll('*').remove();
 
     const width  = svgRef.current.clientWidth  || 760;
@@ -343,7 +360,16 @@ export function D3Graph({
     svg.call(zoomBehavior);
 
     // ── Deep-copy nodes (D3 may mutate x/y) ──────────────────────────────────
-    const nodes: RenderNode[] = renderGraphData.nodes.map(n => ({ ...n, x: 0, y: 0 }));
+    const nodes: RenderNode[] = renderGraphData.nodes.map(n => ({
+      ...n,
+      x: 0,
+      y: 0,
+      topologyRank: 0,
+      track: 0,
+      trackDirection: 1,
+      trackX: 0,
+      trackWidth: 0,
+    }));
     const nodeById: Record<string, RenderNode> = {};
     for (const n of nodes) nodeById[n.id] = n;
 
@@ -475,34 +501,43 @@ export function D3Graph({
     const canvasMainH    = height - 2 * V_PAD - BOTTOM_BAND_H;
     const effectiveMainH = Math.max(canvasMainH, totalMainSlots * MIN_ROW_H);
 
-    // Keep parallel fan-out readable by wrapping a wide topology level. The
-    // previous layout widened the virtual canvas for every peer, then shrank
-    // all titles below the publication threshold to fit the viewport.
-    const VERTICAL_NODE_GAP = 24;
-    const verticalNodesPerRow = Math.max(
-      1,
-      Math.floor((width - 2 * H_PAD + VERTICAL_NODE_GAP) / (NODE_W + VERTICAL_NODE_GAP)),
+    // Choose wrapping and virtual width together so wide levels can use both
+    // viewport dimensions without forcing every level into the same narrow row.
+    const verticalPlan = planVerticalLayout(
+      width,
+      height,
+      sortedColumns.map(columnIndex => colBuckets.get(columnIndex)?.length ?? 0),
     );
-    const verticalLayoutW = width;
-    const verticalLevelStart = new Map<number, number>();
-    let verticalCursor = VERTICAL_PAD;
-    for (const columnIndex of sortedColumns) {
-      verticalLevelStart.set(columnIndex, verticalCursor);
-      const bucketSize = colBuckets.get(columnIndex)?.length ?? 0;
-      verticalCursor += Math.max(1, Math.ceil(bucketSize / verticalNodesPerRow)) * VERTICAL_LEVEL_H;
-    }
+    const verticalLayoutW = verticalPlan.layoutWidth;
+    const verticalPlacementByColumn = new Map(
+      sortedColumns.map((columnIndex, index) => [columnIndex, verticalPlan.levels[index]]),
+    );
 
     for (const [c, bucket] of colBuckets) {
+      bucket.forEach((node: RenderNode) => {
+        node.topologyRank = c;
+      });
       if (orientation === 'vertical') {
+        const placement = verticalPlacementByColumn.get(c);
+        if (!placement) continue;
         bucket.forEach((node: RenderNode, index: number) => {
-          const wrappedRow = Math.floor(index / verticalNodesPerRow);
-          const indexInRow = index % verticalNodesPerRow;
-          const rowStart = wrappedRow * verticalNodesPerRow;
-          const nodesInRow = Math.min(verticalNodesPerRow, bucket.length - rowStart);
+          const wrappedRow = Math.floor(index / verticalPlan.nodesPerRow);
+          const indexInRow = index % verticalPlan.nodesPerRow;
+          const rowStart = wrappedRow * verticalPlan.nodesPerRow;
+          const nodesInRow = Math.min(
+            verticalPlan.nodesPerRow,
+            bucket.length - rowStart,
+          );
           const rowWidth = nodesInRow * NODE_W + (nodesInRow - 1) * VERTICAL_NODE_GAP;
-          node.x = (width - rowWidth) / 2 + NODE_W / 2 + indexInRow * (NODE_W + VERTICAL_NODE_GAP);
-          node.y = (verticalLevelStart.get(c) ?? VERTICAL_PAD)
+          node.x = placement.x + (placement.width - rowWidth) / 2
+            + NODE_W / 2
+            + indexInRow * (NODE_W + VERTICAL_NODE_GAP);
+          node.y = placement.y
             + (wrappedRow + 0.5) * VERTICAL_LEVEL_H;
+          node.track = placement.track;
+          node.trackDirection = placement.direction;
+          node.trackX = placement.x;
+          node.trackWidth = placement.width;
         });
         continue;
       }
@@ -543,7 +578,7 @@ export function D3Graph({
       ? verticalLayoutW
       : numCols * colWidth + 2 * H_PAD;
     const layoutH = orientation === 'vertical'
-      ? verticalCursor + VERTICAL_PAD
+      ? verticalPlan.layoutHeight
       : V_PAD + effectiveMainH + BOTTOM_BAND_H + V_PAD;
 
     // ── Resolve edges to node object references ───────────────────────────────
@@ -605,68 +640,138 @@ export function D3Graph({
       }
     });
 
-    // ── Hinge helpers ─────────────────────────────────────────────────────────
-    // Forward edge (target is clearly to the right of source):
-    //   exits the RIGHT border of source, enters the LEFT border of target.
-    // Return/back edge (target is to the left of or at the same column):
-    //   exits the TOP border of source, enters the TOP border of target.
-    //   The path arcs above the canvas, keeping the forward edges clean.
+    // ── Edge routes ───────────────────────────────────────────────────────────
+    // Semantic rank decides direction. Wrapped and skip routes use the gaps
+    // between node rows and tracks, so they cannot cut through an unrelated card.
 
-    const isForward = (d: RenderLink): boolean => orientation === 'vertical'
-      ? d.target.y > d.source.y + 4
-      : d.target.x > d.source.x + 4;
+    const isForward = (d: RenderLink): boolean => {
+      if (d.flow === 'feedback' || d.edgeType === 'loop') return false;
+      return orientation === 'vertical'
+        ? d.target.topologyRank > d.source.topologyRank
+        : d.target.x > d.source.x + 4;
+    };
+    interface EdgeRoute {
+      path: string;
+      anchorX: number;
+      anchorY: number;
+    }
 
-    // Hinge point X
-    const hx1 = (d: RenderLink): number => {
-      if (orientation === 'vertical') return isForward(d) ? d.source.x : d.source.x - NODE_W / 2;
-      return isForward(d) ? d.source.x + NODE_W / 2 : d.source.x;
-    };
-    const hy1 = (d: RenderLink): number => {
-      if (orientation === 'vertical') return isForward(d) ? d.source.y + NODE_H / 2 : d.source.y;
-      return isForward(d) ? d.source.y : d.source.y - NODE_H / 2;
-    };
-    const hx2 = (d: RenderLink): number => {
-      if (orientation === 'vertical') return isForward(d) ? d.target.x : d.target.x - NODE_W / 2;
-      return isForward(d) ? d.target.x - NODE_W / 2 : d.target.x;
-    };
-    const hy2 = (d: RenderLink): number => {
-      if (orientation === 'vertical') return isForward(d) ? d.target.y - NODE_H / 2 : d.target.y;
-      return isForward(d) ? d.target.y : d.target.y - NODE_H / 2;
-    };
-
-    // SVG path string for an edge
-    const pathD = (d: RenderLink): string => {
-      const x1 = hx1(d), y1 = hy1(d), x2 = hx2(d), y2 = hy2(d);
-      const laneOffset = (d.parallelIndex - (d.parallelCount - 1) / 2) * 14;
-      if (isForward(d)) {
-        if (d.parallelCount === 1) return `M${x1},${y1} L${x2},${y2}`;
-        if (orientation === 'vertical') {
-          const midY = (y1 + y2) / 2;
-          return `M${x1},${y1} C${x1 + laneOffset},${midY} ${x2 + laneOffset},${midY} ${x2},${y2}`;
+    const routeLink = (d: RenderLink): EdgeRoute => {
+      const laneOffset = parallelLaneOffset(d.parallelIndex, d.parallelCount);
+      if (orientation === 'horizontal') {
+        const forward = isForward(d);
+        const x1 = forward ? d.source.x + NODE_W / 2 : d.source.x;
+        const y1 = forward ? d.source.y : d.source.y - NODE_H / 2;
+        const x2 = forward ? d.target.x - NODE_W / 2 : d.target.x;
+        const y2 = forward ? d.target.y : d.target.y - NODE_H / 2;
+        if (forward) {
+          if (d.parallelCount === 1) {
+            return {
+              path: `M${x1},${y1} L${x2},${y2}`,
+              anchorX: (x1 + x2) / 2,
+              anchorY: (y1 + y2) / 2,
+            };
+          }
+          const centerX = (x1 + x2) / 2;
+          return {
+            path: `M${x1},${y1} C${centerX},${y1 + laneOffset} ${centerX},${y2 + laneOffset} ${x2},${y2}`,
+            anchorX: centerX,
+            anchorY: (y1 + y2) / 2 + 0.75 * laneOffset,
+          };
         }
-        const midX = (x1 + x2) / 2;
-        return `M${x1},${y1} C${midX},${y1 + laneOffset} ${midX},${y2 + laneOffset} ${x2},${y2}`;
+        const returnY = RETURN_ARC_OFFSET + laneOffset;
+        return {
+          path: `M${x1},${y1} C${x1},${returnY} ${x2},${returnY} ${x2},${y2}`,
+          anchorX: (x1 + x2) / 2,
+          anchorY: (y1 + y2 + 6 * returnY) / 8,
+        };
       }
-      if (orientation === 'vertical') {
+
+      if (!isForward(d)) {
         const returnX = RETURN_ARC_OFFSET + laneOffset;
-        return `M${x1},${y1} C${returnX},${y1} ${returnX},${y2} ${x2},${y2}`;
+        const sourceLaneY = d.source.y - NODE_H / 2 - 6;
+        const targetLaneY = d.target.y - NODE_H / 2 - 6;
+        return {
+          path: [
+            `M${d.source.x},${d.source.y - NODE_H / 2}`,
+            `L${d.source.x},${sourceLaneY}`,
+            `L${returnX},${sourceLaneY}`,
+            `L${returnX},${targetLaneY}`,
+            `L${d.target.x},${targetLaneY}`,
+            `L${d.target.x},${d.target.y - NODE_H / 2}`,
+          ].join(' '),
+          anchorX: returnX,
+          anchorY: (sourceLaneY + targetLaneY) / 2,
+        };
       }
-      const returnY = RETURN_ARC_OFFSET + laneOffset;
-      return `M${x1},${y1} C${x1},${returnY} ${x2},${returnY} ${x2},${y2}`;
+
+      const sourceDirection = d.source.trackDirection;
+      const targetDirection = d.target.trackDirection;
+      const sourceBorderY = d.source.y + sourceDirection * NODE_H / 2;
+      const targetBorderY = d.target.y - targetDirection * NODE_H / 2;
+      if (
+        d.source.track === d.target.track
+        && d.target.topologyRank === d.source.topologyRank + 1
+      ) {
+        if (d.parallelCount === 1) {
+          return {
+            path: `M${d.source.x},${sourceBorderY} L${d.target.x},${targetBorderY}`,
+            anchorX: (d.source.x + d.target.x) / 2,
+            anchorY: (sourceBorderY + targetBorderY) / 2,
+          };
+        }
+        const centerY = (sourceBorderY + targetBorderY) / 2;
+        return {
+          path: `M${d.source.x},${sourceBorderY} C${d.source.x + laneOffset},${centerY} ${d.target.x + laneOffset},${centerY} ${d.target.x},${targetBorderY}`,
+          anchorX: (d.source.x + d.target.x) / 2 + 0.75 * laneOffset,
+          anchorY: centerY,
+        };
+      }
+
+      const sourceLaneY = sourceBorderY + sourceDirection * 6;
+      const targetLaneY = targetBorderY - targetDirection * 6;
+      if (d.source.track === d.target.track) {
+        const gutterX = d.source.trackX + d.source.trackWidth
+          + VERTICAL_TRACK_GAP / 2 + laneOffset;
+        return {
+          path: [
+            `M${d.source.x},${sourceBorderY}`,
+            `L${d.source.x},${sourceLaneY}`,
+            `L${gutterX},${sourceLaneY}`,
+            `L${gutterX},${targetLaneY}`,
+            `L${d.target.x},${targetLaneY}`,
+            `L${d.target.x},${targetBorderY}`,
+          ].join(' '),
+          anchorX: gutterX,
+          anchorY: (sourceLaneY + targetLaneY) / 2,
+        };
+      }
+
+      const sourceGutterX = d.source.trackX + d.source.trackWidth
+        + VERTICAL_TRACK_GAP / 2 + laneOffset;
+      const targetGutterX = d.target.trackX - VERTICAL_TRACK_GAP / 2 + laneOffset;
+      const corridorY = sourceDirection === 1
+        ? layoutH - VERTICAL_PAD / 2 + laneOffset / 2
+        : VERTICAL_PAD / 2 - laneOffset / 2;
+      return {
+        path: [
+          `M${d.source.x},${sourceBorderY}`,
+          `L${d.source.x},${sourceLaneY}`,
+          `L${sourceGutterX},${sourceLaneY}`,
+          `L${sourceGutterX},${corridorY}`,
+          `L${targetGutterX},${corridorY}`,
+          `L${targetGutterX},${targetLaneY}`,
+          `L${d.target.x},${targetLaneY}`,
+          `L${d.target.x},${targetBorderY}`,
+        ].join(' '),
+        anchorX: (sourceGutterX + targetGutterX) / 2,
+        anchorY: corridorY,
+      };
     };
 
-    // Midpoint of edge path (used to place labels and step badges)
-    const midX = (d: RenderLink): number => {
-      if (!isForward(d) && orientation === 'vertical') {
-        return (hx1(d) + hx2(d) + 6 * RETURN_ARC_OFFSET) / 8;
-      }
-      return (hx1(d) + hx2(d)) / 2;
-    };
-    const midY = (d: RenderLink): number => {
-      if (isForward(d)) return (hy1(d) + hy2(d)) / 2;
-      if (orientation === 'vertical') return (hy1(d) + hy2(d)) / 2;
-      return (hy1(d) + hy2(d) + 6 * RETURN_ARC_OFFSET) / 8;
-    };
+    const pathD = (d: RenderLink): string => routeLink(d).path;
+    const midX = (d: RenderLink): number => routeLink(d).anchorX;
+    const midY = (d: RenderLink): number => routeLink(d).anchorY;
 
     // ── Entry / exit detection ────────────────────────────────────────────────
     // Feedback and deployment routes must not erase the product entry/outcome
@@ -722,6 +827,9 @@ export function D3Graph({
     const link = linkGroup.selectAll('path.edge-vis')
       .data(links).enter().append('path')
       .attr('class', 'edge-vis')
+      .attr('data-source-id', (d: RenderLink) => d.source.id)
+      .attr('data-target-id', (d: RenderLink) => d.target.id)
+      .attr('data-edge-label', (d: RenderLink) => d.label)
       .attr('fill', 'none')
       .attr('stroke', (d: RenderLink) => {
         if (d.flow === 'feedback') return 'rgba(167,139,250,0.7)';
@@ -736,7 +844,7 @@ export function D3Graph({
         return d.sync === 'async' ? '6,4' : 'none';
       })
       .attr('marker-end', (d: RenderLink) => (d.edgeType === 'loop' || !isForward(d)) ? 'url(#arrow-ret)' : 'url(#arrow-fwd)')
-      .attr('opacity', (d: RenderLink) => d.edgeType === 'loop' ? 0.42 : 0);
+      .attr('opacity', (d: RenderLink) => d.edgeType === 'loop' ? 0.42 : 1);
 
     // Wide invisible hit area for easier hover targeting
     const linkHit = linkGroup.selectAll('path.edge-hit')
@@ -819,11 +927,12 @@ export function D3Graph({
     const nodeSel = nodeGroup.selectAll<SVGGElement, RenderNode>('g.node')
       .data(nodes).enter().append('g')
       .attr('class', 'node')
+      .attr('data-node-id', (d: RenderNode) => d.id)
       .attr('role', 'button')
       .attr('tabindex', 0)
       .attr('aria-label', (d: RenderNode) => `Explore ${d.label}`)
       .attr('data-grouped', (d: RenderNode) => groupStyleByNodeId.has(d.id) ? 'true' : null)
-      .attr('opacity', 0)
+      .attr('opacity', 1)
       .style('cursor', 'pointer')
       .call(
         // Drag: move node, re-render all edges (no simulation needed)
@@ -1195,11 +1304,17 @@ export function D3Graph({
         const verticalForward = orientation === 'vertical' && isForward(d);
         const centerX = midX(d);
         const centerY = midY(d);
+        const labelCenterX = orientation === 'vertical' && !isForward(d)
+          ? Math.min(
+              layoutW - labelWidth / 2 - 4,
+              centerX + labelWidth / 2 + 8,
+            )
+          : centerX;
         const baseY = verticalForward
           ? centerY
           : centerY - (d.stepNum !== null ? 20 : isForward(d) ? 12 : 20);
         const sideOffset = NODE_W / 2 + labelWidth / 2 + 14;
-        const preferredSide = centerX < width / 2 ? -1 : 1;
+        const preferredSide = centerX < layoutW / 2 ? -1 : 1;
         const candidates = verticalForward
           ? Array.from({ length: 7 }, (_, distanceIndex) => (
               [preferredSide, -preferredSide].map(side => ({
@@ -1210,15 +1325,24 @@ export function D3Graph({
               }))
             )).flat()
           : Array.from({ length: 13 }, (_, attempt) => ({
-              x: centerX,
+              x: labelCenterX,
               y: baseY + (attempt === 0
                 ? 0
                 : (attempt % 2 === 1 ? -1 : 1)
                   * (14 + Math.floor((attempt - 1) / 2) * (isForward(d) ? 6 : 7))),
             }));
-        let placement = candidates.at(-1) ?? { x: centerX, y: baseY };
+        const boundedCandidates = candidates.map(candidate => boundLabelCenter(
+          candidate,
+          { width: labelWidth, height: labelHeight },
+          { width: layoutW, height: layoutH },
+        ));
+        let placement = boundedCandidates.at(-1) ?? boundLabelCenter(
+          { x: labelCenterX, y: baseY },
+          { width: labelWidth, height: labelHeight },
+          { width: layoutW, height: layoutH },
+        );
 
-        for (const candidatePosition of candidates) {
+        for (const candidatePosition of boundedCandidates) {
           const candidate = {
             x: candidatePosition.x - labelWidth / 2,
             y: candidatePosition.y - labelHeight / 2,
@@ -1274,7 +1398,10 @@ export function D3Graph({
     const signalReady = () => {
       firstFrame = window.requestAnimationFrame(() => {
         secondFrame = window.requestAnimationFrame(() => {
-          if (!cancelled) onLayoutReadyRef.current?.(structureKey);
+          if (!cancelled) {
+            svg.attr('data-rendered-graph-version', renderGraphData.version ?? '');
+            onLayoutReadyRef.current?.(structureKey);
+          }
         });
       });
     };

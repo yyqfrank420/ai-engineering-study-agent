@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from adapters.database_adapter import init_db
 from adapters.supabase_auth_adapter import get_current_user
 from api.sse_handler import ChatRequest, chat_endpoint
-from config import settings
+from config import Settings, settings
 from main import create_app
 from storage import message_store, runtime_state_store
 from storage.analytics_event_store import list_recent_analytics_events
@@ -143,6 +143,106 @@ def test_cloud_run_config_requires_moonshot_for_a_kimi_graph_builder(monkeypatch
 
     with pytest.raises(RuntimeError, match="MOONSHOT_API_KEY"):
         settings.validate_for_cloud_run()
+
+
+def test_cloud_run_config_rejects_secret_with_surrounding_whitespace():
+    configured = Settings(
+        _env_file=None,
+        supabase_db_url="postgresql://example",
+        anthropic_api_key="anthropic-key",
+        moonshot_api_key="moonshot-key\n",
+        graph_builder_model="kimi-k3",
+        supabase_url="https://project.supabase.co",
+        supabase_anon_key="anon-key",
+        supabase_jwt_issuer="https://project.supabase.co/auth/v1",
+        turnstile_secret_key="turnstile-key",
+        frontend_origin="https://example.com",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="surrounding whitespace: MOONSHOT_API_KEY",
+    ):
+        configured.validate_for_cloud_run()
+
+
+def test_cloud_run_config_rejects_an_impossible_architecture_deadline():
+    configured = Settings(
+        _env_file=None,
+        supabase_db_url="postgresql://example",
+        anthropic_api_key="anthropic-key",
+        moonshot_api_key="moonshot-key",
+        graph_builder_model="kimi-k3",
+        supabase_url="https://project.supabase.co",
+        supabase_anon_key="anon-key",
+        supabase_jwt_issuer="https://project.supabase.co/auth/v1",
+        turnstile_secret_key="turnstile-key",
+        frontend_origin="https://example.com",
+        agent_timeout_s=500,
+    )
+
+    with pytest.raises(RuntimeError, match="complete architecture repair path"):
+        configured.validate_for_cloud_run()
+
+
+@pytest.mark.parametrize(
+    "timeout_override",
+    [
+        {"graph_builder_max_timeout_s": 149},
+        {"graph_critic_max_timeout_s": 89},
+    ],
+)
+def test_cloud_run_config_rejects_a_stage_max_below_its_reserved_time(
+    timeout_override,
+):
+    configured = Settings(
+        _env_file=None,
+        supabase_db_url="postgresql://example",
+        anthropic_api_key="anthropic-key",
+        moonshot_api_key="moonshot-key",
+        graph_builder_model="kimi-k3",
+        supabase_url="https://project.supabase.co",
+        supabase_anon_key="anon-key",
+        supabase_jwt_issuer="https://project.supabase.co/auth/v1",
+        turnstile_secret_key="turnstile-key",
+        frontend_origin="https://example.com",
+        **timeout_override,
+    )
+
+    with pytest.raises(RuntimeError, match="cannot be below the reserved"):
+        configured.validate_for_cloud_run()
+
+
+@pytest.mark.parametrize(
+    "removed_name",
+    [
+        "ARCHITECTURE_PASS_TIMEOUT_S",
+        "ARCHITECTURE_REVIEW_TIMEOUT_S",
+        "GRAPH_CRITIC_INITIAL_TIMEOUT_S",
+        "GRAPH_CRITIC_REVISION_TIMEOUT_S",
+    ],
+)
+def test_removed_timeout_settings_fail_instead_of_being_ignored(
+    monkeypatch,
+    removed_name,
+):
+    monkeypatch.setenv(removed_name, "10")
+
+    with pytest.raises(ValueError, match="Removed timeout settings are configured"):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"evaluation_run_id": "run-1"},
+        {"evaluation_provider_attempt_limit": 64},
+        {"evaluation_provider_attempt_limit": -1},
+    ],
+)
+def test_evaluation_provider_attempt_quota_requires_both_settings(values):
+    with pytest.raises(ValueError, match="must be configured together"):
+        Settings(_env_file=None, **values)
 
 
 def test_api_responses_are_not_cacheable():
@@ -724,7 +824,10 @@ def test_chat_stream_releases_active_stream_lock(temp_data_dir, monkeypatch):
     thread = create_thread("user-1")
     app = _authed_app()
 
+    captured_state = {}
+
     async def fake_run_agent(state, rag_tools, graph_tools, node_detail_tools):
+        captured_state.update(state)
         await state["send"]({"type": "done"})
         return {**state, "response_text": "ok", "graph_data": None}
 
@@ -739,6 +842,12 @@ def test_chat_stream_releases_active_stream_lock(temp_data_dir, monkeypatch):
 
     assert response.status_code == 200
     assert response.text
+    assert captured_state["terminal_deadline_s"] > captured_state["workflow_started_at_s"]
+    assert (
+        captured_state["terminal_deadline_s"]
+        - captured_state["workflow_started_at_s"]
+        == pytest.approx(settings.agent_timeout_s - settings.agent_terminal_headroom_s)
+    )
     acquired = runtime_state_store.try_acquire_active_stream(
         "user-1",
         "chat",

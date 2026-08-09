@@ -28,7 +28,9 @@ def _ready_app(temp_data_dir, monkeypatch):
     app = create_app(load_resources=False)
     app.state.vectorstore = object()
     app.state.parent_docs = [{"page_content": "agent design"}]
-    monkeypatch.setattr("api.chat_websocket.get_current_user", lambda authorization: user)
+    monkeypatch.setattr(
+        "api.chat_websocket.get_current_user", lambda authorization: user
+    )
     return app, user, thread
 
 
@@ -55,44 +57,56 @@ async def test_diagram_evaluation_uses_one_correlated_wait_and_ignores_mismatche
         candidate_events.append(event)
         evaluation_id = event["evaluation_id"]
         wrong_id = "wrong-evaluation-id"
-        channel.accept({
-            "type": "diagram_evaluation_start",
-            "evaluation_id": wrong_id,
-            "graph_version": "graph-v1",
-            "total_chunks": 1,
-            "report": {},
-        })
-        channel.accept({
-            "type": "diagram_evaluation_chunk",
-            "evaluation_id": wrong_id,
-            "index": 0,
-            "data": base64.b64encode(b"wrong").decode(),
-        })
-        channel.accept({
-            "type": "diagram_evaluation_complete",
-            "evaluation_id": wrong_id,
-        })
+        channel.accept(
+            {
+                "type": "diagram_evaluation_start",
+                "evaluation_id": wrong_id,
+                "graph_version": "graph-v1",
+                "total_chunks": 1,
+                "report": {},
+            }
+        )
+        channel.accept(
+            {
+                "type": "diagram_evaluation_chunk",
+                "evaluation_id": wrong_id,
+                "index": 0,
+                "data": base64.b64encode(b"wrong").decode(),
+            }
+        )
+        channel.accept(
+            {
+                "type": "diagram_evaluation_complete",
+                "evaluation_id": wrong_id,
+            }
+        )
         assert not channel._waiters[evaluation_id].future.done()
 
         encoded = base64.b64encode(b"browser-render").decode()
-        channel.accept({
-            "type": "diagram_evaluation_start",
-            "evaluation_id": evaluation_id,
-            "graph_version": "graph-v1",
-            "media_type": "image/jpeg",
-            "total_chunks": 1,
-            "report": {"overlap_count": 0},
-        })
-        channel.accept({
-            "type": "diagram_evaluation_chunk",
-            "evaluation_id": evaluation_id,
-            "index": 0,
-            "data": encoded,
-        })
-        channel.accept({
-            "type": "diagram_evaluation_complete",
-            "evaluation_id": evaluation_id,
-        })
+        channel.accept(
+            {
+                "type": "diagram_evaluation_start",
+                "evaluation_id": evaluation_id,
+                "graph_version": "graph-v1",
+                "media_type": "image/jpeg",
+                "total_chunks": 1,
+                "report": {"overlap_count": 0},
+            }
+        )
+        channel.accept(
+            {
+                "type": "diagram_evaluation_chunk",
+                "evaluation_id": evaluation_id,
+                "index": 0,
+                "data": encoded,
+            }
+        )
+        channel.accept(
+            {
+                "type": "diagram_evaluation_complete",
+                "evaluation_id": evaluation_id,
+            }
+        )
 
     result = await channel.request(graph, send)
 
@@ -142,9 +156,16 @@ async def test_diagram_evaluation_cleans_pending_correlation_on_timeout_and_canc
     assert cancel_channel._uploads == {}
 
 
-def test_websocket_steer_cancels_draft_restarts_and_persists_combined_turn(temp_data_dir, monkeypatch):
+def test_websocket_steer_cancels_draft_restarts_and_persists_combined_turn(
+    temp_data_dir, monkeypatch
+):
     app, user, thread = _ready_app(temp_data_dir, monkeypatch)
-    approved_graph = {"title": "Approved baseline", "nodes": [], "edges": [], "sequence": []}
+    approved_graph = {
+        "title": "Approved baseline",
+        "nodes": [],
+        "edges": [],
+        "sequence": [],
+    }
     monkeypatch.setattr(
         "api.chat_websocket.thread_store.get_graph",
         lambda _user_id, _thread_id: approved_graph,
@@ -160,10 +181,17 @@ def test_websocket_steer_cancels_draft_restarts_and_persists_combined_turn(temp_
         terminal_deadlines.append(state["terminal_deadline_s"])
         approved_baselines.append(state["approved_graph_data"])
         if len(calls) == 1:
-            await state["send"]({
-                "type": "graph_data",
-                "data": {"title": "Mutable draft", "nodes": [], "edges": [], "sequence": []},
-            })
+            await state["send"](
+                {
+                    "type": "graph_data",
+                    "data": {
+                        "title": "Mutable draft",
+                        "nodes": [],
+                        "edges": [],
+                        "sequence": [],
+                    },
+                }
+            )
             await state["send"]({"type": "response_delta", "content": "generic draft"})
             try:
                 await asyncio.sleep(30)
@@ -171,34 +199,45 @@ def test_websocket_steer_cancels_draft_restarts_and_persists_combined_turn(temp_
                 first_cancelled = True
                 raise
 
-        assert "focus on attribution and approval boundaries" in state["user_message"].lower()
-        await state["send"]({"type": "response_delta", "content": "specific revised answer"})
+        assert (
+            "focus on attribution and approval boundaries"
+            in state["user_message"].lower()
+        )
+        await state["send"](
+            {"type": "response_delta", "content": "specific revised answer"}
+        )
         await state["send"]({"type": "done"})
         return {**state, "response_text": "specific revised answer", "graph_data": None}
 
     monkeypatch.setattr("api.chat_websocket.run_agent", fake_run_agent)
 
     with TestClient(app) as client:
-        with client.websocket_connect("/api/chat/ws", headers={"origin": "http://localhost:5173"}) as socket:
+        with client.websocket_connect(
+            "/api/chat/ws", headers={"origin": "http://localhost:5173"}
+        ) as socket:
             socket.send_json({"type": "auth", "access_token": "test-token"})
             assert socket.receive_json() == {"type": "ready"}
-            socket.send_json({
-                "type": "start",
-                "thread_id": thread["id"],
-                "content": "Design a growth marketing agent system",
-                "complexity": "production",
-                "graph_mode": "on",
-                "research_enabled": False,
-                "client_request_id": "client-ws-1",
-            })
+            socket.send_json(
+                {
+                    "type": "start",
+                    "thread_id": thread["id"],
+                    "content": "Design a growth marketing agent system",
+                    "complexity": "production",
+                    "graph_mode": "on",
+                    "research_enabled": False,
+                    "client_request_id": "client-ws-1",
+                }
+            )
             initial = _receive_until(socket, "response_delta")
             assert initial[-1]["content"] == "generic draft"
 
-            socket.send_json({
-                "type": "steer",
-                "content": "Focus on attribution and approval boundaries",
-                "client_request_id": "client-ws-1",
-            })
+            socket.send_json(
+                {
+                    "type": "steer",
+                    "content": "Focus on attribution and approval boundaries",
+                    "client_request_id": "client-ws-1",
+                }
+            )
             events = _receive_until(socket, "done")
 
     assert first_cancelled is True
@@ -211,7 +250,8 @@ def test_websocket_steer_cancels_draft_restarts_and_persists_combined_turn(temp_
     assert any(event["type"] == "response_reset" for event in events)
     assert any(event["type"] == "steer_applied" for event in events)
     assert any(
-        event.get("type") == "response_delta" and event.get("content") == "specific revised answer"
+        event.get("type") == "response_delta"
+        and event.get("content") == "specific revised answer"
         for event in events
     )
     history = get_history(user["id"], thread["id"])
@@ -225,12 +265,16 @@ def test_websocket_rejects_untrusted_browser_origin(temp_data_dir, monkeypatch):
 
     with TestClient(app) as client:
         with pytest.raises(WebSocketDisconnect) as exc_info:
-            with client.websocket_connect("/api/chat/ws", headers={"origin": "https://attacker.example"}):
+            with client.websocket_connect(
+                "/api/chat/ws", headers={"origin": "https://attacker.example"}
+            ):
                 pass
     assert exc_info.value.code == 1008
 
 
-def test_websocket_replays_completed_idempotent_turn_without_running_agent(temp_data_dir, monkeypatch):
+def test_websocket_replays_completed_idempotent_turn_without_running_agent(
+    temp_data_dir, monkeypatch
+):
     app, user, thread = _ready_app(temp_data_dir, monkeypatch)
     persist_turn(
         user["id"],
@@ -248,15 +292,19 @@ def test_websocket_replays_completed_idempotent_turn_without_running_agent(temp_
     monkeypatch.setattr("api.chat_websocket.run_agent", fail_if_called)
 
     with TestClient(app) as client:
-        with client.websocket_connect("/api/chat/ws", headers={"origin": "http://localhost:5173"}) as socket:
+        with client.websocket_connect(
+            "/api/chat/ws", headers={"origin": "http://localhost:5173"}
+        ) as socket:
             socket.send_json({"type": "auth", "access_token": "test-token"})
             assert socket.receive_json() == {"type": "ready"}
-            socket.send_json({
-                "type": "start",
-                "thread_id": thread["id"],
-                "content": "Explain RAG",
-                "client_request_id": "client-replay-1",
-            })
+            socket.send_json(
+                {
+                    "type": "start",
+                    "thread_id": thread["id"],
+                    "content": "Explain RAG",
+                    "client_request_id": "client-replay-1",
+                }
+            )
             events = _receive_until(socket, "done")
 
     assert events == [
@@ -265,7 +313,9 @@ def test_websocket_replays_completed_idempotent_turn_without_running_agent(temp_
     ]
 
 
-def test_internal_eval_websocket_acquires_a_thread_scoped_guard(temp_data_dir, monkeypatch):
+def test_internal_eval_websocket_acquires_a_thread_scoped_guard(
+    temp_data_dir, monkeypatch
+):
     app, user, thread = _ready_app(temp_data_dir, monkeypatch)
     user["claims"] = {"app_metadata": {"provider": "internal_test"}}
     observed: dict[str, str | None] = {}
@@ -284,21 +334,27 @@ def test_internal_eval_websocket_acquires_a_thread_scoped_guard(temp_data_dir, m
     monkeypatch.setattr("api.chat_websocket.run_agent", fake_run_agent)
 
     with TestClient(app) as client:
-        with client.websocket_connect("/api/chat/ws", headers={"origin": "http://localhost:5173"}) as socket:
+        with client.websocket_connect(
+            "/api/chat/ws", headers={"origin": "http://localhost:5173"}
+        ) as socket:
             socket.send_json({"type": "auth", "access_token": "test-token"})
             assert socket.receive_json() == {"type": "ready"}
-            socket.send_json({
-                "type": "start",
-                "thread_id": thread["id"],
-                "content": "run eval",
-                "client_request_id": "client-eval-scope",
-            })
+            socket.send_json(
+                {
+                    "type": "start",
+                    "thread_id": thread["id"],
+                    "content": "run eval",
+                    "client_request_id": "client-eval-scope",
+                }
+            )
             _receive_until(socket, "done")
 
     assert observed["scope_id"] == thread["id"]
 
 
-def test_websocket_keeps_candidate_private_until_browser_evaluation(temp_data_dir, monkeypatch):
+def test_websocket_keeps_candidate_private_until_browser_evaluation(
+    temp_data_dir, monkeypatch
+):
     app, _user, thread = _ready_app(temp_data_dir, monkeypatch)
     graph = {
         "graph_type": "architecture",
@@ -321,50 +377,65 @@ def test_websocket_keeps_candidate_private_until_browser_evaluation(temp_data_di
     monkeypatch.setattr("api.chat_websocket.run_agent", fake_run_agent)
 
     with TestClient(app) as client:
-        with client.websocket_connect("/api/chat/ws", headers={"origin": "http://localhost:5173"}) as socket:
+        with client.websocket_connect(
+            "/api/chat/ws", headers={"origin": "http://localhost:5173"}
+        ) as socket:
             socket.send_json({"type": "auth", "access_token": "test-token"})
             assert socket.receive_json() == {"type": "ready"}
-            socket.send_json({
-                "type": "start",
-                "thread_id": thread["id"],
-                "content": "Design an evaluated architecture",
-                "complexity": "prototype",
-                "graph_mode": "on",
-                "research_enabled": False,
-                "client_request_id": "client-eval-1",
-            })
+            socket.send_json(
+                {
+                    "type": "start",
+                    "thread_id": thread["id"],
+                    "content": "Design an evaluated architecture",
+                    "complexity": "prototype",
+                    "graph_mode": "on",
+                    "research_enabled": False,
+                    "client_request_id": "client-eval-1",
+                }
+            )
             candidate_events = _receive_until(socket, "graph_candidate")
-            assert not any(event.get("type") == "graph_data" for event in candidate_events)
+            assert not any(
+                event.get("type") == "graph_data" for event in candidate_events
+            )
             candidate = candidate_events[-1]
             encoded = base64.b64encode(b"browser-render").decode()
-            socket.send_json({
-                "type": "diagram_evaluation_start",
-                "evaluation_id": candidate["evaluation_id"],
-                "graph_version": "graph-v1",
-                "media_type": "image/jpeg",
-                "total_chunks": 1,
-                "report": {
-                    "rendered_nodes": 0,
-                    "rendered_edges": 0,
-                    "overlap_count": 0,
-                    "clipped_nodes": 0,
-                    "minimum_text_px": 8,
-                },
-            })
-            socket.send_json({
-                "type": "diagram_evaluation_chunk",
-                "evaluation_id": candidate["evaluation_id"],
-                "index": 0,
-                "data": encoded,
-            })
-            socket.send_json({
-                "type": "diagram_evaluation_complete",
-                "evaluation_id": candidate["evaluation_id"],
-            })
+            socket.send_json(
+                {
+                    "type": "diagram_evaluation_start",
+                    "evaluation_id": candidate["evaluation_id"],
+                    "graph_version": "graph-v1",
+                    "media_type": "image/jpeg",
+                    "total_chunks": 1,
+                    "report": {
+                        "rendered_nodes": 0,
+                        "rendered_edges": 0,
+                        "overlap_count": 0,
+                        "clipped_nodes": 0,
+                        "minimum_text_px": 12,
+                    },
+                }
+            )
+            socket.send_json(
+                {
+                    "type": "diagram_evaluation_chunk",
+                    "evaluation_id": candidate["evaluation_id"],
+                    "index": 0,
+                    "data": encoded,
+                }
+            )
+            socket.send_json(
+                {
+                    "type": "diagram_evaluation_complete",
+                    "evaluation_id": candidate["evaluation_id"],
+                }
+            )
             published = _receive_until(socket, "done")
 
     assert any(event.get("type") == "graph_data" for event in published)
-    assert any(event.get("type") == "response_delta" and event.get("content") == "approved" for event in published)
+    assert any(
+        event.get("type") == "response_delta" and event.get("content") == "approved"
+        for event in published
+    )
 
 
 @pytest.mark.parametrize(
@@ -382,6 +453,7 @@ def test_websocket_rejects_invalid_authentication_protocol(
 ):
     app, _user, _thread = _ready_app(temp_data_dir, monkeypatch)
     if first_message["type"] == "auth":
+
         def reject_auth(*_args, **_kwargs):
             raise HTTPException(status_code=401)
 
@@ -453,12 +525,14 @@ def test_websocket_rejects_invalid_turns_before_model_work(
         ) as socket:
             socket.send_json({"type": "auth", "access_token": "test-token"})
             assert socket.receive_json() == {"type": "ready"}
-            socket.send_json({
-                "type": "start",
-                "thread_id": thread_id or thread["id"],
-                "content": content,
-                "client_request_id": "client-invalid-turn",
-            })
+            socket.send_json(
+                {
+                    "type": "start",
+                    "thread_id": thread_id or thread["id"],
+                    "content": content,
+                    "client_request_id": "client-invalid-turn",
+                }
+            )
             events = _receive_until(socket, "done")
 
     assert events[0]["type"] == "error"
@@ -483,12 +557,14 @@ def test_websocket_reports_an_incomplete_idempotent_turn(temp_data_dir, monkeypa
         ) as socket:
             socket.send_json({"type": "auth", "access_token": "test-token"})
             assert socket.receive_json() == {"type": "ready"}
-            socket.send_json({
-                "type": "start",
-                "thread_id": thread["id"],
-                "content": "resume request",
-                "client_request_id": "client-incomplete",
-            })
+            socket.send_json(
+                {
+                    "type": "start",
+                    "thread_id": thread["id"],
+                    "content": "resume request",
+                    "client_request_id": "client-incomplete",
+                }
+            )
             events = _receive_until(socket, "done")
 
     assert events[0]["type"] == "error"
@@ -538,19 +614,23 @@ def test_websocket_preflight_failures_do_not_start_model_work(
         ) as socket:
             socket.send_json({"type": "auth", "access_token": "test-token"})
             assert socket.receive_json() == {"type": "ready"}
-            socket.send_json({
-                "type": "start",
-                "thread_id": thread["id"],
-                "content": "bounded request",
-                "client_request_id": "client-preflight",
-            })
+            socket.send_json(
+                {
+                    "type": "start",
+                    "thread_id": thread["id"],
+                    "content": "bounded request",
+                    "client_request_id": "client-preflight",
+                }
+            )
             events = _receive_until(socket, "done")
 
     assert events[0]["type"] == "error"
     assert expected_error in events[0]["content"]
 
 
-def test_websocket_rejects_commands_then_stops_matching_work(temp_data_dir, monkeypatch):
+def test_websocket_rejects_commands_then_stops_matching_work(
+    temp_data_dir, monkeypatch
+):
     app, _user, thread = _ready_app(temp_data_dir, monkeypatch)
 
     async def blocked_agent(*_args, **_kwargs):
@@ -565,12 +645,14 @@ def test_websocket_rejects_commands_then_stops_matching_work(temp_data_dir, monk
         ) as socket:
             socket.send_json({"type": "auth", "access_token": "test-token"})
             assert socket.receive_json() == {"type": "ready"}
-            socket.send_json({
-                "type": "start",
-                "thread_id": thread["id"],
-                "content": "long architecture review",
-                "client_request_id": "client-command",
-            })
+            socket.send_json(
+                {
+                    "type": "start",
+                    "thread_id": thread["id"],
+                    "content": "long architecture review",
+                    "client_request_id": "client-command",
+                }
+            )
             _receive_until(socket, "worker_status")
 
             socket.send_json({"type": "unknown"})
@@ -578,28 +660,34 @@ def test_websocket_rejects_commands_then_stops_matching_work(temp_data_dir, monk
                 "type": "command_rejected",
                 "reason": "Unknown command",
             }
-            socket.send_json({
-                "type": "steer",
-                "content": "wrong request",
-                "client_request_id": "other-request",
-            })
+            socket.send_json(
+                {
+                    "type": "steer",
+                    "content": "wrong request",
+                    "client_request_id": "other-request",
+                }
+            )
             assert socket.receive_json() == {
                 "type": "command_rejected",
                 "reason": "Command does not match the active request",
             }
-            socket.send_json({
-                "type": "steer",
-                "content": "   ",
-                "client_request_id": "client-command",
-            })
+            socket.send_json(
+                {
+                    "type": "steer",
+                    "content": "   ",
+                    "client_request_id": "client-command",
+                }
+            )
             assert socket.receive_json() == {
                 "type": "command_rejected",
                 "reason": "Steering command was empty, unsafe, too large, or over the limit",
             }
-            socket.send_json({
-                "type": "stop",
-                "client_request_id": "client-command",
-            })
+            socket.send_json(
+                {
+                    "type": "stop",
+                    "client_request_id": "client-command",
+                }
+            )
             assert socket.receive_json() == {"type": "stopped"}
 
 

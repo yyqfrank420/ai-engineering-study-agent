@@ -7,13 +7,25 @@ from config import settings
 from storage.rate_limit_store import RateLimitDimension, reserve_rate_limit
 
 
-def internal_test_stream_scope(user: dict, thread_id: str) -> str | None:
-    """Scope trusted eval-session exclusivity to one conversation thread."""
+def _is_internal_test_user(user: dict) -> bool:
     claims = user.get("claims")
     app_metadata = claims.get("app_metadata") if isinstance(claims, dict) else None
-    if not isinstance(app_metadata, dict):
-        return None
-    return thread_id if app_metadata.get("provider") == "internal_test" else None
+    return (
+        isinstance(app_metadata, dict)
+        and app_metadata.get("provider") == "internal_test"
+    )
+
+
+def internal_test_stream_scope(user: dict, thread_id: str) -> str | None:
+    """Scope trusted eval-session exclusivity to one conversation thread."""
+    return thread_id if _is_internal_test_user(user) else None
+
+
+def is_production_traffic(user: dict) -> bool:
+    return (
+        settings.otel_environment.strip().lower() == "production"
+        and not _is_internal_test_user(user)
+    )
 
 
 def check_rate_limit(key: str) -> str | None:
