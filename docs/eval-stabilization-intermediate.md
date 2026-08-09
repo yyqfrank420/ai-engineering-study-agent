@@ -77,6 +77,8 @@ cross-links, reparents invalid topology, or deletes authored elements to fit a t
 
 ### One-shot architecture product and model roles
 
+Historical, superseded repair-limit description:
+
 The product target is a one-shot, publishable architecture diagram. Opus 5 xhigh writes the primary
 architecture brief, then performs a clean second-pass review before graph construction. Kimi K3 low
 owns initial graph topology. Kimi K3 high applies one typed local repair to a rejected unpublished
@@ -84,7 +86,7 @@ candidate and handles user refinements to a previously published graph. Sonnet 5
 semantics and the private browser screenshot before publication. The protected semantic judge also
 defaults to Sonnet 5 high.
 
-The workflow now permits up to three bounded local repairs after the first candidate. Each review
+The historical workflow permitted up to three bounded local repairs after the first candidate. Each review
 selects one connected repair region and sees the full current graph again. A failed QA result after
 the third repair suppresses the graph. Normal operation should publish the first candidate; repair rate and first-pass acceptance
 are release metrics, not an authoring strategy.
@@ -195,11 +197,34 @@ Targeted diagnostic application spend recorded above: **$2.710510**. Semantic ju
 
 The chronology is important: these were not repetitions of one identical defect. Each run cleared the previous boundary and exposed the next one. The main process failure was that the earlier full-suite workflow and coarse `graph_emitted=false` telemetry made this dependency chain expensive to discover.
 
-## Current checkpoint
+## Current graph-review convergence checkpoint
+
+This state machine supersedes the historical repair limits and layer-lock descriptions below.
+Focused offline tests cover its contracts. A paid diagnostic is still required before the protected
+corpus runs.
+
+- Every initial candidate receives one exhaustive component, connection, composition, and render
+  scorecard. Every deterministic finding is classified exactly once.
+- The selected review depth is authoritative. Prototype review rejects production-only findings even
+  when request text describes a production system. Production review retains all topology proofs.
+- Repair patches are record-scoped and may cover multiple disconnected regions. Node, edge, group,
+  sequence, assumption, field, and addition permissions stay exact. A group move requires permission
+  for both source and destination groups.
+- Retained pass verdicts follow dependency invalidation. Component changes reopen components,
+  connections, and composition. Edge changes reopen connections and composition. Composition-only
+  changes reopen composition.
+- The workflow retains a reviewed snapshot as the repair baseline.
+- It permits at most two successful semantic repairs and one error-informed contract correction. An
+  invalid patch preserves the current candidate and returns a safe validation path and rule to a
+  fresh critic call. The corrected Kimi prompt cannot repeat the rejected prompt.
+- Every candidate receives deterministic render validation.
+- Publication requires a final merged full-graph pass.
+
+## Historical stabilization checkpoint
 
 PR #37 preserved `87c9012` and `cbbc892` as its two reviewed commits. The post-merge contract correction is isolated in one follow-up commit.
 
-Current implementation state:
+Implementation state at that historical checkpoint:
 
 - Immutable repair-only edge IDs replace prose selectors and endpoint-pair recovery.
 - Initial topology and one typed local repair each use the 65,536-token safety ceiling and a
@@ -219,7 +244,7 @@ Current implementation state:
   records. Connections owns edge records. Composition owns title, groups, sequence, and assumptions.
   Render owns the measured screenshot and layout. Each rubric code and deterministic finding has
   exactly one owner. A defect that needs changes in two layers must fail both owners.
-- A passing layer is retained across one bounded repair when its full dependency fingerprint is
+- Historical, superseded layer-lock design: a passing layer is retained across one bounded repair when its full dependency fingerprint is
   unchanged. Component locks cover every mutable node field. Connection locks cover every mutable
   node and edge field because endpoint meaning can change without an edge rewrite. Composition locks
   cover its records and every semantic node and edge field. Render locks cover the full graph.
@@ -507,7 +532,7 @@ Most recent authoritative evidence:
   before Kimi topology generation. It carries the interpreted plan, bounded assumptions, and the
   challenger risks. The final stored answer contains the same frame, so a slow graph call no longer
   leaves the user without useful architecture text.
-- Post-patch semantic review is authoritative. The removed layer-fingerprint lock could overwrite a
+- Historical v42 transition: post-patch semantic review was authoritative. The removed layer-fingerprint lock could overwrite a
   newly discovered defect in an unchanged layer with an earlier pass result. Patch-time mutation
   locks still prevent Kimi from changing graph fields outside the approved repair contract.
 - Critic v42 removes model-owned repair scope, layer status, and layer score from the wire protocol.

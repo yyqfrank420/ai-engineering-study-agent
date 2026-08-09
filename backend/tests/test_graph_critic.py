@@ -2,11 +2,13 @@ import json
 from copy import deepcopy
 
 import pytest
-from config import settings
-
 from adapters.llm_adapter import _anthropic_response_schema
+from agent.graph import _route_after_review
+from agent.graph_repair_contract import (
+    REPAIR_LAYER_PATCH_FIELDS,
+    validate_local_repair_admission,
+)
 from agent.nodes.graph_critic import (
-    CriticProtocolError,
     _GRAPH_CRITIC_PROMPT_VERSION,
     _GRAPH_CRITIC_PROTOTYPE_RESPONSE_SCHEMA,
     _GRAPH_CRITIC_RESPONSE_SCHEMA,
@@ -15,25 +17,23 @@ from agent.nodes.graph_critic import (
     _RUBRIC_CODE_OWNERS,
     _RUBRIC_CODES,
     _TOPOLOGY_PROOF_GUARANTEES,
+    CriticProtocolError,
     _canonicalise_review_protocol,
     _critic_system,
     _deterministic_render_review,
     _deterministic_review,
     _enforce_local_repair_admission,
+    _locked_review_layers,
     _preflight_review_protocol,
     _review_packet,
+    _semantic_graph_projection,
     _validate_repair_contract,
     _validate_review_protocol,
     graph_critic_node,
 )
-from agent.graph import _route_after_review
-from agent.graph_repair_contract import (
-    REPAIR_LAYER_PATCH_FIELDS,
-    validate_local_repair_admission,
-    validate_repair_patch_region,
-)
 from agent.nodes.graph_worker import _GRAPH_PATCH_KEYS
 from agent.stream_utils import StructuredLLMResponse
+from config import settings
 
 
 def _structured_response(
@@ -193,7 +193,7 @@ def _critic_state(*, graph=None, complexity="prototype"):
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v46"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v47"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -210,7 +210,7 @@ def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
     assert "A passing proof cites the complete actual" in _critic_system(
         require_topology_proofs=True
     )
-    assert "highest-priority local repair region" in _GRAPH_CRITIC_SYSTEM
+    assert "every blocking repair in one exhaustive scorecard" in _GRAPH_CRITIC_SYSTEM
     assert "event-stream systems define bounded" in _GRAPH_CRITIC_SYSTEM
     assert "backpressure and overload behavior" in _GRAPH_CRITIC_SYSTEM
     assert "partition/order or event-time semantics" in _GRAPH_CRITIC_SYSTEM
@@ -337,7 +337,7 @@ def test_local_repair_admits_a_contiguous_ungrouped_route():
     validate_local_repair_admission(contract, graph=graph)
 
 
-def test_local_repair_rejects_disconnected_edge_regions():
+def test_local_repair_admits_disconnected_record_scoped_selectors():
     edges = [
         {"source": "a", "target": "b", "label": "first"},
         {"source": "c", "target": "d", "label": "second"},
@@ -354,8 +354,7 @@ def test_local_repair_rejects_disconnected_edge_regions():
         layer_selectors={"connections": {"edge_selectors": edges}},
     )
 
-    with pytest.raises(ValueError, match="one connected topology region"):
-        validate_local_repair_admission(contract, graph=graph)
+    validate_local_repair_admission(contract, graph=graph)
 
     review = _enforce_local_repair_admission(
         {
@@ -365,8 +364,7 @@ def test_local_repair_rejects_disconnected_edge_regions():
         },
         graph,
     )
-    assert review["terminal"] is True
-    assert review["failure_code"] == "graph_repair_nonlocal"
+    assert review.get("terminal") is not True
     assert (
         _route_after_review(
             {
@@ -376,39 +374,11 @@ def test_local_repair_rejects_disconnected_edge_regions():
                 "graph_review": review,
             }
         )
-        == "reject"
+        == "revise"
     )
 
 
-def test_local_repair_rejects_a_connected_graph_wide_mutation_surface():
-    node_ids = [f"n{index}" for index in range(15)]
-    edges = [
-        {"source": source, "target": target, "label": f"step {index}"}
-        for index, (source, target) in enumerate(
-            zip(node_ids[:-1], node_ids[1:], strict=True),
-            start=1,
-        )
-    ]
-    graph = {
-        "nodes": [{"id": node_id} for node_id in node_ids],
-        "edges": edges,
-        "groups": [
-            {"id": "intake", "nodeIds": node_ids[:5]},
-            {"id": "runtime", "nodeIds": node_ids[5:10]},
-            {"id": "outcomes", "nodeIds": node_ids[10:]},
-        ],
-    }
-    contract = _repair_contract(
-        scope="local",
-        failed_layer="connections",
-        layer_selectors={"connections": {"edge_selectors": edges[:11]}},
-    )
-
-    with pytest.raises(ValueError, match="authored group boundary"):
-        validate_local_repair_admission(contract, graph=graph)
-
-
-def test_local_repair_admits_a_connected_existing_node_branch_addition():
+def test_local_repair_admits_an_existing_node_branch_addition():
     graph = {
         "nodes": [{"id": node_id} for node_id in ("gate", "approved", "rejected")],
         "edges": [],
@@ -426,15 +396,6 @@ def test_local_repair_admits_a_connected_existing_node_branch_addition():
     )
 
     validate_local_repair_admission(contract, graph=graph)
-    validate_repair_patch_region(
-        contract,
-        patch={
-            "add_edges": [
-                {"source": "gate", "target": "approved"},
-                {"source": "gate", "target": "rejected"},
-            ]
-        },
-    )
 
 
 def test_local_component_additions_require_an_existing_graph_anchor():
@@ -477,33 +438,6 @@ def test_appended_groups_can_organize_existing_components():
     )
 
     validate_local_repair_admission(contract, graph=graph)
-
-
-def test_group_metadata_cannot_hide_disconnected_edge_regions():
-    edges = [
-        {"source": "a", "target": "b", "label": "first"},
-        {"source": "c", "target": "d", "label": "second"},
-    ]
-    graph = {
-        "nodes": [{"id": node_id} for node_id in ("a", "b", "c", "d")],
-        "edges": edges,
-        "groups": [{"id": "runtime", "nodeIds": ["a", "b", "c", "d"]}],
-    }
-    contract = _repair_contract(
-        scope="local",
-        failed_layer="connections",
-        layer_selectors={"connections": {"edge_selectors": edges}},
-    )
-    contract["layers"]["composition"] = _layer(
-        "fail",
-        0.7,
-        findings=["Repair group membership."],
-        composition_fields=["groups"],
-        group_ids=["runtime"],
-    )
-
-    with pytest.raises(ValueError, match="one connected topology region"):
-        validate_local_repair_admission(contract, graph=graph)
 
 
 def test_local_repair_rejects_whole_collection_composition_authority():
@@ -706,8 +640,8 @@ async def test_protocol_correction_receives_all_repair_algebra_defects(monkeypat
 
     async def fake_stream_llm(**kwargs):
         calls.append(kwargs)
-        payload = invalid if len(calls) == 1 else _passing_review_payload(
-            topology_proofs={}
+        payload = (
+            invalid if len(calls) == 1 else _passing_review_payload(topology_proofs={})
         )
         return _structured_response(payload)
 
@@ -810,6 +744,43 @@ def test_topology_proof_validation_follows_resolved_depth():
         )
     assert error.value.path == f"topology_proofs.{guarantee}"
     assert error.value.rule == "missing_evidence"
+
+
+@pytest.mark.asyncio
+async def test_prototype_depth_rejects_production_only_codes_despite_request_wording(
+    monkeypatch,
+):
+    calls = []
+    production_only_code = _RUBRIC_CODES.index("topology_enforced_guarantees") + 1
+    invalid = _passing_review_payload(topology_proofs={})
+    _set_model_layer(
+        invalid,
+        "connections",
+        finding_codes=[production_only_code],
+        edge_indexes=[0],
+    )
+    valid = _passing_review_payload(topology_proofs={})
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return _structured_response(invalid if len(calls) == 1 else valid)
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+    state = _critic_state(complexity="prototype")
+    state["user_message"] = "Design a production-ready campaign workflow."
+
+    result = await graph_critic_node(state)
+
+    assert result["graph_review"]["approved"] is True
+    assert [call["telemetry"]["operation"] for call in calls] == [
+        "graph_critic",
+        "graph_critic_protocol_correction",
+    ]
+    assert "selected UI depth is prototype and is authoritative" in calls[0]["system"]
+    assert "out of scope" in calls[0]["system"]
 
 
 def test_protocol_errors_expose_only_safe_coordinates():
@@ -1223,7 +1194,7 @@ def test_feedback_edge_finding_cannot_fail_components_while_connections_passes()
         )
 
 
-def test_scorecard_can_defer_deterministic_findings_outside_active_region():
+def test_scorecard_admits_disconnected_selectors_when_every_finding_is_classified():
     graph = {
         "nodes": [
             {"id": "a", "label": "A"},
@@ -1248,15 +1219,15 @@ def test_scorecard_can_defer_deterministic_findings_outside_active_region():
         {
             "id": "deterministic_2",
             "owner_layer": "connections",
-            "finding": "Repair the disconnected second route later.",
+            "finding": "Repair the disconnected second route.",
         },
     ]
     payload = _passing_review_payload()
     _set_model_layer(
         payload,
         "connections",
-        deterministic_finding_indexes=[0],
-        edge_indexes=[0],
+        deterministic_finding_indexes=[0, 1],
+        edge_indexes=[0, 1],
     )
 
     _preflight_review_protocol(
@@ -1279,9 +1250,54 @@ def test_scorecard_can_defer_deterministic_findings_outside_active_region():
         deterministic_findings=deterministic_findings,
     )
 
+    validate_local_repair_admission(canonical["repair_contract"], graph=graph)
     assert canonical["repair_contract"]["layers"]["connections"][
         "deterministic_finding_ids"
-    ] == ["deterministic_1"]
+    ] == ["deterministic_1", "deterministic_2"]
+    assert (
+        canonical["repair_contract"]["layers"]["connections"]["edge_selectors"]
+        == graph["edges"]
+    )
+
+
+def test_scorecard_rejects_unclassified_deterministic_findings():
+    graph = {
+        "nodes": [{"id": "a"}, {"id": "b"}, {"id": "c"}, {"id": "d"}],
+        "edges": [
+            {"source": "a", "target": "b", "label": "first"},
+            {"source": "c", "target": "d", "label": "second"},
+        ],
+        "groups": [],
+        "sequence": [],
+        "assumptions": [],
+    }
+    deterministic_findings = [
+        {
+            "id": "deterministic_1",
+            "owner_layer": "connections",
+            "finding": "Repair the first route.",
+        },
+        {
+            "id": "deterministic_2",
+            "owner_layer": "connections",
+            "finding": "Repair the second route.",
+        },
+    ]
+    payload = _passing_review_payload()
+    _set_model_layer(
+        payload,
+        "connections",
+        deterministic_finding_indexes=[0],
+        edge_indexes=[0],
+    )
+
+    with pytest.raises(CriticProtocolError, match="incomplete_classification"):
+        _preflight_review_protocol(
+            payload,
+            graph=graph,
+            deterministic_findings=deterministic_findings,
+            review_context=[],
+        )
 
 
 def test_repair_contract_validation_enforces_deterministic_finding_owner():
@@ -1350,7 +1366,9 @@ def test_graph_caused_render_failure_can_use_one_local_repair():
 def test_render_only_failure_cannot_enter_local_patch_lane():
     contract = _repair_contract(scope="local", failed_layer="render")
 
-    with pytest.raises(ValueError, match="must be global for the failed layer ownership"):
+    with pytest.raises(
+        ValueError, match="must be global for the failed layer ownership"
+    ):
         _validate_repair_contract(contract, graph={})
 
 
@@ -1547,15 +1565,20 @@ async def test_initial_local_rejection_gets_one_local_repair_pass(monkeypatch):
 
     assert len(calls) == 1
     assert calls[0]["telemetry"]["operation"] == "graph_critic"
-    assert len(
-        result["graph_review"]["repair_contract"]["layers"]["connections"][
-            "edge_selectors"
-        ]
-    ) == 1
+    assert (
+        len(
+            result["graph_review"]["repair_contract"]["layers"]["connections"][
+                "edge_selectors"
+            ]
+        )
+        == 1
+    )
 
 
 @pytest.mark.asyncio
-async def test_disconnected_local_repair_skips_patch_admission(monkeypatch):
+async def test_disconnected_scorecard_selectors_are_admitted_without_correction(
+    monkeypatch,
+):
     calls = []
     graph = _domain_graph()
     graph["edges"].append(
@@ -1578,7 +1601,7 @@ async def test_disconnected_local_repair_skips_patch_admission(monkeypatch):
             payload,
             "connections",
             finding_codes=[connection_code],
-            edge_indexes=[0, 1] if len(calls) == 1 else [0],
+            edge_indexes=[0, 1],
         )
         return _structured_response(payload)
 
@@ -1589,24 +1612,21 @@ async def test_disconnected_local_repair_skips_patch_admission(monkeypatch):
 
     review = (await graph_critic_node(_critic_state(graph=graph)))["graph_review"]
 
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert review.get("terminal") is not True
     assert review["repair_contract"]["repair_scope"] == "local"
-    assert review["repair_contract"]["layers"]["connections"][
-        "edge_selectors"
-    ] == [
+    assert review["repair_contract"]["layers"]["connections"]["edge_selectors"] == [
         {
-            "source": graph["edges"][0]["source"],
-            "target": graph["edges"][0]["target"],
-            "label": graph["edges"][0]["label"],
+            "source": edge["source"],
+            "target": edge["target"],
+            "label": edge["label"],
         }
+        for edge in graph["edges"][:2]
     ]
-    correction = calls[1]["messages"][0]["content"][-1]["text"]
-    assert "one admissible region" in correction
 
 
 @pytest.mark.asyncio
-async def test_protocol_correction_is_the_clean_focus_pass(monkeypatch):
+async def test_protocol_correction_requires_a_complete_scorecard(monkeypatch):
     calls = []
     invalid = _passing_review_payload()
     _set_model_layer(invalid, "components", finding_codes="invalid")
@@ -1639,35 +1659,14 @@ async def test_protocol_correction_is_the_clean_focus_pass(monkeypatch):
         "graph_critic_protocol_correction",
     ]
     correction = calls[1]["messages"][0]["content"][-1]["text"]
-    assert "focus pass" in correction
-    assert "selected repair region" in correction
+    assert "complete scorecard" in correction
+    assert "every blocking defect" in correction
 
 
 @pytest.mark.asyncio
-async def test_final_review_can_reopen_an_unchanged_layer_after_a_local_repair(
-    monkeypatch,
-):
-    baseline = _domain_graph()
-    node_ids = ["objective", "quality", "optimizer", "approval", "executor", "outcome"]
-    for node, node_id in zip(baseline["nodes"], node_ids, strict=True):
-        node["id"] = node_id
-    baseline["edges"] = [
-        {
-            "source": source,
-            "target": target,
-            "label": "passes bounded work",
-        }
-        for source, target in zip(node_ids[:-1], node_ids[1:], strict=True)
-    ]
-    baseline["edges"].append(
-        {
-            "source": "outcome",
-            "target": "objective",
-            "label": "returns attributed outcomes",
-            "type": "loop",
-        }
-    )
-    edge = baseline["edges"][0]
+async def test_patch_validation_error_informs_one_contract_correction(monkeypatch):
+    graph = _domain_graph()
+    edge = graph["edges"][0]
     prior_contract = _repair_contract(
         scope="local",
         failed_layer="connections",
@@ -1683,8 +1682,118 @@ async def test_final_review_can_reopen_an_unchanged_layer_after_a_local_repair(
             }
         },
     )
-    candidate = deepcopy(baseline)
-    candidate["edges"][0]["description"] = "Carries the repaired bounded event."
+    connection_code = next(
+        index
+        for index, code in enumerate(_RUBRIC_CODES, start=1)
+        if _RUBRIC_CODE_OWNERS[code] == "connections"
+    )
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        payload = _passing_review_payload(topology_proofs={})
+        _set_model_layer(
+            payload,
+            "connections",
+            finding_codes=[connection_code],
+            edge_indexes=[0],
+        )
+        return _structured_response(payload)
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+    state = _critic_state(graph=graph)
+    state.update(
+        {
+            "reviewed_graph_data": deepcopy(graph),
+            "graph_review": {
+                "repair_contract": prior_contract,
+                "topology_proofs": [],
+            },
+            "graph_contract_correction_pending": True,
+            "graph_patch_validation_error": {
+                "path": "groups.group_2",
+                "rule": "locked_record_changed",
+            },
+            "graph_operation": {
+                "kind": "create",
+                "status": "failed",
+                "failure_code": "graph_patch_invalid_preserved_existing_graph",
+            },
+        }
+    )
+
+    result = await graph_critic_node(state)
+
+    assert len(calls) == 1
+    assert calls[0]["telemetry"]["operation"] == "graph_critic_contract_correction"
+    correction = calls[0]["messages"][0]["content"][-1]["text"]
+    assert "Validation path: groups.group_2" in correction
+    assert "Validation rule: locked_record_changed" in correction
+    assert result["graph_review"]["contract_correction"] == {
+        "path": "groups.group_2",
+        "rule": "locked_record_changed",
+    }
+    assert result["graph_operation"]["status"] == "candidate"
+
+
+@pytest.mark.parametrize(
+    ("changed_layer", "expected_locked_layers"),
+    [
+        ("unchanged", {"components", "connections", "composition"}),
+        ("components", set()),
+        ("connections", {"components"}),
+        ("composition", {"components", "connections"}),
+    ],
+)
+def test_dependency_aware_locks_reopen_downstream_review_layers(
+    changed_layer,
+    expected_locked_layers,
+):
+    reviewed_graph = _domain_graph()
+    candidate = deepcopy(reviewed_graph)
+    if changed_layer == "components":
+        candidate["nodes"][0]["description"] = "Changed component responsibility."
+    elif changed_layer == "connections":
+        candidate["edges"][0]["description"] = "Changed edge contract."
+    elif changed_layer == "composition":
+        candidate["assumptions"] = [
+            *candidate.get("assumptions", []),
+            "Changed retained assumption.",
+        ]
+
+    locked_layers = _locked_review_layers(
+        {
+            "reviewed_graph_data": reviewed_graph,
+            "graph_review": {"repair_contract": _repair_contract()},
+        },
+        candidate,
+    )
+
+    assert locked_layers == expected_locked_layers
+
+
+@pytest.mark.asyncio
+async def test_unchanged_passed_layers_retain_their_prior_verdict(monkeypatch):
+    reviewed_graph = _domain_graph()
+    for node, node_id in zip(
+        reviewed_graph["nodes"],
+        ("objective", "quality", "optimizer", "approval", "executor", "outcome"),
+        strict=True,
+    ):
+        node["id"] = node_id
+    reviewed_graph["edges"] = [
+        {"source": source, "target": target, "label": "passes bounded work"}
+        for source, target in zip(
+            ("objective", "quality", "optimizer", "approval", "executor"),
+            ("quality", "optimizer", "approval", "executor", "outcome"),
+            strict=True,
+        )
+    ]
+    candidate = deepcopy(reviewed_graph)
+    candidate["assumptions"] = ["The composition changed after its prior review."]
     component_code = next(
         index
         for index, code in enumerate(_RUBRIC_CODES, start=1)
@@ -1692,7 +1801,7 @@ async def test_final_review_can_reopen_an_unchanged_layer_after_a_local_repair(
     )
 
     async def fake_stream_llm(**_kwargs):
-        payload = _passing_review_payload()
+        payload = _passing_review_payload(topology_proofs={})
         _set_model_layer(
             payload,
             "components",
@@ -1708,10 +1817,9 @@ async def test_final_review_can_reopen_an_unchanged_layer_after_a_local_repair(
     state = _critic_state(graph=candidate)
     state.update(
         {
-            "graph_revision_count": 1,
-            "repair_baseline_graph_data": baseline,
+            "reviewed_graph_data": reviewed_graph,
             "graph_review": {
-                "repair_contract": prior_contract,
+                "repair_contract": _repair_contract(),
                 "topology_proofs": [],
             },
         }
@@ -1719,12 +1827,74 @@ async def test_final_review_can_reopen_an_unchanged_layer_after_a_local_repair(
 
     review = (await graph_critic_node(state))["graph_review"]
 
-    assert review["repair_contract"]["repair_scope"] == "local"
-    assert review["repair_contract"]["layers"]["components"]["status"] == "fail"
-    assert review["repair_contract"]["layers"]["components"]["node_ids"] == [
-        candidate["nodes"][0]["id"]
+    assert review["approved"] is True
+    assert review["locked_layers"] == ["components", "connections"]
+    assert review["repair_contract"]["layers"]["components"]["status"] == "pass"
+
+
+@pytest.mark.asyncio
+async def test_unchanged_connections_retain_valid_production_topology_proofs(
+    monkeypatch,
+):
+    reviewed_graph = _domain_graph()
+    node_ids = ("objective", "quality", "optimizer", "approval", "executor", "outcome")
+    for node, node_id in zip(reviewed_graph["nodes"], node_ids, strict=True):
+        node["id"] = node_id
+    reviewed_graph["edges"] = [
+        {"source": source, "target": target, "label": "passes bounded work"}
+        for source, target in zip(node_ids[:-1], node_ids[1:], strict=True)
     ]
-    assert "locked_layers" not in review
+    candidate = deepcopy(reviewed_graph)
+    candidate["assumptions"] = ["The composition changed after its prior review."]
+    prior_proofs = _valid_protocol_topology_proofs(reviewed_graph["edges"][0])
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return _structured_response(_passing_review_payload(topology_proofs={}))
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+    state = _critic_state(graph=candidate, complexity="production")
+    state.update(
+        {
+            "reviewed_graph_data": reviewed_graph,
+            "graph_review": {
+                "repair_contract": _repair_contract(),
+                "topology_proofs": prior_proofs,
+            },
+        }
+    )
+
+    review = (await graph_critic_node(state))["graph_review"]
+
+    assert calls[0]["response_schema"] == _GRAPH_CRITIC_PROTOTYPE_RESPONSE_SCHEMA
+    assert review["approved"] is True
+    assert review["topology_proofs"] == prior_proofs
+
+
+@pytest.mark.asyncio
+async def test_reviewed_graph_data_matches_the_scorecard_candidate(monkeypatch):
+    graph = _domain_graph()
+    graph["nodes"][0]["technology"] = "Candidate-specific implementation detail"
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return _structured_response(_passing_review_payload(topology_proofs={}))
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+
+    result = await graph_critic_node(_critic_state(graph=graph))
+    packet = json.loads(calls[0]["messages"][0]["content"][0]["text"].split("\n", 1)[1])
+
+    assert packet["candidate"] == _semantic_graph_projection(graph)
+    assert result["reviewed_graph_data"] == graph
 
 
 def test_required_topology_proofs_reject_missing_or_invented_edges():
@@ -3331,8 +3501,7 @@ async def test_protocol_correction_logs_safe_coordinates(
             in terminal_logs[0]
         )
         assert (
-            result["graph_review"]["failure_code"]
-            == "semantic_review_protocol_invalid"
+            result["graph_review"]["failure_code"] == "semantic_review_protocol_invalid"
         )
         review_event = events[-1]
         assert review_event["validation_stage"] == "correction"
@@ -3517,9 +3686,7 @@ async def test_malformed_topology_proofs_get_one_bounded_correction(
         "sequence": [],
         "assumptions": [],
     }
-    valid = _passing_review_payload(
-        topology_proofs=_valid_model_topology_proofs()
-    )
+    valid = _passing_review_payload(topology_proofs=_valid_model_topology_proofs())
     malformed = deepcopy(valid)
     malformed_guarantee = sorted(_TOPOLOGY_PROOF_GUARANTEES)[0]
     malformed["topology_proofs"][malformed_guarantee] = ["pass", [], []]
@@ -3561,8 +3728,7 @@ async def test_malformed_topology_proofs_get_one_bounded_correction(
     else:
         assert result["graph_review"]["terminal"] is True
         assert (
-            result["graph_review"]["failure_code"]
-            == "semantic_review_protocol_invalid"
+            result["graph_review"]["failure_code"] == "semantic_review_protocol_invalid"
         )
     assert len(calls) == 2
     assert calls[0]["response_schema"] == _GRAPH_CRITIC_RESPONSE_SCHEMA
@@ -3784,7 +3950,9 @@ async def test_semantic_critic_outage_fails_closed(monkeypatch):
 
 
 def test_every_semantic_blocker_has_an_editable_owner():
-    assert "render` records the deterministic browser assessment" in _GRAPH_CRITIC_SYSTEM
+    assert (
+        "render` records the deterministic browser assessment" in _GRAPH_CRITIC_SYSTEM
+    )
     assert "subjective visual\npreference is advice" in _GRAPH_CRITIC_SYSTEM
     assert "Parallel edges between one component pair" in _GRAPH_CRITIC_SYSTEM
     assert "one primary sequence expose" in _GRAPH_CRITIC_SYSTEM

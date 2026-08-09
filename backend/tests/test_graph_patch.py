@@ -68,7 +68,9 @@ def test_patch_rejects_noop_updates_even_with_another_real_change(record_type):
             ]
         }
 
-    with pytest.raises(ValueError, match=f"{record_type} update produced no semantic change"):
+    with pytest.raises(
+        ValueError, match=f"{record_type} update produced no semantic change"
+    ):
         graph_worker._apply_applied_graph_patch(
             graph,
             patch,
@@ -1117,8 +1119,9 @@ def test_repair_contract_rejects_out_of_scope_node_mutation_before_normalization
     assert existing == before
 
 
-def test_patch_rejects_actual_additions_disconnected_from_selected_region():
+def test_disconnected_exact_record_patch_preserves_uncited_records():
     existing = _domain_graph(4)
+    before = copy.deepcopy(existing)
     selected_edge = {
         key: existing["edges"][0][key] for key in ("source", "target", "label")
     }
@@ -1141,6 +1144,12 @@ def test_patch_rejects_actual_additions_disconnected_from_selected_region():
         }
     )
     patch = {
+        "update_edges": [
+            {
+                "edge_id": "edge_1",
+                "set": {"description": "Carries the corrected intake handoff."},
+            }
+        ],
         "add_nodes": [
             {
                 "id": "repair_worker",
@@ -1164,14 +1173,23 @@ def test_patch_rejects_actual_additions_disconnected_from_selected_region():
         ],
     }
 
-    with pytest.raises(ValueError, match="disconnected topology regions"):
-        graph_worker._apply_applied_graph_patch(
-            existing,
-            patch,
-            safety_max_nodes=5,
-            resolved_complexity="prototype",
-            repair_contract=contract,
-        )
+    updated = graph_worker._apply_applied_graph_patch(
+        existing,
+        patch,
+        safety_max_nodes=5,
+        resolved_complexity="prototype",
+        repair_contract=contract,
+    )
+
+    assert existing == before
+    assert updated["nodes"][: len(before["nodes"])] == before["nodes"]
+    assert updated["edges"][0]["description"] == (
+        "Carries the corrected intake handoff."
+    )
+    assert updated["edges"][1 : len(before["edges"])] == before["edges"][1:]
+    assert updated["title"] == before["title"]
+    assert updated.get("groups") == before.get("groups")
+    assert updated["sequence"] == before["sequence"]
 
 
 def test_failed_connection_layer_requires_explicit_edge_addition_permission():
@@ -1333,6 +1351,97 @@ def test_group_only_repair_rederives_lane_without_unlocking_components():
     assert {
         field: after[field] for field in graph_worker._PATCH_NODE_MUTABLE_FIELDS
     } == {field: before[field] for field in graph_worker._PATCH_NODE_MUTABLE_FIELDS}
+
+
+def _two_group_fixture() -> dict:
+    return {
+        "groups": [
+            {"id": "group_1", "nodeIds": ["node_a"]},
+            {"id": "group_2", "nodeIds": ["node_b"]},
+        ]
+    }
+
+
+def test_group_move_requires_both_source_and_destination_permissions():
+    existing = _two_group_fixture()
+    replacement = copy.deepcopy(existing["groups"])
+    replacement[0]["nodeIds"].remove("node_a")
+    replacement[1]["nodeIds"].append("node_a")
+
+    with pytest.raises(
+        ValueError, match="moved a node through locked group: group_2"
+    ) as raised:
+        graph_worker._validate_group_replacement_scope(
+            existing,
+            replacement,
+            {"group_1"},
+        )
+
+    assert graph_worker._patch_validation_coordinates(raised.value) == (
+        "groups.group_2",
+        "locked_record_changed",
+    )
+    with pytest.raises(ValueError, match="moved a node through locked group: group_1"):
+        graph_worker._validate_group_replacement_scope(
+            existing,
+            replacement,
+            {"group_2"},
+        )
+
+    graph_worker._validate_group_replacement_scope(
+        existing,
+        replacement,
+        {"group_1", "group_2"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_contract_corrected_patch_prompt_cannot_repeat_the_invalid_prompt(
+    monkeypatch,
+):
+    existing = _domain_graph(4)
+    contract = _local_repair_contract(
+        failed_layers={"components": {"node_ids": ["fulfilment_stage_0"]}}
+    )
+    prompts = []
+
+    async def invalid_patch(**kwargs):
+        prompts.append(kwargs["messages"])
+        return "{}"
+
+    monkeypatch.setattr(graph_worker, "stream_llm", invalid_patch)
+    base_state = {
+        "send": None,
+        "user_message": "Repair the intake responsibility",
+        "graph_revision_count": 1,
+        "graph_review": {
+            "approved": False,
+            "repair_contract": contract,
+            "topology_proofs": [],
+        },
+        "complexity": "prototype",
+        "user_id": "user-1",
+        "session_id": "thread-1",
+    }
+    for correction in (
+        None,
+        {"path": "groups.group_2", "rule": "locked_record_changed"},
+    ):
+        state = copy.deepcopy(base_state)
+        if correction is not None:
+            state["graph_review"]["contract_correction"] = correction
+        with pytest.raises(graph_worker.GraphPatchRejected):
+            await graph_worker._generate_applied_architecture_patch(
+                state,
+                "Repair the intake responsibility",
+                SimpleNamespace(resolved="prototype"),
+                existing,
+            )
+
+    assert prompts[0] != prompts[1]
+    corrected_prompt = prompts[1][0]["content"]
+    assert "groups.group_2" in corrected_prompt
+    assert "locked_record_changed" in corrected_prompt
 
 
 @pytest.mark.parametrize(
@@ -2511,7 +2620,11 @@ async def test_ambiguous_graph_edit_with_followup_markup_rebuilds_from_topic(
     async def send(_event):
         return None
 
-    monkeypatch.setattr(graph_worker, "_generate_applied_architecture", fake_generate_applied_architecture)
+    monkeypatch.setattr(
+        graph_worker,
+        "_generate_applied_architecture",
+        fake_generate_applied_architecture,
+    )
 
     result = await graph_worker.graph_worker_node(
         {
@@ -2523,7 +2636,10 @@ async def test_ambiguous_graph_edit_with_followup_markup_rebuilds_from_topic(
             "user_message": "Expand the monitoring component while preserving the original graph topic and existing components.",
             "history": [
                 {"role": "user", "content": "Design a production model-serving stack."},
-                {"role": "assistant", "content": "Initial design with gateway and router."},
+                {
+                    "role": "assistant",
+                    "content": "Initial design with gateway and router.",
+                },
             ],
             "graph_data": existing,
             "approved_graph_data": copy.deepcopy(existing),
@@ -2632,7 +2748,9 @@ async def test_reusing_approved_graph_emits_worker_status():
 
 
 @pytest.mark.asyncio
-async def test_create_graph_falls_back_when_architecture_context_is_unavailable(monkeypatch):
+async def test_create_graph_falls_back_when_architecture_context_is_unavailable(
+    monkeypatch,
+):
     events = []
 
     async def send(event):
@@ -3166,48 +3284,74 @@ async def test_invalid_patch_preserves_approved_graph_without_duplicate_model_ca
 
 
 @pytest.mark.asyncio
-async def test_nonlocal_repair_contract_never_calls_the_patch_model(monkeypatch):
+async def test_multi_region_exact_record_repair_preserves_uncited_records(monkeypatch):
     existing = _domain_graph(15, production=True)
+    before = copy.deepcopy(existing)
     edge_selectors = [
         {
             "source": edge["source"],
             "target": edge["target"],
             "label": edge["label"],
         }
-        for edge in existing["edges"][:8]
+        for edge in (existing["edges"][0], existing["edges"][8])
     ]
     calls = []
 
-    async def fail_if_called(**kwargs):
+    async def patch_disconnected_edges(**kwargs):
         calls.append(kwargs)
-        raise AssertionError("patch model must not run")
-
-    monkeypatch.setattr(graph_worker, "stream_llm", fail_if_called)
-    with pytest.raises(graph_worker.GraphPatchRejected) as raised:
-        await graph_worker._generate_applied_architecture_patch(
+        return json.dumps(
             {
-                "send": None,
-                "user_message": "Repair the broad runtime chain",
-                "graph_revision_count": 1,
-                "graph_review": {
-                    "approved": False,
-                    "repair_contract": _local_repair_contract(
-                        failed_layers={
-                            "connections": {"edge_selectors": edge_selectors}
-                        }
-                    ),
-                },
-                "complexity": "prototype",
-                "user_id": "user-1",
-                "session_id": "thread-1",
-            },
-            "Repair the broad runtime chain",
-            SimpleNamespace(resolved="prototype"),
-            existing,
+                "update_edges": [
+                    {
+                        "edge_id": "edge_1",
+                        "set": {
+                            "description": "Carries the corrected intake contract."
+                        },
+                    },
+                    {
+                        "edge_id": "edge_9",
+                        "set": {
+                            "description": "Carries the corrected outcome contract."
+                        },
+                    },
+                ]
+            }
         )
 
-    assert raised.value.code == "graph_patch_contract_invalid"
-    assert calls == []
+    monkeypatch.setattr(graph_worker, "stream_llm", patch_disconnected_edges)
+    updated = await graph_worker._generate_applied_architecture_patch(
+        {
+            "send": None,
+            "user_message": "Repair the broad runtime chain",
+            "graph_revision_count": 1,
+            "graph_review": {
+                "approved": False,
+                "repair_contract": _local_repair_contract(
+                    failed_layers={"connections": {"edge_selectors": edge_selectors}}
+                ),
+            },
+            "complexity": "prototype",
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        },
+        "Repair the broad runtime chain",
+        SimpleNamespace(resolved="prototype"),
+        existing,
+    )
+
+    assert len(calls) == 1
+    assert existing == before
+    assert (
+        updated["edges"][0]["description"] == "Carries the corrected intake contract."
+    )
+    assert (
+        updated["edges"][8]["description"] == "Carries the corrected outcome contract."
+    )
+    assert updated["edges"][1:8] == before["edges"][1:8]
+    assert updated["edges"][9:] == before["edges"][9:]
+    assert updated["nodes"] == before["nodes"]
+    assert updated["groups"] == before["groups"]
+    assert updated["sequence"] == before["sequence"]
 
 
 @pytest.mark.asyncio

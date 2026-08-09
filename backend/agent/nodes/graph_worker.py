@@ -17,7 +17,6 @@ from agent.deadlines import (
 from agent.graph_repair_contract import (
     REPAIR_LAYER_PATCH_FIELDS,
     validate_local_repair_admission,
-    validate_repair_patch_region,
     validate_repair_contract,
 )
 from agent.state import AgentState, GraphData
@@ -40,7 +39,7 @@ from graph.runtime import select_canonical_graph
 
 logger = logging.getLogger(__name__)
 
-_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v30"
+_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v31"
 _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v15"
 _APPLIED_GRAPH_TOPOLOGY_EFFORT = "low"
 _APPLIED_GRAPH_PATCH_EFFORT = "high"
@@ -117,22 +116,35 @@ _USER_EDIT_ALL_CONNECTIONS = re.compile(r"\ball\b.{0,30}\b(?:connections?|edges?
 
 
 class GraphPatchRejected(ValueError):
-    def __init__(self, code: str, message: str):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        path: str | None = None,
+        rule: str | None = None,
+    ):
         super().__init__(message)
         self.code = code
+        self.path = path
+        self.rule = rule
 
 
 def _repair_review(review: dict[str, Any]) -> dict[str, Any]:
     contract = review.get("repair_contract")
     if isinstance(contract, dict):
         copied_contract = copy.deepcopy(contract)
-        return {
+        repaired: dict[str, Any] = {
             "repair_contract": copied_contract,
             "repair_requirements": repair_requirements(
                 copied_contract,
                 review.get("topology_proofs") or [],
             ),
         }
+        correction = review.get("contract_correction")
+        if isinstance(correction, dict):
+            repaired["contract_correction"] = copy.deepcopy(correction)
+        return repaired
     missing = [
         str(item).strip() for item in (review.get("missing") or []) if str(item).strip()
     ]
@@ -883,6 +895,33 @@ def _graph_patch_failure_code(exc: Exception) -> str:
     return "graph_patch_invalid_preserved_existing_graph"
 
 
+def _patch_validation_coordinates(exc: Exception) -> tuple[str | None, str | None]:
+    message = str(exc)
+    locked_record = re.search(
+        r"(?:graph patch|normalization) (?:changed|removed) locked "
+        r"(?P<kind>group|node|edge|sequence|assumptions)(?: record)?: (?P<id>[A-Za-z0-9_]+)",
+        message,
+    )
+    if locked_record:
+        collection = {
+            "group": "groups",
+            "node": "nodes",
+            "edge": "edges",
+            "sequence": "sequence",
+            "assumptions": "assumptions",
+        }[locked_record.group("kind")]
+        return f"{collection}.{locked_record.group('id')}", "locked_record_changed"
+    locked_group_move = re.search(
+        r"graph patch moved a node through locked group: (?P<id>[A-Za-z0-9_]+)",
+        message,
+    )
+    if locked_group_move:
+        return f"groups.{locked_group_move.group('id')}", "locked_record_changed"
+    if "produced no semantic change" in message.lower():
+        return "patch", "no_effect"
+    return None, None
+
+
 def _remaining_provider_time(
     state: AgentState,
     configured_timeout_s: float,
@@ -947,6 +986,11 @@ operation. Enforce behavioral guarantees with directed components and edges rath
 Preserve the primary operational spine. For clarity, density, or duplicate-record findings, prefer a
 permitted update, removal, or consolidation. Add a record only when the finding identifies a missing
 responsibility or contract.
+
+One record-scoped contract may authorize independent repairs in disconnected topology regions. Apply
+all cited blockers in one patch. Connectivity never grants authority for an uncited record. Moving a
+node between existing groups changes both group records, so both the source and destination group IDs
+must be editable. Omit the move when either group is locked.
 
 Source and target must be distinct. A node removal must also remove or redirect every incident edge.
 Omit keys that do not change. Groups, sequence, assumptions, and title are complete replacements when
@@ -1368,9 +1412,15 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
                     )
                     failure_code = _graph_design_failure_code(rebuild_exc)
 
+            current_graph = state.get("graph_data")
+            is_repair_candidate = (
+                int(state.get("graph_revision_count", 0)) > 0
+                and isinstance(current_graph, dict)
+                and current_graph.get("design_origin") == "applied"
+            )
             preserved_graph = (
-                copy.deepcopy(state.get("graph_data"))
-                if _has_approved_applied_graph(state)
+                copy.deepcopy(current_graph)
+                if _has_approved_applied_graph(state) or is_repair_candidate
                 else None
             )
             if (
@@ -1417,6 +1467,18 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
                 **state,
                 "graph_data": preserved_graph,
                 "graph_failure_code": failure_code,
+                **(
+                    {
+                        "graph_patch_validation_error": {
+                            "path": exc.path,
+                            "rule": exc.rule,
+                        }
+                    }
+                    if isinstance(exc, GraphPatchRejected)
+                    and exc.path is not None
+                    and exc.rule is not None
+                    else {}
+                ),
                 "graph_operation": {
                     "kind": operation_kind,
                     "status": "failed",
@@ -1722,9 +1784,12 @@ async def _generate_applied_architecture_patch(
             )
         if isinstance(exc, GraphPatchRejected):
             raise
+        path, rule = _patch_validation_coordinates(exc)
         raise GraphPatchRejected(
             failure_code,
             "the graph patch did not produce a valid candidate",
+            path=path,
+            rule=rule,
         ) from exc
 
 
@@ -1770,6 +1835,30 @@ def _validate_group_replacement_scope(
         if group_id in replacement_by_id:
             raise ValueError(f"duplicate replacement group: {group_id}")
         replacement_by_id[group_id] = group
+
+    def memberships(groups: dict[str, dict[str, Any]]) -> dict[str, set[str]]:
+        result: dict[str, set[str]] = {}
+        for group_id, group in groups.items():
+            node_ids = group.get("nodeIds")
+            for node_id in node_ids if isinstance(node_ids, list) else []:
+                if isinstance(node_id, str) and node_id:
+                    result.setdefault(node_id, set()).add(group_id)
+        return result
+
+    existing_memberships = memberships(existing_by_id)
+    replacement_memberships = memberships(replacement_by_id)
+    existing_group_ids = set(existing_by_id)
+    for node_id in existing_memberships.keys() | replacement_memberships.keys():
+        changed_existing_groups = (
+            existing_memberships.get(node_id, set())
+            ^ replacement_memberships.get(node_id, set())
+        ) & existing_group_ids
+        locked_groups = changed_existing_groups - editable_group_ids
+        if locked_groups:
+            group_id = sorted(locked_groups)[0]
+            raise ValueError(
+                f"graph patch moved a node through locked group: {group_id}"
+            )
     for group_id, existing_group in existing_by_id.items():
         if group_id in editable_group_ids:
             continue
@@ -2406,9 +2495,6 @@ def _apply_applied_graph_patch(
     if not patch:
         raise ValueError("graph patch cannot be empty")
     _validate_incremental_patch_identity(existing_graph, patch)
-    if repair_contract is not None:
-        validate_repair_patch_region(repair_contract, patch=patch)
-
     candidate: dict[str, Any] = copy.deepcopy(existing_graph)
     nodes, edges = _approved_patch_records(candidate)
     final_node_ids = _apply_node_patch(nodes, patch)

@@ -55,7 +55,8 @@ NodeResult = Awaitable[AgentState]
 AgentNode = Callable[[AgentState], NodeResult]
 
 _GRAPH_STAGE_DEADLINE_KEY = "_graph_stage_deadline_s"
-_MAX_GRAPH_REVISIONS = 3
+_MAX_GRAPH_REPAIR_ROUNDS = 2
+_MAX_GRAPH_CONTRACT_CORRECTIONS = 1
 _RETRYABLE_GRAPH_PATCH_FAILURE_CODES = {
     "graph_patch_invalid_preserved_existing_graph",
     "graph_patch_no_effect",
@@ -242,10 +243,16 @@ def build_agent_workflow(
             }
 
     async def revise_graph(state: AgentState) -> AgentState:
-        revision_count = int(state.get("graph_revision_count", 0)) + 1
+        repair_round_count = int(
+            state.get(
+                "graph_repair_round_count",
+                state.get("graph_revision_count", 0),
+            )
+        )
+        next_repair_round = repair_round_count + 1
         revision_state = {
             **state,
-            "graph_revision_count": revision_count,
+            "graph_revision_count": next_repair_round,
         }
         try:
             timeout_s = patch_timeout_seconds(revision_state)
@@ -265,7 +272,8 @@ def build_agent_workflow(
             return {
                 **restored,
                 "graph_notice_sent": True,
-                "graph_revision_count": revision_count,
+                "graph_revision_count": repair_round_count,
+                "graph_repair_round_count": repair_round_count,
                 **({"graph_operation": operation} if operation else {}),
             }
         await state["send"](
@@ -275,7 +283,7 @@ def build_agent_workflow(
                 "status": "retry",
                 "title": "Refining the diagram",
                 "detail": (
-                    f"Repair attempt {revision_count} of {_MAX_GRAPH_REVISIONS}. "
+                    f"Repair round {next_repair_round} of {_MAX_GRAPH_REPAIR_ROUNDS}. "
                     "Any valid candidate will then be checked against the real layout."
                 ),
             }
@@ -308,12 +316,38 @@ def build_agent_workflow(
             return {
                 **restored,
                 "graph_notice_sent": True,
-                "graph_revision_count": revision_count,
+                "graph_revision_count": repair_round_count,
+                "graph_repair_round_count": repair_round_count,
                 **({"graph_operation": operation} if operation else {}),
             }
+        revised = _without_graph_stage_deadline(revised)
+        operation = revised.get("graph_operation")
+        failed = isinstance(operation, dict) and operation.get("status") == "failed"
+        if failed:
+            validation_error = revised.get("graph_patch_validation_error")
+            correction_count = int(state.get("graph_contract_correction_count", 0))
+            can_correct = (
+                operation.get("failure_code") in _RETRYABLE_GRAPH_PATCH_FAILURE_CODES
+                and isinstance(validation_error, dict)
+                and isinstance(validation_error.get("path"), str)
+                and isinstance(validation_error.get("rule"), str)
+                and correction_count < _MAX_GRAPH_CONTRACT_CORRECTIONS
+            )
+            return {
+                **revised,
+                "graph_revision_count": repair_round_count,
+                "graph_repair_round_count": repair_round_count,
+                "graph_contract_correction_count": correction_count
+                + (1 if can_correct else 0),
+                "graph_contract_correction_pending": can_correct,
+            }
+        corrected = dict(revised)
+        corrected.pop("graph_patch_validation_error", None)
         return {
-            **_without_graph_stage_deadline(revised),
-            "graph_revision_count": revision_count,
+            **corrected,
+            "graph_revision_count": next_repair_round,
+            "graph_repair_round_count": next_repair_round,
+            "graph_contract_correction_pending": False,
         }
 
     async def expand_context(state: AgentState) -> AgentState:
@@ -364,7 +398,11 @@ def build_agent_workflow(
             int(state.get("graph_revision_count", 0))
         )
         preserve_candidate = _should_preserve_unreviewed_candidate(state)
-        if not preserve_candidate and not state.get("graph_notice_sent") and _should_send_graph_notice(state):
+        if (
+            not preserve_candidate
+            and not state.get("graph_notice_sent")
+            and _should_send_graph_notice(state)
+        ):
             operation = state.get("graph_operation")
             failure_code = (
                 operation.get("failure_code") if isinstance(operation, dict) else None
@@ -397,7 +435,8 @@ def build_agent_workflow(
         operation = state.get("graph_operation")
         return {
             **restored,
-            "graph_notice_sent": preserve_candidate or state.get("graph_notice_sent", False),
+            "graph_notice_sent": preserve_candidate
+            or state.get("graph_notice_sent", False),
             "graph_review": review,
             "graph_operation": (
                 {
@@ -494,7 +533,7 @@ def build_agent_workflow(
         _route_after_revision,
         {
             "review": "review_graph",
-            "retry": "revise_graph",
+            "correct": "review_graph",
             "reject": "reject_graph",
         },
     )
@@ -523,14 +562,27 @@ def _has_applied_graph(graph_data: dict | None) -> bool:
 def _route_after_review(state: AgentState) -> Literal["accept", "revise", "reject"]:
     operation = state.get("graph_operation")
     graph = state.get("graph_data") or {}
-    revision_count = int(state.get("graph_revision_count", 0))
-    if isinstance(operation, dict) and operation.get("status") == "failed" and revision_count == 0:
+    revision_count = int(
+        state.get("graph_repair_round_count", state.get("graph_revision_count", 0))
+    )
+    if (
+        isinstance(operation, dict)
+        and operation.get("status") == "failed"
+        and revision_count == 0
+    ):
         return "reject"
-    if not state.get("graph_changed"):
-        if revision_count == 0 or graph.get("design_origin") != "applied":
-            return "accept"
     review = state.get("graph_review") or {}
     repair_contract = review.get("repair_contract")
+    if not state.get("graph_changed"):
+        corrected_contract = (
+            review.get("review_status") == "completed"
+            and isinstance(repair_contract, dict)
+            and repair_contract.get("repair_scope") == "local"
+        )
+        if not corrected_contract and (
+            revision_count == 0 or graph.get("design_origin") != "applied"
+        ):
+            return "accept"
     if isinstance(repair_contract, dict):
         repair_scope = repair_contract.get("repair_scope")
         if repair_scope == "none":
@@ -545,27 +597,23 @@ def _route_after_review(state: AgentState) -> Literal["accept", "revise", "rejec
             return "reject"
     if review.get("approved"):
         return "accept"
-    if (
-        not review.get("terminal")
-        and revision_count < _MAX_GRAPH_REVISIONS
-    ):
+    if not review.get("terminal") and revision_count < _MAX_GRAPH_REPAIR_ROUNDS:
         return "revise"
     return "reject"
 
 
-def _route_after_revision(state: AgentState) -> Literal["review", "retry", "reject"]:
-    revision_count = int(state.get("graph_revision_count", 0))
-    if not state.get("graph_data") or revision_count <= 0:
+def _route_after_revision(state: AgentState) -> Literal["review", "correct", "reject"]:
+    repair_round_count = int(
+        state.get("graph_repair_round_count", state.get("graph_revision_count", 0))
+    )
+    if not state.get("graph_data"):
         return "reject"
     operation = state.get("graph_operation")
     if isinstance(operation, dict) and operation.get("status") == "failed":
-        retryable = (
-            operation.get("failure_code") in _RETRYABLE_GRAPH_PATCH_FAILURE_CODES
-        )
-        if retryable and revision_count < _MAX_GRAPH_REVISIONS:
-            return "retry"
+        if state.get("graph_contract_correction_pending"):
+            return "correct"
         return "reject"
-    return "review" if revision_count <= _MAX_GRAPH_REVISIONS else "reject"
+    return "review" if 0 < repair_round_count <= _MAX_GRAPH_REPAIR_ROUNDS else "reject"
 
 
 async def run_agent(
@@ -594,6 +642,13 @@ async def run_agent(
         "graph_intent": graph_intent,
         **({"graph_operation": graph_operation} if graph_operation else {}),
         "graph_revision_count": state.get("graph_revision_count", 0),
+        "graph_repair_round_count": state.get(
+            "graph_repair_round_count", state.get("graph_revision_count", 0)
+        ),
+        "graph_contract_correction_count": state.get(
+            "graph_contract_correction_count", 0
+        ),
+        "graph_contract_correction_pending": False,
         "approved_graph_data": copy.deepcopy(
             state.get("approved_graph_data", state.get("graph_data"))
         ),

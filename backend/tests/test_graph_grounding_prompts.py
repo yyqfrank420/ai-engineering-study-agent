@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 
-def test_applied_graph_prompts_define_generic_local_repair_boundaries():
+def test_applied_graph_prompts_define_record_scoped_repair_boundaries():
     from agent.nodes.graph_worker import (
         _APPLIED_GRAPH_PATCH_PROMPT_VERSION,
         _APPLIED_GRAPH_PATCH_SYSTEM,
@@ -12,7 +12,7 @@ def test_applied_graph_prompts_define_generic_local_repair_boundaries():
         _APPLIED_GRAPH_TOPOLOGY_SYSTEM,
     )
 
-    assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v30"
+    assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v31"
     assert _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION == "applied_topology_v15"
     assert (
         "Choose graph size from the material design" in _APPLIED_GRAPH_TOPOLOGY_SYSTEM
@@ -33,6 +33,8 @@ def test_applied_graph_prompts_define_generic_local_repair_boundaries():
     )
     assert "Every update must" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "repair-only edge_id values" in _APPLIED_GRAPH_PATCH_SYSTEM
+    assert "disconnected topology regions" in _APPLIED_GRAPH_PATCH_SYSTEM
+    assert "source and destination group IDs" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "cache lookup separate from" not in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "approval-only route" not in _APPLIED_GRAPH_PATCH_SYSTEM
 

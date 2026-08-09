@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import re
@@ -50,7 +51,7 @@ class CriticProtocolError(ValueError):
         self.rule = rule if rule in _PROTOCOL_ERROR_RULES else None
 
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v46"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v47"
 # Sonnet 5 high effort can spend the full output allowance on adaptive thinking
 # before emitting the required scorecard. Medium keeps the review inside one call.
 _GRAPH_CRITIC_EFFORT = "medium"
@@ -66,6 +67,7 @@ _TOPOLOGY_PROOF_GUARANTEES = {
     "audit_and_provenance",
     "learning_and_release",
 }
+_PRODUCTION_ONLY_RUBRIC_CODES = frozenset(RUBRIC_CODES[16:])
 _GRAPH_CRITIC_COMPACT_PROTOCOL = """
 
 Response-size contract:
@@ -137,12 +139,7 @@ _MODEL_LAYER_OUTPUT_EXAMPLE = ",\n".join(
     + json.dumps(layer, ensure_ascii=False)
     + ": "
     + json.dumps(
-        [
-            0
-            if field.endswith("addition_count")
-            else []
-            for field in fields
-        ],
+        [0 if field.endswith("addition_count") else [] for field in fields],
         ensure_ascii=False,
     )
     for layer, fields in _MODEL_LAYER_FIELDS.items()
@@ -150,6 +147,14 @@ _MODEL_LAYER_OUTPUT_EXAMPLE = ",\n".join(
 _MODEL_LAYER_FIELD_LEGEND = "\n".join(
     f"- {layer}: {', '.join(fields)}." for layer, fields in _MODEL_LAYER_FIELDS.items()
 )
+
+
+def _passing_model_layer_row(layer: str) -> list[Any]:
+    return [
+        0 if field.endswith("addition_count") else []
+        for field in _MODEL_LAYER_FIELDS[layer]
+    ]
+
 
 # Anthropic compiles response schemas into a grammar. Repeating the full object schema for
 # every named layer exceeds that compiler's size limit. The named MECE boundary stays explicit;
@@ -219,9 +224,7 @@ def _critic_response_schema(*, require_topology_proofs: bool) -> dict[str, Any]:
     }
 
 
-_GRAPH_CRITIC_RESPONSE_SCHEMA = _critic_response_schema(
-    require_topology_proofs=True
-)
+_GRAPH_CRITIC_RESPONSE_SCHEMA = _critic_response_schema(require_topology_proofs=True)
 _GRAPH_CRITIC_PROTOTYPE_RESPONSE_SCHEMA = _critic_response_schema(
     require_topology_proofs=False
 )
@@ -281,6 +284,97 @@ def _semantic_graph_projection(graph: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _content_fingerprint(value: Any) -> str:
+    payload = json.dumps(
+        value, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _owned_layer_fingerprints(graph: dict[str, Any]) -> dict[str, str]:
+    nodes = _project_records(
+        graph.get("nodes"),
+        ("id", "label", "type", "technology", "description"),
+    )
+    edges = _project_records(
+        graph.get("edges"),
+        (
+            "source",
+            "target",
+            "label",
+            "technology",
+            "sync",
+            "flow",
+            "description",
+            "type",
+        ),
+    )
+    composition = {
+        "title": graph.get("title"),
+        "groups": deepcopy(graph.get("groups") or []),
+        "sequence": deepcopy(graph.get("sequence") or []),
+        "assumptions": deepcopy(graph.get("assumptions") or []),
+    }
+    return {
+        "components": _content_fingerprint(nodes),
+        "connections": _content_fingerprint(edges),
+        "composition": _content_fingerprint(composition),
+    }
+
+
+def _review_layer_fingerprints(graph: dict[str, Any]) -> dict[str, str]:
+    owned = _owned_layer_fingerprints(graph)
+    return {
+        "components": owned["components"],
+        "connections": _content_fingerprint(
+            [owned["components"], owned["connections"]]
+        ),
+        "composition": _content_fingerprint(
+            [
+                owned["components"],
+                owned["connections"],
+                owned["composition"],
+            ]
+        ),
+        "render": _content_fingerprint(
+            {key: value for key, value in graph.items() if key != "version"}
+        ),
+    }
+
+
+def _locked_review_layers(state: AgentState, graph: dict[str, Any]) -> set[str]:
+    previous_graph = state.get("reviewed_graph_data")
+    previous_review = state.get("graph_review") or {}
+    previous_contract = previous_review.get("repair_contract")
+    if not isinstance(previous_graph, dict) or not isinstance(previous_contract, dict):
+        return set()
+    previous_layers = previous_contract.get("layers")
+    if not isinstance(previous_layers, dict):
+        return set()
+
+    before = _owned_layer_fingerprints(previous_graph)
+    after = _owned_layer_fingerprints(graph)
+    reopened: set[str] = {
+        layer
+        for layer in ("components", "connections", "composition")
+        if isinstance(previous_layers.get(layer), dict)
+        and previous_layers[layer].get("status") == "fail"
+    }
+    if before["components"] != after["components"]:
+        reopened.update(("components", "connections", "composition"))
+    if before["connections"] != after["connections"]:
+        reopened.update(("connections", "composition"))
+    if before["composition"] != after["composition"]:
+        reopened.add("composition")
+    return {
+        layer
+        for layer in ("components", "connections", "composition")
+        if layer not in reopened
+        and isinstance(previous_layers.get(layer), dict)
+        and previous_layers[layer].get("status") == "pass"
+    }
+
+
 def _review_packet(
     state: AgentState,
     *,
@@ -289,6 +383,7 @@ def _review_packet(
     resolved_depth: str,
     render_result: dict[str, Any],
     deterministic_findings: list[dict[str, str]] | None = None,
+    locked_layers: set[str] | None = None,
 ) -> dict[str, Any]:
     plan = state.get("architect_plan") or {}
     requirements = plan.get("diagram_requirements") if isinstance(plan, dict) else []
@@ -303,6 +398,7 @@ def _review_packet(
         ),
         "review_context": review_context,
         "deterministic_pre_review_findings": list(deterministic_findings or []),
+        "locked_pass_layers": sorted(locked_layers or set()),
         "candidate": _semantic_graph_projection(graph),
         "render_report": (
             {field: report[field] for field in _RENDER_REPORT_FIELDS if field in report}
@@ -426,6 +522,7 @@ def _preflight_review_protocol(
     deterministic_findings: list[dict[str, str]],
     review_context: list[str],
     require_topology_proofs: bool = False,
+    resolved_depth: str = "production",
 ) -> None:
     """Report independent compact-row defects in one bounded correction."""
     failures: list[tuple[str, str]] = []
@@ -470,8 +567,14 @@ def _preflight_review_protocol(
         elif len(finding_codes) != len(set(finding_codes)):
             reject(f"{row_path}.finding_codes", "duplicate_reference")
         for code in finding_codes:
-            if _RUBRIC_CODE_OWNERS[_RUBRIC_CODES[code - 1]] != layer:
+            rubric_code = _RUBRIC_CODES[code - 1]
+            if _RUBRIC_CODE_OWNERS[rubric_code] != layer:
                 reject(f"{row_path}.finding_codes", "ownership_mismatch")
+            if (
+                resolved_depth != "production"
+                and rubric_code in _PRODUCTION_ONLY_RUBRIC_CODES
+            ):
+                reject(f"{row_path}.finding_codes", "invalid_reference")
 
         valid_indexes: dict[str, list[int]] = {}
         for field in fields:
@@ -493,9 +596,7 @@ def _preflight_review_protocol(
             else:
                 valid_indexes[field] = value
 
-        deterministic_indexes = valid_indexes.get(
-            "deterministic_finding_indexes", []
-        )
+        deterministic_indexes = valid_indexes.get("deterministic_finding_indexes", [])
         classified_deterministic_indexes.extend(deterministic_indexes)
         for index in deterministic_indexes:
             finding_id = deterministic_findings[index]["id"]
@@ -514,8 +615,7 @@ def _preflight_review_protocol(
         if "composition_fields" in assessment:
             value = assessment["composition_fields"]
             if not isinstance(value, list) or not all(
-                isinstance(item, str) and item in _COMPOSITION_FIELDS
-                for item in value
+                isinstance(item, str) and item in _COMPOSITION_FIELDS for item in value
             ):
                 reject(f"{row_path}.composition_fields", "invalid_reference")
             elif len(value) != len(set(value)):
@@ -597,8 +697,10 @@ def _preflight_review_protocol(
             ):
                 reject(path, "unexpected_context")
 
-    if deterministic_findings and not classified_deterministic_indexes:
-        reject("deterministic_findings", "missing_active_region")
+    if sorted(classified_deterministic_indexes) != list(
+        range(len(deterministic_findings))
+    ):
+        reject("deterministic_findings", "incomplete_classification")
     if failures:
         summary = "; ".join(f"{path}:{rule}" for path, rule in failures)
         path, rule = failures[0]
@@ -714,6 +816,7 @@ def _unique_model_rubric_codes(
     *,
     path: str,
     layer: str,
+    resolved_depth: str = "production",
 ) -> list[str]:
     if not isinstance(value, list) or not all(
         isinstance(code, int)
@@ -729,6 +832,8 @@ def _unique_model_rubric_codes(
         owner = _RUBRIC_CODE_OWNERS[code]
         if owner != layer:
             raise ValueError(f"{code} belongs to the {owner} layer, not {layer}")
+        if resolved_depth != "production" and code in _PRODUCTION_ONLY_RUBRIC_CODES:
+            raise ValueError(f"{code} is not applicable at {resolved_depth} depth")
     return codes
 
 
@@ -798,6 +903,7 @@ def _canonicalise_review_protocol(
     deterministic_findings: list[dict[str, str]],
     review_context: list[str],
     require_topology_proofs: bool = True,
+    resolved_depth: str = "production",
 ) -> dict[str, Any]:
     candidate = deepcopy(payload)
     deterministic_owners = _deterministic_finding_owners(deterministic_findings)
@@ -826,6 +932,7 @@ def _canonicalise_review_protocol(
             assessment.get("finding_codes"),
             path=f"layers.{layer}.finding_codes",
             layer=layer,
+            resolved_depth=resolved_depth,
         )
         deterministic_indexes = _unique_model_indexes(
             assessment.get("deterministic_finding_indexes"),
@@ -981,10 +1088,10 @@ def _canonicalise_review_protocol(
                 if count > 0
             }
         canonical_layers[layer] = canonical
-    if deterministic_findings and not classified_deterministic_indexes:
-        raise ValueError(
-            "the active repair region must classify at least one deterministic finding"
-        )
+    if sorted(classified_deterministic_indexes) != list(
+        range(len(deterministic_findings))
+    ):
+        raise ValueError("every deterministic finding must be classified exactly once")
 
     scope = _repair_scope_for_layers(canonical_layers)
 
@@ -1262,9 +1369,9 @@ bypass. Do not infer a missing control from a node name or an assumption.
 Never put a missing directed edge, state, branch, gate, or boundary in advice: that is a blocking
 failure under this contract. Advice is only for genuinely optional hardening of an already complete
 topology.
-Review all blocking defects with full context, then return the highest-priority local repair
-region for this pass. The designer receives one bounded local repair contract.
-Do not bundle unrelated regions into one repair request.
+Review all blocking defects with full context and return every blocking defect in this scorecard.
+The resulting repair contract is record-scoped and may authorize exact records across disconnected
+topology regions. Do not defer a known blocker to a later review.
 
 Use `finding_codes` only for a clear omission or defect that makes the diagram unsafe, misleading,
 unusable, or fails an explicit part of the user's request at the selected depth. The owner in the
@@ -1284,13 +1391,14 @@ For an existing record defect, cite only the zero-based record indexes that may 
 `node_indexes` only in components, `edge_indexes` only in connections, and `group_indexes`,
 `sequence_indexes`, `assumption_indexes`, plus `composition_fields` only in composition. A missing
 node or edge can fail its layer with an empty selector array because repair would add a record.
+Moving a node between groups changes two existing records. Cite both the source and destination
+group indexes. A destination-only group selector is an invalid permission contract.
 Use `context_indexes` for exact items in the packet's `review_context` and
 `context_node_indexes` for existing nodes that anchor a missing record. These fields provide repair
 context and never grant permission to mutate a record. Context supplements a finding code; it does
 not replace one.
-Each supplied deterministic finding names its authoritative `owner_layer`. Classify at least one
-finding in the active local repair region under its owner layer. Leave findings outside that region
-unclassified; the next review will see them again against the repaired graph.
+Each supplied deterministic finding names its authoritative `owner_layer`. Classify every supplied
+finding exactly once under that owner layer.
 A layer with no finding codes or deterministic finding indexes exposes no selectors or context.
 All four artifact layers are mandatory for every reviewed candidate.
 Set each component or connection `addition_count` to the exact number of missing records required
@@ -1305,7 +1413,7 @@ editable existing group or a declared group addition. Every composition addition
 matching field in `composition_fields`. These are one repair plan across MECE owners, so fail every
 owner whose records must change.
 
-Copy deterministic pre-review findings that belong to the active local repair region.
+Copy every deterministic pre-review finding under its owning layer.
 </review_contract>
 
 <output_contract>
@@ -1333,22 +1441,46 @@ _GRAPH_CRITIC_SYSTEM = (
 _GRAPH_CRITIC_SYSTEM += """
 
 <repair_scope_contract>
-Report the highest-priority local repair region per pass. Keep every other blocking defect for the next
-pass. Use the same row schema and ownership rules, but only authorize mutation inside this single
-repair region.
+Report every blocking repair in one exhaustive scorecard. Exact record selectors remain the only
+mutation authority and may span disconnected regions. Uncited records remain locked.
 </repair_scope_contract>
 """
 
-def _critic_system(*, require_topology_proofs: bool) -> str:
+
+def _critic_system(
+    *,
+    require_topology_proofs: bool,
+    resolved_depth: str = "production",
+    locked_layers: set[str] | None = None,
+) -> str:
+    depth_contract = (
+        f"\nThe selected UI depth is {resolved_depth} and is authoritative. At prototype depth, checklist items and "
+        "finding codes 17 through 27 are out of scope, even when the request contains the word "
+        "production. At production depth, all applicable criteria and topology proofs remain "
+        "mandatory.\n"
+    )
+    locked_contract = ""
+    if locked_layers:
+        locked_contract = (
+            "\nThe server has retained pass verdicts for these unchanged layers: "
+            + ", ".join(sorted(locked_layers))
+            + ". Return their passing empty rows. Do not invent findings or selectors for them.\n"
+        )
     if not require_topology_proofs:
         topology_output = '  "topology_proofs": {}'
         topology_review = (
-            "Prototype depth does not require formal topology proof rows. Return the empty "
+            "The unchanged connections layer retains its prior production topology proofs. Return "
+            "the empty topology_proofs object required by this correction schema."
+            if resolved_depth == "production"
+            else "Prototype depth does not require formal topology proof rows. Return the empty "
             "topology_proofs object required by the schema."
         )
         return (
-            _GRAPH_CRITIC_SYSTEM.replace("<topology_output_contract>", topology_output)
-            .replace("<topology_review_contract>", topology_review)
+            _GRAPH_CRITIC_SYSTEM.replace(
+                "<topology_output_contract>", topology_output
+            ).replace("<topology_review_contract>", topology_review)
+            + depth_contract
+            + locked_contract
         )
 
     topology_output = """  "topology_proofs": {
@@ -1368,8 +1500,11 @@ code 17 in connections. Finish all five proofs and trace every normal and altern
 terminal and audit outcomes. Cite the smallest witness subgraph and directed endpoint claims for
 each guarantee. Preserve every required proof."""
     return (
-        _GRAPH_CRITIC_SYSTEM.replace("<topology_output_contract>", topology_output)
-        .replace("<topology_review_contract>", topology_review)
+        _GRAPH_CRITIC_SYSTEM.replace(
+            "<topology_output_contract>", topology_output
+        ).replace("<topology_review_contract>", topology_review)
+        + depth_contract
+        + locked_contract
     )
 
 
@@ -1381,18 +1516,26 @@ async def _request_critic_scorecard(
     resolved_complexity: str,
     revision_count: int,
     correction: tuple[str, str] | None = None,
+    contract_correction: dict[str, str] | None = None,
+    locked_layers: set[str] | None = None,
+    require_topology_proofs: bool | None = None,
 ) -> StructuredLLMResponse:
     message = _critic_message(review_packet, render_result)
     operation = "graph_critic"
     effort = _GRAPH_CRITIC_EFFORT
     max_output_tokens = settings.graph_qa_max_completion_tokens
-    require_topology_proofs = resolved_complexity == "production"
+    if require_topology_proofs is None:
+        require_topology_proofs = resolved_complexity == "production"
     response_schema = (
         _GRAPH_CRITIC_RESPONSE_SCHEMA
         if require_topology_proofs
         else _GRAPH_CRITIC_PROTOTYPE_RESPONSE_SCHEMA
     )
-    system = _critic_system(require_topology_proofs=require_topology_proofs)
+    system = _critic_system(
+        require_topology_proofs=require_topology_proofs,
+        resolved_depth=resolved_complexity,
+        locked_layers=locked_layers,
+    )
     if correction is not None:
         operation = "graph_critic_protocol_correction"
         effort = _GRAPH_CRITIC_CORRECTION_EFFORT
@@ -1410,14 +1553,32 @@ async def _request_critic_scorecard(
             {
                 "type": "text",
                 "text": (
-                    "Your prior scorecard failed protocol validation. Correct it and run the clean "
-                    "focus pass before the next local repair. Keep valid judgments inside the "
-                    "selected repair region. Remove unrelated findings and selectors so the patch "
-                    "covers one admissible region; the next review will see them again. Add every "
-                    "blocking defect that was missed inside the selected region, and obey the exact "
+                    "Your prior scorecard failed protocol validation. Correct it and return the "
+                    "complete scorecard before the next repair. Preserve valid judgments, include "
+                    "every blocking defect, and obey the exact "
                     f"{correction_contracts}.\n"
                     f"Validation error: {validation_error[:1000]}\n"
                     f"Prior scorecard: {invalid_response[:12000]}"
+                ),
+            }
+        )
+    if contract_correction is not None:
+        operation = "graph_critic_contract_correction"
+        prior_contract = (state.get("graph_review") or {}).get("repair_contract")
+        message["content"].append(
+            {
+                "type": "text",
+                "text": (
+                    "The patch validator rejected the prior permission contract. Return a fresh "
+                    "exhaustive scorecard with corrected exact-record permissions before Kimi is "
+                    "called again. The validation coordinate is server-owned and safe to use. "
+                    "Authorize both source and destination groups for every group membership move.\n"
+                    f"Validation path: {contract_correction['path']}\n"
+                    f"Validation rule: {contract_correction['rule']}\n"
+                    "Prior repair contract: "
+                    + json.dumps(
+                        prior_contract, ensure_ascii=False, separators=(",", ":")
+                    )[:12000]
                 ),
             }
         )
@@ -1440,6 +1601,7 @@ async def _request_critic_scorecard(
                 "client_request_id": state.get("client_request_id"),
                 "prompt_version": _GRAPH_CRITIC_PROMPT_VERSION,
                 "protocol_correction": correction is not None,
+                "contract_correction": contract_correction is not None,
             },
         ),
         timeout_seconds=critic_timeout_seconds(state),
@@ -1463,7 +1625,7 @@ def _enforce_local_repair_admission(
                 "terminal": True,
                 "failure_code": "graph_repair_nonlocal",
                 "revision_instruction": (
-                    "The requested corrections exceed one bounded architecture region. "
+                    "The requested corrections exceed the bounded record-scoped patch contract. "
                     "The diagram was withheld without modifying the reviewed candidate."
                 ),
             }
@@ -1479,15 +1641,22 @@ def _completed_critic_review(
     deterministic_findings: list[dict[str, str]],
     review_context: list[str],
     require_topology_proofs: bool,
+    resolved_depth: str = "production",
+    locked_layers: set[str] | None = None,
 ) -> dict[str, Any]:
     try:
         raw_payload = _parse_complete_response(response)
+        model_layers = raw_payload.get("layers")
+        if isinstance(model_layers, dict):
+            for layer in locked_layers or set():
+                model_layers[layer] = _passing_model_layer_row(layer)
         _preflight_review_protocol(
             raw_payload,
             graph=graph,
             deterministic_findings=deterministic_findings,
             review_context=review_context,
             require_topology_proofs=require_topology_proofs,
+            resolved_depth=resolved_depth,
         )
         payload = _canonicalise_review_protocol(
             raw_payload,
@@ -1495,6 +1664,7 @@ def _completed_critic_review(
             deterministic_findings=deterministic_findings,
             review_context=review_context,
             require_topology_proofs=require_topology_proofs,
+            resolved_depth=resolved_depth,
         )
         _validate_review_protocol(
             payload,
@@ -1507,9 +1677,6 @@ def _completed_critic_review(
     except ValueError as exc:
         raise _critic_protocol_error(exc) from exc
     review = _review_from_repair_contract(payload)
-    contract = review.get("repair_contract")
-    if isinstance(contract, dict) and contract.get("repair_scope") == "local":
-        _validate_local_repair_admission(contract, graph=graph)
     return review
 
 
@@ -1519,11 +1686,29 @@ async def graph_critic_node(state: AgentState) -> AgentState:
     if not graph or graph.get("design_origin") != "applied":
         return {**state, "graph_review": {"approved": True, "score": 1.0}}
     revision_count = int(state.get("graph_revision_count", 0))
-    if revision_count == 0 and not state.get("graph_changed"):
+    correction_pending = bool(state.get("graph_contract_correction_pending"))
+    if (
+        revision_count == 0
+        and not state.get("graph_changed")
+        and not correction_pending
+    ):
         return {**state, "graph_review": {"approved": True, "score": 1.0}}
 
     profile = resolve_complexity(state.get("complexity", "auto"), query)
     revision_count = int(state.get("graph_revision_count", 0))
+    locked_layers = _locked_review_layers(state, graph)
+    require_topology_proofs = (
+        profile.resolved == "production" and "connections" not in locked_layers
+    )
+    validation_error = state.get("graph_patch_validation_error")
+    contract_correction = (
+        validation_error
+        if correction_pending
+        and isinstance(validation_error, dict)
+        and set(validation_error) == {"path", "rule"}
+        and all(isinstance(value, str) for value in validation_error.values())
+        else None
+    )
     await state["send"](
         {
             "type": "worker_status",
@@ -1586,7 +1771,7 @@ async def graph_critic_node(state: AgentState) -> AgentState:
                             )[:260],
                         }
                     )
-                    return {**state, "graph_review": review}
+                    return _reviewed_state(state, graph=graph, review=review)
             else:
                 render_unavailable_reason = "missing"
     else:
@@ -1607,7 +1792,7 @@ async def graph_critic_node(state: AgentState) -> AgentState:
                 "detail": "The diagram will stay unpublished until browser rendering and visual QA complete.",
             }
         )
-        return {**state, "graph_review": review}
+        return _reviewed_state(state, graph=graph, review=review)
     raw = ""
     validation_stage = "initial"
     protocol_corrected = False
@@ -1621,6 +1806,7 @@ async def graph_critic_node(state: AgentState) -> AgentState:
             resolved_depth=profile.resolved,
             render_result=render_result,
             deterministic_findings=deterministic_findings,
+            locked_layers=locked_layers,
         )
         response = await _request_critic_scorecard(
             state,
@@ -1628,6 +1814,9 @@ async def graph_critic_node(state: AgentState) -> AgentState:
             render_result=render_result,
             resolved_complexity=profile.resolved,
             revision_count=revision_count,
+            contract_correction=contract_correction,
+            locked_layers=locked_layers,
+            require_topology_proofs=require_topology_proofs,
         )
         raw = response.text
         try:
@@ -1636,9 +1825,15 @@ async def graph_critic_node(state: AgentState) -> AgentState:
                 graph=graph,
                 deterministic_findings=deterministic_findings,
                 review_context=review_packet["review_context"],
-                require_topology_proofs=profile.resolved == "production",
+                require_topology_proofs=require_topology_proofs,
+                resolved_depth=profile.resolved,
+                locked_layers=locked_layers,
             )
-        except (CriticProtocolError, ValueError, json.JSONDecodeError) as protocol_error:
+        except (
+            CriticProtocolError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as protocol_error:
             if (
                 _semantic_review_failure_code(protocol_error, raw)
                 == "semantic_review_output_truncated"
@@ -1663,6 +1858,9 @@ async def graph_critic_node(state: AgentState) -> AgentState:
                 resolved_complexity=profile.resolved,
                 revision_count=revision_count,
                 correction=(raw, str(protocol_error)),
+                contract_correction=contract_correction,
+                locked_layers=locked_layers,
+                require_topology_proofs=require_topology_proofs,
             )
             raw = response.text
             review = _completed_critic_review(
@@ -1670,9 +1868,29 @@ async def graph_critic_node(state: AgentState) -> AgentState:
                 graph=graph,
                 deterministic_findings=deterministic_findings,
                 review_context=review_packet["review_context"],
-                require_topology_proofs=profile.resolved == "production",
+                require_topology_proofs=require_topology_proofs,
+                resolved_depth=profile.resolved,
+                locked_layers=locked_layers,
             )
             protocol_corrected = True
+        review = _merge_locked_layer_verdicts(
+            review,
+            previous_review=state.get("graph_review") or {},
+            locked_layers=locked_layers,
+        )
+        _validate_review_protocol(
+            {
+                "repair_contract": review["repair_contract"],
+                "strengths": review.get("strengths") or [],
+                "advice": review.get("advice") or [],
+                "topology_proofs": review.get("topology_proofs") or [],
+            },
+            require_topology_proofs=profile.resolved == "production",
+            graph=graph,
+            deterministic_findings=deterministic_findings,
+        )
+        if contract_correction is not None:
+            review["contract_correction"] = deepcopy(contract_correction)
         review = _enforce_local_repair_admission(review, graph)
     except Exception as exc:
         # Structural checks cannot prove semantic control boundaries. Fail closed
@@ -1692,6 +1910,7 @@ async def graph_critic_node(state: AgentState) -> AgentState:
             failure_code=failure_code,
             reason="The independent semantic architecture review did not complete.",
         )
+    review["layer_fingerprints"] = _review_layer_fingerprints(graph)
     review_unavailable = review.get("review_status") == "unavailable"
     progress_event = {
         "type": "workflow_progress",
@@ -1723,7 +1942,22 @@ async def graph_critic_node(state: AgentState) -> AgentState:
             }
         )
     await state["send"](progress_event)
-    return {**state, "graph_review": review}
+    reviewed_state = _reviewed_state(state, graph=graph, review=review)
+    operation = reviewed_state.get("graph_operation")
+    if (
+        contract_correction is not None
+        and review.get("review_status") == "completed"
+        and isinstance(operation, dict)
+    ):
+        reviewed_state = {
+            **reviewed_state,
+            "graph_operation": {
+                **operation,
+                "status": "candidate",
+                "failure_code": None,
+            },
+        }
+    return reviewed_state
 
 
 def _deterministic_review(
@@ -2163,6 +2397,57 @@ def _review_from_repair_contract(
     if contract["repair_scope"] == "global":
         review["terminal"] = True
     return review
+
+
+def _merge_locked_layer_verdicts(
+    review: dict[str, Any],
+    *,
+    previous_review: dict[str, Any],
+    locked_layers: set[str],
+) -> dict[str, Any]:
+    if not locked_layers:
+        return review
+    contract = deepcopy(review["repair_contract"])
+    previous_contract = previous_review.get("repair_contract")
+    previous_layers = (
+        previous_contract.get("layers") if isinstance(previous_contract, dict) else None
+    )
+    if not isinstance(previous_layers, dict):
+        return review
+    for layer in locked_layers:
+        prior_layer = previous_layers.get(layer)
+        if isinstance(prior_layer, dict) and prior_layer.get("status") == "pass":
+            contract["layers"][layer] = deepcopy(prior_layer)
+    contract["repair_scope"] = _repair_scope_for_layers(contract["layers"])
+    topology_proofs = review.get("topology_proofs") or []
+    if "connections" in locked_layers:
+        topology_proofs = previous_review.get("topology_proofs") or topology_proofs
+    merged = _review_from_repair_contract(
+        {
+            "repair_contract": contract,
+            "strengths": review.get("strengths") or [],
+            "advice": review.get("advice") or [],
+            "topology_proofs": topology_proofs,
+        }
+    )
+    merged["locked_layers"] = sorted(locked_layers)
+    return merged
+
+
+def _reviewed_state(
+    state: AgentState,
+    *,
+    graph: dict[str, Any],
+    review: dict[str, Any],
+) -> AgentState:
+    cleaned = dict(state)
+    cleaned.pop("graph_patch_validation_error", None)
+    return {
+        **cleaned,
+        "graph_review": review,
+        "reviewed_graph_data": deepcopy(graph),
+        "graph_contract_correction_pending": False,
+    }  # type: ignore[return-value]
 
 
 def _terminal_review(
