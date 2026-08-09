@@ -1013,6 +1013,226 @@ _GENERIC_LABELS = {
 }
 
 
+def _dominant_term(text: str) -> str:
+    stopwords = {
+        "a",
+        "and",
+        "architecture",
+        "application",
+        "as",
+        "at",
+        "for",
+        "from",
+        "in",
+        "is",
+        "it",
+        "platform",
+        "service",
+        "system",
+        "workflow",
+    }
+    for term in re.findall(r"[a-z0-9]+", text.lower()):
+        if len(term) > 2 and term not in stopwords and not term.isdigit():
+            return term
+    return "system"
+
+
+def _fallback_applied_graph(state: AgentState, query: str, profile) -> GraphData:
+    spec = applied_graph_spec(profile.resolved)
+    query_text = " ".join((query or "").split()) or "system architecture"
+    candidate = {
+        "graph_type": "architecture",
+        "title": f"{_dominant_term(query_text).title()} architecture fallback",
+        "nodes": [
+            {
+                "id": "entrypoint",
+                "label": f"{_dominant_term(query_text).title()} entrypoint",
+                "type": "client",
+                "technology": "Public API",
+                "description": "Receives input and forwards bounded work.",
+            },
+            {
+                "id": "core",
+                "label": f"{_dominant_term(query_text).title()} core",
+                "type": "service",
+                "technology": "Application service",
+                "description": f"Performs bounded {query_text} operations.",
+            },
+        ],
+        "edges": [
+            {
+                "source": "entrypoint",
+                "target": "core",
+                "label": f"invokes {query_text}",
+                "technology": "HTTPS/JSON",
+                "sync": "async",
+                "flow": "runtime",
+                "description": f"Triggers {query_text} processing with bounded input.",
+            }
+        ],
+        "sequence": [
+            {
+                "step": 1,
+                "nodes": ["entrypoint", "core"],
+                "description": f"Routes {query_text} through a bounded flow.",
+            }
+        ],
+    }
+
+    try:
+        selected = select_canonical_graph(
+            query=query_text,
+            rag_chunks=state.get("rag_chunks", []),
+            artifacts=load_canonical_graph_cached(),
+        )
+        if selected is not None:
+            try:
+                return _normalise_applied_graph(
+                    selected,
+                    safety_max_nodes=spec.safety_max_nodes,
+                    resolved_complexity=profile.resolved,
+                )
+            except ValueError:
+                pass
+    except Exception as exc:
+        logger.warning("Fallback canonical lookup failed: %s", exc)
+
+    if profile.resolved == "production":
+        candidate["title"] = f"{_dominant_term(query_text).title()} production fallback"
+        candidate["nodes"] = [
+            {
+                "id": "ingest",
+                "label": "Request intake",
+                "type": "gateway",
+                "technology": "API gateway",
+                "description": "Accepts incoming requests and validates minimal input.",
+            },
+            {
+                "id": "orchestrator",
+                "label": f"{_dominant_term(query_text).title()} coordinator",
+                "type": "service",
+                "technology": "Workflow service",
+                "description": "Routes work, assigns bounded responsibility, and records progress.",
+            },
+            {
+                "id": "processor",
+                "label": f"{_dominant_term(query_text).title()} processor",
+                "type": "service",
+                "technology": "Application service",
+                "description": "Executes bounded transformations and computes state.",
+            },
+            {
+                "id": "state_store",
+                "label": "State store",
+                "type": "datastore",
+                "technology": "Primary database",
+                "description": "Persists state for recovery and replay.",
+            },
+            {
+                "id": "monitor",
+                "label": "Operational monitor",
+                "type": "control",
+                "technology": "Telemetry stream",
+                "description": "Observes outcomes and records bounded execution events.",
+            },
+        ]
+        candidate["edges"] = [
+            {
+                "source": "ingest",
+                "target": "orchestrator",
+                "label": "creates work",
+                "technology": "HTTPS/JSON",
+                "sync": "async",
+                "flow": "control",
+                "description": f"Moves validated {_dominant_term(query_text)} requests into orchestration.",
+            },
+            {
+                "source": "orchestrator",
+                "target": "processor",
+                "label": "calls processor",
+                "technology": "Service call",
+                "sync": "async",
+                "flow": "runtime",
+                "description": "Dispatches bounded jobs with ownership metadata.",
+            },
+            {
+                "source": "processor",
+                "target": "state_store",
+                "label": "persists result",
+                "technology": "Durable write",
+                "sync": "sync",
+                "flow": "runtime",
+                "description": "Stores computed outcome with trace identifiers.",
+            },
+            {
+                "source": "state_store",
+                "target": "monitor",
+                "label": "publishes event",
+                "technology": "Outbox event",
+                "sync": "async",
+                "flow": "feedback",
+                "description": "Streams durable outcomes for operational observability.",
+            },
+            {
+                "source": "monitor",
+                "target": "orchestrator",
+                "label": "triggers retry decision",
+                "technology": "Policy rules engine",
+                "sync": "async",
+                "flow": "control",
+                "type": "loop",
+                "description": "Feeds bounded feedback for route and retry decisions.",
+            },
+        ]
+        candidate["sequence"] = [
+            {
+                "step": 1,
+                "nodes": ["ingest", "orchestrator"],
+                "description": f"Collects validated {_dominant_term(query_text)} traffic.",
+            },
+            {
+                "step": 2,
+                "nodes": ["orchestrator"],
+                "description": "Assigns ownership and bounded processing policies.",
+            },
+            {
+                "step": 3,
+                "nodes": ["processor"],
+                "description": "Executes bounded transformations.",
+            },
+            {
+                "step": 4,
+                "nodes": ["state_store"],
+                "description": "Persists final state and metadata.",
+            },
+            {
+                "step": 5,
+                "nodes": ["monitor"],
+                "description": "Emits metrics and retry signals.",
+            },
+        ]
+        candidate["groups"] = [
+            {
+                "id": "ingest_and_flow",
+                "label": "Request and flow control",
+                "kind": "runtime",
+                "nodeIds": ["ingest", "orchestrator", "processor"],
+            },
+            {
+                "id": "state_and_signal",
+                "label": "State and feedback",
+                "kind": "runtime",
+                "nodeIds": ["state_store", "monitor"],
+            },
+        ]
+
+    return _normalise_applied_graph(
+        candidate,
+        safety_max_nodes=spec.safety_max_nodes,
+        resolved_complexity=profile.resolved,
+    )
+
+
 async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
     """Build an applied architecture or select a canonical concept subgraph."""
     _ = tools
@@ -1103,6 +1323,31 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
                 if _has_approved_applied_graph(state)
                 else None
             )
+            if (
+                failure_code == "graph_architecture_input_unavailable"
+                and operation_kind == "create"
+                and not _has_approved_applied_graph(state)
+            ):
+                fallback_graph = _fallback_applied_graph(state, query, profile)
+                await send(
+                    {
+                        "type": "workflow_progress",
+                        "phase": "integrate",
+                        "status": "complete",
+                        "title": "Fallback architecture assembled",
+                        "detail": "Using a bounded architecture fallback after initial design input was unavailable.",
+                    }
+                )
+                return {
+                    **state,
+                    "graph_data": _attach_graph_version(fallback_graph),
+                    "graph_failure_code": None,
+                    "graph_operation": {
+                        "kind": operation_kind,
+                        "status": "candidate",
+                        "failure_code": None,
+                    },
+                }
             await send(
                 {
                     "type": "workflow_progress",
