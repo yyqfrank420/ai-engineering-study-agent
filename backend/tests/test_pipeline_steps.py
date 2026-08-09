@@ -114,8 +114,13 @@ async def test_apply_graph_worker_treats_version_only_reuse_as_unchanged(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_apply_graph_worker_sends_notice_when_search_has_no_graph(monkeypatch):
-    state, events = _state(graph_data=None, route="search", graph_notice_sent=False)
+async def test_apply_graph_worker_sends_notice_for_applied_design_failures(monkeypatch):
+    state, events = _state(
+        graph_data=None,
+        route="search",
+        graph_notice_sent=False,
+        is_applied_design=True,
+    )
 
     async def fake_graph_worker_node(incoming_state, tools):
         return {**incoming_state, "graph_data": None}
@@ -132,12 +137,14 @@ async def test_apply_graph_worker_sends_notice_when_search_has_no_graph(monkeypa
     assert events[0]["type"] == "graph_notice"
 
 
+@pytest.mark.parametrize("graph_mode", ["on", "auto"])
 @pytest.mark.asyncio
-async def test_apply_graph_worker_uses_graph_fallback_when_on_and_search_returns_none(
+async def test_apply_graph_worker_uses_graph_fallback_when_graph_is_required(
     monkeypatch,
+    graph_mode,
 ):
     state, events = _state(
-        graph_mode="on",
+        graph_mode=graph_mode,
         graph_data=None,
         route="search",
         graph_notice_sent=False,

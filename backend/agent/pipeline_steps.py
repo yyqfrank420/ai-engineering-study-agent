@@ -26,10 +26,12 @@ def should_run_graph_worker(state: AgentState, existing_graph: dict | None) -> b
     return existing_graph is None
 
 
-def _required_graph_fallback(state: AgentState) -> dict | None:
-    if state.get("graph_mode") != "on" or state.get("route") != "search":
+def _required_graph_fallback(state: AgentState, existing_graph: dict | None) -> dict | None:
+    if existing_graph is not None:
         return None
-    if state.get("graph_data") is not None:
+    if state.get("graph_mode") not in {"on", "auto"} or state.get("route") != "search":
+        return None
+    if state.get("is_applied_design"):
         return None
 
     query = " ".join((state.get("design_query") or state.get("user_message", "")).split())
@@ -61,7 +63,7 @@ async def apply_graph_worker(state: AgentState, graph_tools: list) -> AgentState
     graph_state = await graph_worker_node(state, graph_tools)
     new_graph = graph_state.get("graph_data")
     if new_graph is None:
-        fallback_graph = _required_graph_fallback(state)
+        fallback_graph = _required_graph_fallback(graph_state, existing_graph)
         if fallback_graph is not None:
             return {
                 **graph_state,
