@@ -43,6 +43,7 @@ from agent.nodes.orchestrator_node import (
 )
 from agent.pipeline_steps import (
     apply_graph_worker,
+    _required_graph_fallback,
     maybe_expand_with_search_tool,
     run_parallel_research_phase,
     run_search_phase,
@@ -84,6 +85,17 @@ def _restore_approved_graph_state(state: AgentState) -> AgentState:
         "graph_data": copy.deepcopy(state.get("approved_graph_data")),
         "graph_changed": False,
     }
+
+
+def _reject_graph_fallback(state: AgentState) -> dict | None:
+    approved = copy.deepcopy(state.get("approved_graph_data"))
+    if approved is not None:
+        return approved
+
+    return _required_graph_fallback(
+        {**state, "is_applied_design": False},
+        existing_graph=None,
+    )
 
 
 def _failed_graph_operation(
@@ -363,6 +375,14 @@ def build_agent_workflow(
                 {
                     "type": "graph_notice",
                     "message": message,
+                }
+            )
+        graph_fallback = _reject_graph_fallback(state)
+        if graph_fallback is not None:
+            await state["send"](
+                {
+                    "type": "graph_data",
+                    "data": graph_fallback,
                 }
             )
         restored = _restore_approved_graph_state(state)

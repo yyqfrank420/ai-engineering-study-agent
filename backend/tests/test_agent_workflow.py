@@ -496,3 +496,98 @@ async def test_langgraph_can_verify_one_bounded_repair_then_publish(monkeypatch)
         "Reworking the diagram 1 of 3",
     ]
     assert not any(event.get("type") == "graph_notice" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_rejected_graph_still_emits_graph_data_event(monkeypatch):
+    import agent.graph as agent_graph
+
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    async def fake_route(state):
+        return {**state, "route": "search"}
+
+    async def fake_search(state, _tools):
+        return state, None
+
+    async def fake_expand(state, _tools, _wait_task):
+        return state
+
+    async def fake_architect(state):
+        return {
+            "architect_plan": {
+                "interpretation": "growth system",
+                "assumptions": ["Bounded complexity"],
+            }
+        }
+
+    async def fake_challenger(state):
+        return {"challenger_review": {"risks": []}}
+
+    async def fake_early_frame(state):
+        return {
+            "early_design_frame": state.get("architect_plan", {}).get(
+                "interpretation", ""
+            )
+        }
+
+    async def fake_apply(state, _tools):
+        return {
+            **state,
+            "graph_changed": True,
+            "graph_data": {
+                "title": "Candidate",
+                "nodes": [],
+                "edges": [],
+                "sequence": [],
+                "design_origin": "applied",
+            },
+            "graph_operation": {
+                "kind": "create",
+                "status": "candidate",
+                "failure_code": None,
+            },
+        }
+
+    async def fake_review(state):
+        return {
+            **state,
+            "graph_review": {
+                "approved": False,
+                "terminal": True,
+                "score": 0.2,
+                "failure_code": "not_clear",
+                "revision_instruction": "Try a simpler topology",
+            },
+        }
+
+    async def fake_synth(state):
+        return {**state, "response_text": "done"}
+
+    monkeypatch.setattr(agent_graph, "orchestrator_route", fake_route)
+    monkeypatch.setattr(agent_graph, "run_search_phase", fake_search)
+    monkeypatch.setattr(agent_graph, "architect_node", fake_architect)
+    monkeypatch.setattr(agent_graph, "challenger_node", fake_challenger)
+    monkeypatch.setattr(agent_graph, "early_design_frame_node", fake_early_frame)
+    monkeypatch.setattr(agent_graph, "apply_graph_worker", fake_apply)
+    monkeypatch.setattr(agent_graph, "graph_critic_node", fake_review)
+    monkeypatch.setattr(agent_graph, "orchestrator_synthesise", fake_synth)
+    monkeypatch.setattr(agent_graph, "maybe_expand_with_search_tool", fake_expand)
+
+    result = await agent_graph.run_agent(_state(send), [], [], [])
+
+    assert result["response_text"] == "done"
+    assert not result.get("approved_graph_data")
+
+    assert any(event.get("type") == "graph_notice" for event in events)
+    assert any(event.get("type") == "graph_data" for event in events)
+    graph_payloads = [
+        event.get("data", {}) for event in events if event.get("type") == "graph_data"
+    ]
+    assert graph_payloads
+    assert isinstance(graph_payloads[0], dict)
+    assert isinstance(graph_payloads[0].get("nodes"), list)
+    assert len(graph_payloads[0].get("nodes", [])) > 0
