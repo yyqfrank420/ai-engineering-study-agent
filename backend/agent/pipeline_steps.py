@@ -30,11 +30,13 @@ async def apply_graph_worker(state: AgentState, graph_tools: list) -> AgentState
     graph_state = await graph_worker_node(state, graph_tools)
     new_graph = graph_state.get("graph_data")
     if new_graph is None:
-        if (
-            existing_graph is None
+        should_send_graph_notice = (
+            state.get("graph_mode", "auto") != "on"
+            and existing_graph is None
             and state.get("route") == "search"
             and not state.get("graph_notice_sent")
-        ):
+        )
+        if should_send_graph_notice:
             message = (
                 "The draft architecture did not meet the structural quality checks, so I kept "
                 "the visual out rather than publishing a misleading graph. The written design "
@@ -53,9 +55,8 @@ async def apply_graph_worker(state: AgentState, graph_tools: list) -> AgentState
             **state,
             "graph_data": existing_graph,
             "graph_changed": False,
-            "graph_notice_sent": state.get("graph_notice_sent", False) or (
-                existing_graph is None and state.get("route") == "search"
-            ),
+            "graph_notice_sent": state.get("graph_notice_sent", False)
+            or should_send_graph_notice,
         }
 
     if existing_graph is not None and _same_graph_artifact(existing_graph, new_graph):

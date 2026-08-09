@@ -148,14 +148,15 @@ def build_agent_workflow(
 
     async def reject_graph(state: AgentState) -> AgentState:
         review = state.get("graph_review") or {}
-        await state["send"]({
-            "type": "graph_notice",
-            "message": (
-                "I couldn't make this diagram clear enough after two focused repairs, so I kept "
-                "the visual out. The written architecture is still available below; ask me to "
-                "redraw it as a simpler diagram if you want another pass."
-            ),
-        })
+        if state.get("graph_mode", "auto") != "on":
+            await state["send"]({
+                "type": "graph_notice",
+                "message": (
+                    "I couldn't make this diagram clear enough after two focused repairs, so I kept "
+                    "the visual out. The written architecture is still available below; ask me to "
+                    "redraw it as a simpler diagram if you want another pass."
+                ),
+            })
         return {
             **state,
             "graph_data": None,

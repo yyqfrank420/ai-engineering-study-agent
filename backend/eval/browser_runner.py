@@ -463,6 +463,10 @@ def _thread_id(frames: list[dict[str, Any]]) -> str | None:
     return None
 
 
+def _should_inspect_graph_dom(case: EvaluationCase, graph: dict | None) -> bool:
+    return bool(graph) and case.deterministic.graph_renderable is True
+
+
 def _failure_detail(
     kind: FailureKind,
     code: str,
@@ -983,7 +987,7 @@ async def _run_browser_attempt(
 
         graph = extract_graph_data(case_events)
         rendered_nodes = 0
-        if not failure_details:
+        if not failure_details and _should_inspect_graph_dom(case, graph):
             try:
                 rendered_nodes = await page.locator(
                     '[data-testid="graph-canvas"] g.node'

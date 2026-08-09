@@ -162,3 +162,61 @@ async def test_langgraph_can_verify_two_bounded_repairs_then_publish(monkeypatch
     assert set(role_order) == {"architect", "challenger"}
     assert any(event.get("phase") == "revise" and event.get("status") == "retry" for event in events)
     assert not any(event.get("type") == "graph_notice" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_langgraph_does_not_emit_graph_notice_on_failed_graph_notice_mode(monkeypatch):
+    import agent.graph as agent_graph
+
+    events: list[dict] = []
+
+    async def send(event):
+        events.append(event)
+
+    async def fake_route(state):
+        return {**state, "route": "search"}
+
+    async def fake_search(state, _tools):
+        return {
+            **state,
+            "rag_chunks": [],
+            "retrieval_relevance": "strong",
+            "retrieval_notice": "",
+        }, None
+
+    async def fake_apply_graph(state, _tools):
+        return {
+            **state,
+            "graph_changed": True,
+            "graph_data": {
+                "design_origin": "applied",
+                "nodes": [],
+                "edges": [],
+                "sequence": [],
+            },
+        }
+
+    async def fake_review(state):
+        return {**state, "graph_review": {"approved": False, "terminal": True}}
+
+    async def fake_synth(state):
+        return {**state, "response_text": "ok"}
+
+    async def fake_enrich(_state, _tools):
+        return None
+
+    monkeypatch.setattr(agent_graph, "orchestrator_route", fake_route)
+    monkeypatch.setattr(agent_graph, "run_search_phase", fake_search)
+    monkeypatch.setattr(agent_graph, "apply_graph_worker", fake_apply_graph)
+    monkeypatch.setattr(agent_graph, "maybe_expand_with_search_tool", lambda state, *_: state)
+    monkeypatch.setattr(agent_graph, "graph_critic_node", fake_review)
+    monkeypatch.setattr(agent_graph, "orchestrator_synthesise", fake_synth)
+    monkeypatch.setattr(agent_graph, "maybe_start_node_enrichment", fake_enrich)
+
+    state = _state(send)
+    state["graph_mode"] = "on"
+
+    result = await agent_graph.run_agent(state, [], [], [])
+
+    assert result["graph_data"] is None
+    assert not any(event.get("type") == "graph_notice" for event in events)

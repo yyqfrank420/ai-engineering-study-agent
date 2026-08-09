@@ -574,6 +574,21 @@ def test_web_research_provider_failure_is_classified_as_infrastructure():
     assert research_failure["kind"] == "infrastructure"
 
 
+def test_graph_dom_inspection_is_only_enabled_for_renderable_graph_cases():
+    from eval.browser_runner import _should_inspect_graph_dom
+
+    cases = load_corpus().by_id
+    graph_case = cases["graph-expansion"]
+    no_graph_case = cases["graph-off"]
+    ambiguous_case = cases["ambiguity"]
+    graph_data = {"nodes": [{"id": "n1"}], "edges": []}
+
+    assert _should_inspect_graph_dom(graph_case, graph_data) is True
+    assert _should_inspect_graph_dom(graph_case, None) is False
+    assert _should_inspect_graph_dom(no_graph_case, graph_data) is False
+    assert _should_inspect_graph_dom(ambiguous_case, graph_data) is False
+
+
 def test_book_citations_must_match_retrieval_provenance():
     from eval.browser_runner import _deterministic_failures
 
