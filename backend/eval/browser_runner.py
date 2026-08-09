@@ -501,7 +501,7 @@ async def _graph_dom_state(
                 """version => document.querySelector(
                     '[data-testid="graph-canvas"]'
                 )?.getAttribute('data-rendered-graph-version') === version""",
-                graph_version,
+                arg=graph_version,
                 timeout=10_000,
             )
         except PlaywrightTimeoutError:

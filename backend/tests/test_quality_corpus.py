@@ -455,6 +455,46 @@ async def test_non_graph_case_skips_case_level_graph_dom_inspection(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_graph_dom_state_passes_graph_version_as_keyword_arg_to_wait_for_function():
+    from eval.browser_runner import _graph_dom_state
+
+    calls: list[dict[str, object]] = []
+
+    class FakeGraphCanvas:
+        async def evaluate_all(self, _script: str) -> list[dict[str, str]]:
+            return []
+
+        async def get_attribute(self, _name: str) -> str:
+            return "graph-v1"
+
+    class FakePage:
+        def locator(self, _selector: str) -> FakeGraphCanvas:
+            return FakeGraphCanvas()
+
+        async def wait_for_function(
+            self,
+            _expression: str,
+            *,
+            arg: str | None = None,
+            timeout: int | None = None,
+        ) -> None:
+            calls.append({"arg": arg, "timeout": timeout})
+
+    await _graph_dom_state(
+        FakePage(),
+        {
+            "version": "graph-v1",
+            "nodes": [],
+            "edges": [],
+        },
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["arg"] == "graph-v1"
+    assert calls[0]["timeout"] == 10_000
+
+
+@pytest.mark.asyncio
 async def test_expected_error_case_can_continue_to_a_later_turn(monkeypatch):
     from eval.browser_runner import _send_case_steps
 
