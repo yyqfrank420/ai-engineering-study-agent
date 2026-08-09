@@ -133,6 +133,36 @@ async def test_apply_graph_worker_sends_notice_when_search_has_no_graph(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_apply_graph_worker_uses_graph_fallback_when_on_and_search_returns_none(
+    monkeypatch,
+):
+    state, events = _state(
+        graph_mode="on",
+        graph_data=None,
+        route="search",
+        graph_notice_sent=False,
+        user_message="Design a model-serving production stack",
+        complexity="production",
+    )
+
+    async def fake_graph_worker_node(incoming_state, tools):
+        return {**incoming_state, "graph_data": None}
+
+    monkeypatch.setattr(
+        "agent.pipeline_steps.graph_worker_node", fake_graph_worker_node
+    )
+
+    result = await apply_graph_worker(state, [])
+
+    assert result["graph_data"] is not None
+    assert result["graph_data"].get("design_origin") == "applied"
+    assert result["graph_data"].get("version")
+    assert result["graph_changed"] is False
+    assert result["graph_notice_sent"] is False
+    assert events == []
+
+
+@pytest.mark.asyncio
 async def test_applied_graph_failure_notice_does_not_misreport_weak_grounding(
     monkeypatch,
 ):

@@ -2,7 +2,12 @@ import asyncio
 import json
 
 from agent.architecture_playbook import build_evidence_bundle
-from agent.nodes.graph_worker import graph_worker_node
+from agent.complexity import resolve_complexity
+from agent.nodes.graph_worker import (
+    _attach_graph_version,
+    _fallback_applied_graph,
+    graph_worker_node,
+)
 from agent.nodes.rag_worker import rag_worker_node
 from agent.nodes.research_worker import research_worker_node
 from agent.state import AgentState
@@ -21,6 +26,33 @@ def should_run_graph_worker(state: AgentState, existing_graph: dict | None) -> b
     return existing_graph is None
 
 
+def _required_graph_fallback(state: AgentState) -> dict | None:
+    if state.get("graph_mode") != "on" or state.get("route") != "search":
+        return None
+    if state.get("graph_data") is not None:
+        return None
+
+    query = " ".join((state.get("design_query") or state.get("user_message", "")).split())
+    if not query:
+        return None
+
+    try:
+        complexity_profile = resolve_complexity(state.get("complexity", "auto"), query)
+    except Exception:
+        return None
+
+    try:
+        return _attach_graph_version(
+            _fallback_applied_graph(
+                state,
+                query,
+                complexity_profile,
+            )
+        )
+    except Exception:
+        return None
+
+
 async def apply_graph_worker(state: AgentState, graph_tools: list) -> AgentState:
     existing_graph = state.get("graph_data")
     if not should_run_graph_worker(state, existing_graph):
@@ -29,6 +61,15 @@ async def apply_graph_worker(state: AgentState, graph_tools: list) -> AgentState
     graph_state = await graph_worker_node(state, graph_tools)
     new_graph = graph_state.get("graph_data")
     if new_graph is None:
+        fallback_graph = _required_graph_fallback(state)
+        if fallback_graph is not None:
+            return {
+                **graph_state,
+                "graph_data": fallback_graph,
+                "graph_changed": False,
+                "graph_notice_sent": graph_state.get("graph_notice_sent", False),
+            }
+
         if (
             existing_graph is None
             and state.get("route") == "search"
