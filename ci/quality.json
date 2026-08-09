@@ -87,6 +87,7 @@
             "backend/tests/test_staging_diagram_renderer.py",
             "backend/tests/test_staging_runner.py",
             "backend/tests/test_quality_corpus.py",
+            "backend/tests/test_research_eval_contract.py",
             "backend/tests/test_semantic_gate.py"
           ]
         }

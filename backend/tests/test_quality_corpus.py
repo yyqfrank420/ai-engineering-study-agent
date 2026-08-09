@@ -795,6 +795,21 @@ def test_web_research_provider_failure_is_classified_as_infrastructure():
     assert research_failure["kind"] == "infrastructure"
 
 
+def test_graph_dom_inspection_is_only_enabled_for_renderable_graph_cases():
+    from eval.browser_runner import _should_inspect_graph_dom
+
+    cases = load_corpus().by_id
+    graph_case = cases["graph-expansion"]
+    no_graph_case = cases["graph-off"]
+    ambiguous_case = cases["ambiguity"]
+    graph_data = {"nodes": [{"id": "n1"}], "edges": []}
+
+    assert _should_inspect_graph_dom(graph_case, graph_data) is True
+    assert _should_inspect_graph_dom(graph_case, None) is False
+    assert _should_inspect_graph_dom(no_graph_case, graph_data) is False
+    assert _should_inspect_graph_dom(ambiguous_case, graph_data) is False
+
+
 def test_book_citations_must_match_retrieval_provenance():
     from eval.browser_runner import _deterministic_failures
 
@@ -971,7 +986,38 @@ def test_approved_hash_is_content_addressed(tmp_path):
 
 def test_approval_changes_do_not_change_behavior_identity_but_invalidate_approval(tmp_path):
     raw = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
+    raw["approval"].update(
+        {
+            "status": "approved",
+            "reviewed_by": "reviewer",
+            "reviewed_at": "2026-08-02T12:00:00Z",
+            "calibration": {
+                "judge_release": "semantic-rubric-judge-v5",
+                "judge_model": "claude-opus-5",
+                "evidence_run_id": "123456789",
+                "evidence_commit_sha": "a" * 40,
+                "evidence_sha256": "b" * 64,
+                "agreement": 0.9,
+                "critical_false_passes": 0,
+                "evaluated_at": "2026-08-02T12:00:00Z",
+            },
+        }
+    )
+    for case in raw["cases"]:
+        case["approval"].update(
+            {
+                "status": "approved",
+                "reviewer": "reviewer",
+                "reviewed_at": "2026-08-02T12:00:00Z",
+                "review_run_id": "github-run-123",
+                "reviewed_grades": {
+                    dimension: "pass" for dimension in case["rubric_dimensions"]
+                },
+            }
+        )
     path = tmp_path / "cases.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    raw["approval"]["approved_manifest_sha256"] = approval_manifest_sha256(path)
     path.write_text(json.dumps(raw), encoding="utf-8")
     behavior_sha = corpus_sha256(path)
 

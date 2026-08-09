@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -72,6 +73,56 @@ class ConversationStep(BaseModel):
     ui: UIMode
 
 
+class ResearchSourceContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    required_url_prefixes: list[str] = Field(min_length=1, max_length=8)
+    minimum_url_prefix_matches: int = Field(ge=1)
+    required_evidence_markers: list[str] = Field(default_factory=list, max_length=12)
+    minimum_evidence_marker_matches: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_contract(self) -> "ResearchSourceContract":
+        if self.minimum_url_prefix_matches > len(self.required_url_prefixes):
+            raise ValueError(
+                "minimum URL prefix matches cannot exceed the configured prefixes"
+            )
+        if self.minimum_evidence_marker_matches > len(self.required_evidence_markers):
+            raise ValueError(
+                "minimum evidence marker matches cannot exceed the configured markers"
+            )
+
+        normalised_prefixes: list[str] = []
+        for prefix in self.required_url_prefixes:
+            parsed = urlsplit(prefix)
+            if (
+                parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+                or parsed.path in {"", "/"}
+            ):
+                raise ValueError(
+                    "research source prefixes must be HTTPS URLs with a stable path and no credentials, query, or fragment"
+                )
+            normalised_prefixes.append(prefix.rstrip("/").casefold())
+        if len(set(normalised_prefixes)) != len(normalised_prefixes):
+            raise ValueError("research source prefixes must be unique")
+
+        normalised_markers = [
+            marker.strip().casefold() for marker in self.required_evidence_markers
+        ]
+        if any(not marker or len(marker) > 240 for marker in normalised_markers):
+            raise ValueError(
+                "research evidence markers must contain 1 to 240 characters"
+            )
+        if len(set(normalised_markers)) != len(normalised_markers):
+            raise ValueError("research evidence markers must be unique")
+        return self
+
+
 class DeterministicExpectation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -85,6 +136,7 @@ class DeterministicExpectation(BaseModel):
     graph_renderable: bool | None
     citations_required: bool
     citation_source: Literal["any", "web"] = "any"
+    research_source_contract: ResearchSourceContract | None = None
     error_expected: bool
     cleanup: bool
 
@@ -133,6 +185,23 @@ class EvaluationCorpus(BaseModel):
                     raise ValueError(f"web-citation case {case.id} must require the research worker")
                 if not any(step.ui.research_enabled for step in case.steps):
                     raise ValueError(f"web-citation case {case.id} must enable research")
+                if case.deterministic.research_source_contract is None:
+                    raise ValueError(
+                        f"web-citation case {case.id} must define a research source contract"
+                    )
+            elif case.deterministic.research_source_contract is not None:
+                raise ValueError(
+                    f"non-web-citation case {case.id} cannot define a research source contract"
+                )
+            if case.category == "retrieved_instruction_conflict":
+                source_contract = case.deterministic.research_source_contract
+                if (
+                    source_contract is None
+                    or source_contract.minimum_evidence_marker_matches < 1
+                ):
+                    raise ValueError(
+                        f"retrieved instruction-conflict case {case.id} must require hostile evidence markers"
+                    )
             if case.approval.status == "approved":
                 if not case.approval.reviewer or not case.approval.reviewed_at:
                     raise ValueError(f"approved case {case.id} must identify its reviewer and review time")
