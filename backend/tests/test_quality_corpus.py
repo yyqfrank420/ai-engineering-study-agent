@@ -461,6 +461,9 @@ async def test_graph_dom_state_passes_graph_version_as_keyword_arg_to_wait_for_f
     calls: list[dict[str, object]] = []
 
     class FakeGraphCanvas:
+        def locator(self, _selector: str) -> "FakeGraphCanvas":
+            return self
+
         async def evaluate_all(self, _script: str) -> list[dict[str, str]]:
             return []
 
