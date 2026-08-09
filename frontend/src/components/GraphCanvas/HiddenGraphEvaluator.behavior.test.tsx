@@ -5,7 +5,8 @@ vi.mock('./D3Graph', async () => {
   const React = await import('react');
   return {
     D3Graph: ({ onLayoutReady }: { onLayoutReady?: (key: string) => void }) => {
-      React.useEffect(() => onLayoutReady?.('candidate-layout'), [onLayoutReady]);
+      const onLayoutReadyRef = React.useRef(onLayoutReady);
+      React.useEffect(() => onLayoutReadyRef.current?.('candidate-layout'), []);
       return (
         <svg width="1440" height="960">
           <text>Candidate graph</text>
@@ -124,6 +125,29 @@ describe('HiddenGraphEvaluator browser boundary', () => {
     view.rerender(<HiddenGraphEvaluator candidate={candidate} />);
     await act(async () => vi.runAllTimersAsync());
     expect(agentTransport.submitDiagramEvaluation).toHaveBeenCalledTimes(1);
+  });
+
+  it('evaluates a new request for an unchanged candidate', async () => {
+    const view = render(
+      <HiddenGraphEvaluator candidate={candidate} />,
+    );
+    await act(async () => vi.runAllTimersAsync());
+
+    view.rerender(
+      <HiddenGraphEvaluator
+        candidate={{ ...candidate, evaluationId: 'evaluation-2' }}
+      />,
+    );
+    await act(async () => vi.runAllTimersAsync());
+
+    expect(agentTransport.submitDiagramEvaluation).toHaveBeenCalledTimes(2);
+    expect(agentTransport.submitDiagramEvaluation).toHaveBeenNthCalledWith(
+      2,
+      'evaluation-2',
+      'graph-v1',
+      expect.any(Object),
+      'data:image/jpeg;base64,candidate',
+    );
   });
 
   it('retries a temporarily unavailable transport with bounded delays', async () => {

@@ -1,5 +1,6 @@
-import pytest
 import time
+
+import pytest
 
 
 def _state(send):
@@ -71,10 +72,10 @@ def test_failed_review_gets_up_to_three_bounded_revisions():
         _route_after_revision,
     )
 
-    assert _repair_attempt_summary(0) == "before a reviewed revision could complete"
-    assert _repair_attempt_summary(1) == "after 1 reviewed revision"
-    assert _repair_attempt_summary(2) == "after 2 reviewed revisions"
-    assert _repair_attempt_summary(3) == "after 3 reviewed revisions"
+    assert _repair_attempt_summary(0) == "before a bounded repair could complete"
+    assert _repair_attempt_summary(1) == "after 1 bounded repair attempt"
+    assert _repair_attempt_summary(2) == "after 2 bounded repair attempts"
+    assert _repair_attempt_summary(3) == "after 3 bounded repair attempts"
 
     failed = {
         "graph_changed": True,
@@ -100,10 +101,22 @@ def test_failed_review_gets_up_to_three_bounded_revisions():
         _route_after_revision({**failed, "graph_revision_count": 1, "graph_changed": True})
         == "review"
     )
+    assert (
+        _route_after_revision({**failed, "graph_revision_count": 2, "graph_changed": True})
+        == "review"
+    )
+    assert (
+        _route_after_revision({**failed, "graph_revision_count": 3, "graph_changed": True})
+        == "review"
+    )
+    assert (
+        _route_after_revision({**failed, "graph_revision_count": 4, "graph_changed": True})
+        == "reject"
+    )
     assert _route_after_revision({**failed, "graph_changed": False}) == "reject"
 
 
-def test_failed_revision_no_graph_change_stays_in_repair_loop():
+def test_failed_revision_retries_the_same_contract_without_repeating_review():
     from agent.graph import _route_after_review, _route_after_revision
 
     state = {
@@ -118,7 +131,21 @@ def test_failed_revision_no_graph_change_stays_in_repair_loop():
     }
 
     assert _route_after_review(state) == "revise"
-    assert _route_after_revision(state) == "review"
+    assert _route_after_revision(state) == "retry"
+    assert _route_after_revision({**state, "graph_revision_count": 3}) == "reject"
+    assert (
+        _route_after_revision(
+            {
+                **state,
+                "graph_operation": {
+                    "status": "failed",
+                    "kind": "create",
+                    "failure_code": "graph_patch_contract_invalid",
+                },
+            }
+        )
+        == "reject"
+    )
 
 
 def test_initial_revision_failures_still_reject_without_graph_change():
@@ -492,8 +519,8 @@ async def test_langgraph_can_verify_one_bounded_repair_then_publish(monkeypatch)
         for event in events
         if event.get("phase") == "revise" and event.get("status") == "retry"
     ]
-    assert [event["detail"].split(",", 1)[0] for event in repair_events] == [
-        "Reworking the diagram 1 of 3",
+    assert [event["detail"].split(".", 1)[0] for event in repair_events] == [
+        "Repair attempt 1 of 3",
     ]
     assert not any(event.get("type") == "graph_notice" for event in events)
 

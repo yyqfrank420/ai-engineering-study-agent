@@ -8,11 +8,11 @@ def test_applied_graph_prompts_define_generic_local_repair_boundaries():
     from agent.nodes.graph_worker import (
         _APPLIED_GRAPH_PATCH_PROMPT_VERSION,
         _APPLIED_GRAPH_PATCH_SYSTEM,
-        _APPLIED_GRAPH_TOPOLOGY_SYSTEM,
         _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION,
+        _APPLIED_GRAPH_TOPOLOGY_SYSTEM,
     )
 
-    assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v29"
+    assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v30"
     assert _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION == "applied_topology_v15"
     assert (
         "Choose graph size from the material design" in _APPLIED_GRAPH_TOPOLOGY_SYSTEM
@@ -27,6 +27,11 @@ def test_applied_graph_prompts_define_generic_local_repair_boundaries():
     assert "directed components and edges" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "complete replacements" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "Map every blocking finding" in _APPLIED_GRAPH_PATCH_SYSTEM
+    assert (
+        "Declared addition counts are exact required operations"
+        in _APPLIED_GRAPH_PATCH_SYSTEM
+    )
+    assert "Every update must" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "repair-only edge_id values" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "cache lookup separate from" not in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "approval-only route" not in _APPLIED_GRAPH_PATCH_SYSTEM

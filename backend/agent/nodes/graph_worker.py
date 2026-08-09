@@ -40,7 +40,7 @@ from graph.runtime import select_canonical_graph
 
 logger = logging.getLogger(__name__)
 
-_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v29"
+_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v30"
 _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v15"
 _APPLIED_GRAPH_TOPOLOGY_EFFORT = "low"
 _APPLIED_GRAPH_PATCH_EFFORT = "high"
@@ -950,7 +950,8 @@ responsibility or contract.
 
 Source and target must be distinct. A node removal must also remove or redirect every incident edge.
 Omit keys that do not change. Groups, sequence, assumptions, and title are complete replacements when
-the contract permits them. Preserve uncited records byte-for-byte. Existing edges use immutable
+the contract permits them. Declared addition counts are exact required operations. Every update must
+change at least one value and omit unrelated fields. Preserve uncited records byte-for-byte. Existing edges use immutable
 repair-only edge_id values for update or removal. Keep those IDs separate from authored edge values.
 New edges never carry edge_id and must include source, target, and a non-empty natural-language label.
 The server rejects any operation outside the exact contract and validates the complete patched graph.
@@ -2283,6 +2284,8 @@ def _apply_node_patch(
             raise ValueError(
                 f"invalid node update fields: {', '.join(sorted(invalid_fields))}"
             )
+        if all(node_by_id[node_id].get(key) == value for key, value in changes.items()):
+            raise ValueError(f"node update produced no semantic change: {node_id}")
         node_by_id[node_id].update(copy.deepcopy(changes))
         updated_node_ids.add(node_id)
 
@@ -2349,6 +2352,8 @@ def _apply_edge_patch(
             raise ValueError(
                 f"invalid edge update fields: {', '.join(sorted(invalid_fields))}"
             )
+        if all(edge.get(key) == value for key, value in changes.items()):
+            raise ValueError(f"edge update produced no semantic change: {edge_id}")
         edge.update(copy.deepcopy(changes))
         updated_edge_ids.add(edge_id)
 

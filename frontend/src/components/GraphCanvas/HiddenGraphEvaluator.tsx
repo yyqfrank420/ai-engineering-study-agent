@@ -75,6 +75,7 @@ export function HiddenGraphEvaluator({ candidate }: HiddenGraphEvaluatorProps) {
       }}
     >
       <D3Graph
+        key={candidate.evaluationId}
         graphData={candidate.data}
         currentStep={-1}
         activeNodeIds={new Set<string>()}

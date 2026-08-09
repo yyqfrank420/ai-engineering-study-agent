@@ -38,6 +38,45 @@ def test_patch_accepts_multiple_operations_while_preserving_existing_records():
     assert len(result["edges"]) == 5
 
 
+@pytest.mark.parametrize("record_type", ["node", "edge"])
+def test_patch_rejects_noop_updates_even_with_another_real_change(record_type):
+    graph = _domain_graph(5)
+    if record_type == "node":
+        patch = {
+            "update_nodes": [
+                {
+                    "id": graph["nodes"][0]["id"],
+                    "set": {"label": graph["nodes"][0]["label"]},
+                },
+                {
+                    "id": graph["nodes"][1]["id"],
+                    "set": {"description": "A valid separate node change."},
+                },
+            ]
+        }
+    else:
+        patch = {
+            "update_edges": [
+                {
+                    "edge_id": "edge_1",
+                    "set": {"label": graph["edges"][0]["label"]},
+                },
+                {
+                    "edge_id": "edge_2",
+                    "set": {"description": "A valid separate edge change."},
+                },
+            ]
+        }
+
+    with pytest.raises(ValueError, match=f"{record_type} update produced no semantic change"):
+        graph_worker._apply_applied_graph_patch(
+            graph,
+            patch,
+            safety_max_nodes=7,
+            resolved_complexity="prototype",
+        )
+
+
 def test_graph_design_json_failure_is_classified_as_truncated():
     exc = json.JSONDecodeError("Unterminated string", "{", 1)
 

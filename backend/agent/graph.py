@@ -56,6 +56,10 @@ AgentNode = Callable[[AgentState], NodeResult]
 
 _GRAPH_STAGE_DEADLINE_KEY = "_graph_stage_deadline_s"
 _MAX_GRAPH_REVISIONS = 3
+_RETRYABLE_GRAPH_PATCH_FAILURE_CODES = {
+    "graph_patch_invalid_preserved_existing_graph",
+    "graph_patch_no_effect",
+}
 
 
 def _with_graph_stage_deadline(state: AgentState, timeout_s: float) -> AgentState:
@@ -73,9 +77,9 @@ def _without_graph_stage_deadline(state: AgentState) -> AgentState:
 
 def _repair_attempt_summary(revision_count: int) -> str:
     if revision_count <= 0:
-        return "before a reviewed revision could complete"
-    suffix = "revision" if revision_count == 1 else "revisions"
-    return f"after {revision_count} reviewed {suffix}"
+        return "before a bounded repair could complete"
+    suffix = "attempt" if revision_count == 1 else "attempts"
+    return f"after {revision_count} bounded repair {suffix}"
 
 
 def _restore_approved_graph_state(state: AgentState) -> AgentState:
@@ -247,6 +251,7 @@ def build_agent_workflow(
             timeout_s = patch_timeout_seconds(revision_state)
         except StageAdmissionDenied:
             restored = _restore_approved_graph_state(state)
+            operation = _failed_graph_operation(state, "graph_patch_admission_denied")
             if not state.get("graph_notice_sent") and _should_send_graph_notice(state):
                 await state["send"](
                     {
@@ -261,6 +266,7 @@ def build_agent_workflow(
                 **restored,
                 "graph_notice_sent": True,
                 "graph_revision_count": revision_count,
+                **({"graph_operation": operation} if operation else {}),
             }
         await state["send"](
             {
@@ -269,9 +275,8 @@ def build_agent_workflow(
                 "status": "retry",
                 "title": "Refining the diagram",
                 "detail": (
-                    f"Reworking the diagram {revision_count} of "
-                    f"{_MAX_GRAPH_REVISIONS}, then checking "
-                    "the real layout again."
+                    f"Repair attempt {revision_count} of {_MAX_GRAPH_REVISIONS}. "
+                    "Any valid candidate will then be checked against the real layout."
                 ),
             }
         )
@@ -286,6 +291,10 @@ def build_agent_workflow(
                 )
         except TimeoutError:
             restored = _restore_approved_graph_state(state)
+            operation = _failed_graph_operation(
+                state,
+                "graph_patch_timeout_preserved_existing_graph",
+            )
             if not state.get("graph_notice_sent") and _should_send_graph_notice(state):
                 await state["send"](
                     {
@@ -300,6 +309,7 @@ def build_agent_workflow(
                 **restored,
                 "graph_notice_sent": True,
                 "graph_revision_count": revision_count,
+                **({"graph_operation": operation} if operation else {}),
             }
         return {
             **_without_graph_stage_deadline(revised),
@@ -482,7 +492,11 @@ def build_agent_workflow(
     workflow.add_conditional_edges(
         "revise_graph",
         _route_after_revision,
-        {"review": "review_graph", "reject": "reject_graph"},
+        {
+            "review": "review_graph",
+            "retry": "revise_graph",
+            "reject": "reject_graph",
+        },
     )
     workflow.add_edge("reject_graph", "synthesise")
     workflow.add_edge("synthesise", END)
@@ -539,15 +553,19 @@ def _route_after_review(state: AgentState) -> Literal["accept", "revise", "rejec
     return "reject"
 
 
-def _route_after_revision(state: AgentState) -> Literal["review", "reject"]:
+def _route_after_revision(state: AgentState) -> Literal["review", "retry", "reject"]:
     revision_count = int(state.get("graph_revision_count", 0))
-    return (
-        "review"
-        if state.get("graph_data")
-        and revision_count > 0
-        and revision_count < _MAX_GRAPH_REVISIONS
-        else "reject"
-    )
+    if not state.get("graph_data") or revision_count <= 0:
+        return "reject"
+    operation = state.get("graph_operation")
+    if isinstance(operation, dict) and operation.get("status") == "failed":
+        retryable = (
+            operation.get("failure_code") in _RETRYABLE_GRAPH_PATCH_FAILURE_CODES
+        )
+        if retryable and revision_count < _MAX_GRAPH_REVISIONS:
+            return "retry"
+        return "reject"
+    return "review" if revision_count <= _MAX_GRAPH_REVISIONS else "reject"
 
 
 async def run_agent(
