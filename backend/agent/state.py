@@ -79,6 +79,16 @@ class GraphOperation(TypedDict):
     failure_code: str | None
 
 
+GraphPublicationDisposition = Literal[
+    "approved",
+    "preserved",
+    "unchanged",
+    "unreviewed",
+    "withheld",
+    "none",
+]
+
+
 class Chunk(TypedDict):
     text: str
     book: str
@@ -120,9 +130,9 @@ class AgentState(TypedDict):
     graph_notice_sent: (
         bool  # True when we've already warned that no graph could be produced
     )
-    # Public disposition for this turn's graph. A preserved baseline remains
-    # available to synthesis and persistence but is not a newly published graph.
-    graph_publication: NotRequired[Literal["approved", "preserved"]]
+    # Internal disposition for this turn's graph. This state controls publication,
+    # but is not itself part of the public transport payload.
+    graph_publication: NotRequired[GraphPublicationDisposition]
     graph_review: NotRequired[dict[str, Any]]
     graph_operation: NotRequired[GraphOperation]
     graph_intent: NotRequired[Literal["create", "edit"] | None]
@@ -130,6 +140,7 @@ class AgentState(TypedDict):
     graph_repair_round_count: NotRequired[int]
     graph_contract_correction_count: NotRequired[int]
     graph_contract_correction_pending: NotRequired[bool]
+    graph_critic_call_count: NotRequired[int]
     graph_patch_validation_error: NotRequired[dict[str, str]]
     reviewed_graph_data: NotRequired[GraphData | None]
     approved_graph_data: NotRequired[GraphData | None]

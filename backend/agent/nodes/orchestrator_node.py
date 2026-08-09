@@ -12,22 +12,24 @@
 #          Side effects: sends SSE events to browser
 # ─────────────────────────────────────────────────────────────────────────────
 
+import copy
 import json
 
 from adapters.llm_adapter import build_telemetry
+from config import settings
+
 from agent.complexity import (
     is_applied_system_design_request,
-    resolve_graph_operation,
     resolve_complexity,
+    resolve_graph_operation,
 )
 from agent.context_manager import maybe_condense_history
+from agent.deadlines import synthesis_timeout_seconds
 from agent.explanation_blocks import stream_explanation_blocks
 from agent.state import AgentState
 from agent.stream_utils import stream_llm
-from agent.deadlines import synthesis_timeout_seconds
-from config import settings
 
-_SYNTHESIS_PROMPT_VERSION = "architecture_blocks_v12"
+_SYNTHESIS_PROMPT_VERSION = "architecture_blocks_v14"
 _QUICK_SYNTHESIS_PROMPT_VERSION = "quick_synthesis_v2"
 
 _ROUTER_SYSTEM = """<role>
@@ -98,6 +100,20 @@ the designed system represented by its exact domain node labels, data flows, con
 assumptions, and boundaries. Retrieved passages support principles; they do not override the
 domain the user asked about.
 </core_task>
+
+<turn_result_integrity>
+- The supplied <trusted_turn_result> block is system-owned and authoritative for what happened
+  to the graph in this turn. It is not user or model evidence.
+- If its publication state is preserved, the requested graph operation was not approved or applied.
+  Describe the current graph only as the prior approved graph. Never claim the requested graph or
+  graph changes succeeded or appear on the canvas.
+- If its publication state is withheld, no new graph was approved or published. Never claim that
+  a new diagram was rendered or is available on the canvas.
+- If its publication state is approved, the current graph is the newly approved result for this turn.
+- Say that a diagram was rendered only when its publication state is approved. For every other
+  publication state, describe only the trusted outcome for this turn.
+- Follow any required completion sentence in the block exactly.
+</turn_result_integrity>
 
 <language>
 Answer in the same language as the user's latest message unless they ask to switch.
@@ -188,8 +204,10 @@ Answer in the same language as the user's latest message unless they ask to swit
 - For an applied design, start with your interpretation and material assumptions, then walk the
   primary runtime loop using exact graph node and edge names. Cover inputs, decisions, actions,
   outcome measurement, control boundaries, and the biggest failure modes relevant to the depth contract.
-- If the user explicitly requested a diagram and a graph exists, say that the diagram is rendered
-  on the canvas, then explain its exact nodes and edges. Do not duplicate the canvas as ASCII art.
+- If the user explicitly requested a diagram and publication is approved, say that the newly
+  approved diagram is rendered on the canvas, then explain its exact nodes and edges. Do not
+  duplicate the canvas as ASCII art. For every other publication state, do not say that a diagram
+  was rendered.
 - Explain why each major boundary exists and what crosses it; do not merely restate node descriptions.
 - Distinguish facts supplied by the user, inferred assumptions, and recommendations.
 - Use a compact table when it materially clarifies component responsibilities or contracts.
@@ -220,8 +238,10 @@ Return 3-6 compact JSON objects, one object per line, with no array and no markd
 Each object must be complete before starting the next:
 {"block_id":"stable_id","title":"short beginner-facing title","content":"concise markdown",
  "related_node_ids":["exact_graph_node_id"],"evidence_refs":["Chapter N, p.X", "https://source.example/path"]}
-Order the blocks so the UI can reveal them progressively: interpretation, runtime path, controls/evals,
-then trade-offs or next decisions. Cite only retrieved claims. Do not repeat the whole diagram.
+Use each required key exactly once and use unique block_id values. evidence_refs is optional: use [] when
+no current evidence supports the block. Order the blocks so the UI can reveal them progressively:
+interpretation, runtime path, controls/evals, then trade-offs or next decisions. Cite only retrieved
+claims. Do not repeat the whole diagram.
 </streaming_output_contract>"""
 
 
@@ -438,6 +458,7 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
     The transport owns the terminal event so success is not announced before
     the completed turn is durably persisted.
     """
+    state = _withhold_unreviewed_graph(state)
     send = state["send"]
     history = state.get("history") or []
     history = await maybe_condense_history(
@@ -455,10 +476,7 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
     )
 
     current_graph = state.get("graph_data") or {}
-    design_query = state.get("design_query") or state.get("user_message", "")
-    if current_graph.get("design_origin") == "applied":
-        design_query = f"{design_query} {current_graph.get('title', '')}".strip()
-    profile = resolve_complexity(state.get("complexity", "auto"), design_query)
+    profile = _resolve_synthesis_complexity(state, current_graph)
 
     await send(
         {
@@ -503,6 +521,8 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
             f"\nCurrent graph:\n{_format_graph_context(state['graph_data'])}\n\n"
         )
 
+    turn_result_block = _format_trusted_turn_result(state)
+
     brief_block = ""
     if state.get("architect_plan"):
         brief_block = (
@@ -531,6 +551,7 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
                 f"{research_block}"
                 f"{brief_block}"
                 f"{early_response_block}"
+                f"{turn_result_block}"
                 f"{graph_block}"
                 f"Response depth contract:\n{profile.answer_contract}\n\n"
                 f"Question: {state['user_message']}"
@@ -554,13 +575,17 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
     )
     synthesis_timeout_s = synthesis_timeout_seconds(state)
     if current_graph:
+        explain_title, explain_detail = _explanation_start_status(
+            graph_is_preserved=graph_is_preserved,
+            delay_changed_graph=delay_changed_graph,
+        )
         await send(
             {
                 "type": "workflow_progress",
                 "phase": "explain",
                 "status": "active",
-                "title": "Finishing the design walkthrough",
-                "detail": "The approved diagram stays private until its complete explanation is ready.",
+                "title": explain_title,
+                "detail": explain_detail,
             }
         )
         buffered_blocks: list[dict] = []
@@ -598,21 +623,17 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
             await send({"type": "graph_data", "data": current_graph})
             for block in buffered_blocks:
                 await send(block)
+        completion_title, completion_detail = _explanation_completion_status(
+            graph_is_preserved=graph_is_preserved,
+            synthesis_degraded=synthesis_degraded,
+        )
         await send(
             {
                 "type": "workflow_progress",
                 "phase": "explain",
                 "status": "degraded" if synthesis_degraded else "complete",
-                "title": (
-                    "Design ready with a bounded walkthrough"
-                    if synthesis_degraded
-                    else "Design and walkthrough ready"
-                ),
-                "detail": (
-                    "The architecture is available with the explanation completed before its latency budget."
-                    if synthesis_degraded
-                    else "The complete architecture is now available to explore and steer."
-                ),
+                "title": completion_title,
+                "detail": completion_detail,
             }
         )
     else:
@@ -640,6 +661,144 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
         else response_text
     )
     return {**state, "response_text": persisted_response}
+
+
+def _resolve_synthesis_complexity(state: AgentState, current_graph: dict):
+    requested_depth = state.get("complexity", "auto")
+    operation = state.get("graph_operation")
+    edits_existing_graph = state.get("graph_intent") == "edit" or (
+        isinstance(operation, dict) and operation.get("kind") == "edit"
+    )
+    explicit_edit_depth = current_graph.get("resolved_complexity")
+    if (
+        edits_existing_graph
+        and requested_depth == "auto"
+        and explicit_edit_depth in {"low", "prototype", "production"}
+    ):
+        requested_depth = explicit_edit_depth
+    return resolve_complexity(requested_depth, state.get("user_message", ""))
+
+
+def _format_trusted_turn_result(state: AgentState) -> str:
+    operation = state.get("graph_operation")
+    publication = state.get("graph_publication")
+    operation_kind = (
+        operation.get("kind")
+        if isinstance(operation, dict) and operation.get("kind") in {"create", "edit"}
+        else "none"
+    )
+    if publication not in {
+        "approved",
+        "preserved",
+        "withheld",
+        "unchanged",
+        "unreviewed",
+        "none",
+    }:
+        publication = "withheld" if operation_kind != "none" else "none"
+
+    preserved_result = (
+        "Publication state: preserved.\n"
+        "The requested graph edit was not approved or applied. The current graph is the prior "
+        "approved graph and remains unchanged by this turn. Do not claim requested edits "
+        "succeeded or appear on the canvas.\n"
+        "Required completion sentence: The requested diagram edit was not approved, so the "
+        "prior approved diagram remains unchanged."
+        if operation_kind == "edit"
+        else "Publication state: preserved.\n"
+        "The requested new graph was not approved or published. The current graph is the prior "
+        "approved graph and remains unchanged by this turn. Do not claim a new diagram appears "
+        "on the canvas.\n"
+        "Required completion sentence: The requested new diagram was not approved, so the "
+        "prior approved diagram remains unchanged."
+    )
+    result_by_publication = {
+        "approved": (
+            "Publication state: approved.\n"
+            "The current graph is the newly approved graph for this turn. The newly approved "
+            "diagram was rendered on the canvas."
+        ),
+        "preserved": preserved_result,
+        "withheld": (
+            "Publication state: withheld.\n"
+            "No new graph was approved, published, or rendered for this turn. Do not claim that "
+            "a new or edited diagram is available on the canvas."
+        ),
+        "unchanged": (
+            "Publication state: unchanged.\n"
+            "No graph publication occurred this turn. An existing approved graph, if any, remains "
+            "unchanged. No diagram was rendered for this turn."
+        ),
+        "unreviewed": (
+            "Publication state: unreviewed.\n"
+            "The candidate has not passed review and must be withheld. No graph was published or "
+            "rendered for this turn."
+        ),
+        "none": (
+            "Publication state: none.\n"
+            "This turn has no graph candidate or publication. No diagram was rendered for this turn."
+        ),
+    }
+
+    return (
+        "\n<trusted_turn_result>\n"
+        f"Graph operation: {operation_kind}.\n"
+        f"{result_by_publication[publication]}\n"
+        "</trusted_turn_result>\n\n"
+    )
+
+
+def _withhold_unreviewed_graph(state: AgentState) -> AgentState:
+    """Fail closed if a draft reaches synthesis before its review disposition."""
+    if state.get("graph_publication") != "unreviewed":
+        return state
+
+    approved_graph = state.get("approved_graph_data")
+    preserves_approved_graph = isinstance(approved_graph, dict)
+    return {
+        **state,
+        "graph_data": copy.deepcopy(approved_graph) if preserves_approved_graph else None,
+        "graph_changed": False,
+        "graph_publication": "preserved" if preserves_approved_graph else "withheld",
+    }
+
+
+def _explanation_start_status(
+    *, graph_is_preserved: bool, delay_changed_graph: bool
+) -> tuple[str, str]:
+    if graph_is_preserved:
+        return (
+            "Finishing the walkthrough for the preserved diagram",
+            "The requested graph operation was not approved; the prior approved diagram remains unchanged.",
+        )
+    if delay_changed_graph:
+        return (
+            "Finishing the design walkthrough",
+            "The newly approved diagram stays private until its complete explanation is ready.",
+        )
+    return (
+        "Finishing the design walkthrough",
+        "The existing approved diagram remains available while its explanation is completed.",
+    )
+
+
+def _explanation_completion_status(
+    *, graph_is_preserved: bool, synthesis_degraded: bool
+) -> tuple[str, str]:
+    if graph_is_preserved:
+        return (
+            "Walkthrough ready; prior diagram preserved",
+            "The requested graph operation was not approved, so the prior approved diagram remains unchanged.",
+        )
+    if synthesis_degraded:
+        return (
+            "Design ready with a bounded walkthrough",
+            "The architecture is available with the explanation completed before its latency budget.",
+        )
+    return (
+        "Design and walkthrough ready",
+        "The complete architecture is now available to explore and steer.",
+    )
 
 
 def _format_history(history: list[dict]) -> str:

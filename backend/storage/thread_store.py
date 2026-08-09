@@ -2,8 +2,15 @@ import json
 import logging
 import uuid
 
-from adapters.database_adapter import _adapt_query, _connect, execute, fetchall, fetchone
+from adapters.database_adapter import (
+    _adapt_query,
+    _connect,
+    execute,
+    fetchall,
+    fetchone,
+)
 from config import settings
+
 from storage.errors import ThreadMessageLimitExceeded
 
 logger = logging.getLogger(__name__)
@@ -208,27 +215,62 @@ def get_graph(user_id: str, thread_id: str) -> dict | None:
 
 
 def save_graph(user_id: str, thread_id: str, graph_data: dict) -> bool:
-    """Persist graph_data for a thread.
+    """Persist only the submitted layout state on the current server graph.
 
     Returns True if saved, False if the serialised size exceeds
-    settings.max_graph_data_bytes — caller should notify the user.
+    settings.max_graph_data_bytes. A thread without a current graph remains
+    unchanged.
     """
-    serialized = json.dumps(graph_data, ensure_ascii=False)
-    byte_size = len(serialized.encode("utf-8"))
-    if byte_size > settings.max_graph_data_bytes:
-        logger.warning(
-            "thread_store: graph_data too large (%d bytes > %d limit) for thread %s — skipping save",
-            byte_size, settings.max_graph_data_bytes, thread_id,
+    with _connect() as conn:
+        if not settings.use_postgres:
+            conn.execute("BEGIN IMMEDIATE")
+        thread_query = (
+            "SELECT graph_data FROM chat_threads WHERE id = ? AND user_id = ? FOR UPDATE"
+            if settings.use_postgres
+            else "SELECT graph_data FROM chat_threads WHERE id = ? AND user_id = ?"
         )
-        return False
-    execute(
-        """
-        UPDATE chat_threads
-        SET graph_data = ?, updated_at = CURRENT_TIMESTAMP, last_seen_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND user_id = ?
-        """,
-        (serialized, thread_id, user_id),
-    )
+        row = conn.execute(
+            _adapt_query(thread_query),
+            (thread_id, user_id),
+        ).fetchone()
+        if row is None or row["graph_data"] is None or "view_state" not in graph_data:
+            return True
+
+        stored_graph = row["graph_data"]
+        try:
+            current_graph = json.loads(stored_graph) if isinstance(stored_graph, str) else stored_graph
+        except (TypeError, json.JSONDecodeError):
+            logger.warning(
+                "thread_store: current graph_data is invalid for thread %s; skipping layout save",
+                thread_id,
+            )
+            return True
+        if not isinstance(current_graph, dict):
+            logger.warning(
+                "thread_store: current graph_data is not an object for thread %s; skipping layout save",
+                thread_id,
+            )
+            return True
+
+        updated_graph = {**current_graph, "view_state": graph_data["view_state"]}
+        serialized = json.dumps(updated_graph, ensure_ascii=False)
+        byte_size = len(serialized.encode("utf-8"))
+        if byte_size > settings.max_graph_data_bytes:
+            logger.warning(
+                "thread_store: graph_data too large (%d bytes > %d limit) for thread %s; skipping save",
+                byte_size, settings.max_graph_data_bytes, thread_id,
+            )
+            return False
+        conn.execute(
+            _adapt_query(
+                """
+                UPDATE chat_threads
+                SET graph_data = ?, updated_at = CURRENT_TIMESTAMP, last_seen_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND user_id = ?
+                """
+            ),
+            (serialized, thread_id, user_id),
+        )
     return True
 
 

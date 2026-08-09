@@ -3,6 +3,7 @@ from copy import deepcopy
 
 import pytest
 from adapters.llm_adapter import _anthropic_response_schema
+from agent.architecture_rubric import repair_requirements
 from agent.graph import _route_after_review
 from agent.graph_repair_contract import (
     REPAIR_LAYER_PATCH_FIELDS,
@@ -25,6 +26,7 @@ from agent.nodes.graph_critic import (
     _enforce_local_repair_admission,
     _locked_review_layers,
     _preflight_review_protocol,
+    _prior_obligation_id,
     _review_packet,
     _semantic_graph_projection,
     _validate_repair_contract,
@@ -68,6 +70,9 @@ def _layer(status="pass", score=0.9, *, findings=None, **selectors):
         "assumption_indexes": list(selectors.get("assumption_indexes") or []),
         "context_node_ids": list(selectors.get("context_node_ids") or []),
         "addition_count": int(selectors.get("addition_count", 0)),
+        "connection_addition_obligations": list(
+            selectors.get("connection_addition_obligations") or []
+        ),
         "composition_append_counts": dict(
             selectors.get("composition_append_counts") or {}
         ),
@@ -115,7 +120,7 @@ def _model_layer(layer):
         assessment["addition_count"] = 0
     elif layer == "connections":
         assessment["edge_indexes"] = []
-        assessment["addition_count"] = 0
+        assessment["addition_obligations"] = []
     elif layer == "composition":
         assessment.update(
             {
@@ -154,10 +159,11 @@ def _passing_review_payload(*, strengths=None, advice=None, topology_proofs=None
             topology_proofs
             if topology_proofs is not None
             else {
-                guarantee: ["not_applicable", [], []]
+                guarantee: ["not_applicable", [], [], [], []]
                 for guarantee in sorted(_TOPOLOGY_PROOF_GUARANTEES)
             }
         ),
+        "prior_obligation_dispositions": [],
     }
 
 
@@ -193,7 +199,7 @@ def _critic_state(*, graph=None, complexity="prototype"):
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v47"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v49"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -216,7 +222,29 @@ def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
     assert "partition/order or event-time semantics" in _GRAPH_CRITIC_SYSTEM
     assert "replay/checkpoint" in _GRAPH_CRITIC_SYSTEM
     assert "compatible schema evolution" in _GRAPH_CRITIC_SYSTEM
-    assert "at least two endpoint identities" in _GRAPH_CRITIC_SYSTEM
+    assert "grants only these directed endpoint pairs" in _GRAPH_CRITIC_SYSTEM
+    assert "mandatory post-patch full-graph review must verify" in _GRAPH_CRITIC_SYSTEM
+    assert "it is not an exact edge" in _GRAPH_CRITIC_SYSTEM
+
+
+@pytest.mark.asyncio
+async def test_request_scoped_critic_provider_call_ceiling_fails_closed(monkeypatch):
+    calls = []
+
+    async def unexpected_call(**kwargs):
+        calls.append(kwargs)
+        raise AssertionError("critic provider must not be called past the request ceiling")
+
+    monkeypatch.setattr("agent.nodes.graph_critic.stream_structured_llm", unexpected_call)
+    state = _critic_state()
+    state["graph_critic_call_count"] = 4
+
+    result = await graph_critic_node(state)
+
+    assert calls == []
+    assert result["graph_critic_call_count"] == 4
+    assert result["graph_review"]["approved"] is False
+    assert result["graph_review"]["failure_code"] == "semantic_review_unavailable"
 
 
 def test_repair_contract_has_exactly_four_mece_layers_without_duplicate_selectors():
@@ -259,7 +287,12 @@ def test_component_additions_require_connection_additions():
     contract = _repair_contract(
         scope="local",
         failed_layer="components",
-        layer_selectors={"components": {"addition_count": 1}},
+        layer_selectors={
+            "components": {
+                "addition_count": 1,
+                "context_node_ids": ["intake"],
+            }
+        },
     )
 
     with pytest.raises(ValueError, match="connection"):
@@ -289,6 +322,14 @@ def test_component_additions_in_a_grouped_graph_require_composition_groups():
         0.7,
         findings=["Connect the missing component."],
         addition_count=1,
+        context_node_ids=["intake"],
+        connection_addition_obligations=[
+            {
+                "source": "intake",
+                "target": "$new_node_1",
+                "required_contract": "attach the missing component",
+            }
+        ],
     )
 
     with pytest.raises(ValueError, match="groups"):
@@ -391,6 +432,18 @@ def test_local_repair_admits_an_existing_node_branch_addition():
             "connections": {
                 "addition_count": 2,
                 "context_node_ids": ["gate", "approved", "rejected"],
+                "connection_addition_obligations": [
+                    {
+                        "source": "gate",
+                        "target": "approved",
+                        "required_contract": "route approved decisions",
+                    },
+                    {
+                        "source": "gate",
+                        "target": "rejected",
+                        "required_contract": "route rejected decisions",
+                    },
+                ],
             }
         },
     )
@@ -414,6 +467,13 @@ def test_local_component_additions_require_an_existing_graph_anchor():
         0.7,
         findings=["Connect the missing components."],
         addition_count=1,
+        connection_addition_obligations=[
+            {
+                "source": "$new_node_1",
+                "target": "$new_node_2",
+                "required_contract": "connect the missing components",
+            }
+        ],
     )
 
     with pytest.raises(ValueError, match="existing graph anchor"):
@@ -536,6 +596,28 @@ def test_local_repair_admission_reports_safe_coordinates(
             findings=["Attach the missing components."],
             addition_count=2 if case == "missing_anchor" else 1,
             context_node_ids=[] if case == "missing_anchor" else ["existing"],
+            connection_addition_obligations=(
+                [
+                    {
+                        "source": "$new_node_1",
+                        "target": "$new_node_2",
+                        "required_contract": "attach the first missing component",
+                    },
+                    {
+                        "source": "$new_node_2",
+                        "target": "$new_node_1",
+                        "required_contract": "attach the second missing component",
+                    },
+                ]
+                if case == "missing_anchor"
+                else [
+                    {
+                        "source": "$new_node_1",
+                        "target": "$new_node_2",
+                        "required_contract": "attach both missing components",
+                    }
+                ]
+            ),
         )
 
     review = _enforce_local_repair_admission(
@@ -681,7 +763,7 @@ def test_scorecard_preflight_reports_independent_proof_defects_together():
     payload = _passing_review_payload()
     guarantees = sorted(_TOPOLOGY_PROOF_GUARANTEES)[:2]
     for guarantee in guarantees:
-        payload["topology_proofs"][guarantee] = ["pass", [], []]
+        payload["topology_proofs"][guarantee] = ["pass", [], [], [], []]
 
     with pytest.raises(CriticProtocolError) as caught:
         _preflight_review_protocol(
@@ -709,7 +791,7 @@ async def test_protocol_correction_receives_all_repair_algebra_defects(monkeypat
         invalid,
         "connections",
         finding_codes=[connection_code],
-        addition_count=1,
+        addition_obligations=[[0, 0, "invalid self connection"]],
     )
     calls = []
 
@@ -730,8 +812,8 @@ async def test_protocol_correction_receives_all_repair_algebra_defects(monkeypat
 
     assert result["graph_review"]["approved"] is True
     correction = calls[1]["messages"][0]["content"][-1]["text"]
-    assert "pass status cannot expose editable selectors" in correction
-    assert "connection additions require at least two" in correction
+    assert "layers.components:unexpected_context" in correction
+    assert "layers.connections.addition_obligations:invalid_contract" in correction
 
 
 def test_critic_schema_keeps_named_layers_without_repeating_rubric_names():
@@ -780,7 +862,7 @@ def test_model_layer_rows_require_the_exact_layer_arity(layer, length_change):
         )
 
 
-@pytest.mark.parametrize("length", [1, 2, 4])
+@pytest.mark.parametrize("length", [1, 2, 3, 4, 6])
 def test_model_proof_rows_require_exact_status_and_edge_indexes(length):
     payload = _passing_review_payload()
     guarantee = sorted(_TOPOLOGY_PROOF_GUARANTEES)[0]
@@ -798,7 +880,7 @@ def test_model_proof_rows_require_exact_status_and_edge_indexes(length):
 def test_topology_proof_validation_follows_resolved_depth():
     payload = _passing_review_payload()
     guarantee = sorted(_TOPOLOGY_PROOF_GUARANTEES)[0]
-    payload["topology_proofs"][guarantee] = ["pass", [], []]
+    payload["topology_proofs"][guarantee] = ["pass", [], [], [], []]
 
     prototype = _canonicalise_review_protocol(
         payload,
@@ -861,7 +943,13 @@ async def test_prototype_depth_rejects_production_only_codes_despite_request_wor
 def test_protocol_errors_expose_only_safe_coordinates():
     payload = _passing_review_payload()
     guarantee = sorted(_TOPOLOGY_PROOF_GUARANTEES)[0]
-    payload["topology_proofs"][guarantee] = ["PRIVATE_SENTINEL", [], []]
+    payload["topology_proofs"][guarantee] = [
+        "PRIVATE_SENTINEL",
+        [],
+        [],
+        [],
+        [],
+    ]
 
     with pytest.raises(CriticProtocolError) as error:
         _canonicalise_review_protocol(
@@ -999,13 +1087,13 @@ def test_failed_topology_proof_requires_connections_code_17(finding_codes):
     }
     payload = _passing_review_payload()
     guarantee = sorted(_TOPOLOGY_PROOF_GUARANTEES)[0]
-    payload["topology_proofs"][guarantee] = ["fail", [], []]
+    payload["topology_proofs"][guarantee] = ["fail", [], [], [0], []]
     _set_model_layer(
         payload,
         "connections",
         finding_codes=finding_codes,
         context_node_indexes=[0, 1],
-        addition_count=1,
+        addition_obligations=[[0, 1, "restore the required directed guarantee"]],
     )
 
     if finding_codes == [5]:
@@ -1029,11 +1117,273 @@ def test_failed_topology_proof_requires_connections_code_17(finding_codes):
         normalized["topology_proofs"][0]["reason"]
         in normalized["repair_contract"]["layers"]["connections"]["blocking_findings"]
     )
+    topology_requirement = next(
+        item
+        for item in repair_requirements(
+            normalized["repair_contract"], normalized["topology_proofs"]
+        )
+        if item["criterion"].startswith("topology_proof:")
+    )
+    assert (
+        "Required additions: source -> target: restore the required directed guarantee"
+        in topology_requirement["requirement"]
+    )
     _validate_review_protocol(
         normalized,
         require_topology_proofs=True,
         graph=graph,
     )
+
+
+def test_connection_addition_count_is_derived_from_exact_obligations():
+    graph = {
+        "nodes": [
+            {"id": "gate", "label": "Gate"},
+            {"id": "audit", "label": "Audit"},
+            {"id": "metrics", "label": "Metrics"},
+        ],
+        "edges": [],
+    }
+    payload = _passing_review_payload(topology_proofs={})
+    _set_model_layer(
+        payload,
+        "connections",
+        finding_codes=[5],
+        addition_obligations=[
+            [0, 1, "record the accepted action in the canonical audit log"]
+        ],
+    )
+
+    normalized = _canonicalise_review_protocol(
+        payload,
+        graph=graph,
+        deterministic_findings=[],
+        review_context=[],
+        require_topology_proofs=False,
+    )
+    connections = normalized["repair_contract"]["layers"]["connections"]
+
+    assert connections["addition_count"] == 1
+    assert connections["connection_addition_obligations"] == [
+        {
+            "source": "gate",
+            "target": "audit",
+            "required_contract": (
+                "record the accepted action in the canonical audit log"
+            ),
+        }
+    ]
+    assert connections["context_node_ids"] == ["gate", "audit"]
+    _validate_repair_contract(normalized["repair_contract"], graph=graph)
+
+
+def test_failed_topology_proof_requires_an_exact_repair_obligation():
+    graph = {
+        "nodes": [
+            {"id": "source", "label": "Source"},
+            {"id": "target", "label": "Target"},
+        ],
+        "edges": [],
+    }
+    payload = _passing_review_payload()
+    guarantee = sorted(_TOPOLOGY_PROOF_GUARANTEES)[0]
+    payload["topology_proofs"][guarantee] = ["fail", [], [], [], []]
+    _set_model_layer(payload, "connections", finding_codes=[17])
+
+    with pytest.raises(CriticProtocolError, match="exact repair path") as error:
+        _canonicalise_review_protocol(
+            payload,
+            graph=graph,
+            deterministic_findings=[],
+            review_context=[],
+        )
+
+    assert error.value.path == f"topology_proofs.{guarantee}"
+    assert error.value.rule == "missing_evidence"
+
+
+def test_failed_topology_proof_projects_an_existing_edge_repair_selector():
+    graph = {
+        "nodes": [
+            {"id": "source", "label": "Source"},
+            {"id": "target", "label": "Target"},
+        ],
+        "edges": [{"source": "source", "target": "target", "label": "ambiguous flow"}],
+    }
+    payload = _passing_review_payload()
+    guarantee = sorted(_TOPOLOGY_PROOF_GUARANTEES)[0]
+    payload["topology_proofs"][guarantee] = ["fail", [], [], [], [0]]
+    _set_model_layer(payload, "connections", finding_codes=[17])
+
+    normalized = _canonicalise_review_protocol(
+        payload,
+        graph=graph,
+        deterministic_findings=[],
+        review_context=[],
+    )
+
+    selector = {"source": "source", "target": "target", "label": "ambiguous flow"}
+    connections = normalized["repair_contract"]["layers"]["connections"]
+    assert connections["edge_selectors"] == [selector]
+    failed_proof = next(
+        proof
+        for proof in normalized["topology_proofs"]
+        if proof["guarantee"] == guarantee
+    )
+    assert failed_proof["repair_obligations"] == []
+    assert failed_proof["repair_edge_selectors"] == [selector]
+    requirement = next(
+        item
+        for item in repair_requirements(
+            normalized["repair_contract"], normalized["topology_proofs"]
+        )
+        if item["criterion"] == f"topology_proof:{guarantee}"
+    )
+    assert (
+        "Required existing-edge repairs: source -> target: ambiguous flow"
+        in requirement["requirement"]
+    )
+    _validate_review_protocol(
+        normalized,
+        require_topology_proofs=True,
+        graph=graph,
+    )
+
+
+@pytest.mark.parametrize("status", ["pass", "not_applicable"])
+def test_non_failed_topology_proofs_forbid_existing_edge_repair_references(status):
+    graph = {
+        "nodes": [{"id": "source"}, {"id": "target"}],
+        "edges": [{"source": "source", "target": "target", "label": "flow"}],
+    }
+    payload = _passing_review_payload()
+    guarantee = sorted(_TOPOLOGY_PROOF_GUARANTEES)[0]
+    edge_indexes = [0] if status == "pass" else []
+    route_pairs = [[0, 1]] if status == "pass" else []
+    payload["topology_proofs"][guarantee] = [
+        status,
+        edge_indexes,
+        route_pairs,
+        [],
+        [0],
+    ]
+
+    with pytest.raises(ValueError, match="cannot cite repair"):
+        _canonicalise_review_protocol(
+            payload,
+            graph=graph,
+            deterministic_findings=[],
+            review_context=[],
+        )
+
+
+def test_prior_open_obligations_require_explicit_consistent_dispositions():
+    prior_finding = "Repair edge semantics in the connections layer."
+    prior_id = _prior_obligation_id(layer="connections", finding=prior_finding)
+    prior = [
+        {
+            "id": prior_id,
+            "layer": "connections",
+            "finding": prior_finding,
+        }
+    ]
+    payload = _passing_review_payload(topology_proofs={})
+    _set_model_layer(payload, "connections", finding_codes=[5])
+
+    with pytest.raises(ValueError, match="classify every prior open obligation"):
+        _canonicalise_review_protocol(
+            payload,
+            graph={"nodes": [], "edges": []},
+            deterministic_findings=[],
+            review_context=[],
+            require_topology_proofs=False,
+            prior_open_obligations=prior,
+        )
+
+    payload["prior_obligation_dispositions"] = [[prior_id, "resolved"]]
+    with pytest.raises(ValueError, match="resolved prior obligation"):
+        _canonicalise_review_protocol(
+            payload,
+            graph={"nodes": [], "edges": []},
+            deterministic_findings=[],
+            review_context=[],
+            require_topology_proofs=False,
+            prior_open_obligations=prior,
+        )
+
+    _set_model_layer(payload, "connections", finding_codes=[3])
+    payload["prior_obligation_dispositions"] = [[prior_id, "still_fail"]]
+    normalized = _canonicalise_review_protocol(
+        payload,
+        graph={"nodes": [], "edges": []},
+        deterministic_findings=[],
+        review_context=[],
+        require_topology_proofs=False,
+        prior_open_obligations=prior,
+    )
+    assert normalized["prior_obligation_dispositions"] == [
+        {"prior_obligation_id": prior_id, "status": "still_fail"}
+    ]
+    assert (
+        prior_finding
+        in normalized["repair_contract"]["layers"]["connections"]["blocking_findings"]
+    )
+
+
+def test_prior_obligation_dispositions_reject_unknown_server_ids():
+    prior_finding = "Keep this blocker open."
+    prior = [
+        {
+            "id": _prior_obligation_id(layer="connections", finding=prior_finding),
+            "layer": "connections",
+            "finding": prior_finding,
+        }
+    ]
+    payload = _passing_review_payload(topology_proofs={})
+    payload["prior_obligation_dispositions"] = [["prior_unknown", "resolved"]]
+
+    with pytest.raises(ValueError, match="prior_obligation_id"):
+        _canonicalise_review_protocol(
+            payload,
+            graph={},
+            deterministic_findings=[],
+            review_context=[],
+            require_topology_proofs=False,
+            prior_open_obligations=prior,
+        )
+
+
+def test_review_packet_carries_open_findings_and_prototype_filters_production_only():
+    state = _critic_state()
+    contract = _repair_contract(
+        scope="local",
+        failed_layer="connections",
+        findings=[
+            "Repair edge semantics in the connections layer.",
+            "Repair topology enforced guarantees in the connections layer.",
+        ],
+        layer_selectors={"connections": {"edge_selectors": []}},
+    )
+    state["graph_review"] = {"repair_contract": contract}
+
+    packet = _review_packet(
+        state,
+        graph=state["graph_data"],
+        query=state["user_message"],
+        resolved_depth="prototype",
+        render_result={},
+    )
+
+    assert packet["prior_open_obligations"] == [
+        {
+            "id": _prior_obligation_id(
+                layer="connections",
+                finding="Repair edge semantics in the connections layer.",
+            ),
+            "layer": "connections",
+            "finding": "Repair edge semantics in the connections layer.",
+        }
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1122,7 +1472,7 @@ def test_missing_record_context_is_actionable_without_unlocking_node_anchors():
         finding_codes=[4],
         context_indexes=[0],
         context_node_indexes=[0, 1],
-        addition_count=1,
+        addition_obligations=[[0, 1, "bind approval to the exact authorized action"]],
     )
 
     normalized = _canonicalise_review_protocol(
@@ -1774,7 +2124,10 @@ async def test_completed_scorecard_admission_failure_gets_one_contract_correctio
                 payload,
                 "connections",
                 finding_codes=[connection_code],
-                addition_count=2,
+                addition_obligations=[
+                    ["$new_node_1", "$new_node_2", "connect new responsibilities"],
+                    ["$new_node_2", "$new_node_1", "return connection state"],
+                ],
             )
         return _structured_response(payload)
 
@@ -1838,7 +2191,10 @@ async def test_completed_scorecard_does_not_retry_after_contract_correction_is_c
             payload,
             "connections",
             finding_codes=[connection_code],
-            addition_count=2,
+            addition_obligations=[
+                ["$new_node_1", "$new_node_2", "connect new responsibilities"],
+                ["$new_node_2", "$new_node_1", "return connection state"],
+            ],
         )
         return _structured_response(payload)
 
@@ -1885,6 +2241,15 @@ async def test_patch_validation_error_informs_one_contract_correction(monkeypatc
     async def fake_stream_llm(**kwargs):
         calls.append(kwargs)
         payload = _passing_review_payload(topology_proofs={})
+        payload["prior_obligation_dispositions"] = [
+            [
+                _prior_obligation_id(
+                    layer="connections",
+                    finding="Repair this layer.",
+                ),
+                "resolved",
+            ]
+        ]
         _set_model_layer(
             payload,
             "connections",
@@ -3793,6 +4158,8 @@ def _valid_protocol_topology_proofs(edge=None):
             "status": "pass",
             "edge_evidence": [edge],
             "route_claims": [{"source": edge["source"], "target": edge["target"]}],
+            "repair_obligations": [],
+            "repair_edge_selectors": [],
             "reason": "The cited witness subgraph supports this guarantee.",
         }
         for guarantee in sorted(_TOPOLOGY_PROOF_GUARANTEES)
@@ -3801,7 +4168,7 @@ def _valid_protocol_topology_proofs(edge=None):
 
 def _valid_model_topology_proofs():
     return {
-        guarantee: ["pass", [0], [[0, 1]]]
+        guarantee: ["pass", [0], [[0, 1]], [], []]
         for guarantee in sorted(_TOPOLOGY_PROOF_GUARANTEES)
     }
 
@@ -3882,7 +4249,13 @@ async def test_malformed_topology_proofs_get_one_bounded_correction(
     valid = _passing_review_payload(topology_proofs=_valid_model_topology_proofs())
     malformed = deepcopy(valid)
     malformed_guarantee = sorted(_TOPOLOGY_PROOF_GUARANTEES)[0]
-    malformed["topology_proofs"][malformed_guarantee] = ["pass", [], []]
+    malformed["topology_proofs"][malformed_guarantee] = [
+        "pass",
+        [],
+        [],
+        [],
+        [],
+    ]
     calls = []
 
     async def fake_stream_llm(**kwargs):
@@ -4054,6 +4427,7 @@ def test_semantic_review_wire_has_only_fixed_scorecard_fields():
     assert set(_GRAPH_CRITIC_RESPONSE_SCHEMA["properties"]) == {
         "layers",
         "topology_proofs",
+        "prior_obligation_dispositions",
     }
     schema_text = json.dumps(_GRAPH_CRITIC_RESPONSE_SCHEMA)
     assert "blocking_findings" not in schema_text

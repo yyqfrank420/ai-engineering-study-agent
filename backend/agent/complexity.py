@@ -166,13 +166,16 @@ _EMBEDDED_GRAPH_ACTION = re.compile(r"\b(?:diagram|draw|show|visualise|visualize
 _NEGATED_GRAPH_EDIT_CLAUSE = re.compile(
     r"^\s*(?:please\s+)?(?:do\s+not|don't|never|without)\b"
 )
+_GRAPH_ARTIFACT_CHANGE_FORBIDDEN = re.compile(
+    r"\b(?:do\s+not|don't|never|without)\b.{0,60}"
+    r"\b(?:chang(?:e|es|ed|ing)|edit(?:s|ed|ing)?|modify|modifies|modified|modifying|"
+    r"rebuild(?:s|ing)?|redesign(?:s|ed|ing)?|replac(?:e|es|ed|ing)|"
+    r"revis(?:e|es|ed|ing)|updat(?:e|es|ed|ing))\b.{0,40}"
+    r"\b(?:architectures?|diagrams?|graphs?)\b"
+)
 _EXPLANATION_REQUEST = re.compile(
     r"^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?"
     r"(?:explain|describe|tell\s+me\s+how)\b"
-)
-_NON_GRAPH_MUTATION_TARGET = re.compile(
-    r"\b(?:answer|citations?|explanation|graph\s+database|react\s+components?|"
-    r"subject|topic|training\s+data|tradeoffs?)\b"
 )
 _TOPIC_SWITCH_REQUEST = re.compile(
     r"^(?:change\s+the\s+(?:subject|topic)|move\s+on|switch\s+to|talk\s+about)\b"
@@ -231,26 +234,30 @@ def resolve_design_query(
     if not any(phrase in message.lower() for phrase in _DESIGN_FOLLOWUP_PHRASES):
         return message
 
-    prior_user_messages = [
-        " ".join(str(turn.get("content") or "").split())
-        for turn in (history or [])[-8:]
-        if turn.get("role") == "user" and turn.get("content")
-    ]
-    graph_parts: list[str] = []
-    if graph_data:
-        graph_parts.extend(
-            [
-                str(graph_data.get("title") or ""),
-                str(graph_data.get("graph_type") or ""),
-            ]
+    graph_title = (
+        " ".join(str(graph_data.get("title") or "").split())
+        if isinstance(graph_data, dict)
+        else ""
+    )
+    if graph_title:
+        context = f"Existing graph context (not new user requirements): {graph_title}"
+    else:
+        latest_prior_user_message = next(
+            (
+                " ".join(str(turn.get("content") or "").split())
+                for turn in reversed(history or [])
+                if turn.get("role") == "user" and turn.get("content")
+            ),
+            "",
         )
-        graph_parts.extend(
-            str(node.get("label") or "")
-            for node in (graph_data.get("nodes") or [])
-            if isinstance(node, dict) and node.get("label")
+        context = (
+            "Most recent user context (background only): " + latest_prior_user_message
+            if latest_prior_user_message
+            else ""
         )
-    parts = [*prior_user_messages[-3:], *graph_parts, message]
-    return " ".join(part for part in parts if part).strip() or message
+    if not context:
+        return message
+    return f"{context}\nLatest user request: {message}"
 
 
 def is_existing_graph_edit_request(query: str, graph_data: dict | None) -> bool:
@@ -312,7 +319,12 @@ def resolve_graph_operation(
             )
         )
 
-    design_clauses = [clause for clause in clauses if requests_graph_design(clause)]
+    design_clauses = [
+        clause
+        for clause in clauses
+        if requests_graph_design(clause)
+        and not _GRAPH_ARTIFACT_CHANGE_FORBIDDEN.search(clause)
+    ]
     new_graph_requested = applied_design_requested and any(
         not references_current_design(clause) for clause in design_clauses
     )
@@ -339,14 +351,11 @@ def resolve_graph_operation(
         for clause in clauses
         if _GRAPH_EDIT_ACTION.search(clause)
         and not _NEGATED_GRAPH_EDIT_CLAUSE.match(clause)
+        and not _GRAPH_ARTIFACT_CHANGE_FORBIDDEN.search(clause)
     ]
     if any(
         references_current_design(clause) or _GRAPH_EDIT_TARGET.search(clause)
         for clause in mutation_clauses
-    ):
-        return "edit"
-    if any(
-        not _NON_GRAPH_MUTATION_TARGET.search(clause) for clause in mutation_clauses
     ):
         return "edit"
     return None

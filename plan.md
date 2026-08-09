@@ -6,7 +6,7 @@ Last updated: 2026-08-08
 
 Restore the current architecture pipeline and deploy it before starting the staged generation redesign.
 
-The current release now completes architecture planning, Kimi generation, private rendering, local repair, and post-patch review. Diagnostic `31257810429` exposed serial semantic defect discovery. Diagnostic `31259489721` exposed serial scorecard validation. Diagnostic `31261404727` exposed model-owned completion state, which critic v41 replaced with a server-owned merge. Diagnostic `31262285743` then exposed a direct schema/parser contradiction: the provider schema allowed categorical strings while the applied topology parser required integer codes. The parser now accepts only the finite canonical codebook names or their integer codes.
+The current release completes architecture planning, Kimi generation, private rendering, one semantic repair, one error-informed critic-contract correction, and post-patch review. The reviewed graph snapshot stays beside its scorecard. Dependency-aware layer retention reopens downstream review when an upstream owned record changes. A request-scoped four-call ceiling bounds Sonnet critic provider calls across all review stages. Diagnostic `31257810429` exposed serial semantic defect discovery. Diagnostic `31259489721` exposed serial scorecard validation. Diagnostic `31261404727` exposed model-owned completion state, which critic v41 replaced with a server-owned merge. Diagnostic `31262285743` then exposed a direct schema/parser contradiction: the provider schema allowed categorical strings while the applied topology parser required integer codes. The parser now accepts only the finite canonical codebook names or their integer codes.
 
 The redesign stays outside the release-critical path. It begins after the current pipeline passes the targeted live diagnostic and production smoke test.
 
@@ -20,16 +20,16 @@ The redesign stays outside the release-critical path. It begins after the curren
 4. Record safe validation paths and rule codes when critic output is rejected.
 5. Add paired prototype and production tests.
 6. Give the active critic verdict priority over speculative repair time while preserving synthesis and finalization.
-7. Keep whole-graph generation, private render, MECE review layers, locks, and one bounded local repair.
+7. Keep whole-graph generation, private render, MECE review layers, dependency-aware retention and reopening, one semantic repair, and one error-informed critic-contract correction.
 8. Complete the first editable review before spending the one repair.
 
 ### Current status
 
 - Canonicalisation and final validation use the resolved architecture depth.
 - Critic v41 sends an empty proof object at prototype depth and keeps the full proof contract at production depth.
-- An initial editable rejection receives one clean completion pass against the same graph and render. The server retains the first valid review as a lower bound, unions new authority from the second review, and validates the merged contract.
+- An initial editable rejection receives one clean completion pass against the same graph and render. The server retains the first valid review as a lower bound, unions new authority from the second review, and validates the merged contract. This consumes the sole error-informed critic-contract correction budget.
 - The shared initial critic stage may borrow up to 195 seconds. The measured timing replay preserves 98 seconds for patching and 101 seconds for final review.
-- Repair scope is derived from failed layer ownership, so editable defects enter one bounded patch and render-only defects fail closed.
+- Repair scope is derived from failed layer ownership. It grants exact permissions for cited disconnected records and exact directed connection obligations. Group moves require both source and destination group authority. Editable defects enter one bounded patch and render-only defects fail closed.
 - The exact `122b1fd` diagnostic completed all graph stages and proved the repair pipeline works. Its remaining failure was an unchanged defect omitted by the first critic.
 - All 147 critic tests and 73 applied topology specification tests pass locally. The next paid action remains one exact-head `graph-expansion` diagnostic after independent review, commit, and exact-head CI.
 
@@ -39,7 +39,7 @@ The redesign stays outside the release-critical path. It begins after the curren
 - The same incomplete witnesses fail at production depth.
 - A corrected review can recover from one malformed response.
 - An initial editable rejection receives exactly one completion pass before repair.
-- A completion may add defects and selectors. Omitted prior repair evidence remains in the server-owned merged contract.
+- A completion may add defects and selectors. Omitted prior repair evidence remains in the server-owned merged contract. The reviewed graph snapshot and scorecard remain paired by graph version.
 - Post-patch reviews do not start another completion pass.
 - Safe error telemetry identifies the rejected field and rule without storing raw prompts or model output.
 - Existing graph critic, repair, workflow, API, and browser tests remain green.
@@ -49,13 +49,13 @@ The redesign stays outside the release-critical path. It begins after the curren
 
 1. Run focused tests, static analysis, and the full offline CI matrix.
 2. Run one targeted `graph-expansion` real-model diagnostic.
-3. Require a fresh graph version, successful private render, completed semantic review, and no fallback.
+3. Require a fresh graph version, successful private render, completed semantic review, and explicit `approved`, `preserved`, or `withheld` publication state. An edit cannot fall back to creation.
 4. Merge and deploy only after the exact commit passes.
 5. Run a production smoke test and confirm stable traffic before beginning Release 2 work.
 
 ### Scope freeze
 
-Release 1 must not introduce component-stage orchestration, parallel builders, a new project-state model, multi-candidate search, or new scoring layers.
+Release 1 must not introduce component-stage orchestration, parallel builders, a new project-state model, multi-candidate search, generated layers, or new scoring layers. The staged DAG and layer-as-generated architecture remain Release 2 work.
 
 ## Release 2: staged architecture generation
 

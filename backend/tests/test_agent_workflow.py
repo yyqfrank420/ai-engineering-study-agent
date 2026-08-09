@@ -65,7 +65,30 @@ def test_architecture_roles_follow_graph_request_intent(message, expected):
     assert _should_run_applied_design_roles(state) is expected
 
 
-def test_failed_review_gets_two_semantic_repair_rounds():
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        ({"graph_changed": True, "graph_data": {}}, "unreviewed"),
+        ({"graph_changed": False, "graph_data": {}}, "unchanged"),
+        (
+            {
+                "graph_changed": False,
+                "graph_data": {},
+                "approved_graph_data": {},
+                "graph_operation": {"status": "failed"},
+            },
+            "preserved",
+        ),
+        ({"graph_changed": False, "graph_data": None}, "none"),
+    ],
+)
+def test_draft_graph_publication_is_explicit(state, expected):
+    from agent.graph import _draft_graph_publication
+
+    assert _draft_graph_publication(state) == expected
+
+
+def test_failed_review_gets_one_semantic_repair_round():
     from agent.graph import (
         _repair_attempt_summary,
         _route_after_review,
@@ -74,7 +97,6 @@ def test_failed_review_gets_two_semantic_repair_rounds():
 
     assert _repair_attempt_summary(0) == "before a bounded repair could complete"
     assert _repair_attempt_summary(1) == "after 1 bounded repair attempt"
-    assert _repair_attempt_summary(2) == "after 2 bounded repair attempts"
 
     failed = {
         "graph_changed": True,
@@ -83,7 +105,7 @@ def test_failed_review_gets_two_semantic_repair_rounds():
     }
 
     assert _route_after_review({**failed, "graph_repair_round_count": 0}) == "revise"
-    assert _route_after_review({**failed, "graph_repair_round_count": 1}) == "revise"
+    assert _route_after_review({**failed, "graph_repair_round_count": 1}) == "reject"
     assert _route_after_review({**failed, "graph_repair_round_count": 2}) == "reject"
     assert (
         _route_after_review(
@@ -105,7 +127,7 @@ def test_failed_review_gets_two_semantic_repair_rounds():
         _route_after_revision(
             {**failed, "graph_repair_round_count": 2, "graph_changed": True}
         )
-        == "review"
+        == "reject"
     )
     assert (
         _route_after_revision(
@@ -188,7 +210,7 @@ def test_repair_round_and_contract_correction_counters_are_separate():
             {
                 **failed,
                 "graph_revision_count": 0,
-                "graph_repair_round_count": 2,
+                "graph_repair_round_count": 1,
                 "graph_contract_correction_count": 0,
             }
         )
@@ -473,6 +495,7 @@ def test_rejected_candidate_restores_immutable_approved_graph_baseline():
     assert restored["graph_data"] == approved
     assert restored["graph_data"] is not approved
     assert restored["graph_changed"] is False
+    assert restored["graph_publication"] == "preserved"
 
 
 @pytest.mark.asyncio
@@ -526,6 +549,7 @@ async def test_rejected_expansion_preserves_baseline_without_publication(
         }
 
     async def fake_review(state):
+        assert state["graph_publication"] == "unreviewed"
         return {
             **state,
             "graph_review": {
@@ -577,7 +601,7 @@ async def test_rejected_expansion_preserves_baseline_without_publication(
 
 
 @pytest.mark.asyncio
-async def test_preserved_graph_is_not_emitted_but_unmarked_graph_resyncs(monkeypatch):
+async def test_preserved_graph_is_not_emitted_but_unchanged_graph_resyncs(monkeypatch):
     import agent.nodes.orchestrator_node as orchestrator
 
     graph = {
@@ -622,7 +646,7 @@ async def test_preserved_graph_is_not_emitted_but_unmarked_graph_resyncs(monkeyp
         return result, events
 
     preserved_result, preserved_events = await run_synthesis("preserved")
-    resynced_result, resynced_events = await run_synthesis(None)
+    resynced_result, resynced_events = await run_synthesis("unchanged")
 
     assert preserved_result["graph_data"] == graph
     assert not any(event.get("type") == "graph_data" for event in preserved_events)
@@ -729,7 +753,7 @@ async def test_langgraph_can_verify_one_bounded_repair_then_publish(monkeypatch)
         if event.get("phase") == "revise" and event.get("status") == "retry"
     ]
     assert [event["detail"].split(".", 1)[0] for event in repair_events] == [
-        "Repair round 1 of 2",
+        "Repair round 1 of 1",
     ]
     assert not any(event.get("type") == "graph_notice" for event in events)
 
@@ -907,7 +931,7 @@ async def test_langgraph_does_not_emit_graph_notice_when_graph_mode_on(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_run_agent_treats_edit_request_without_applied_graph_as_create(
+async def test_run_agent_preserves_edit_request_without_applied_graph(
     monkeypatch,
 ):
     import agent.graph as agent_graph
@@ -924,22 +948,16 @@ async def test_run_agent_treats_edit_request_without_applied_graph_as_create(
         return incoming_state, None
 
     async def fake_apply_graph(incoming_state, _tools):
-        assert incoming_state["graph_intent"] == "create"
+        assert incoming_state["graph_intent"] == "edit"
+        assert incoming_state["graph_operation"] == {
+            "kind": "edit",
+            "status": "failed",
+            "failure_code": "graph_edit_target_unavailable",
+        }
         return {
             **incoming_state,
-            "graph_changed": True,
-            "graph_data": {
-                "design_origin": "applied",
-                "title": "Created graph",
-                "nodes": [],
-                "edges": [],
-                "sequence": [],
-            },
-            "graph_operation": {
-                "kind": "create",
-                "status": "candidate",
-                "failure_code": None,
-            },
+            "graph_changed": False,
+            "graph_data": None,
         }
 
     async def fake_review(incoming_state):
@@ -972,12 +990,19 @@ async def test_run_agent_treats_edit_request_without_applied_graph_as_create(
 
     result = await agent_graph.run_agent(state, [], [], [])
 
-    assert not any(event.get("type") == "graph_notice" for event in events)
-    assert result["graph_data"]["title"] == "Created graph"
+    assert result["graph_data"] is None
+    assert result["graph_operation"] == {
+        "kind": "edit",
+        "status": "failed",
+        "failure_code": "graph_edit_target_unavailable",
+    }
+    assert any(event.get("type") == "graph_notice" for event in events)
 
 
 @pytest.mark.asyncio
-async def test_reject_graph_preserves_candidate_when_review_is_unavailable(monkeypatch):
+async def test_initial_unreviewed_candidate_is_withheld_when_review_is_unavailable(
+    monkeypatch,
+):
     import agent.graph as agent_graph
 
     events = []
@@ -1010,6 +1035,7 @@ async def test_reject_graph_preserves_candidate_when_review_is_unavailable(monke
         }
 
     async def fake_review(incoming_state):
+        assert incoming_state["graph_publication"] == "unreviewed"
         return {
             **incoming_state,
             "graph_review": {
@@ -1022,6 +1048,8 @@ async def test_reject_graph_preserves_candidate_when_review_is_unavailable(monke
         }
 
     async def fake_synth(incoming_state):
+        assert incoming_state["graph_data"] is None
+        assert incoming_state["graph_publication"] == "withheld"
         return {**incoming_state, "response_text": "ok"}
 
     async def fake_architect(_incoming_state):
@@ -1048,8 +1076,10 @@ async def test_reject_graph_preserves_candidate_when_review_is_unavailable(monke
 
     result = await agent_graph.run_agent(state, [], [], [])
 
-    assert not any(event.get("type") == "graph_notice" for event in events)
-    assert result["graph_data"]["title"] == "Rejected candidate"
+    assert any(event.get("type") == "graph_notice" for event in events)
+    assert not any(event.get("type") == "graph_data" for event in events)
+    assert result["graph_data"] is None
+    assert result["graph_publication"] == "withheld"
     assert result["graph_notice_sent"] is True
     assert result["graph_operation"]["status"] == "failed"
 

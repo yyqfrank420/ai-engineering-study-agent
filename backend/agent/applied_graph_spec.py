@@ -183,8 +183,16 @@ def applied_graph_topology_prompt(
         "layouts: root is [label,type,responsibility,group_index]; every remaining component is "
         "[parent_index,label,type,responsibility,group_index,incoming_edge_label,flow,sync]; link "
         "rows are [source_index,target_index,label,flow,sync]; group definition rows are "
-        "[label,kind]. Categorical tuple fields and group kind use "
-        f"integer codes. {codebook} Use the integer, never its name, in the wire object. Choose the "
+        "[label,kind]. String fields are labels, responsibilities, titles, and group labels. Integer "
+        "fields are every component, parent, source, target, group, and step index plus every "
+        "categorical type, flow, sync, and group-kind code. Categorical tuple fields and group kind use "
+        f"integer codes. {codebook} The positional integer-code wire format is canonical. Use the "
+        "integer, never its name, in the wire object. The reviewed_plan owns design decisions; use "
+        "the request for domain vocabulary and stated context. You author "
+        "the title, groups, component labels, component types, responsibilities, edge labels, flows, "
+        "sync modes, and sequence membership. The server owns stable IDs, display technology and "
+        "transport labels, edge descriptions, lanes, tiers, and rendering state. The server derives "
+        "each lane from its authored group kind. Do not emit lane or tier fields. Choose the "
         "number of components, groups, and "
         "links from the design. Never merge distinct owners, trust "
         "boundaries, authoritative stores, decisions, or failure outcomes to make the diagram "
@@ -193,7 +201,9 @@ def applied_graph_topology_prompt(
         "event source, or scheduled trigger starts the depicted flow. Tree-edge direction and its "
         "incoming label must agree: the parent sends the named data or command to the child. Make "
         "the primary sequence one obvious directed path from entry through controls to an observable "
-        "outcome. Keep offline and supporting paths outside that sequence. Do not add diagram "
+        "outcome. Production depth requires this sequence. Prototype depth may omit it for a non-flow "
+        "diagram. Every nonempty sequence starts with root 0. Keep offline and supporting paths outside "
+        "that sequence. Do not add diagram "
         "authoring, rendering, or graph-generation mechanics as domain components unless the request "
         "requires them. A component earns its own row when ownership, trust, authoritative state, a "
         "decision, an externally meaningful action, or an outcome changes; fold other implementation "
@@ -206,20 +216,30 @@ def applied_graph_topology_prompt(
         "at components[i] defines component i+1 and its one incoming tree edge. Parent indexes are "
         "zero-based and must be smaller than the component index, which makes one rooted acyclic "
         "topology. For example, components[0] must use parent 0 and components[4] may use parent "
-        "0 through 4, never 5. Define groups before assigning their zero-based indexes in the root and "
-        "component rows. Every component must reference exactly one group. Links use component "
+        "0 through 4, never 5. Choose and enumerate groups before constructing root and component "
+        "rows, then emit their definitions in composition.groups. Root and component rows reference "
+        "those zero-based group positions. Every component must reference exactly one group. Links use component "
         "indexes starting with root 0. "
-        "Composition steps use the same indexes but allow only non-root components 1 through the "
-        "final component. Put parallel incoming edges in the same step, keep each component "
-        "in at most one step, and omit supporting edges from steps. Include all material "
+        "Composition steps use the same indexes and define a staged directed subgraph. A step lists "
+        "the components entered in that stage, not their parent. The first step must include root 0; "
+        "each other first-step component must have no incoming primary/runtime edge from another "
+        "sequenced component. Each component in every later step must have a directed primary/runtime "
+        "edge from a component in an earlier step. Every tree edge and every link with runtime flow is "
+        "a primary/runtime edge. Put independent parallel entries in the same step, keep each component "
+        "in at most one step, and omit supporting paths from steps. Include all material "
         "non-tree links. Every approval decision "
-        "needs distinct approved and rejected routes. Rejection is a no-effect outcome. A failure "
-        "after an effect uses a separate bounded compensation route through the normal controls. "
-        "Retry exhaustion, success, COMMITTED, NOT_FOUND, and STILL_UNKNOWN remain distinct outcomes "
-        "when they apply. Canary, promotion, and rollback remain distinct delivery paths when they "
-        "apply. Edge labels state the visible action or control contract. External mutations show "
+        "needs distinct approved and rejected routes. Edge labels state the visible action or control "
+        "contract. External mutations show "
         "validation, approval, execution, authoritative state, and reconciliation as distinct "
-        "responsibilities when those boundaries apply. Keep the title at most 100 characters, node "
+        "responsibilities when those boundaries apply. At low depth, use only low-depth criteria and "
+        "material requested runtime and control paths. At prototype depth, use only prototype criteria: "
+        "concrete buildable boundaries and applicable requested failure paths. Do not add or require "
+        "production hardening at low or prototype depth. At the selected production depth only, require "
+        "a no-effect rejection outcome, a separate bounded compensation route after an effect through "
+        "the normal controls, distinct retry exhaustion, success, COMMITTED, NOT_FOUND, and "
+        "STILL_UNKNOWN outcomes when they apply, and distinct canary, promotion, and rollback delivery "
+        "paths when they apply. At the selected production depth only, include every applicable control, "
+        "failure, observability, and delivery path. Keep the title at most 100 characters, node "
         "labels at most 60 characters, group labels at most 80 characters, responsibilities at most "
         f"220 characters, and edge labels at most {spec.edge_label_chars} characters. Return only "
         "the schema-constrained object as compact JSON without indentation or line breaks.\n"
@@ -266,6 +286,11 @@ def _required_text(value: Any, limit: int, *, path: str) -> str:
 
 
 def _coded_token(value: Any, codes: dict[int, str], *, path: str) -> str:
+    """Decode canonical integer codes and normalize accepted compatibility values.
+
+    Canonical topology output uses integer codes. Named tokens and decimal-string codes
+    are accepted only as compatibility input and are normalized to their coded token.
+    """
     if isinstance(value, bool):
         raise AppliedGraphSpecError(
             "graph_design_schema_invalid", path=path, rule="value_type"
@@ -520,9 +545,21 @@ def _validate_links(
     return edges
 
 
-def _validate_sequence_steps(raw_steps: list[Any], tree_count: int) -> list[int]:
-    sequence_steps = [0] * (tree_count + 1)
+def _validate_sequence_steps(
+    raw_steps: list[Any],
+    node_count: int,
+    tree_edges: list[dict[str, str]],
+    edges: list[dict[str, str]],
+    *,
+    require_sequence: bool,
+) -> list[int]:
+    if require_sequence and not raw_steps:
+        _raise_topology("composition.steps")
+    if raw_steps and (not raw_steps[0] or 0 not in raw_steps[0]):
+        _raise_topology("composition.steps[0]")
+    sequence_steps = [0] * node_count
     seen_components: set[int] = set()
+    component_paths: dict[int, str] = {}
     for step_index, raw_step in enumerate(raw_steps):
         path = f"composition.steps[{step_index}]"
         if not isinstance(raw_step, list):
@@ -534,7 +571,7 @@ def _validate_sequence_steps(raw_steps: list[Any], tree_count: int) -> list[int]
         for item_index, value in enumerate(raw_step):
             component_path = f"{path}[{item_index}]"
             component_index = _required_index(value, path=component_path)
-            if component_index <= 0 or component_index > tree_count:
+            if component_index < 0 or component_index >= node_count:
                 _raise_topology(component_path)
             if component_index in seen_components:
                 raise AppliedGraphSpecError(
@@ -544,6 +581,30 @@ def _validate_sequence_steps(raw_steps: list[Any], tree_count: int) -> list[int]
                 )
             seen_components.add(component_index)
             sequence_steps[component_index] = step_index + 1
+            component_paths[component_index] = component_path
+
+    incoming_sources: dict[int, set[int]] = {}
+    primary_runtime_edges = [
+        *tree_edges,
+        *(edge for edge in edges if edge["flow"] == "runtime"),
+    ]
+    for edge in primary_runtime_edges:
+        source_index = int(edge["source"][1:]) - 1
+        target_index = int(edge["target"][1:]) - 1
+        incoming_sources.setdefault(target_index, set()).add(source_index)
+
+    for component_index, step_index in enumerate(sequence_steps):
+        if step_index == 0:
+            continue
+        sources = incoming_sources.get(component_index, set())
+        if step_index == 1:
+            if component_index != 0 and any(
+                sequence_steps[source] > 0 for source in sources
+            ):
+                _raise_topology(component_paths[component_index])
+            continue
+        if not any(0 < sequence_steps[source] < step_index for source in sources):
+            _raise_topology(component_paths[component_index])
     return sequence_steps
 
 
@@ -615,7 +676,14 @@ def validate_applied_graph_topology(
         raw_root, raw_components, spec
     )
     memberships = _validate_group_memberships(raw_groups, group_indexes, spec)
-    sequence_steps = _validate_sequence_steps(raw_steps, len(raw_components))
+    edges = _validate_links(raw_links, node_count, tree_edges, spec)
+    sequence_steps = _validate_sequence_steps(
+        raw_steps,
+        node_count,
+        tree_edges,
+        edges,
+        require_sequence=spec.depth == "production",
+    )
     nodes = [
         {
             **component,
@@ -629,8 +697,6 @@ def validate_applied_graph_topology(
             components, memberships, sequence_steps, strict=True
         )
     ]
-    edges = _validate_links(raw_links, node_count, tree_edges, spec)
-
     title = _required_text(
         raw_composition["title"], spec.title_chars, path="composition.title"
     )
@@ -727,14 +793,14 @@ def enrich_applied_graph_topology(
     for node in draft["nodes"]:
         step = node["sequence_step"]
         edge = parent_edges.get(node["id"])
-        if step <= 0 or edge is None:
+        if step <= 0:
             continue
         entry = sequence_by_step.setdefault(step, {"nodes": [], "descriptions": []})
-        for node_id in (edge["source"], edge["target"]):
-            if node_id not in entry["nodes"]:
-                entry["nodes"].append(node_id)
-        if edge["label"] not in entry["descriptions"]:
-            entry["descriptions"].append(edge["label"])
+        if node["id"] not in entry["nodes"]:
+            entry["nodes"].append(node["id"])
+        description = edge["label"] if edge is not None else node["responsibility"]
+        if description not in entry["descriptions"]:
+            entry["descriptions"].append(description)
     sequence = [
         {
             "step": index,

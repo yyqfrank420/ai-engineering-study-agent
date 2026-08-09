@@ -58,7 +58,7 @@ def _draft(node_count: int = 14) -> dict:
         "composition": {
             "title": "Complete architecture",
             "groups": groups,
-            "steps": [[index] for index in range(1, min(7, len(components)) + 1)],
+            "steps": [[index] for index in range(min(7, node_count))],
         },
     }
 
@@ -264,7 +264,7 @@ def test_wire_codes_reject_invalid_scalar_values(value, rule):
     assert caught.value.rule == rule
 
 
-def test_canonical_category_representations_work_in_every_tuple_layout():
+def test_compatibility_category_representations_are_normalized_in_every_tuple_layout():
     payload = _draft(4)
     payload["root"][1] = "101"
     payload["components"][0][2] = "decision"
@@ -368,8 +368,8 @@ def test_group_memberships_are_derived_from_component_rows():
     ]
 
 
-@pytest.mark.parametrize("steps", [[[]], [[1], [1]], [[0]], [[99]]])
-def test_sequence_steps_are_nonempty_unique_non_root_component_indexes(steps):
+@pytest.mark.parametrize("steps", [[[]], [[1], [1]], [[99]]])
+def test_sequence_steps_are_nonempty_unique_component_indexes(steps):
     payload = _draft(4)
     payload["composition"]["steps"] = steps
     with pytest.raises(AppliedGraphSpecError) as caught:
@@ -379,13 +379,74 @@ def test_sequence_steps_are_nonempty_unique_non_root_component_indexes(steps):
 
 def test_sequence_uses_component_indexes_without_row_offset():
     payload = _draft(6)
-    payload["composition"]["steps"] = [[1, 5]]
+    payload["composition"]["steps"] = [[0], [1], [2], [3], [4], [5]]
 
     draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
 
-    assert draft["nodes"][0]["sequence_step"] == 0
-    assert draft["nodes"][1]["sequence_step"] == 1
-    assert draft["nodes"][5]["sequence_step"] == 1
+    assert draft["nodes"][0]["sequence_step"] == 1
+    assert draft["nodes"][1]["sequence_step"] == 2
+    assert draft["nodes"][5]["sequence_step"] == 6
+
+
+def test_sequence_can_start_at_root_and_follows_primary_tree_edges():
+    payload = _draft(4)
+    payload["composition"]["steps"] = [[0], [1], [2]]
+
+    draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert [node["sequence_step"] for node in draft["nodes"]] == [1, 2, 3, 0]
+
+
+def test_production_requires_a_primary_sequence_but_prototype_can_omit_it():
+    payload = _draft(4)
+    payload["composition"]["steps"] = []
+
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert caught.value.code == "graph_design_topology_invalid"
+    validate_applied_graph_topology(payload, applied_graph_spec("prototype"))
+
+
+@pytest.mark.parametrize(
+    "steps",
+    [
+        [[1, 2]],
+        [[1], [3]],
+        [[1], [0]],
+    ],
+)
+def test_sequence_requires_staged_directed_primary_runtime_edges(steps):
+    payload = _draft(4)
+    payload["composition"]["steps"] = steps
+
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert caught.value.code == "graph_design_topology_invalid"
+    assert caught.value.rule == "topology"
+
+
+def test_sequence_accepts_a_runtime_link_from_an_earlier_stage():
+    payload = _draft(4)
+    payload["components"][1][0] = 0
+    payload["connections"]["links"] = [[1, 2, "starts staged runtime", 400, 500]]
+    payload["composition"]["steps"] = [[0], [1], [2]]
+
+    draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert [node["sequence_step"] for node in draft["nodes"]] == [1, 2, 3, 0]
+
+
+def test_sequence_rejects_a_runtime_link_in_the_reverse_direction():
+    payload = _draft(4)
+    payload["connections"]["links"] = [[3, 1, "reverses staged runtime", 400, 500]]
+    payload["composition"]["steps"] = [[0], [1], [3]]
+
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert caught.value.rule == "topology"
 
 
 def test_presentation_metadata_is_derived_from_semantic_fields():
@@ -598,7 +659,8 @@ def test_bounded_presentation_text_prefers_a_word_boundary():
 def test_enrichment_preserves_authored_groups_and_runtime_sequence():
     spec = applied_graph_spec("production")
     payload = _draft(14)
-    payload["composition"]["steps"] = [[1], [2, 3], [4], [5], [6], [7]]
+    payload["components"][1][0] = 0
+    payload["composition"]["steps"] = [[0], [1, 2], [3], [4], [5], [6], [7]]
     graph = enrich_applied_graph_topology(
         validate_applied_graph_topology(payload, spec),
         spec=spec,
@@ -611,7 +673,10 @@ def test_enrichment_preserves_authored_groups_and_runtime_sequence():
         f"n{index}" for index in range(1, 15)
     }
     parallel_step = graph["sequence"][1]
-    assert {"n3", "n4"} <= set(parallel_step["nodes"])
+    assert parallel_step["nodes"] == ["n2", "n3"]
+    assert [node_id for step in graph["sequence"] for node_id in step["nodes"]] == [
+        "n1", "n2", "n3", "n4", "n5", "n6", "n7", "n8"
+    ]
     assert graph["assumptions"] == ["The source API supports version reads."]
 
 
@@ -688,7 +753,20 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     assert "incoming_edge_label" in prompt
     assert "Type: 100=client,101=service" in prompt
     assert "Group kind: 600=runtime,601=data" in prompt
+    assert "String fields are labels, responsibilities, titles, and group labels" in prompt
+    assert "The server owns stable IDs" in prompt
+    assert "Choose and enumerate groups before constructing root and component rows" in prompt
+    assert "At the selected production depth only, include every applicable control" in prompt
+    assert "At prototype depth, use only prototype criteria" in prompt
+    assert "Do not add or require production hardening at low or prototype depth" in prompt
+    assert "At the selected production depth only, require a no-effect rejection outcome" in prompt
+    assert "distinct retry exhaustion, success, COMMITTED, NOT_FOUND, and STILL_UNKNOWN outcomes" in prompt
+    assert "distinct canary, promotion, and rollback delivery paths" in prompt
     assert "Use the integer, never its name" in prompt
+    assert "The positional integer-code wire format is canonical" in prompt
+    assert "The reviewed_plan owns design decisions" in prompt
+    assert "Do not emit lane or tier fields" in prompt
+    assert "The server derives each lane from its authored group kind" in prompt
     for codebook in (
         module._NODE_TYPE_CODES,
         module._FLOW_CODES,
@@ -703,7 +781,8 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     assert "Every component must reference exactly one group" in prompt
     assert "Links use component indexes starting with root 0" in prompt
     assert "member indexes" not in prompt
-    assert "allow only non-root components 1 through the final component" in prompt
+    assert "define a staged directed subgraph" in prompt
+    assert "Each component in every later step must have a directed primary/runtime edge" in prompt
     assert "all material non-tree links" in prompt
     assert "Make the root the primary runtime entry or trigger" in prompt
     assert "Tree-edge direction and its incoming label must agree" in prompt

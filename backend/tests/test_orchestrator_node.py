@@ -40,13 +40,14 @@ def test_synthesis_prompts_answer_adjacent_applications_directly():
 
 def test_synthesis_prompts_enforce_evidence_bounded_attribution():
     from agent.nodes.orchestrator_node import (
+        _BLOCK_OUTPUT_CONTRACT,
         _QUICK_SYNTHESIS_PROMPT_VERSION,
         _QUICK_SYNTHESIS_SYSTEM,
         _SYNTHESIS_PROMPT_VERSION,
         _SYNTHESIS_SYSTEM,
     )
 
-    assert _SYNTHESIS_PROMPT_VERSION == "architecture_blocks_v12"
+    assert _SYNTHESIS_PROMPT_VERSION == "architecture_blocks_v14"
     assert _QUICK_SYNTHESIS_PROMPT_VERSION == "quick_synthesis_v2"
     assert "complete citation allowlist" in _SYNTHESIS_SYSTEM
     assert "exactly one of two provenance lanes" in _SYNTHESIS_SYSTEM
@@ -81,6 +82,13 @@ def test_synthesis_prompts_enforce_evidence_bounded_attribution():
     assert "Cache population, logging, feedback capture, index publication" in _SYNTHESIS_SYSTEM
     assert "externally visible business mutations from internal operational state changes" in _SYNTHESIS_SYSTEM
     assert '"no downstream business writes"' in _SYNTHESIS_SYSTEM
+    assert "<trusted_turn_result> block is system-owned and authoritative" in _SYNTHESIS_SYSTEM
+    assert "Never claim the requested graph or" in _SYNTHESIS_SYSTEM
+    assert "Follow any required completion sentence in the block exactly" in _SYNTHESIS_SYSTEM
+    assert "only when its publication state is approved" in _SYNTHESIS_SYSTEM
+    assert "For every other publication state" in _SYNTHESIS_SYSTEM
+    assert "Use each required key exactly once" in _BLOCK_OUTPUT_CONTRACT
+    assert "evidence_refs is optional" in _BLOCK_OUTPUT_CONTRACT
     assert "This fast path receives no retrieved book evidence" in _QUICK_SYNTHESIS_SYSTEM
     assert "do not produce chapter/page citations" in _QUICK_SYNTHESIS_SYSTEM
 
@@ -785,6 +793,222 @@ async def test_production_complexity_keeps_depth_contract_in_low_cost_explanatio
     assert "Production depth" in captured["messages"][-1]["content"]
     assert "<streaming_output_contract>" in captured["system"]
     assert "production design and trade-offs" in events[0]["status"]
+
+
+@pytest.mark.asyncio
+async def test_preserved_edit_prompt_and_completion_report_unchanged_graph(monkeypatch):
+    import agent.nodes.orchestrator_node as orchestrator
+
+    captured = {}
+
+    async def fake_stream_blocks(**kwargs):
+        captured.update(kwargs)
+        await kwargs["send"](
+            {
+                "type": "explanation_block",
+                "block_id": "result",
+                "title": "Result",
+                "content": "The prior design remains available.",
+                "related_node_ids": ["monitor"],
+                "evidence_refs": [],
+            }
+        )
+        return "The prior design remains available."
+
+    monkeypatch.setattr(orchestrator, "stream_explanation_blocks", fake_stream_blocks)
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    graph = {
+        "design_origin": "applied",
+        "title": "Production monitoring platform",
+        "resolved_complexity": "prototype",
+        "version": "approved-v1",
+        "nodes": [{"id": "monitor", "label": "Monitor"}],
+        "edges": [],
+    }
+    await orchestrator.orchestrator_synthesise(
+        {
+            "send": send,
+            "history": [],
+            "user_message": "Expand the monitoring component",
+            "complexity": "auto",
+            "rag_chunks": [],
+            "graph_data": graph,
+            "graph_changed": False,
+            "graph_intent": "edit",
+            "graph_operation": {
+                "kind": "edit",
+                "status": "failed",
+                "failure_code": "graph_review_rejected",
+            },
+            "graph_publication": "preserved",
+        }
+    )
+
+    prompt = captured["messages"][-1]["content"]
+    assert "Publication state: preserved." in prompt
+    assert "The requested graph edit was not approved or applied." in prompt
+    assert (
+        "Required completion sentence: The requested diagram edit was not approved, so the "
+        "prior approved diagram remains unchanged."
+    ) in prompt
+    assert "Prototype depth" in prompt
+    assert "prototype design and trade-offs" in events[0]["status"]
+    assert not any(event.get("type") == "graph_data" for event in events)
+    assert events[1] == {
+        "type": "workflow_progress",
+        "phase": "explain",
+        "status": "active",
+        "title": "Finishing the walkthrough for the preserved diagram",
+        "detail": "The requested graph operation was not approved; the prior approved diagram remains unchanged.",
+    }
+    assert events[-1]["title"] == "Walkthrough ready; prior diagram preserved"
+    assert events[-1]["detail"] == (
+        "The requested graph operation was not approved, so the prior approved diagram remains unchanged."
+    )
+
+
+def test_synthesis_depth_ignores_graph_title_without_explicit_edit_depth():
+    from agent.nodes.orchestrator_node import _resolve_synthesis_complexity
+
+    profile = _resolve_synthesis_complexity(
+        {
+            "user_message": "Explain the cache node",
+            "complexity": "auto",
+            "graph_intent": "edit",
+        },
+        {
+            "title": "Production platform with every control",
+            "design_origin": "applied",
+        },
+    )
+
+    assert profile.resolved == "low"
+
+
+@pytest.mark.parametrize(
+    "publication,operation,expected",
+    [
+        (
+            "approved",
+            {"kind": "edit", "status": "applied"},
+            "The newly approved diagram was rendered on the canvas.",
+        ),
+        (
+            "preserved",
+            {"kind": "edit", "status": "failed"},
+            "Required completion sentence: The requested diagram edit was not approved, so the "
+            "prior approved diagram remains unchanged.",
+        ),
+        (
+            "preserved",
+            {"kind": "create", "status": "failed"},
+            "Required completion sentence: The requested new diagram was not approved, so the "
+            "prior approved diagram remains unchanged.",
+        ),
+        (
+            "withheld",
+            {"kind": "create", "status": "failed"},
+            "No new graph was approved, published, or rendered for this turn.",
+        ),
+        (
+            "unchanged",
+            None,
+            "No graph publication occurred this turn.",
+        ),
+        (
+            "unreviewed",
+            {"kind": "create", "status": "draft"},
+            "The candidate has not passed review and must be withheld.",
+        ),
+        (
+            "none",
+            None,
+            "This turn has no graph candidate or publication.",
+        ),
+        (
+            None,
+            {"kind": "create", "status": "failed"},
+            "Publication state: withheld.",
+        ),
+    ],
+)
+def test_trusted_turn_result_describes_publication_state(
+    publication, operation, expected
+):
+    from agent.nodes.orchestrator_node import _format_trusted_turn_result
+
+    state = {"graph_operation": operation}
+    if publication is not None:
+        state["graph_publication"] = publication
+
+    result = _format_trusted_turn_result(state)
+
+    assert result.startswith("\n<trusted_turn_result>\n")
+    assert expected in result
+    assert result.endswith("</trusted_turn_result>\n\n")
+
+
+@pytest.mark.asyncio
+async def test_synthesis_withholds_an_unreviewed_candidate(monkeypatch):
+    import agent.nodes.orchestrator_node as orchestrator
+
+    captured = {}
+
+    async def fake_stream_llm(**kwargs):
+        captured.update(kwargs)
+        return "The draft is withheld."
+
+    monkeypatch.setattr(orchestrator, "stream_llm", fake_stream_llm)
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    result = await orchestrator.orchestrator_synthesise(
+        {
+            "send": send,
+            "history": [],
+            "user_message": "Create a graph",
+            "rag_chunks": [],
+            "graph_data": {
+                "title": "Unreviewed candidate",
+                "nodes": [{"id": "candidate", "label": "Candidate"}],
+            },
+            "graph_changed": True,
+            "graph_operation": {"kind": "create", "status": "draft"},
+            "graph_publication": "unreviewed",
+        }
+    )
+
+    prompt = captured["messages"][-1]["content"]
+    assert "Publication state: withheld." in prompt
+    assert "Unreviewed candidate" not in prompt
+    assert not any(event["type"] == "graph_data" for event in events)
+    assert result["graph_data"] is None
+    assert result["graph_publication"] == "withheld"
+
+
+def test_unreviewed_edit_restores_approved_baseline_as_preserved():
+    from agent.nodes.orchestrator_node import _withhold_unreviewed_graph
+
+    approved = {"title": "Approved", "nodes": [], "edges": []}
+    result = _withhold_unreviewed_graph(
+        {
+            "graph_data": {"title": "Draft"},
+            "approved_graph_data": approved,
+            "graph_changed": True,
+            "graph_publication": "unreviewed",
+        }
+    )
+
+    assert result["graph_data"] == approved
+    assert result["graph_data"] is not approved
+    assert result["graph_publication"] == "preserved"
+    assert result["graph_changed"] is False
 
 
 @pytest.mark.asyncio

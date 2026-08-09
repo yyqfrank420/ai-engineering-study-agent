@@ -41,7 +41,8 @@ async def test_one_provider_call_emits_complete_explanation_blocks(monkeypatch):
     assert calls[0]["max_output_tokens"] == 4500
     assert "<untrusted_context>" in calls[0]["system"]
     blocks = [event for event in events if event["type"] == "explanation_block"]
-    assert [block["title"] for block in blocks] == ["In one minute", "Safety"]
+    assert [block["title"] for block in blocks[:2]] == ["In one minute", "Safety"]
+    assert len(blocks) == 3
     assert blocks[1]["related_node_ids"] == ["approval"]
     assert "## Safety" in response
 
@@ -87,7 +88,7 @@ async def test_stream_timeout_preserves_parsed_block_and_closes_provider_iterato
     assert [event["status"] for event in events if event["type"] == "workflow_progress"] == [
         "degraded"
     ]
-    assert len([event for event in events if event["type"] == "explanation_block"]) == 1
+    assert len([event for event in events if event["type"] == "explanation_block"]) == 3
 
 
 @pytest.mark.asyncio
@@ -132,6 +133,55 @@ async def test_stream_timeout_before_complete_block_emits_bounded_fallback(monke
     )
 
 
+@pytest.mark.asyncio
+async def test_preserved_edit_appends_required_completion_sentence_after_parsing(
+    monkeypatch,
+):
+    async def fake_stream_response(**_kwargs):
+        yield (
+            "text",
+            '{"block_id":"result","title":"Result","content":"The prior graph remains.",'
+            '"related_node_ids":[],"evidence_refs":[]}',
+        )
+
+    monkeypatch.setattr(explanation_blocks, "stream_response", fake_stream_response)
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    response = await explanation_blocks.stream_explanation_blocks(
+        model="claude-opus-5",
+        system="system",
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    "<trusted_turn_result>\n"
+                    "Publication state: preserved.\n"
+                    "Required completion sentence: The requested diagram edit was not approved, so "
+                    "the prior approved diagram remains unchanged.\n"
+                    "</trusted_turn_result>"
+                ),
+            }
+        ],
+        effort="low",
+        max_output_tokens=4500,
+        timeout_seconds=40,
+        telemetry={"operation": "test"},
+        send=send,
+        graph_version="v1",
+        allowed_node_ids=set(),
+    )
+
+    sentence = (
+        "The requested diagram edit was not approved, so the prior approved diagram remains unchanged."
+    )
+    block = [event for event in events if event["type"] == "explanation_block"][-1]
+    assert block["content"].endswith(sentence)
+    assert response.endswith(sentence)
+
+
 def test_block_normalisation_rejects_scalar_lists_and_empty_identifiers():
     block = explanation_blocks._normalise_block(
         {
@@ -151,6 +201,62 @@ def test_block_normalisation_rejects_scalar_lists_and_empty_identifiers():
         "related_node_ids": [],
         "evidence_refs": [],
     }
+
+
+def test_block_normalisation_requires_exact_contract_keys():
+    block = explanation_blocks._normalise_block(
+        {
+            "block_id": "overview",
+            "title": "Overview",
+            "content": "Useful detail",
+            "related_node_ids": [],
+            "evidence_refs": [],
+            "unexpected": "value",
+        },
+        set(),
+    )
+
+    assert block is None
+
+
+@pytest.mark.asyncio
+async def test_stream_limits_blocks_and_rejects_duplicate_ids(monkeypatch):
+    async def fake_stream_response(**_kwargs):
+        for index in range(8):
+            block_id = "duplicate" if index == 1 else f"block_{index}"
+            yield (
+                "text",
+                (
+                    "{"
+                    f'"block_id":"{block_id}",'
+                    f'"title":"Block {index}",'
+                    f'"content":"Content {index}",'
+                    '"related_node_ids":[],"evidence_refs":[]}'
+                ),
+            )
+
+    monkeypatch.setattr(explanation_blocks, "stream_response", fake_stream_response)
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    await explanation_blocks.stream_explanation_blocks(
+        model="claude-opus-5",
+        system="system",
+        messages=[{"role": "user", "content": "explain"}],
+        effort="low",
+        max_output_tokens=4500,
+        timeout_seconds=40,
+        telemetry={"operation": "test"},
+        send=send,
+        graph_version="v1",
+        allowed_node_ids=set(),
+    )
+
+    blocks = [event for event in events if event["type"] == "explanation_block"]
+    assert len(blocks) == 6
+    assert len({block["block_id"] for block in blocks}) == 6
 
 
 def test_fallback_block_bounds_unstructured_model_output():

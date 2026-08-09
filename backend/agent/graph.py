@@ -47,7 +47,7 @@ from agent.pipeline_steps import (
     run_parallel_research_phase,
     run_search_phase,
 )
-from agent.state import AgentState, GraphOperation
+from agent.state import AgentState, GraphOperation, GraphPublicationDisposition
 from observability import start_span
 
 
@@ -55,7 +55,7 @@ NodeResult = Awaitable[AgentState]
 AgentNode = Callable[[AgentState], NodeResult]
 
 _GRAPH_STAGE_DEADLINE_KEY = "_graph_stage_deadline_s"
-_MAX_GRAPH_REPAIR_ROUNDS = 2
+_MAX_GRAPH_REPAIR_ROUNDS = 1
 _MAX_GRAPH_CONTRACT_CORRECTIONS = 1
 _RETRYABLE_GRAPH_PATCH_FAILURE_CODES = {
     "graph_patch_invalid_preserved_existing_graph",
@@ -83,11 +83,18 @@ def _repair_attempt_summary(revision_count: int) -> str:
     return f"after {revision_count} bounded repair {suffix}"
 
 
-def _restore_approved_graph_state(state: AgentState) -> AgentState:
+def _restore_approved_graph_state(
+    state: AgentState,
+    *,
+    publication: GraphPublicationDisposition | None = None,
+) -> AgentState:
+    approved_graph = state.get("approved_graph_data")
     return {
         **state,
-        "graph_data": copy.deepcopy(state.get("approved_graph_data")),
+        "graph_data": copy.deepcopy(approved_graph),
         "graph_changed": False,
+        "graph_publication": publication
+        or ("preserved" if approved_graph is not None else "none"),
     }
 
 
@@ -112,17 +119,13 @@ def _should_send_graph_notice(state: AgentState) -> bool:
     return state.get("graph_mode", "auto") != "on"
 
 
-def _should_preserve_unreviewed_candidate(state: AgentState) -> bool:
-    graph = state.get("graph_data")
-    review = state.get("graph_review") or {}
-    return (
-        bool(state.get("graph_changed"))
-        and isinstance(graph, dict)
-        and graph.get("design_origin") == "applied"
-        and isinstance(review, dict)
-        and review.get("approved") is False
-        and review.get("review_status") == "unavailable"
-    )
+def _draft_graph_publication(state: AgentState) -> GraphPublicationDisposition:
+    if state.get("graph_changed"):
+        return "unreviewed"
+    operation = state.get("graph_operation")
+    if isinstance(operation, dict) and operation.get("status") == "failed":
+        return "preserved" if state.get("approved_graph_data") is not None else "none"
+    return "unchanged" if state.get("graph_data") is not None else "none"
 
 
 def _traced(name: str, node: AgentNode, **attributes) -> AgentNode:
@@ -221,7 +224,11 @@ def build_agent_workflow(
                     _with_graph_stage_deadline(state, timeout_s),
                     graph_tools,
                 )
-                return _without_graph_stage_deadline(drafted)
+                drafted = _without_graph_stage_deadline(drafted)
+                return {
+                    **drafted,
+                    "graph_publication": _draft_graph_publication(drafted),
+                }
         except (TimeoutError, StageAdmissionDenied):
             restored = _restore_approved_graph_state(state)
             if not state.get("graph_notice_sent") and _should_send_graph_notice(state):
@@ -348,6 +355,7 @@ def build_agent_workflow(
             "graph_revision_count": next_repair_round,
             "graph_repair_round_count": next_repair_round,
             "graph_contract_correction_pending": False,
+            "graph_publication": "unreviewed",
         }
 
     async def expand_context(state: AgentState) -> AgentState:
@@ -360,7 +368,13 @@ def build_agent_workflow(
 
     async def review_graph(state: AgentState) -> AgentState:
         if not state.get("graph_changed"):
-            return await graph_critic_node(state)
+            reviewed = await graph_critic_node(state)
+            return {
+                **reviewed,
+                "graph_publication": (
+                    "unchanged" if reviewed.get("graph_data") is not None else "none"
+                ),
+            }
         try:
             timeout_s = critic_timeout_seconds(state)
             async with asyncio.timeout(timeout_s):
@@ -369,10 +383,12 @@ def build_agent_workflow(
                 )
                 reviewed = _without_graph_stage_deadline(reviewed)
                 if (reviewed.get("graph_review") or {}).get("approved"):
-                    publication = (
-                        {"graph_publication": "approved"}
+                    publication: GraphPublicationDisposition = (
+                        "approved"
                         if reviewed.get("graph_changed")
-                        else {}
+                        else "unchanged"
+                        if reviewed.get("graph_data") is not None
+                        else "none"
                     )
                     operation = reviewed.get("graph_operation")
                     if (
@@ -381,15 +397,20 @@ def build_agent_workflow(
                     ):
                         reviewed = {
                             **reviewed,
-                            **publication,
+                            "graph_publication": publication,
                             "graph_operation": {**operation, "status": "applied"},
                         }
-                    elif publication:
-                        reviewed = {**reviewed, **publication}
+                    else:
+                        reviewed = {**reviewed, "graph_publication": publication}
+                elif reviewed.get("graph_changed"):
+                    reviewed = {**reviewed, "graph_publication": "withheld"}
                 return reviewed
         except (TimeoutError, StageAdmissionDenied):
             return {
                 **state,
+                "graph_publication": (
+                    "withheld" if state.get("graph_changed") else "none"
+                ),
                 "graph_review": {
                     "approved": False,
                     "terminal": True,
@@ -405,14 +426,8 @@ def build_agent_workflow(
         repair_summary = _repair_attempt_summary(
             int(state.get("graph_revision_count", 0))
         )
-        preserve_candidate = _should_preserve_unreviewed_candidate(
-            state
-        ) and not state.get("approved_graph_data")
-        if (
-            not preserve_candidate
-            and not state.get("graph_notice_sent")
-            and _should_send_graph_notice(state)
-        ):
+        notice_sent = bool(state.get("graph_notice_sent"))
+        if not notice_sent and _should_send_graph_notice(state):
             operation = state.get("graph_operation")
             failure_code = (
                 operation.get("failure_code") if isinstance(operation, dict) else None
@@ -441,13 +456,20 @@ def build_agent_workflow(
                     "message": message,
                 }
             )
-        restored = state if preserve_candidate else _restore_approved_graph_state(state)
+            notice_sent = True
+        publication: GraphPublicationDisposition = (
+            "preserved"
+            if approved_graph is not None
+            else "withheld"
+            if state.get("graph_publication") in {"unreviewed", "withheld"}
+            or state.get("graph_changed")
+            else "none"
+        )
+        restored = _restore_approved_graph_state(state, publication=publication)
         operation = state.get("graph_operation")
         return {
             **restored,
-            **({"graph_publication": "preserved"} if not preserve_candidate else {}),
-            "graph_notice_sent": preserve_candidate
-            or state.get("graph_notice_sent", False),
+            "graph_notice_sent": notice_sent,
             "graph_review": review,
             "graph_operation": (
                 {
@@ -646,8 +668,11 @@ async def run_agent(
             "failure_code": "graph_mode_disabled",
         }
     elif graph_intent == "edit" and not _has_applied_graph(state.get("graph_data")):
-        graph_intent = "create"
-        graph_operation = None
+        graph_operation = {
+            "kind": "edit",
+            "status": "failed",
+            "failure_code": "graph_edit_target_unavailable",
+        }
     initial_state: AgentState = {
         **state,
         "graph_intent": graph_intent,
@@ -659,11 +684,14 @@ async def run_agent(
         "graph_contract_correction_count": state.get(
             "graph_contract_correction_count", 0
         ),
+        "graph_critic_call_count": 0,
         "graph_contract_correction_pending": False,
         "approved_graph_data": copy.deepcopy(
             state.get("approved_graph_data", state.get("graph_data"))
         ),
+        "graph_publication": (
+            "unchanged" if state.get("graph_data") is not None else "none"
+        ),
     }
-    initial_state.pop("graph_publication", None)
     workflow = build_agent_workflow(rag_tools, graph_tools, node_detail_tools)
     return await workflow.ainvoke(initial_state, config={"recursion_limit": 24})

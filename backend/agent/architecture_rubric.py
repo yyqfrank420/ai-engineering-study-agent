@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 RUBRIC_CRITERIA = {
     "domain_specificity": (
         "components",
@@ -30,7 +29,7 @@ RUBRIC_CRITERIA = {
     ),
     "selected_depth": (
         "components",
-        "Name the production owners for applicable failure, observability, and rollout work.",
+        "Match component ownership and operational detail to the selected UI depth without importing deeper criteria.",
     ),
     "novice_clarity": (
         "composition",
@@ -158,7 +157,15 @@ def repair_requirements(
         {
             "criterion": f"topology_proof:{guarantee}",
             "owner_layer": "connections",
-            "requirement": TOPOLOGY_PROOF_REQUIREMENTS[guarantee],
+            "requirement": " ".join(
+                part
+                for part in (
+                    TOPOLOGY_PROOF_REQUIREMENTS[guarantee],
+                    _format_repair_obligations(proof.get("repair_obligations")),
+                    _format_repair_edges(proof.get("repair_edge_selectors")),
+                )
+                if part
+            ),
         }
         for proof in topology_proofs
         if isinstance(proof, dict)
@@ -167,3 +174,44 @@ def repair_requirements(
         and (guarantee := proof["guarantee"]) in TOPOLOGY_PROOF_REQUIREMENTS
     )
     return requirements
+
+
+def _format_repair_obligations(value: Any) -> str:
+    if not isinstance(value, list):
+        return ""
+    obligations = [
+        obligation
+        for obligation in value
+        if isinstance(obligation, dict)
+        and all(
+            isinstance(obligation.get(field), str) and obligation[field].strip()
+            for field in ("source", "target", "required_contract")
+        )
+    ]
+    if not obligations:
+        return ""
+    return "Required additions: " + "; ".join(
+        f"{obligation['source']} -> {obligation['target']}: "
+        f"{obligation['required_contract']}"
+        for obligation in obligations
+    )
+
+
+def _format_repair_edges(value: Any) -> str:
+    if not isinstance(value, list):
+        return ""
+    selectors = [
+        selector
+        for selector in value
+        if isinstance(selector, dict)
+        and all(
+            isinstance(selector.get(field), str) and selector[field].strip()
+            for field in ("source", "target", "label")
+        )
+    ]
+    if not selectors:
+        return ""
+    return "Required existing-edge repairs: " + "; ".join(
+        f"{selector['source']} -> {selector['target']}: {selector['label']}"
+        for selector in selectors
+    )

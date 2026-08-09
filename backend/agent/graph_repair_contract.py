@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 
 REPAIR_LAYERS = ("components", "connections", "composition", "render")
@@ -27,8 +28,11 @@ _ASSESSMENT_FIELDS = {
     "reason",
     "context_node_ids",
     "addition_count",
+    "connection_addition_obligations",
     "composition_append_counts",
 }
+
+_NEW_NODE_REFERENCE = re.compile(r"\$new_node_(?P<position>[1-9][0-9]*)")
 
 
 class LocalRepairAdmissionError(ValueError):
@@ -177,6 +181,7 @@ def validate_repair_contract(
     all_findings: list[str] = []
     classified_deterministic_ids: list[str] = []
     addition_counts: dict[str, int] = {}
+    connection_addition_obligations: list[dict[str, str]] = []
     composition_append_counts: dict[str, dict[str, int]] = {}
     for layer in REPAIR_LAYERS:
         assessment = layers.get(layer)
@@ -253,6 +258,60 @@ def validate_repair_contract(
         addition_counts[layer] = addition_count
         if layer not in {"components", "connections"} and addition_count:
             failures.append(f"{layer} cannot add graph records")
+        raw_connection_obligations = assessment.get("connection_addition_obligations")
+        parsed_connection_obligations: list[dict[str, str]] = []
+        if not isinstance(raw_connection_obligations, list):
+            failures.append(f"{layer}.connection_addition_obligations must be an array")
+        else:
+            for index, obligation in enumerate(raw_connection_obligations):
+                if not isinstance(obligation, dict) or set(obligation) != {
+                    "source",
+                    "target",
+                    "required_contract",
+                }:
+                    failures.append(
+                        f"{layer}.connection_addition_obligations[{index}] must contain "
+                        "exactly source, target, and required_contract"
+                    )
+                    continue
+                if any(
+                    not isinstance(obligation.get(field), str)
+                    or not obligation[field].strip()
+                    for field in ("source", "target", "required_contract")
+                ):
+                    failures.append(
+                        f"{layer}.connection_addition_obligations[{index}] must use "
+                        "non-empty strings"
+                    )
+                    continue
+                if obligation["source"] == obligation["target"]:
+                    failures.append(
+                        f"{layer}.connection_addition_obligations[{index}] must use "
+                        "distinct endpoints"
+                    )
+                    continue
+                parsed_connection_obligations.append(obligation)
+        obligation_keys = [
+            (
+                obligation["source"],
+                obligation["target"],
+                obligation["required_contract"],
+            )
+            for obligation in parsed_connection_obligations
+        ]
+        if len(obligation_keys) != len(set(obligation_keys)):
+            failures.append(
+                f"{layer}.connection_addition_obligations must not contain duplicates"
+            )
+        if layer == "connections":
+            connection_addition_obligations = parsed_connection_obligations
+            if addition_count != len(parsed_connection_obligations):
+                failures.append(
+                    "connections.addition_count must equal the number of exact "
+                    "connection addition obligations"
+                )
+        elif parsed_connection_obligations:
+            failures.append(f"{layer} cannot declare connection addition obligations")
         append_counts = assessment.get("composition_append_counts")
         if not isinstance(append_counts, dict) or any(
             field not in {"groups", "sequence", "assumptions"}
@@ -415,6 +474,7 @@ def validate_repair_contract(
                     selected_sequence_indexes,
                     selected_assumption_indexes,
                     context_node_ids,
+                    parsed_connection_obligations,
                 )
             ):
                 failures.append(
@@ -462,6 +522,37 @@ def validate_repair_contract(
     composition = layers.get("composition") if isinstance(layers, dict) else None
     component_additions = addition_counts.get("components", 0)
     connection_additions = addition_counts.get("connections", 0)
+    allowed_new_node_references = {
+        f"$new_node_{position}" for position in range(1, component_additions + 1)
+    }
+    obligation_endpoints = {
+        endpoint
+        for obligation in connection_addition_obligations
+        for endpoint in (obligation["source"], obligation["target"])
+    }
+    unknown_obligation_endpoints = obligation_endpoints - (
+        node_ids | allowed_new_node_references
+    )
+    if unknown_obligation_endpoints:
+        failures.append("connection addition obligations contain an unknown endpoint")
+    invalid_new_node_references = {
+        endpoint
+        for endpoint in obligation_endpoints
+        if endpoint.startswith("$new_node_")
+        and (
+            not (match := _NEW_NODE_REFERENCE.fullmatch(endpoint))
+            or int(match.group("position")) > component_additions
+        )
+    }
+    if invalid_new_node_references:
+        failures.append(
+            "connection addition obligations contain an invalid new-node reference"
+        )
+    missing_new_node_references = allowed_new_node_references - obligation_endpoints
+    if missing_new_node_references:
+        failures.append(
+            "every component addition must appear in a connection addition obligation"
+        )
     if isinstance(components, dict) and component_additions > 0:
         if not (
             isinstance(connections, dict)
@@ -503,6 +594,13 @@ def validate_repair_contract(
         if available_endpoint_count < 2:
             failures.append(
                 "connection additions require at least two declared endpoint identities"
+            )
+        existing_obligation_endpoints = obligation_endpoints & node_ids
+        if not existing_obligation_endpoints.issubset(
+            connection_context | component_context
+        ):
+            failures.append(
+                "connection addition obligation endpoints must be declared as context nodes"
             )
     if scope in {"none", "local", "global"} and isinstance(layers, dict):
         derived_scope = repair_scope_for_layers(layers)

@@ -41,10 +41,14 @@ This is the current runtime contract for the production-quality demo.
 7. The critic judges four disjoint artifact layers: components, connections, composition, and the
    rendered artifact. Each layer has its own hard pass gate. Sonnet returns a fixed scorecard of
    rubric codes and record indexes; the server expands them into exact selectors and read-only
-   context. A local semantic rejection can receive one Kimi K3 max typed patch against the failed
-   graph layers. Passing layers and uncited records are immutable during that repair. A graph-caused
-   render failure can share that local patch when an editable layer identifies the cause. A
-   render-only failure, global design failure, or second failed review suppresses the diagram.
+   context. A local semantic rejection can receive one Kimi K3 high typed patch against the exact
+   failed records, including records in disconnected topology regions. Uncited records stay locked.
+   Component changes reopen component, connection, and composition review. Edge changes reopen
+   connection and composition review. Composition-only changes reopen composition review. An invalid
+   patch may receive one error-informed critic-contract correction before the patch is retried. A
+   graph-caused render failure can share the patch when an editable layer identifies the cause. A
+   render-only failure, global design failure, or failed post-patch review suppresses the diagram.
+   The entire turn has a four-call Sonnet critic ceiling, including schema corrections.
    Published user refinements use the same typed patch boundary. The model chooses graph
    size, groups, and runtime sequence from the design. Node and edge safety ceilings protect
    persistence and rendering, stay out of the prompt, and reject malformed output without deleting
@@ -75,7 +79,7 @@ limiter table.
 
 The applied-design path gives each role one explicit owner. Opus 5 xhigh writes the primary
 architecture brief. A second Opus 5 xhigh pass reconstructs the design from the request and evidence,
-then audits the primary plan. Kimi K3 low creates the initial graph topology. Kimi K3 max applies
+then audits the primary plan. Kimi K3 low creates the initial graph topology. Kimi K3 high applies
 typed patches to local critic failures and published user refinements. Sonnet 5 medium reviews every
 graph candidate and revision. Opus 5 low writes the explanation stream. Renderer-only
 failures add no model calls. Retrieval and the standing checklist do not add model calls.

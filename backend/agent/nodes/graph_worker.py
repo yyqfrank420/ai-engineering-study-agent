@@ -39,8 +39,8 @@ from graph.runtime import select_canonical_graph
 
 logger = logging.getLogger(__name__)
 
-_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v31"
-_APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v15"
+_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v33"
+_APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v16"
 _APPLIED_GRAPH_TOPOLOGY_EFFORT = "low"
 _APPLIED_GRAPH_PATCH_EFFORT = "high"
 _MAX_GRAPH_PATCH_CHARS = 200_000
@@ -80,6 +80,20 @@ _USER_EDIT_ADDITION_PREFIX = re.compile(
     r"^(?:please\s+)?(?:add|expand|include)\w*\s+"
     r"(?:(?:a|an|new|the)\s+)*(?P<body>.+)$"
 )
+_USER_EDIT_SCOPED_EXPANSION = re.compile(r"^(?:please\s+)?expand\w*\b")
+_EXPANSION_TARGET_STOP = re.compile(
+    r"\b(?:while|without|preserv\w*|keeping|and\s+keep|and\s+preserv\w*)\b"
+)
+_EXPANSION_GENERIC_TOKENS = {
+    "around",
+    "component",
+    "current",
+    "graph",
+    "node",
+    "service",
+    "system",
+    "the",
+}
 _USER_EDIT_GRAPH_REPLACEMENT = re.compile(
     r"\b(?:from\s+scratch|start\s+over)\b|"
     r"\b(?:rebuild|redesign|replace)\w*\b.{0,40}\b(?:entire|whole)\b|"
@@ -91,11 +105,6 @@ _USER_EDIT_COMPOSITION = {
     "sequence": re.compile(r"\b(?:sequence|steps?)\b"),
     "assumptions": re.compile(r"\bassumptions?\b"),
 }
-_USER_EDIT_ASSUMPTION_CHANGE = re.compile(
-    r"\bassum(?:e|ing)\b|"
-    r"\b(?:add|change|delete|edit|expand|remove|replace|revise|update)\w*\b.{0,40}\bassumptions?\b|"
-    r"\bassumptions?\b.{0,40}\b(?:add|change|delete|edit|expand|remove|replace|revise|update)\w*\b"
-)
 _USER_EDIT_NODE_FIELDS = {
     "label": re.compile(r"\b(?:label|name|rename|typo)\w*\b"),
     "type": re.compile(r"\b(?:kind|type)\b"),
@@ -133,22 +142,6 @@ class GraphPatchRejected(ValueError):
         self.code = code
         self.path = path
         self.rule = rule
-
-
-def _preserve_accepted_assumptions(
-    rebuilt_graph: GraphData,
-    accepted_graph: GraphData,
-    user_message: str,
-) -> GraphData:
-    """Carry accepted assumptions across a rebuild unless the user changes them."""
-    if _USER_EDIT_ASSUMPTION_CHANGE.search(_reference_text(user_message)):
-        return rebuilt_graph
-    preserved = copy.deepcopy(rebuilt_graph)
-    accepted_assumptions = accepted_graph.get("assumptions")
-    preserved["assumptions"] = copy.deepcopy(
-        accepted_assumptions if isinstance(accepted_assumptions, list) else []
-    )
-    return preserved
 
 
 def _repair_review(review: dict[str, Any]) -> dict[str, Any]:
@@ -313,6 +306,9 @@ def _repair_permissions(
         "allowed_new_node_ids": None,
         "allowed_new_node_count": layers["components"]["addition_count"],
         "allowed_new_edge_count": layers["connections"]["addition_count"],
+        "connection_addition_obligations": copy.deepcopy(
+            layers["connections"]["connection_addition_obligations"]
+        ),
         "allowed_new_group_ids": None,
         "composition_append_limits": layers["composition"]["composition_append_counts"],
         "required_assumption_text": None,
@@ -362,6 +358,86 @@ def _mentioned_record_ids(
     return {record_id for _start, _end, record_id in selected}
 
 
+def _record_reference_position(
+    text: str,
+    record: dict[str, Any],
+) -> int | None:
+    positions = []
+    for field in ("id", "label"):
+        name = _reference_text(record.get(field) or "")
+        if not name:
+            continue
+        pattern = re.escape(name).replace(r"\ ", r"\s+")
+        match = re.search(rf"(?<![a-z0-9]){pattern}(?![a-z0-9])", text)
+        if match:
+            positions.append(match.start())
+    return min(positions) if positions else None
+
+
+def _ordered_record_ids(
+    text: str,
+    records: list[dict[str, Any]],
+    record_ids: set[str],
+) -> list[str]:
+    positions = [
+        (position, str(record.get("id")))
+        for record in records
+        if str(record.get("id") or "") in record_ids
+        if (position := _record_reference_position(text, record)) is not None
+    ]
+    return [record_id for _position, record_id in sorted(positions)]
+
+
+def _expansion_token(token: str) -> str:
+    if token.endswith("ing") and len(token) > 5:
+        return token[:-3]
+    if token.endswith("s") and len(token) > 4:
+        return token[:-1]
+    return token
+
+
+def _scoped_expansion_target(
+    text: str,
+    nodes: list[dict[str, Any]],
+) -> str | None:
+    """Resolve one existing component for a bounded one-child expansion."""
+    if not _USER_EDIT_SCOPED_EXPANSION.search(text):
+        return None
+    exact_ids = _mentioned_record_ids(text, nodes)
+    if len(exact_ids) > 1:
+        raise ValueError("the expansion names more than one authored component")
+    if len(exact_ids) == 1:
+        return next(iter(exact_ids))
+
+    addition_match = _USER_EDIT_ADDITION_PREFIX.match(text)
+    target_text = (
+        addition_match.group("body").strip() if addition_match else text
+    )
+    target_text = _EXPANSION_TARGET_STOP.split(target_text, maxsplit=1)[0]
+    target_tokens = {
+        _expansion_token(token)
+        for token in target_text.split()
+        if token not in _EXPANSION_GENERIC_TOKENS
+    }
+    if not target_tokens:
+        raise ValueError("the expansion does not name an authored component")
+    candidates = []
+    for node in nodes:
+        record_id = str(node.get("id") or "").strip()
+        authored_tokens = {
+            _expansion_token(token)
+            for field in ("id", "label")
+            for token in _reference_text(node.get(field) or "").split()
+        }
+        if record_id and target_tokens.issubset(authored_tokens):
+            candidates.append(record_id)
+    if len(set(candidates)) != 1:
+        raise ValueError(
+            "the expansion must resolve to exactly one authored component"
+        )
+    return candidates[0]
+
+
 def _without_named_record_references(
     text: str,
     records: list[dict[str, Any]],
@@ -392,6 +468,7 @@ def _user_edit_layer(
     assumption_indexes: list[int] | None = None,
     context_node_ids: list[str] | None = None,
     addition_count: int = 0,
+    connection_addition_obligations: list[dict[str, str]] | None = None,
     composition_append_counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     return {
@@ -416,6 +493,9 @@ def _user_edit_layer(
         ),
         "context_node_ids": list(context_node_ids or []),
         "addition_count": addition_count,
+        "connection_addition_obligations": copy.deepcopy(
+            connection_addition_obligations or []
+        ),
         "composition_append_counts": dict(composition_append_counts or {}),
     }
 
@@ -430,7 +510,7 @@ def _component_attachment(
     *,
     nodes: list[dict[str, Any]],
     groups: list[dict[str, Any]],
-) -> tuple[int | None, set[str], set[str]]:
+) -> tuple[int | None, set[str], set[str], int, int]:
     """Resolve direct component relations to exact authored nodes and groups."""
     node_relation = (
         r"\b(?:and\s+)?(?:(?:connect(?:ed|ing)?|link(?:ed|ing)?|"
@@ -473,10 +553,18 @@ def _component_attachment(
             continue
         kind, record_id = next(iter(owners))
         selected.append((start, end, kind, record_id))
+    node_matches = [
+        record_id for _start, _end, kind, record_id in selected if kind == "node"
+    ]
+    group_matches = [
+        record_id for _start, _end, kind, record_id in selected if kind == "group"
+    ]
     return (
         min((start for start, _end, _kind, _record_id in selected), default=None),
-        {record_id for _start, _end, kind, record_id in selected if kind == "node"},
-        {record_id for _start, _end, kind, record_id in selected if kind == "group"},
+        set(node_matches),
+        set(group_matches),
+        len(node_matches),
+        len(group_matches),
     )
 
 
@@ -503,6 +591,8 @@ def _composition_addition_field(
 def _requested_component_id(body: str, attachment_start: int | None) -> str:
     name = body[:attachment_start].strip() if attachment_start is not None else body
     name = re.sub(r"\b(?:component|node|service)\b\s*$", "", name).strip()
+    if re.search(r"\b(?:and|plus)\b", name):
+        raise ValueError("the component addition identifies more than one component")
     component_id = _slug(name)
     if not component_id:
         raise ValueError("the component addition has no requested identity")
@@ -591,7 +681,7 @@ def _user_edit_composition_indexes(
     return sorted(set(sequence_indexes)), sorted(set(assumption_indexes))
 
 
-def _add_production_group_scope(
+def _add_required_group_scope(
     groups: list[dict[str, Any]],
     node_ids: set[str],
     group_ids: set[str],
@@ -601,9 +691,7 @@ def _add_production_group_scope(
     node_removal: bool,
     node_addition: bool,
 ) -> None:
-    if resolved_complexity != "production":
-        return
-    if node_removal:
+    if resolved_complexity == "production" and node_removal:
         composition_fields.append("groups")
         group_ids.update(
             str(group.get("id") or "")
@@ -612,9 +700,11 @@ def _add_production_group_scope(
                 str(node_id) for node_id in (group.get("nodeIds") or [])
             )
         )
-    if node_addition:
+    if node_addition and (groups or resolved_complexity == "production"):
         composition_fields.append("groups")
         if group_ids:
+            return
+        if not groups:
             return
         anchor_group_ids = {
             str(group.get("id") or "")
@@ -625,7 +715,7 @@ def _add_production_group_scope(
         }
         if len(anchor_group_ids) != 1:
             raise ValueError(
-                "a production component addition must identify one existing group"
+                "a grouped component addition must identify one existing group"
             )
         group_ids.update(anchor_group_ids)
 
@@ -643,20 +733,28 @@ def _user_edit_scope(
 
     nodes = [node for node in (graph.get("nodes") or []) if isinstance(node, dict)]
     groups = [group for group in (graph.get("groups") or []) if isinstance(group, dict)]
+    scoped_expansion_target = _scoped_expansion_target(text, nodes)
+    scoped_expansion = scoped_expansion_target is not None
     addition_requested = bool(_USER_EDIT_ADDITION.search(text))
     removal_requested = bool(_USER_EDIT_REMOVAL.search(text))
-    addition_body = _addition_body(text)
+    addition_body = None if scoped_expansion else _addition_body(text)
     connection_record_addition = bool(
         _USER_EDIT_CONNECTION_RECORD_ADDITION.search(text)
     )
-    attachment_start, attachment_node_ids, attachment_group_ids = (
+    (
+        attachment_start,
+        attachment_node_ids,
+        attachment_group_ids,
+        attachment_node_match_count,
+        attachment_group_match_count,
+    ) = (
         _component_attachment(
             addition_body,
             nodes=nodes,
             groups=groups,
         )
         if addition_body
-        else (None, set(), set())
+        else (None, set(), set(), 0, 0)
     )
     composition_addition_field = _composition_addition_field(
         addition_body,
@@ -668,6 +766,14 @@ def _user_edit_scope(
         and not connection_record_addition
         and composition_addition_field is None
     )
+    if component_addition_candidate and (
+        attachment_node_match_count != 1
+        or len(attachment_node_ids) != 1
+        or attachment_group_match_count > 1
+    ):
+        raise ValueError(
+            "the component addition must identify one component, one connection anchor, and at most one group"
+        )
     requested_component_id = (
         _requested_component_id(addition_body, attachment_start)
         if component_addition_candidate and addition_body
@@ -678,7 +784,10 @@ def _user_edit_scope(
         if composition_addition_field == "groups" and addition_body
         else None
     )
-    if composition_addition_field:
+    if scoped_expansion:
+        node_ids = {str(scoped_expansion_target)}
+        group_ids = set()
+    elif composition_addition_field:
         node_ids: set[str] = set()
         group_ids: set[str] = set()
     elif component_addition_candidate:
@@ -689,7 +798,7 @@ def _user_edit_scope(
         group_ids = _mentioned_record_ids(text, groups)
     intent_text = _without_named_record_references(text, nodes, node_ids)
     intent_text = _without_named_record_references(intent_text, groups, group_ids)
-    allow_node_additions = bool(
+    allow_node_additions = scoped_expansion or bool(
         requested_component_id and attachment_start is not None and node_ids
     )
     connection_requested = bool(
@@ -756,6 +865,36 @@ def _user_edit_scope(
     allow_edge_additions = allow_node_additions or bool(
         connection_requested and _USER_EDIT_CONNECTION_ADDITION.search(text)
     )
+    connection_addition_obligations: list[dict[str, str]] = []
+    if allow_node_additions:
+        anchor_node_id = next(iter(node_ids))
+        required_contract = (
+            "Add one directly connected responsibility that expands only the named component."
+            if scoped_expansion
+            else "Connect the requested new component directly to the named existing component."
+        )
+        connection_addition_obligations = [
+            {
+                "source": anchor_node_id,
+                "target": "$new_node_1",
+                "required_contract": required_contract,
+            }
+        ]
+    elif allow_edge_additions:
+        ordered_node_ids = _ordered_record_ids(text, nodes, node_ids)
+        if len(ordered_node_ids) != 2:
+            raise ValueError(
+                "a connection addition must identify one source and one target"
+            )
+        connection_addition_obligations = [
+            {
+                "source": ordered_node_ids[0],
+                "target": ordered_node_ids[1],
+                "required_contract": (
+                    "Implement the exact directed connection requested by the user."
+                ),
+            }
+        ]
 
     edge_selectors = _user_edit_edge_selectors(
         text,
@@ -764,7 +903,7 @@ def _user_edit_scope(
         node_removal=node_removal,
     )
 
-    _add_production_group_scope(
+    _add_required_group_scope(
         groups,
         node_ids,
         group_ids,
@@ -828,6 +967,7 @@ def _user_edit_scope(
                 edge_selectors=edge_selectors,
                 context_node_ids=(sorted(node_ids) if allow_edge_additions else []),
                 addition_count=1 if allow_edge_additions else 0,
+                connection_addition_obligations=connection_addition_obligations,
             ),
             "composition": _user_edit_layer(
                 "composition",
@@ -869,12 +1009,20 @@ def _user_edit_scope(
     permissions["added_edge_anchor_node_ids"] = sorted(node_ids)
     permissions["added_edges_require_new_node"] = permissions["allow_node_additions"]
     permissions["allowed_new_node_ids"] = (
-        [requested_component_id] if allow_node_additions else []
+        None
+        if scoped_expansion
+        else ([requested_component_id] if allow_node_additions else [])
     )
     permissions["allowed_new_node_count"] = 1 if allow_node_additions else 0
     permissions["allowed_new_edge_count"] = 1 if allow_edge_additions else 0
     permissions["allowed_new_group_ids"] = (
-        [requested_group_id] if requested_group_id else []
+        None
+        if allow_node_additions
+        and resolved_complexity == "production"
+        and not groups
+        else [requested_group_id]
+        if requested_group_id
+        else []
     )
     permissions["composition_append_limits"] = {
         field: 1
@@ -883,7 +1031,7 @@ def _user_edit_scope(
         and field in {"groups", "sequence", "assumptions"}
         and not (field == "groups" and group_ids)
     }
-    if allow_node_additions and resolved_complexity == "production":
+    if allow_node_additions and groups:
         permissions["composition_append_limits"]["groups"] = 0
     assumption_match = re.search(r"\bassumption\s+that\s+(?P<text>.+)$", text)
     permissions["required_assumption_text"] = (
@@ -1001,9 +1149,11 @@ mutation authority. Change only failed layers, cited records, declared additions
 composition fields. Passing layers and uncited records are immutable.
 
 The graph projection contains a read-only global topology skeleton. Records selected by the contract
-carry their full mutable detail. Use the skeleton to keep each repair consistent with the whole graph,
-but do not copy locked detail into the patch. Map every blocking finding to a concrete permitted
-operation. Enforce behavioral guarantees with directed components and edges rather than prose alone.
+carry their full mutable detail. Use the skeleton to keep each repair consistent with the whole graph.
+Node and edge operations omit locked detail. An authorized groups, sequence, or assumptions
+replacement must return the complete collection and copy every uncited record byte-for-byte.
+Map every blocking finding to a concrete permitted operation. Enforce behavioral guarantees with
+directed components and edges rather than prose alone.
 Preserve the primary operational spine. For clarity, density, or duplicate-record findings, prefer a
 permitted update, removal, or consolidation. Add a record only when the finding identifies a missing
 responsibility or contract.
@@ -1012,6 +1162,12 @@ One record-scoped contract may authorize independent repairs in disconnected top
 all cited blockers in one patch. Connectivity never grants authority for an uncited record. Moving a
 node between existing groups changes both group records, so both the source and destination group IDs
 must be editable. Omit the move when either group is locked.
+
+Connection addition obligations are exact and ordered. For each obligation, add one edge with the
+declared source and target. Resolve `$new_node_N` to the Nth record in add_nodes and use that
+record's authored ID in add_edges, never the placeholder. Express required_contract through the
+edge's concise label and description. The server enforces the exact directed endpoints; the mandatory
+post-patch critic owns semantic verification. Do not reverse, merge, or substitute endpoints.
 
 Source and target must be distinct. A node removal must also remove or redirect every incident edge.
 Omit keys that do not change. Groups, sequence, assumptions, and title are complete replacements when
@@ -1387,59 +1543,6 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
                 "Applied architecture rejected: %s: %s", type(exc).__name__, exc
             )
             failure_code = _graph_design_failure_code(exc)
-            if (
-                failure_code == "graph_edit_scope_ambiguous"
-                and operation_kind == "edit"
-                and _looks_like_graph_followup(state.get("user_message", ""))
-            ):
-                await send(
-                    {
-                        "type": "workflow_progress",
-                        "phase": "integrate",
-                        "status": "active",
-                        "title": "Broad edit interpreted as refinement scope",
-                        "detail": "I could not lock a narrow patch, so I will rebuild the diagram from topic and keep existing ownership.",
-                    }
-                )
-                try:
-                    rebuilt_graph = await _generate_applied_architecture(
-                        {**state, "graph_intent": "create"},
-                        query,
-                        profile,
-                    )
-                    accepted_graph = state.get("approved_graph_data")
-                    if isinstance(accepted_graph, dict):
-                        rebuilt_graph = _preserve_accepted_assumptions(
-                            rebuilt_graph,
-                            accepted_graph,
-                            state.get("user_message", ""),
-                        )
-                    await send(
-                        {
-                            "type": "workflow_progress",
-                            "phase": "integrate",
-                            "status": "complete",
-                            "title": "Candidate architecture assembled",
-                            "detail": f"{len(rebuilt_graph.get('nodes') or [])} responsibilities are connected into a bounded runtime flow.",
-                        }
-                    )
-                    return {
-                        **state,
-                        "graph_data": _attach_graph_version(rebuilt_graph),
-                        "graph_operation": {
-                            "kind": operation_kind,
-                            "status": "candidate",
-                            "failure_code": None,
-                        },
-                    }
-                except Exception as rebuild_exc:
-                    logger.warning(
-                        "Broad edit rebuild failed: %s: %s",
-                        type(rebuild_exc).__name__,
-                        rebuild_exc,
-                    )
-                    failure_code = _graph_design_failure_code(rebuild_exc)
-
             current_graph = state.get("graph_data")
             is_repair_candidate = (
                 int(state.get("graph_revision_count", 0)) > 0
@@ -1572,9 +1675,12 @@ async def _generate_applied_architecture(
         return await _generate_applied_architecture_patch(
             state, query, profile, existing_graph
         )
-    if _has_approved_applied_graph(state) and existing_graph and graph_intent == "edit":
+    if _has_approved_applied_graph(state) and graph_intent == "edit":
+        approved_graph = state.get("approved_graph_data")
+        if not isinstance(approved_graph, dict):
+            raise AppliedGraphSpecError("graph_edit_target_unavailable")
         return await _generate_applied_architecture_patch(
-            state, query, profile, existing_graph
+            state, query, profile, approved_graph
         )
     if not state.get("architecture_ready", False):
         raise AppliedGraphSpecError("graph_architecture_input_unavailable")
@@ -1991,11 +2097,12 @@ def _validate_added_record_scope(
     permissions: dict[str, Any],
 ) -> set[str]:
     added_nodes = _patch_list(patch, "add_nodes")
-    added_node_ids = {
+    added_node_ids_in_order = [
         _patch_reference(node.get("id"), "added node id")
         for node in added_nodes
         if isinstance(node, dict)
-    }
+    ]
+    added_node_ids = set(added_node_ids_in_order)
     allowed_new_node_ids = permissions["allowed_new_node_ids"]
     if allowed_new_node_ids is not None and added_node_ids != set(allowed_new_node_ids):
         raise ValueError("added node identities do not match the user edit scope")
@@ -2005,13 +2112,16 @@ def _validate_added_record_scope(
     if len(added_edges) != permissions["allowed_new_edge_count"]:
         raise ValueError("graph patch added the wrong number of edges")
     anchor_node_ids = set(permissions["added_edge_anchor_node_ids"])
+    added_edge_node_ids: set[str] = set()
+    actual_added_edge_endpoints: list[tuple[str, str]] = []
     for edge in added_edges:
         if not isinstance(edge, dict):
             raise ValueError("added edge must be an object")
-        endpoints = {
-            _patch_reference(edge.get("source"), "added edge source"),
-            _patch_reference(edge.get("target"), "added edge target"),
-        }
+        source = _patch_reference(edge.get("source"), "added edge source")
+        target = _patch_reference(edge.get("target"), "added edge target")
+        actual_added_edge_endpoints.append((source, target))
+        endpoints = {source, target}
+        added_edge_node_ids.update(endpoints.intersection(added_node_ids))
         if (
             permissions["added_edges_require_new_node"]
             and added_node_ids
@@ -2023,9 +2133,34 @@ def _validate_added_record_scope(
         if (
             anchor_node_ids
             and not added_node_ids
-            and (len(anchor_node_ids) == 2 and endpoints != anchor_node_ids)
+            and len(anchor_node_ids) == 2
+            and endpoints != anchor_node_ids
         ):
             raise ValueError("added edge is outside the named connection scope")
+    unattached_node_ids = added_node_ids - added_edge_node_ids
+    if unattached_node_ids:
+        raise ValueError(
+            "every added node must have an added incident edge: "
+            + ", ".join(sorted(unattached_node_ids))
+        )
+    expected_added_edge_endpoints = []
+    for obligation in permissions["connection_addition_obligations"]:
+        resolved_endpoints = []
+        for endpoint in (obligation["source"], obligation["target"]):
+            match = re.fullmatch(r"\$new_node_([1-9][0-9]*)", endpoint)
+            if match:
+                position = int(match.group(1)) - 1
+                if position >= len(added_node_ids_in_order):
+                    raise ValueError(
+                        "connection obligation references a missing added node"
+                    )
+                endpoint = added_node_ids_in_order[position]
+            resolved_endpoints.append(endpoint)
+        expected_added_edge_endpoints.append(tuple(resolved_endpoints))
+    if sorted(actual_added_edge_endpoints) != sorted(expected_added_edge_endpoints):
+        raise ValueError(
+            "added edges do not match the exact connection addition obligations"
+        )
     return added_node_ids
 
 
@@ -2149,6 +2284,36 @@ def _validate_production_node_set_patch(
             )
 
 
+def _validate_grouped_node_additions(
+    existing_graph: GraphData,
+    patch: dict[str, Any],
+    layers: dict[str, Any],
+    editable_composition_fields: set[str],
+    added_node_ids: set[str],
+) -> None:
+    if not added_node_ids or not (existing_graph.get("groups") or []):
+        return
+    if layers["composition"]["status"] != "fail":
+        raise ValueError("grouped node additions require a failed composition layer")
+    if "groups" not in editable_composition_fields:
+        raise ValueError("grouped node additions require editable groups")
+    replacement = patch.get("groups")
+    if not isinstance(replacement, list):
+        raise ValueError("grouped node additions require a complete groups replacement")
+    placed_node_ids = {
+        str(node_id)
+        for group in replacement
+        if isinstance(group, dict)
+        for node_id in (group.get("nodeIds") or [])
+    }
+    unplaced_node_ids = added_node_ids - placed_node_ids
+    if unplaced_node_ids:
+        raise ValueError(
+            "every added node must be placed in a group: "
+            + ", ".join(sorted(unplaced_node_ids))
+        )
+
+
 def _validate_patch_scope_before_normalization(
     existing_graph: GraphData,
     patch: dict[str, Any],
@@ -2167,12 +2332,19 @@ def _validate_patch_scope_before_normalization(
     _validate_patch_layer_locks(patch, layers)
     _validate_node_patch_scope(patch, permissions)
     _validate_edge_patch_scope(patch, permissions)
-    _validate_added_record_scope(patch, permissions)
+    added_node_ids = _validate_added_record_scope(patch, permissions)
     editable_composition_fields = _validate_composition_patch_scope(
         existing_graph,
         patch,
         layers["composition"],
         permissions,
+    )
+    _validate_grouped_node_additions(
+        existing_graph,
+        patch,
+        layers,
+        editable_composition_fields,
+        added_node_ids,
     )
     _validate_production_node_set_patch(
         patch,

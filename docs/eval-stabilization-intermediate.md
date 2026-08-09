@@ -202,29 +202,38 @@ The chronology is important: these were not repetitions of one identical defect.
 This state machine supersedes the historical repair limits and layer-lock descriptions below.
 Focused offline tests cover its contracts. A paid diagnostic is still required before the protected
 corpus runs and is pending explicit approval.
+The staged DAG and layer-as-generated architecture are Release 2 future work, outside this
+stabilization path.
 
 - Every initial candidate receives one exhaustive component, connection, composition, and render
   scorecard. Every deterministic finding is classified exactly once.
 - The selected review depth is authoritative. Prototype review rejects production-only findings even
   when request text describes a production system. Production review retains all topology proofs.
-- Repair patches are record-scoped and may cover multiple disconnected regions. Node, edge, group,
-  sequence, assumption, field, and addition permissions stay exact. A group move requires permission
-  for both source and destination groups.
+- Repair patches are record-scoped and may cover multiple disconnected regions. Every cited node,
+  edge, group, sequence, assumption, field, removal, and addition has its own exact permission;
+  topology proximity grants none. Each required connection addition names its exact directed
+  `source -> destination` obligation. A group move requires permission for both source and
+  destination groups.
 - Retained pass verdicts follow dependency invalidation. Component changes reopen components,
   connections, and composition. Edge changes reopen connections and composition. Composition-only
   changes reopen composition.
-- The workflow retains a reviewed snapshot as the repair baseline.
-- It permits at most two successful semantic repairs and one error-informed contract correction. An
-  invalid local-admission patch preserves the current candidate, returns a safe typed validation path
-  and rule to a fresh critic call, and consumes the single contract-correction budget. The corrected
-  Kimi prompt cannot repeat the rejected prompt.
+- The workflow retains the reviewed graph snapshot beside its scorecard as the repair baseline; a
+  later scorecard cannot be paired with a different graph version.
+- It permits one semantic repair and one error-informed critic-contract correction. An invalid local
+  admission preserves the current candidate, returns its safe typed validation path and rule to one
+  fresh critic correction, and consumes that correction budget. The corrected Kimi prompt cannot
+  repeat the rejected prompt.
+- A request-scoped counter caps Sonnet critic provider calls at four across initial review, schema
+  correction, contract correction, and post-patch review. Reaching the ceiling fails closed.
 - A local contract may combine exact component or connection changes with the title and selected
   assumption records that those semantic changes require. Assumption edits use exact indexed or
   append permissions; unrelated composition records remain locked.
-- An ambiguous broad expansion rebuild preserves accepted assumptions unless the user explicitly
-  changes them. It cannot erase them as a side effect of selecting a new topology path.
-- A rejected expansion retains the approved graph internally. Its publication state is preserved and
-  the response does not emit stale `graph_data` for that rejected candidate.
+- A broad expansion resolves one existing component against the approved graph and authorizes one
+  directly connected child plus any required group placement. Zero or multiple target matches
+  preserve the approved graph for clarification. The edit lane never rebuilds the graph.
+- Publication states are explicit: `approved` emits the reviewed accepted graph, `preserved` keeps
+  the prior approved graph after a rejected edit without emitting stale candidate `graph_data`, and
+  `withheld` emits no unapproved create candidate. An edit cannot fall back to graph creation.
 - Every candidate receives deterministic render validation.
 - Publication requires a final merged full-graph pass.
 
@@ -600,7 +609,7 @@ Most recent authoritative evidence:
 ## Remaining execution order
 
 1. Pass the full offline gate on the exact tracked tree.
-2. Run one protected graph diagnostic and require a publishable first candidate or bounded local repairs.
+2. Run one protected graph diagnostic and require a publishable first candidate or the bounded one-repair path.
 3. Run one uninterrupted canonical eight-case protected evaluation on that tree.
 4. Verify the exact-tree approval tag and required PR checks, then merge with the final-head guard.
 5. Monitor the `main` production workflow through immutable backend deployment, smoke/promotion, and Vercel deployment.

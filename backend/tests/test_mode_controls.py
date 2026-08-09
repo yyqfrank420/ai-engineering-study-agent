@@ -187,7 +187,7 @@ def test_self_improving_applied_system_defaults_to_production_depth():
     assert profile.resolved == "production"
 
 
-def test_terse_graph_followup_restores_the_original_design_context():
+def test_terse_graph_followup_keeps_labeled_artifact_context_only():
     from agent.complexity import resolve_design_query
 
     query = resolve_design_query(
@@ -195,6 +195,7 @@ def test_terse_graph_followup_restores_the_original_design_context():
         history=[
             {"role": "user", "content": "growth marketing multi-agent system"},
             {"role": "assistant", "content": "Here is the first design."},
+            {"role": "user", "content": "Compare fine-tuning methods"},
         ],
         graph_data={
             "title": "Campaign Optimisation Loop",
@@ -203,10 +204,34 @@ def test_terse_graph_followup_restores_the_original_design_context():
         },
     )
 
-    assert "growth marketing multi-agent system" in query
+    assert query.startswith(
+        "Existing graph context (not new user requirements): Campaign Optimisation Loop"
+    )
     assert "Campaign Optimisation Loop" in query
-    assert "Channel Executor" in query
-    assert query.endswith("expand the approval path")
+    assert "growth marketing multi-agent system" not in query
+    assert "Compare fine-tuning methods" not in query
+    assert "Channel Executor" not in query
+    assert "Outcome Attribution" not in query
+    assert query.endswith("Latest user request: expand the approval path")
+
+
+def test_terse_followup_without_graph_uses_only_most_recent_user_context():
+    from agent.complexity import resolve_design_query
+
+    query = resolve_design_query(
+        "go deeper",
+        history=[
+            {"role": "user", "content": "Design a growth marketing system"},
+            {"role": "assistant", "content": "Here is the design."},
+            {"role": "user", "content": "Explain outcome attribution"},
+            {"role": "assistant", "content": "Attribution links outcomes to actions."},
+        ],
+    )
+
+    assert query == (
+        "Most recent user context (background only): Explain outcome attribution\n"
+        "Latest user request: go deeper"
+    )
 
 
 @pytest.mark.parametrize(
@@ -416,7 +441,7 @@ def test_graph_operation_resolver_handles_ambiguous_mutation_language_once():
     )
     assert resolve_graph_operation("Expand monitoring", applied) == "edit"
     assert resolve_graph_operation("Expand monitoring", canonical) == "edit"
-    assert resolve_graph_operation("Add Prometheus", applied) == "edit"
+    assert resolve_graph_operation("Add Prometheus", applied) is None
     assert resolve_graph_operation("Update React components", applied) is None
     assert (
         resolve_graph_operation(
@@ -430,7 +455,6 @@ def test_graph_operation_resolver_handles_ambiguous_mutation_language_once():
 @pytest.mark.parametrize(
     "message",
     [
-        "Could you add Prometheus?",
         "Make monitoring more detailed",
         "Increase monitoring coverage",
         "Improve monitoring",
@@ -444,7 +468,6 @@ def test_graph_operation_resolver_handles_ambiguous_mutation_language_once():
         "Show Cache service with Redis",
         "Diagram the API Gateway service with auth",
         "Enhance Monitoring",
-        "Enhance the observability layer",
         "Modernize Cache service",
     ],
 )
@@ -467,10 +490,36 @@ def test_local_component_requests_remain_incremental_edits(message):
 @pytest.mark.parametrize(
     "message",
     [
+        "Could you add Prometheus?",
+        "Enhance the observability layer",
+        "Expand on why this trade-off matters.",
+        "Make it clearer.",
+        "Include an example.",
+    ],
+)
+def test_targetless_mutation_language_does_not_edit_a_graph(message):
+    from agent.complexity import resolve_graph_operation
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "monitoring", "label": "Monitoring"}],
+        "groups": [],
+    }
+
+    assert resolve_graph_operation(message, graph) is None
+    assert resolve_graph_operation(message, None) is None
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
         "Keep the current graph unchanged and add citations to the answer.",
         "Keep the current graph as-is, but update the explanation.",
         "Do not change the diagram, but add citations.",
         "Preserve the diagram and revise the tradeoffs.",
+        "Expand on your explanation without changing the graph.",
+        "Without changing the graph, expand on all agents.",
+        "Show how the pieces fit together without updating the graph.",
     ],
 )
 def test_answer_edits_cannot_borrow_a_graph_reference_from_another_clause(message):
@@ -512,16 +561,43 @@ def test_new_design_intent_does_not_depend_on_existing_graph_state(message):
     [
         "Expand monitoring",
         "Add Prometheus",
-        (
-            "Expand the monitoring component while preserving the original graph "
-            "topic and existing components."
-        ),
     ],
 )
-def test_rejected_graph_followup_fails_as_an_edit_instead_of_selecting_canonical(
-    message,
-):
+def test_graph_followup_without_an_explicit_target_is_not_assumed_to_be_an_edit(message):
     from agent.complexity import resolve_graph_operation
+
+    assert resolve_graph_operation(message, None) is None
+
+
+def test_graph_followup_can_constrain_an_explicit_existing_artifact_edit():
+    from agent.complexity import resolve_graph_operation
+
+    message = (
+        "Expand the monitoring component while preserving the original graph "
+        "topic and existing components."
+    )
+
+    assert resolve_graph_operation(message, None) == "edit"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Expand the current graph",
+        "Add a monitoring node",
+        "Rename the graph title",
+    ],
+)
+def test_explicit_graph_targets_keep_edit_intent_without_loaded_graph(message):
+    from agent.complexity import resolve_graph_operation
+
+    assert resolve_graph_operation(message, None) == "edit"
+
+
+def test_negation_in_one_clause_does_not_cancel_a_later_explicit_graph_edit():
+    from agent.complexity import resolve_graph_operation
+
+    message = "Do not explain how to update a graph database; update the current graph"
 
     assert resolve_graph_operation(message, None) == "edit"
 

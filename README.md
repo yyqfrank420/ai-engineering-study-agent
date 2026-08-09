@@ -28,7 +28,7 @@ Production-oriented, graph-guided study companion for *AI Engineering* by Chip H
 3. enrich applied-design seeds into one explicit product brief, then challenge that same interpretation
 4. integrate their outputs into a domain-specific graph
 5. render the candidate privately in the browser and review the real screenshot plus architecture
-6. lock every passing review layer, let Kimi apply one typed patch to the exact failed graph selectors, then revalidate and rerender the complete candidate; global design failures and browser failures stop publication
+6. retain only dependency-safe passing review layers, keep the reviewed graph snapshot beside its scorecard, and let Kimi apply one semantic repair to exact failed records and directed connection obligations; one error-informed critic-contract correction may follow a rejected admission, then the complete candidate is revalidated and rerendered
 7. finish the one-call walkthrough privately, then reveal the accepted graph and explanation together
 
 Chat runs over `/api/chat/ws`. The first frame authenticates the connection; subsequent
@@ -65,6 +65,7 @@ Relevant docs:
 - **Explicit design roles**: Opus 5 xhigh writes and reviews the architecture brief, Kimi K3 low builds graph JSON, Kimi K3 high applies typed repairs, Sonnet 5 medium owns graph QA, and Sonnet 5 high owns the protected semantic judge.
 - **D3 architecture diagram**: Interactive graph with step-by-step walkthrough and node detail enrichment.
 - **Protected live evaluation**: Browser journeys, deterministic graph contracts, and reviewed semantic rubrics run against isolated no-traffic Cloud Run revisions.
+- **Bounded graph publication**: Repairs can cover cited disconnected records, require both source and destination group authority for a group move, and use explicit `approved`, `preserved`, or `withheld` publication states. An edit never falls back to creating a new graph.
 - **Selective evidence reuse**: Audited per-case evidence composition avoids repeating already-passing paid evaluations while requiring exact evidence for the unresolved case.
 - **Immutable production delivery**: Production deploys only the approved Artifact Registry digest for the exact Git tree, smokes it without traffic, then promotes that revision.
 
@@ -125,8 +126,9 @@ image digest across synthetic PR merge refs and later squash merges. Selective s
 replay reuses only authenticated, successful graph-free cases; runtime-affected cases
 rerun as scheduled diagnostics. Scheduled evaluation now reports a missing image tag in
 preflight, while a manual diagnostic builds an ephemeral image from the exact requested
-tree. Graph repair has one bounded owner, and invalid generated output fails closed while
-preserving the approved graph. These controls do not imply that a pending production
+tree. Graph repair has one semantic-repair owner plus one error-informed critic-contract
+correction, and invalid generated output fails closed while preserving the approved graph.
+These controls do not imply that paid validation or a pending production
 deployment has completed. See [docs/quality-system.md](docs/quality-system.md) for the
 full evidence, replay, and deployment procedures.
 

@@ -9,6 +9,7 @@ from agent.nodes.architecture_workers import (
     _ARCHITECT_SYSTEM,
     _CHALLENGER_RESPONSE_SCHEMA,
     _CHALLENGER_SYSTEM,
+    _REVIEW_PLAN_LIST_LIMITS,
     _apply_source_backed_plan_locks,
     _is_complete_architect_plan,
     _normalise_architect,
@@ -65,13 +66,29 @@ def _complete_plan(**overrides):
 
 
 def test_architecture_roles_reason_about_enforced_control_paths():
-    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v17"
-    assert "production guarantees as directed paths" in _ARCHITECT_SYSTEM
-    assert "timeout-after-commit as an unknown outcome" in _ARCHITECT_SYSTEM
+    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v19"
+    for production_requirement in (
+        "At selected production depth only, keep risky customer writes",
+        "At selected production depth only, treat production guarantees",
+        "At selected production depth only, require alternative delivery",
+        "At selected production depth only, persist a stable operation identity",
+        "At selected production depth only, require model output",
+        "At selected production depth only, distinguish no external business mutation",
+        "At selected production depth only, when continuous or event-stream input",
+        "At selected production depth only, treat every model and prompt",
+    ):
+        assert production_requirement in _ARCHITECT_SYSTEM
     assert "retrieved content stays untrusted" in _ARCHITECT_SYSTEM
     assert "stable operation identity" in _ARCHITECT_SYSTEM
     assert "complete release/policy" in _ARCHITECT_SYSTEM
-    assert "Trace material guarantees through the proposed control topology" in _CHALLENGER_SYSTEM
+    for production_requirement in (
+        "At selected production depth only, check ownership",
+        "At selected production depth only, trace material guarantees",
+        "At selected production depth only, flag retrieved text",
+        "At selected production depth only, flag action attempts",
+        "At selected production depth only, flag cache keys",
+    ):
+        assert production_requirement in _CHALLENGER_SYSTEM
     assert "observation verification confused with" in _CHALLENGER_SYSTEM
     assert "automatic lanes without an" in _CHALLENGER_SYSTEM
     assert "bounded backpressure and overload" in _ARCHITECT_SYSTEM
@@ -85,6 +102,20 @@ def test_architecture_roles_reason_about_enforced_control_paths():
     assert "one primary operational scenario" in _ARCHITECT_SYSTEM
     assert "one primary runtime flow starts at the real trigger" in _CHALLENGER_SYSTEM
     assert "authoring, reviewing" in _ARCHITECT_SYSTEM
+    assert "latest user request is the only source" in _ARCHITECT_SYSTEM
+    assert "latest user request is the only source" in _CHALLENGER_SYSTEM
+    assert "selected depth is authoritative" in _ARCHITECT_SYSTEM
+    assert "selected depth is authoritative" in _CHALLENGER_SYSTEM
+    assert "At prototype depth, use only prototype criteria" in _ARCHITECT_SYSTEM
+    assert "At prototype depth, use only prototype criteria" in _CHALLENGER_SYSTEM
+    assert "Hard list limits are inclusive: actors 10; inputs 12" in _ARCHITECT_SYSTEM
+    assert "evidence_basis 18; decisions 20; runtime_flow 30" in _ARCHITECT_SYSTEM
+    assert "Hard audit list limits are inclusive: risks 5" in _CHALLENGER_SYSTEM
+    assert (
+        "Hard accepted_plan string limits are inclusive characters"
+        in _CHALLENGER_SYSTEM
+    )
+    assert "exact chapter/page or URL" in _CHALLENGER_SYSTEM
 
 
 def test_architecture_worker_schemas_require_every_declared_object_field():
@@ -104,6 +135,36 @@ def test_architecture_worker_schemas_require_every_declared_object_field():
     assert "removed_candidate_items" not in _CHALLENGER_RESPONSE_SCHEMA["properties"]
     assert _CHALLENGER_RESPONSE_SCHEMA["properties"]["risks"]["maxItems"] == 5
     assert _CHALLENGER_RESPONSE_SCHEMA["properties"]["tradeoffs"]["maxItems"] == 4
+
+    architect_properties = _ARCHITECT_RESPONSE_SCHEMA["properties"]
+    reviewed_properties = _CHALLENGER_RESPONSE_SCHEMA["properties"]["accepted_plan"][
+        "properties"
+    ]
+    for field, limit in _REVIEW_PLAN_LIST_LIMITS.items():
+        assert architect_properties[field]["maxItems"] == limit
+        assert reviewed_properties[field]["maxItems"] == limit
+
+    assert architect_properties["interpretation"]["maxLength"] == 400
+    assert architect_properties["actors"]["items"]["maxLength"] == 120
+    assert architect_properties["diagram_requirements"]["items"]["maxLength"] == 240
+    assert (
+        architect_properties["evidence_basis"]["items"]["properties"]["evidence_ref"][
+            "maxLength"
+        ]
+        == 500
+    )
+    assert (
+        architect_properties["decisions"]["items"]["properties"]["why"]["maxLength"]
+        == 300
+    )
+    assert architect_properties["runtime_flow"]["items"]["maxLength"] == 300
+    assert architect_properties["status_update"]["maxLength"] == 220
+    challenger_properties = _CHALLENGER_RESPONSE_SCHEMA["properties"]
+    assert (
+        challenger_properties["risks"]["items"]["properties"]["risk"]["maxLength"]
+        == 300
+    )
+    assert challenger_properties["missing_requirements"]["items"]["maxLength"] == 260
 
 
 def test_challenger_audit_is_bounded_even_if_a_provider_ignores_the_schema():
@@ -126,53 +187,65 @@ def test_challenger_audit_is_bounded_even_if_a_provider_ignores_the_schema():
 
 
 def test_complete_architect_plan_may_have_no_material_assumptions():
-    assert _is_complete_architect_plan({
-        "interpretation": "A fully specified evidence explorer.",
-        "actors": ["Researcher"],
-        "inputs": ["ACL-scoped query"],
-        "outputs": ["Cited answer"],
-        "required_capabilities": [
-            "Authorise evidence scope",
-            "Retrieve source passages",
-            "Validate claim support",
-            "Return cited results",
-        ],
-        "outcome_measures": ["Supported-claim rate"],
-        "assumptions": [],
-        "decisions": [
-            {"area": "access", "decision": "Enforce source ACLs"},
-            {"area": "quality", "decision": "Abstain without support"},
-        ],
-        "runtime_flow": ["Authorise", "Retrieve", "Validate", "Return"],
-    })
+    assert _is_complete_architect_plan(
+        {
+            "interpretation": "A fully specified evidence explorer.",
+            "actors": ["Researcher"],
+            "inputs": ["ACL-scoped query"],
+            "outputs": ["Cited answer"],
+            "required_capabilities": [
+                "Authorise evidence scope",
+                "Retrieve source passages",
+                "Validate claim support",
+                "Return cited results",
+            ],
+            "diagram_requirements": ["Show the ACL-scoped retrieval and citation path"],
+            "outcome_measures": ["Supported-claim rate"],
+            "assumptions": [],
+            "decisions": [
+                {"area": "access", "decision": "Enforce source ACLs"},
+                {"area": "quality", "decision": "Abstain without support"},
+            ],
+            "runtime_flow": ["Authorise", "Retrieve", "Validate", "Return"],
+        }
+    )
 
 
 def test_architect_output_becomes_a_bounded_canonical_design_brief():
-    brief = _normalise_architect({
-        "interpretation": "Turn a terse growth prompt into a bounded campaign optimisation product.",
-        "actors": ["Growth lead", "Advertising channel"],
-        "inputs": ["Campaign brief", "Conversion events"],
-        "outputs": ["Approved campaign changes"],
-        "required_capabilities": ["Attribution quality gate", "Bounded channel executor"],
-        "diagram_requirements": [
-            "Route rejected claims back to campaign review",
-            "Let analytics-only requests bypass the channel write gate",
-        ],
-        "outcome_measures": ["Incremental contribution margin"],
-        "constraints": ["Constrained objective"],
-        "assumptions": ["Channel APIs support idempotent writes"],
-        "open_questions": ["Which channels are in scope?"],
-        "evidence_basis": [
-            {
-                "claim": "Use an approval gate for large spend changes",
-                "basis": "engineering_recommendation",
-                "evidence_ref": "write_boundary checklist area",
-            },
-            {"claim": "Ignore unsupported provenance", "basis": "invented"},
-        ],
-        "decisions": [],
-        "runtime_flow": ["Validate events", "Propose a bounded change", "Measure outcome"],
-    })
+    brief = _normalise_architect(
+        {
+            "interpretation": "Turn a terse growth prompt into a bounded campaign optimisation product.",
+            "actors": ["Growth lead", "Advertising channel"],
+            "inputs": ["Campaign brief", "Conversion events"],
+            "outputs": ["Approved campaign changes"],
+            "required_capabilities": [
+                "Attribution quality gate",
+                "Bounded channel executor",
+            ],
+            "diagram_requirements": [
+                "Route rejected claims back to campaign review",
+                "Let analytics-only requests bypass the channel write gate",
+            ],
+            "outcome_measures": ["Incremental contribution margin"],
+            "constraints": ["Constrained objective"],
+            "assumptions": ["Channel APIs support idempotent writes"],
+            "open_questions": ["Which channels are in scope?"],
+            "evidence_basis": [
+                {
+                    "claim": "Use an approval gate for large spend changes",
+                    "basis": "engineering_recommendation",
+                    "evidence_ref": "write_boundary checklist area",
+                },
+                {"claim": "Ignore unsupported provenance", "basis": "invented"},
+            ],
+            "decisions": [],
+            "runtime_flow": [
+                "Validate events",
+                "Propose a bounded change",
+                "Measure outcome",
+            ],
+        }
+    )
 
     assert brief["actors"] == ["Growth lead", "Advertising channel"]
     assert brief["required_capabilities"] == [
@@ -184,54 +257,87 @@ def test_architect_output_becomes_a_bounded_canonical_design_brief():
         "Let analytics-only requests bypass the channel write gate",
     ]
     assert brief["assumptions"] == ["Channel APIs support idempotent writes"]
-    assert brief["evidence_basis"] == [{
-        "claim": "Use an approval gate for large spend changes",
-        "basis": "engineering_recommendation",
-        "evidence_ref": "write_boundary checklist area",
-    }]
+    assert brief["evidence_basis"] == [
+        {
+            "claim": "Use an approval gate for large spend changes",
+            "basis": "engineering_recommendation",
+            "evidence_ref": "write_boundary checklist area",
+        }
+    ]
 
 
 @pytest.mark.parametrize(
-    ("brief", "expected"),
+    "brief",
     [
-        (
-            {
-                "required_capabilities": ["Temperature excursion triage"],
-                "decisions": [{"area": "reliability", "decision": "Persist offline alerts", "why": "Intermittent links"}],
-            },
-            ("Temperature excursion triage", "Persist offline alerts"),
-        ),
-        (
-            {
-                "required_capabilities": ["Evidence-linked care guidance"],
-                "decisions": [{"area": "safety", "decision": "Escalate uncertain advice to a clinician", "why": "Human accountability"}],
-            },
-            ("Evidence-linked care guidance", "Escalate uncertain advice to a clinician"),
-        ),
-        (
-            {
-                "required_capabilities": ["Reconcile buyer and seller events"],
-                "decisions": [{"area": "data", "decision": "Cache versioned catalogue reads", "why": "Bounded latency"}],
-            },
-            ("Reconcile buyer and seller events", "Cache versioned catalogue reads"),
-        ),
+        {
+            "required_capabilities": ["Temperature excursion triage"],
+            "decisions": [
+                {
+                    "area": "reliability",
+                    "decision": "Persist offline alerts",
+                    "why": "Intermittent links",
+                }
+            ],
+        },
+        {
+            "required_capabilities": ["Evidence-linked care guidance"],
+            "decisions": [
+                {
+                    "area": "safety",
+                    "decision": "Escalate uncertain advice to a clinician",
+                    "why": "Human accountability",
+                }
+            ],
+        },
+        {
+            "required_capabilities": ["Reconcile buyer and seller events"],
+            "decisions": [
+                {
+                    "area": "data",
+                    "decision": "Cache versioned catalogue reads",
+                    "why": "Bounded latency",
+                }
+            ],
+        },
     ],
 )
-def test_out_of_sample_briefs_derive_bounded_diagram_commitments(brief, expected):
-    normalised = _normalise_architect({
-        "interpretation": "Out-of-sample system",
-        "actors": ["Operator"],
-        "inputs": ["Validated event"],
-        "outputs": ["Observable outcome"],
-        "outcome_measures": ["Outcome quality"],
-        "assumptions": ["An authoritative source exists"],
-        "runtime_flow": ["Accept event", "Return outcome"],
-        **brief,
-    })
+def test_out_of_sample_briefs_keep_explicit_diagram_commitments(brief):
+    normalised = _normalise_architect(
+        {
+            "interpretation": "Out-of-sample system",
+            "actors": ["Operator"],
+            "inputs": ["Validated event"],
+            "outputs": ["Observable outcome"],
+            "diagram_requirements": ["Show the bounded event-to-outcome path"],
+            "outcome_measures": ["Outcome quality"],
+            "assumptions": ["An authoritative source exists"],
+            "runtime_flow": ["Accept event", "Return outcome"],
+            **brief,
+        }
+    )
 
     contract = format_diagram_commitments(normalised)
 
-    assert all(item in contract for item in expected)
+    assert contract == "- Show the bounded event-to-outcome path"
+
+
+def test_architect_normalization_does_not_derive_diagram_requirements():
+    plan = _normalise_architect(
+        _complete_plan(
+            diagram_requirements=[],
+            required_capabilities=["Route one inference request"],
+            decisions=[
+                {
+                    "area": "scope",
+                    "decision": "Ship one inference path first",
+                    "why": "It satisfies the current request.",
+                }
+            ],
+        )
+    )
+
+    assert plan["diagram_requirements"] == []
+    assert not _is_complete_architect_plan(plan)
 
 
 def test_challenger_context_ignores_a_stale_architect_brief():
@@ -249,6 +355,8 @@ def test_challenger_context_ignores_a_stale_architect_brief():
     )
 
     assert "growth marketing system expand it" in context
+    assert "Latest user request" in context
+    assert "Design context" in context
     assert "Canonical enriched design brief" not in context
     assert "Channel write APIs are available" not in context
 
@@ -268,7 +376,9 @@ def test_challenger_context_includes_the_primary_plan_for_the_second_pass():
 
 
 @pytest.mark.asyncio
-async def test_architect_failure_stops_graph_input_instead_of_inventing_a_plan(monkeypatch):
+async def test_architect_failure_stops_graph_input_instead_of_inventing_a_plan(
+    monkeypatch,
+):
     events = []
 
     async def fail_model(**_kwargs):
@@ -281,14 +391,16 @@ async def test_architect_failure_stops_graph_input_instead_of_inventing_a_plan(m
         "agent.nodes.architecture_workers.stream_structured_llm",
         fail_model,
     )
-    result = await architect_node({
-        "is_applied_design": True,
-        "design_query": "customer support chatbot",
-        "user_message": "customer support chatbot",
-        "complexity": "auto",
-        "evidence_bundle": {},
-        "send": send,
-    })
+    result = await architect_node(
+        {
+            "is_applied_design": True,
+            "design_query": "customer support chatbot",
+            "user_message": "customer support chatbot",
+            "complexity": "auto",
+            "evidence_bundle": {},
+            "send": send,
+        }
+    )
 
     assert result == {"architect_plan": {}, "architecture_ready": False}
     assert events[-1]["failure_code"] == "architecture_pass_timeout"
@@ -309,14 +421,16 @@ async def test_architect_empty_success_stops_graph_input(monkeypatch):
         "agent.nodes.architecture_workers.stream_structured_llm",
         empty_model,
     )
-    result = await architect_node({
-        "is_applied_design": True,
-        "design_query": "growth marketing multi-agent system",
-        "user_message": "growth marketing multi-agent system",
-        "complexity": "auto",
-        "evidence_bundle": {},
-        "send": send,
-    })
+    result = await architect_node(
+        {
+            "is_applied_design": True,
+            "design_query": "growth marketing multi-agent system",
+            "user_message": "growth marketing multi-agent system",
+            "complexity": "auto",
+            "evidence_bundle": {},
+            "send": send,
+        }
+    )
 
     assert result == {"architect_plan": {}, "architecture_ready": False}
     assert captured["effort"] == "xhigh"
@@ -368,6 +482,46 @@ async def test_architect_rejects_malformed_or_incomplete_structured_output(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "plan",
+    [
+        _complete_plan(diagram_requirements=[]),
+        _complete_plan(actors=[f"actor-{index}" for index in range(11)]),
+        _complete_plan(status_update="x" * 12_000),
+    ],
+)
+async def test_architect_rejects_missing_commitments_or_response_limits(
+    monkeypatch, plan
+):
+    events = []
+
+    async def model(**_kwargs):
+        return _structured_response(plan)
+
+    async def send(event):
+        events.append(event)
+
+    monkeypatch.setattr(
+        "agent.nodes.architecture_workers.stream_structured_llm",
+        model,
+    )
+
+    result = await architect_node(
+        {
+            "is_applied_design": True,
+            "design_query": "Design a service.",
+            "user_message": "Design a service.",
+            "complexity": "prototype",
+            "evidence_bundle": {},
+            "send": send,
+        }
+    )
+
+    assert result == {"architect_plan": {}, "architecture_ready": False}
+    assert events[-1]["failure_code"] == "architecture_pass_invalid"
+
+
+@pytest.mark.asyncio
 async def test_challenger_failure_stops_graph_input(monkeypatch):
     captured = {}
 
@@ -382,16 +536,18 @@ async def test_challenger_failure_stops_graph_input(monkeypatch):
         "agent.nodes.architecture_workers.stream_structured_llm",
         fail_model,
     )
-    result = await challenger_node({
-        "is_applied_design": True,
-        "design_query": "airport baggage recovery system",
-        "user_message": "airport baggage recovery system",
-        "complexity": "production",
-        "evidence_bundle": {},
-        "architecture_ready": True,
-        "architect_plan": {"interpretation": "Airport baggage recovery"},
-        "send": send,
-    })
+    result = await challenger_node(
+        {
+            "is_applied_design": True,
+            "design_query": "airport baggage recovery system",
+            "user_message": "airport baggage recovery system",
+            "complexity": "production",
+            "evidence_bundle": {},
+            "architecture_ready": True,
+            "architect_plan": {"interpretation": "Airport baggage recovery"},
+            "send": send,
+        }
+    )
 
     assert result == {"challenger_review": {}, "architecture_ready": False}
     assert captured["effort"] == "medium"
@@ -522,6 +678,94 @@ async def test_challenger_replaces_the_candidate_with_one_reviewed_plan(monkeypa
     assert "Primary architect candidate" in captured["messages"][0]["content"]
 
 
+@pytest.mark.asyncio
+async def test_challenger_rejects_accepted_plan_exceeding_list_limit(monkeypatch):
+    events = []
+
+    async def model(**_kwargs):
+        return _structured_response(
+            {
+                "accepted_plan": _complete_plan(
+                    runtime_flow=[f"step-{index}" for index in range(31)],
+                ),
+                "risks": [],
+                "missing_requirements": [],
+                "tradeoffs": [],
+                "status_update": "Reviewed.",
+            }
+        )
+
+    async def send(event):
+        events.append(event)
+
+    monkeypatch.setattr(
+        "agent.nodes.architecture_workers.stream_structured_llm",
+        model,
+    )
+
+    result = await challenger_node(
+        {
+            "is_applied_design": True,
+            "user_message": "Design a service.",
+            "complexity": "prototype",
+            "evidence_bundle": {},
+            "architecture_ready": True,
+            "architect_plan": _complete_plan(),
+            "send": send,
+        }
+    )
+
+    assert result == {"challenger_review": {}, "architecture_ready": False}
+    assert events[-1]["failure_code"] == "architecture_review_invalid"
+
+
+@pytest.mark.asyncio
+async def test_challenger_validates_constraints_against_latest_user_request(
+    monkeypatch,
+):
+    events = []
+
+    async def model(**_kwargs):
+        return _structured_response(
+            {
+                "accepted_plan": _complete_plan(
+                    constraints=["keep all data in region"],
+                ),
+                "risks": [],
+                "missing_requirements": [],
+                "tradeoffs": [],
+                "status_update": "Reviewed.",
+            }
+        )
+
+    async def send(event):
+        events.append(event)
+
+    monkeypatch.setattr(
+        "agent.nodes.architecture_workers.stream_structured_llm",
+        model,
+    )
+
+    result = await challenger_node(
+        {
+            "is_applied_design": True,
+            "design_query": "Design a service and keep all data in region.",
+            "user_message": "Expand its monitoring.",
+            "complexity": "prototype",
+            "evidence_bundle": {},
+            "architecture_ready": True,
+            "architect_plan": _complete_plan(
+                constraints=["keep all data in region"],
+            ),
+            "send": send,
+        }
+    )
+
+    assert result["architecture_ready"] is True
+    assert result["architect_plan"]["constraints"] == []
+    assert events[-1]["status"] == "complete"
+
+
 def test_reviewed_plan_can_rewrite_or_remove_architect_generated_content():
     candidate = _complete_plan(
         actors=["Product application", "Invented compliance board"],
@@ -634,6 +878,187 @@ def test_reviewed_plan_validation_has_specific_provenance_codes(accepted, code):
         )
 
     assert exc_info.value.code == code
+
+
+def test_reviewed_plan_accepts_only_supplied_book_and_web_evidence_references():
+    accepted = _complete_plan(
+        evidence_basis=[
+            {
+                "claim": "Evaluation should be measured.",
+                "basis": "book",
+                "evidence_ref": "[Chapter 3, p.42]",
+            },
+            {
+                "claim": "The current source describes an evaluation method.",
+                "basis": "web",
+                "evidence_ref": "https://example.com/current?version=2",
+            },
+        ]
+    )
+
+    _validate_reviewed_plan_transition(
+        accepted,
+        source_request="Design an evaluation service.",
+        evidence_bundle={
+            "book_evidence": [
+                {"chapter": 3, "page_number": 42, "text": "Measure the system."}
+            ],
+            "research_context": (
+                "- Current source <https://example.com/current?version=2>: "
+                "Evaluation method."
+            ),
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("basis", "evidence_ref", "evidence_bundle"),
+    [
+        (
+            "book",
+            "Chapter 3, p.43",
+            {
+                "book_evidence": [
+                    {"chapter": 3, "page_number": 42, "text": "Measure the system."}
+                ]
+            },
+        ),
+        (
+            "web",
+            "https://example.com/invented",
+            {
+                "research_context": (
+                    "- [Current source](https://example.com/current): current evidence"
+                )
+            },
+        ),
+        (
+            "web",
+            "https://untrusted.example/in-snippet",
+            {
+                "research_context": (
+                    "- [Current source](https://example.com/current): mentions "
+                    "https://untrusted.example/in-snippet"
+                )
+            },
+        ),
+    ],
+)
+def test_reviewed_plan_rejects_invented_external_evidence_with_stable_code(
+    basis,
+    evidence_ref,
+    evidence_bundle,
+):
+    with pytest.raises(ValueError) as exc_info:
+        _validate_reviewed_plan_transition(
+            _complete_plan(
+                evidence_basis=[
+                    {
+                        "claim": "Unsupported external claim.",
+                        "basis": basis,
+                        "evidence_ref": evidence_ref,
+                    }
+                ]
+            ),
+            source_request="Design an evaluation service.",
+            evidence_bundle=evidence_bundle,
+        )
+
+    assert exc_info.value.code == "architecture_review_evidence_provenance"
+
+
+@pytest.mark.asyncio
+async def test_architect_rejects_invented_book_evidence_with_stable_code(monkeypatch):
+    events = []
+
+    async def model(**_kwargs):
+        return _structured_response(
+            _complete_plan(
+                evidence_basis=[
+                    {
+                        "claim": "Evaluation should be measured.",
+                        "basis": "book",
+                        "evidence_ref": "Chapter 3, p.43",
+                    }
+                ]
+            )
+        )
+
+    async def send(event):
+        events.append(event)
+
+    monkeypatch.setattr(
+        "agent.nodes.architecture_workers.stream_structured_llm",
+        model,
+    )
+    result = await architect_node(
+        {
+            "is_applied_design": True,
+            "design_query": "Design an evaluation service.",
+            "user_message": "Design an evaluation service.",
+            "complexity": "prototype",
+            "evidence_bundle": {
+                "book_evidence": [
+                    {"chapter": 3, "page_number": 42, "text": "Measure the system."}
+                ]
+            },
+            "send": send,
+        }
+    )
+
+    assert result == {"architect_plan": {}, "architecture_ready": False}
+    assert events[-1]["failure_code"] == "architecture_pass_evidence_provenance"
+
+
+@pytest.mark.asyncio
+async def test_challenger_rejects_invented_web_evidence_with_stable_code(monkeypatch):
+    events = []
+
+    async def model(**_kwargs):
+        return _structured_response(
+            {
+                "accepted_plan": _complete_plan(
+                    evidence_basis=[
+                        {
+                            "claim": "The current source mandates this design.",
+                            "basis": "web",
+                            "evidence_ref": "https://example.com/invented",
+                        }
+                    ]
+                ),
+                "risks": [],
+                "missing_requirements": [],
+                "tradeoffs": [],
+                "status_update": "Reviewed.",
+            }
+        )
+
+    async def send(event):
+        events.append(event)
+
+    monkeypatch.setattr(
+        "agent.nodes.architecture_workers.stream_structured_llm",
+        model,
+    )
+    result = await challenger_node(
+        {
+            "is_applied_design": True,
+            "design_query": "Design an evaluation service.",
+            "user_message": "Design an evaluation service.",
+            "complexity": "prototype",
+            "evidence_bundle": {
+                "research_context": (
+                    "- [Current source](https://example.com/current): current evidence"
+                )
+            },
+            "architecture_ready": True,
+            "architect_plan": _complete_plan(),
+            "send": send,
+        }
+    )
+
+    assert result == {"challenger_review": {}, "architecture_ready": False}
+    assert events[-1]["failure_code"] == "architecture_review_evidence_provenance"
 
 
 @pytest.mark.asyncio
