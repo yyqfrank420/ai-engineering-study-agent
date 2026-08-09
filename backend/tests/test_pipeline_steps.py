@@ -109,7 +109,9 @@ async def test_apply_graph_worker_treats_version_only_reuse_as_unchanged(monkeyp
 
     result = await apply_graph_worker(state, [])
 
-    assert result["graph_data"] is existing_graph
+    assert result["graph_data"] is not existing_graph
+    assert result["graph_data"]["version"] == "generated-v2"
+    assert result["graph_data"]["nodes"] == existing_graph["nodes"]
     assert result["graph_changed"] is False
 
 

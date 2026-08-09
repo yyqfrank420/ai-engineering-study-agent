@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 
 from agent.architecture_playbook import build_evidence_bundle
@@ -69,6 +70,9 @@ async def apply_graph_worker(state: AgentState, graph_tools: list) -> AgentState
         }
 
     if existing_graph is not None and _same_graph_artifact(existing_graph, new_graph):
+        aligned_graph = copy.deepcopy(existing_graph)
+        if new_graph.get("version") != aligned_graph.get("version"):
+            aligned_graph["version"] = new_graph.get("version")
         operation = graph_state.get("graph_operation")
         if (
             isinstance(operation, dict)
@@ -82,7 +86,7 @@ async def apply_graph_worker(state: AgentState, graph_tools: list) -> AgentState
             }
         return {
             **graph_state,
-            "graph_data": existing_graph,
+            "graph_data": aligned_graph,
             "graph_changed": False,
             "graph_notice_sent": graph_state.get("graph_notice_sent", False),
             "graph_operation": operation,

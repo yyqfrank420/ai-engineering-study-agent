@@ -2505,6 +2505,80 @@ async def test_unrelated_query_preserves_existing_applied_graph(monkeypatch, mes
 
 
 @pytest.mark.asyncio
+async def test_reusing_approved_graph_emits_worker_status():
+    events = []
+    existing = _domain_graph(5)
+
+    async def send(event):
+        events.append(event)
+
+    result = await graph_worker.graph_worker_node(
+        {
+            "architecture_ready": False,
+            "architect_plan": {},
+            "challenger_review": {},
+            "send": send,
+            "design_query": "Explain RAG",
+            "user_message": "Explain RAG",
+            "history": [],
+            "graph_data": existing,
+            "approved_graph_data": copy.deepcopy(existing),
+            "graph_revision_count": 0,
+            "complexity": "prototype",
+            "research_context": "",
+            "rag_chunks": [],
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        },
+        [],
+    )
+
+    assert result["graph_data"] == existing
+    assert any(
+        event.get("type") == "worker_status" and event.get("worker") == "graph"
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_graph_falls_back_when_architecture_context_is_unavailable(monkeypatch):
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    result = await graph_worker.graph_worker_node(
+        {
+            "architecture_ready": False,
+            "architect_plan": {},
+            "challenger_review": {},
+            "send": send,
+            "design_query": "Design a resilient model-serving architecture.",
+            "user_message": "Design a resilient model-serving architecture.",
+            "history": [],
+            "graph_data": None,
+            "approved_graph_data": None,
+            "graph_revision_count": 0,
+            "complexity": "prototype",
+            "research_context": "",
+            "rag_chunks": [],
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        },
+        [],
+    )
+
+    assert result["graph_data"] is not None
+    assert result["graph_data"]["design_origin"] == "applied"
+    assert result["graph_operation"] == {
+        "kind": "create",
+        "status": "candidate",
+        "failure_code": None,
+    }
+    assert all(event.get("type") != "graph_notice" for event in events)
+
+
+@pytest.mark.asyncio
 async def test_canonical_graph_edit_never_selects_an_unrelated_canonical_graph(
     monkeypatch,
 ):

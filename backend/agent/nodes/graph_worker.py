@@ -1017,6 +1017,10 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
     """Build an applied architecture or select a canonical concept subgraph."""
     _ = tools
     send = state["send"]
+
+    async def emit_graph_status(message: str) -> None:
+        await send({"type": "worker_status", "worker": "graph", "status": message})
+
     query = state.get("design_query") or _graph_query(state)
     graph_intent = state.get("graph_intent") or resolve_graph_operation(
         state.get("user_message", ""),
@@ -1028,6 +1032,7 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
         and pending_operation.get("status") == "failed"
         and pending_operation.get("failure_code") == "graph_edit_target_unavailable"
     ):
+        await emit_graph_status("Graph edit target is unavailable")
         await send(
             {
                 "type": "workflow_progress",
@@ -1047,13 +1052,7 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
         if isinstance(pending_operation, dict):
             operation_kind = pending_operation["kind"]
         profile = resolve_complexity(state.get("complexity", "auto"), query)
-        await send(
-            {
-                "type": "worker_status",
-                "worker": "graph",
-                "status": f"Designing a {profile.resolved} domain architecture…",
-            }
-        )
+        await emit_graph_status(f"Designing a {profile.resolved} domain architecture…")
         await send(
             {
                 "type": "workflow_progress",
@@ -1131,6 +1130,7 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
             }
 
     if _has_approved_applied_graph(state):
+        await emit_graph_status("Using the existing approved graph")
         return {**state, "graph_data": copy.deepcopy(state.get("graph_data"))}
 
     if graph_intent == "edit":
@@ -1139,6 +1139,7 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
             "status": "failed",
             "failure_code": "graph_edit_target_unavailable",
         }
+        await emit_graph_status("Graph edit target is unavailable")
         await send(
             {
                 "type": "workflow_progress",
@@ -1151,13 +1152,7 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
         )
         return {**state, "graph_data": None, "graph_operation": operation}
 
-    await send(
-        {
-            "type": "worker_status",
-            "worker": "graph",
-            "status": "Selecting grounded concepts…",
-        }
-    )
+    await emit_graph_status("Selecting grounded concepts…")
     try:
         artifacts = load_canonical_graph_cached()
         graph = select_canonical_graph(
