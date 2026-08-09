@@ -58,7 +58,7 @@ class CriticProtocolError(ValueError):
         self.rule = rule if rule in _PROTOCOL_ERROR_RULES else None
 
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v49"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v50"
 # Sonnet 5 high effort can spend the full output allowance on adaptive thinking
 # before emitting the required scorecard. Medium keeps the review inside one call.
 _GRAPH_CRITIC_EFFORT = "medium"
@@ -1769,8 +1769,9 @@ Never put a missing directed edge, state, branch, gate, or boundary in advice: t
 failure under this contract. Advice is only for genuinely optional hardening of an already complete
 topology.
 Review all blocking defects with full context and return every blocking defect in this scorecard.
-The resulting repair contract is record-scoped and may authorize exact records across disconnected
-topology regions. Do not defer a known blocker to a later review.
+The resulting repair contract is record-scoped and may authorize independent repairs at non-adjacent
+records in the same connected candidate graph. This does not permit a disconnected candidate or
+mutation of an uncited connecting record. Do not defer a known blocker to a later review.
 
 Use `finding_codes` only for a clear omission or defect that makes the diagram unsafe, misleading,
 unusable, or fails an explicit part of the user's request at the selected depth. The owner in the
@@ -1811,6 +1812,13 @@ each required new edge. Source and target must differ. The server derives the co
 count from this list and grants only these directed endpoint pairs. `required_contract` states the
 semantic meaning that the mandatory post-patch full-graph review must verify; it is not an exact edge
 label and may be expressed by the patch through a concise label and description.
+For a candidate with two existing nodes, `[0,1,"required behavior"]` adds an existing-to-existing
+edge. `[0,"$new_node_1","required behavior"]` connects the first existing node to the first added
+component. Integer `2` never represents a proposed node in that candidate. Every declared new-node
+slot must appear in an obligation. At least one connection addition obligation for each newly added
+connected region must use an existing candidate node as one endpoint. Context selectors explain the
+repair but never attach a new region. Group moves use composition `group_indexes`, with both the
+source and destination group indexes selected.
 Component additions also require connection additions. When the candidate has groups, component
 additions require a failed composition row with `groups` in `composition_fields` and either an
 editable existing group or a declared group addition. Every composition addition count requires its
@@ -1852,7 +1860,8 @@ _GRAPH_CRITIC_SYSTEM += """
 
 <repair_scope_contract>
 Report every blocking repair in one exhaustive scorecard. Exact record selectors remain the only
-mutation authority and may span disconnected regions. Uncited records remain locked.
+mutation authority and may span non-adjacent regions in one connected candidate. Uncited records
+remain locked.
 </repair_scope_contract>
 """
 
@@ -1983,10 +1992,13 @@ async def _request_critic_scorecard(
             {
                 "type": "text",
                 "text": (
-                    "The patch validator rejected the prior permission contract. Return a fresh "
-                    "exhaustive scorecard with corrected exact-record permissions before Kimi is "
-                    "called again. The validation coordinate is server-owned and safe to use. "
-                    "Authorize both source and destination groups for every group membership move.\n"
+                    "The previous patch attempt was rejected at a server-owned validation "
+                    "coordinate. Return a fresh exhaustive scorecard with permissions sufficient "
+                    "for every current blocker before the patch model is called again. Preserve "
+                    "valid judgments. Change selectors, addition obligations, append counts, and "
+                    "group permissions only where required by the coordinate and the complete "
+                    "candidate. For every existing-group move, authorize both source and "
+                    "destination groups.\n"
                     f"Validation path: {contract_correction['path']}\n"
                     f"Validation rule: {contract_correction['rule']}\n"
                     "Prior repair contract: "

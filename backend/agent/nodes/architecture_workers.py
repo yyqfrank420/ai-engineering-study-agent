@@ -20,7 +20,7 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_ARCHITECT_PROMPT_VERSION = "architecture_roles_v19"
+_ARCHITECT_PROMPT_VERSION = "architecture_roles_v20"
 _REVIEW_PLAN_LIST_LIMITS = {
     "actors": 10,
     "inputs": 12,
@@ -35,7 +35,6 @@ _REVIEW_PLAN_LIST_LIMITS = {
     "decisions": 20,
     "runtime_flow": 30,
 }
-_MAX_ARCHITECTURE_RESPONSE_CHARS = 12_000
 _ANGLE_BRACKET_WEB_URL_PATTERN = re.compile(
     r"<(https?://[^>\s]+)>",
     re.IGNORECASE,
@@ -265,9 +264,8 @@ concern only when it materially affects this scenario.
 - Do not draw the final graph and do not expose private chain-of-thought.
 - For every book- or web-grounded decision, include the exact chapter/page or URL from the supplied
   bundle in evidence_ref. Never invent a source or imply that a snippet establishes more than it says.
-- Keep the complete JSON under 12,000 characters. Remove repeated rationale before dropping a
-  material actor, boundary, route, failure outcome, or decision. This is a planning response bound,
-  not a limit on the graph that the builder may produce.
+- Remove repeated rationale before dropping a material actor, boundary, route, failure outcome, or
+  decision. The field and list limits below are the complete response bounds.
 - Hard list limits are inclusive: actors 10; inputs 12; outputs 10; required_capabilities 18;
   diagram_requirements 24; outcome_measures 12; constraints 10; assumptions 12;
   open_questions 8; evidence_basis 18; decisions 20; runtime_flow 30. Never exceed them.
@@ -363,8 +361,8 @@ graph is produced. Return one corrected complete plan plus the audit that caused
   Each entry is one concrete sentence. Omit repeated rationale.
 - Every listed mitigation must already be reflected in `accepted_plan`; do not return a known
   unresolved blocker as an accepted design. Do not expose private chain-of-thought.
-- Keep the complete JSON under 12,000 characters. Preserve material boundaries, routes, outcomes,
-  and corrections before explanatory prose.
+- Preserve material boundaries, routes, outcomes, and corrections before explanatory prose. The
+  field and list limits below are the complete response bounds.
 - Hard accepted_plan list limits are inclusive: actors 10; inputs 12; outputs 10;
   required_capabilities 18; diagram_requirements 24; outcome_measures 12; constraints 10;
   assumptions 12; open_questions 8; evidence_basis 18; decisions 20; runtime_flow 30.
@@ -435,8 +433,14 @@ async def architect_node(state: AgentState) -> dict[str, Any]:
             temperature=settings.graph_temperature,
             telemetry=_telemetry(state, "architecture_architect", profile.resolved),
         )
-        plan = _normalise_architect(_parse_complete_response(response))
-        _validate_plan_list_limits(plan)
+        plan = _normalise_architect(_parse_architect_response(response))
+        try:
+            _validate_plan_list_limits(plan)
+        except ValueError as exc:
+            raise _ArchitecturePassError(
+                "architecture_pass_list_limit",
+                str(exc),
+            ) from exc
         _validate_external_evidence_references(
             plan,
             state.get("evidence_bundle") or {},
@@ -444,7 +448,10 @@ async def architect_node(state: AgentState) -> dict[str, Any]:
             error_code="architecture_pass_evidence_provenance",
         )
         if not _is_complete_architect_plan(plan):
-            raise ValueError("architecture worker returned an incomplete product brief")
+            raise _ArchitecturePassError(
+                "architecture_pass_incomplete",
+                "architecture worker returned an incomplete product brief",
+            )
     except Exception as exc:
         if isinstance(exc, TimeoutError):
             failure_code = "architecture_pass_timeout"
@@ -453,8 +460,9 @@ async def architect_node(state: AgentState) -> dict[str, Any]:
         else:
             failure_code = "architecture_pass_invalid"
         logger.warning(
-            "Architect role unavailable; graph generation stopped: %s",
+            "Architect role unavailable; graph generation stopped: %s (%s)",
             type(exc).__name__,
+            failure_code,
         )
         await _progress(
             state,
@@ -642,10 +650,31 @@ def _parse_complete_response(response: StructuredLLMResponse) -> dict[str, Any]:
     value = json.loads(response.text)
     if not isinstance(value, dict):
         raise ValueError("architecture worker payload must be an object")
-    parsed_chars = len(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
-    if parsed_chars > _MAX_ARCHITECTURE_RESPONSE_CHARS:
-        raise ValueError(
-            "architecture worker payload exceeds the 12,000-character response contract"
+    return value
+
+
+def _parse_architect_response(response: StructuredLLMResponse) -> dict[str, Any]:
+    if response.finish_reason == "max_tokens":
+        raise _ArchitecturePassError(
+            "architecture_pass_truncated",
+            "architecture worker output was truncated",
+        )
+    if response.finish_reason != "end_turn":
+        raise _ArchitecturePassError(
+            "architecture_pass_finish_invalid",
+            "architecture worker provider response was incomplete",
+        )
+    try:
+        value = json.loads(response.text)
+    except json.JSONDecodeError as exc:
+        raise _ArchitecturePassError(
+            "architecture_pass_payload_invalid",
+            "architecture worker payload was not valid JSON",
+        ) from exc
+    if not isinstance(value, dict):
+        raise _ArchitecturePassError(
+            "architecture_pass_payload_invalid",
+            "architecture worker payload must be an object",
         )
     return value
 

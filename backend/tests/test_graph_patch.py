@@ -576,9 +576,7 @@ def test_unique_broad_expansion_compiles_one_child_and_one_directed_edge():
 
     assert contract["layers"]["components"]["addition_count"] == 1
     assert contract["layers"]["components"]["node_ids"] == []
-    assert contract["layers"]["connections"][
-        "connection_addition_obligations"
-    ] == [
+    assert contract["layers"]["connections"]["connection_addition_obligations"] == [
         {
             "source": "fulfilment_stage_2",
             "target": "$new_node_1",
@@ -1272,14 +1270,8 @@ def test_incremental_patch_cannot_replace_the_existing_graph(with_contract):
         )
 
 
-@pytest.mark.parametrize("with_contract", [False, True])
-def test_incremental_patch_cannot_rewrite_every_existing_record(with_contract):
+def test_unscoped_incremental_patch_cannot_rewrite_every_existing_record():
     existing = _domain_graph(5)
-    contract = _whole_graph_repair_contract(existing) if with_contract else None
-    if contract is not None:
-        contract["layers"]["components"]["addition_count"] = 0
-        contract["layers"]["connections"]["addition_count"] = 0
-        contract["layers"]["connections"]["connection_addition_obligations"] = []
     patch = {
         "title": "Unrelated replacement",
         "update_nodes": [
@@ -1314,8 +1306,39 @@ def test_incremental_patch_cannot_rewrite_every_existing_record(with_contract):
             patch,
             safety_max_nodes=20,
             resolved_complexity="prototype",
-            repair_contract=contract,
         )
+
+
+def test_exact_contract_can_update_every_cited_node_in_small_graph():
+    existing = _domain_graph(2)
+    node_ids = [node["id"] for node in existing["nodes"]]
+    contract = _local_repair_contract(
+        failed_layers={"components": {"node_ids": node_ids}}
+    )
+
+    updated = graph_worker._apply_applied_graph_patch(
+        existing,
+        {
+            "update_nodes": [
+                {
+                    "id": node_id,
+                    "set": {
+                        "description": f"Owns the corrected responsibility for {node_id}."
+                    },
+                }
+                for node_id in node_ids
+            ]
+        },
+        safety_max_nodes=20,
+        resolved_complexity="prototype",
+        repair_contract=contract,
+    )
+
+    assert [node["id"] for node in updated["nodes"]] == node_ids
+    assert all(
+        node["description"].startswith("Owns the corrected responsibility")
+        for node in updated["nodes"]
+    )
 
 
 def test_repair_contract_rejects_out_of_scope_node_mutation_before_normalization():
@@ -1361,22 +1384,22 @@ def test_disconnected_exact_record_patch_preserves_uncited_records():
                 "addition_count": 1,
                 "context_node_ids": context_node_ids,
             },
-                "connections": {
-                    "edge_selectors": [selected_edge],
-                    "addition_count": 2,
-                    "context_node_ids": context_node_ids,
-                    "connection_addition_obligations": [
-                        {
-                            "source": "$new_node_1",
-                            "target": target,
-                            "required_contract": f"Repair {target}.",
-                        }
-                        for target in (
-                            "fulfilment_stage_2",
-                            "fulfilment_stage_3",
-                        )
-                    ],
-                },
+            "connections": {
+                "edge_selectors": [selected_edge],
+                "addition_count": 2,
+                "context_node_ids": context_node_ids,
+                "connection_addition_obligations": [
+                    {
+                        "source": "$new_node_1",
+                        "target": target,
+                        "required_contract": f"Repair {target}.",
+                    }
+                    for target in (
+                        "fulfilment_stage_2",
+                        "fulfilment_stage_3",
+                    )
+                ],
+            },
         }
     )
     patch = {
@@ -3314,9 +3337,7 @@ async def test_reusing_approved_graph_emits_worker_status():
 
 
 @pytest.mark.asyncio
-async def test_create_graph_falls_back_when_architecture_context_is_unavailable(
-    monkeypatch,
-):
+async def test_create_graph_fails_closed_when_architecture_context_is_unavailable():
     events = []
 
     async def send(event):
@@ -3343,13 +3364,15 @@ async def test_create_graph_falls_back_when_architecture_context_is_unavailable(
         [],
     )
 
-    assert result["graph_data"] is not None
-    assert result["graph_data"]["design_origin"] == "applied"
+    assert result["graph_data"] is None
+    assert result["graph_failure_code"] == "graph_architecture_input_unavailable"
     assert result["graph_operation"] == {
         "kind": "create",
-        "status": "candidate",
-        "failure_code": None,
+        "status": "failed",
+        "failure_code": "graph_architecture_input_unavailable",
     }
+    assert events[-1]["status"] == "rejected"
+    assert events[-1]["failure_code"] == "graph_architecture_input_unavailable"
     assert all(event.get("type") != "graph_notice" for event in events)
 
 
@@ -3642,25 +3665,25 @@ async def test_production_unpublished_repair_adds_node_and_group_without_changin
                     "fulfilment_stage_2",
                 ],
             },
-                "connections": {
-                    "addition_count": 2,
-                    "context_node_ids": [
-                        "fulfilment_stage_7",
-                        "fulfilment_stage_2",
-                    ],
-                    "connection_addition_obligations": [
-                        {
-                            "source": "fulfilment_stage_7",
-                            "target": "$new_node_1",
-                            "required_contract": "Route the unresolved exception.",
-                        },
-                        {
-                            "source": "$new_node_1",
-                            "target": "fulfilment_stage_2",
-                            "required_contract": "Return the reconciled state.",
-                        },
-                    ],
-                },
+            "connections": {
+                "addition_count": 2,
+                "context_node_ids": [
+                    "fulfilment_stage_7",
+                    "fulfilment_stage_2",
+                ],
+                "connection_addition_obligations": [
+                    {
+                        "source": "fulfilment_stage_7",
+                        "target": "$new_node_1",
+                        "required_contract": "Route the unresolved exception.",
+                    },
+                    {
+                        "source": "$new_node_1",
+                        "target": "fulfilment_stage_2",
+                        "required_contract": "Return the reconciled state.",
+                    },
+                ],
+            },
             "composition": {
                 "composition_fields": ["groups"],
                 "composition_append_counts": {"groups": 1},
@@ -3856,7 +3879,8 @@ async def test_invalid_patch_preserves_approved_graph_without_duplicate_model_ca
     assert "read-only global topology skeleton" in calls[0]["system"]
     assert "server permissions are the complete" in calls[0]["system"]
     assert "server enforces the exact directed endpoints" in calls[0]["system"]
-    assert "post-patch critic owns semantic verification" in calls[0]["system"]
+    assert "post-patch critic verifies the" in calls[0]["system"]
+    assert "does not supply omitted behavior" in calls[0]["system"]
     assert "approval-only route" not in calls[0]["system"]
     assert calls[0]["telemetry"]["metadata"]["prompt_version"] == (
         graph_worker._APPLIED_GRAPH_PATCH_PROMPT_VERSION

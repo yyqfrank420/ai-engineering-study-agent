@@ -39,7 +39,7 @@ from graph.runtime import select_canonical_graph
 
 logger = logging.getLogger(__name__)
 
-_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v33"
+_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v34"
 _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v16"
 _APPLIED_GRAPH_TOPOLOGY_EFFORT = "low"
 _APPLIED_GRAPH_PATCH_EFFORT = "high"
@@ -410,9 +410,7 @@ def _scoped_expansion_target(
         return next(iter(exact_ids))
 
     addition_match = _USER_EDIT_ADDITION_PREFIX.match(text)
-    target_text = (
-        addition_match.group("body").strip() if addition_match else text
-    )
+    target_text = addition_match.group("body").strip() if addition_match else text
     target_text = _EXPANSION_TARGET_STOP.split(target_text, maxsplit=1)[0]
     target_tokens = {
         _expansion_token(token)
@@ -432,9 +430,7 @@ def _scoped_expansion_target(
         if record_id and target_tokens.issubset(authored_tokens):
             candidates.append(record_id)
     if len(set(candidates)) != 1:
-        raise ValueError(
-            "the expansion must resolve to exactly one authored component"
-        )
+        raise ValueError("the expansion must resolve to exactly one authored component")
     return candidates[0]
 
 
@@ -1017,9 +1013,7 @@ def _user_edit_scope(
     permissions["allowed_new_edge_count"] = 1 if allow_edge_additions else 0
     permissions["allowed_new_group_ids"] = (
         None
-        if allow_node_additions
-        and resolved_complexity == "production"
-        and not groups
+        if allow_node_additions and resolved_complexity == "production" and not groups
         else [requested_group_id]
         if requested_group_id
         else []
@@ -1154,20 +1148,25 @@ Node and edge operations omit locked detail. An authorized groups, sequence, or 
 replacement must return the complete collection and copy every uncited record byte-for-byte.
 Map every blocking finding to a concrete permitted operation. Enforce behavioral guarantees with
 directed components and edges rather than prose alone.
-Preserve the primary operational spine. For clarity, density, or duplicate-record findings, prefer a
-permitted update, removal, or consolidation. Add a record only when the finding identifies a missing
-responsibility or contract.
+Preserve the primary operational spine. "Smallest" means no operation outside the cited authority.
+It does not cap the number of independently authorized records, edges, groups, or sequence changes.
+Apply every cited blocker in this patch. Do not replace a required expansion with consolidation,
+removal, or a simpler substitute. Use consolidation only when the cited finding is duplicate density
+or redundant responsibility.
 
-One record-scoped contract may authorize independent repairs in disconnected topology regions. Apply
-all cited blockers in one patch. Connectivity never grants authority for an uncited record. Moving a
-node between existing groups changes both group records, so both the source and destination group IDs
-must be editable. Omit the move when either group is locked.
+One record-scoped contract may authorize independent repairs at non-adjacent records in the same
+connected candidate graph. This does not permit a disconnected candidate or mutation of an uncited
+connecting record. Moving a node between existing groups changes both group records, so both the
+source and destination group IDs must be editable. Omit the move when either group is locked.
 
-Connection addition obligations are exact and ordered. For each obligation, add one edge with the
-declared source and target. Resolve `$new_node_N` to the Nth record in add_nodes and use that
-record's authored ID in add_edges, never the placeholder. Express required_contract through the
-edge's concise label and description. The server enforces the exact directed endpoints; the mandatory
-post-patch critic owns semantic verification. Do not reverse, merge, or substitute endpoints.
+Connection addition obligations are exact directed endpoint obligations. For each obligation, add
+one edge with the declared source and target. The order of add_edges is irrelevant except that
+`$new_node_N` always means the Nth record in add_nodes. Use that record's authored ID in add_edges,
+never the placeholder. Express required_contract through the edge's concise label and description.
+The server enforces the exact directed endpoints. The mandatory post-patch critic verifies the
+completed repair; it does not supply omitted behavior. Each added edge must itself express its
+obligation's required_contract across its label and description. Do not reverse, merge, or
+substitute endpoints.
 
 Source and target must be distinct. A node removal must also remove or redirect every incident edge.
 Omit keys that do not change. Groups, sequence, assumptions, and title are complete replacements when
@@ -1236,226 +1235,6 @@ _GENERIC_LABELS = {
     "tokenization",
     "tool use",
 }
-
-
-def _dominant_term(text: str) -> str:
-    stopwords = {
-        "a",
-        "and",
-        "architecture",
-        "application",
-        "as",
-        "at",
-        "for",
-        "from",
-        "in",
-        "is",
-        "it",
-        "platform",
-        "service",
-        "system",
-        "workflow",
-    }
-    for term in re.findall(r"[a-z0-9]+", text.lower()):
-        if len(term) > 2 and term not in stopwords and not term.isdigit():
-            return term
-    return "system"
-
-
-def _fallback_applied_graph(state: AgentState, query: str, profile) -> GraphData:
-    spec = applied_graph_spec(profile.resolved)
-    query_text = " ".join((query or "").split()) or "system architecture"
-    candidate = {
-        "graph_type": "architecture",
-        "title": f"{_dominant_term(query_text).title()} architecture fallback",
-        "nodes": [
-            {
-                "id": "entrypoint",
-                "label": f"{_dominant_term(query_text).title()} entrypoint",
-                "type": "client",
-                "technology": "Public API",
-                "description": "Receives input and forwards bounded work.",
-            },
-            {
-                "id": "core",
-                "label": f"{_dominant_term(query_text).title()} core",
-                "type": "service",
-                "technology": "Application service",
-                "description": f"Performs bounded {query_text} operations.",
-            },
-        ],
-        "edges": [
-            {
-                "source": "entrypoint",
-                "target": "core",
-                "label": f"invokes {query_text}",
-                "technology": "HTTPS/JSON",
-                "sync": "async",
-                "flow": "runtime",
-                "description": f"Triggers {query_text} processing with bounded input.",
-            }
-        ],
-        "sequence": [
-            {
-                "step": 1,
-                "nodes": ["entrypoint", "core"],
-                "description": f"Routes {query_text} through a bounded flow.",
-            }
-        ],
-    }
-
-    try:
-        selected = select_canonical_graph(
-            query=query_text,
-            rag_chunks=state.get("rag_chunks", []),
-            artifacts=load_canonical_graph_cached(),
-        )
-        if selected is not None:
-            try:
-                return _normalise_applied_graph(
-                    selected,
-                    safety_max_nodes=spec.safety_max_nodes,
-                    resolved_complexity=profile.resolved,
-                )
-            except ValueError:
-                pass
-    except Exception as exc:
-        logger.warning("Fallback canonical lookup failed: %s", exc)
-
-    if profile.resolved == "production":
-        candidate["title"] = f"{_dominant_term(query_text).title()} production fallback"
-        candidate["nodes"] = [
-            {
-                "id": "ingest",
-                "label": "Request intake",
-                "type": "gateway",
-                "technology": "API gateway",
-                "description": "Accepts incoming requests and validates minimal input.",
-            },
-            {
-                "id": "orchestrator",
-                "label": f"{_dominant_term(query_text).title()} coordinator",
-                "type": "service",
-                "technology": "Workflow service",
-                "description": "Routes work, assigns bounded responsibility, and records progress.",
-            },
-            {
-                "id": "processor",
-                "label": f"{_dominant_term(query_text).title()} processor",
-                "type": "service",
-                "technology": "Application service",
-                "description": "Executes bounded transformations and computes state.",
-            },
-            {
-                "id": "state_store",
-                "label": "State store",
-                "type": "datastore",
-                "technology": "Primary database",
-                "description": "Persists state for recovery and replay.",
-            },
-            {
-                "id": "monitor",
-                "label": "Operational monitor",
-                "type": "control",
-                "technology": "Telemetry stream",
-                "description": "Observes outcomes and records bounded execution events.",
-            },
-        ]
-        candidate["edges"] = [
-            {
-                "source": "ingest",
-                "target": "orchestrator",
-                "label": "creates work",
-                "technology": "HTTPS/JSON",
-                "sync": "async",
-                "flow": "control",
-                "description": f"Moves validated {_dominant_term(query_text)} requests into orchestration.",
-            },
-            {
-                "source": "orchestrator",
-                "target": "processor",
-                "label": "calls processor",
-                "technology": "Service call",
-                "sync": "async",
-                "flow": "runtime",
-                "description": "Dispatches bounded jobs with ownership metadata.",
-            },
-            {
-                "source": "processor",
-                "target": "state_store",
-                "label": "persists result",
-                "technology": "Durable write",
-                "sync": "sync",
-                "flow": "runtime",
-                "description": "Stores computed outcome with trace identifiers.",
-            },
-            {
-                "source": "state_store",
-                "target": "monitor",
-                "label": "publishes event",
-                "technology": "Outbox event",
-                "sync": "async",
-                "flow": "feedback",
-                "description": "Streams durable outcomes for operational observability.",
-            },
-            {
-                "source": "monitor",
-                "target": "orchestrator",
-                "label": "triggers retry decision",
-                "technology": "Policy rules engine",
-                "sync": "async",
-                "flow": "control",
-                "type": "loop",
-                "description": "Feeds bounded feedback for route and retry decisions.",
-            },
-        ]
-        candidate["sequence"] = [
-            {
-                "step": 1,
-                "nodes": ["ingest", "orchestrator"],
-                "description": f"Collects validated {_dominant_term(query_text)} traffic.",
-            },
-            {
-                "step": 2,
-                "nodes": ["orchestrator"],
-                "description": "Assigns ownership and bounded processing policies.",
-            },
-            {
-                "step": 3,
-                "nodes": ["processor"],
-                "description": "Executes bounded transformations.",
-            },
-            {
-                "step": 4,
-                "nodes": ["state_store"],
-                "description": "Persists final state and metadata.",
-            },
-            {
-                "step": 5,
-                "nodes": ["monitor"],
-                "description": "Emits metrics and retry signals.",
-            },
-        ]
-        candidate["groups"] = [
-            {
-                "id": "ingest_and_flow",
-                "label": "Request and flow control",
-                "kind": "runtime",
-                "nodeIds": ["ingest", "orchestrator", "processor"],
-            },
-            {
-                "id": "state_and_signal",
-                "label": "State and feedback",
-                "kind": "runtime",
-                "nodeIds": ["state_store", "monitor"],
-            },
-        ]
-
-    return _normalise_applied_graph(
-        candidate,
-        safety_max_nodes=spec.safety_max_nodes,
-        resolved_complexity=profile.resolved,
-    )
 
 
 async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
@@ -1554,31 +1333,6 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
                 if _has_approved_applied_graph(state) or is_repair_candidate
                 else None
             )
-            if (
-                failure_code == "graph_architecture_input_unavailable"
-                and operation_kind == "create"
-                and not _has_approved_applied_graph(state)
-            ):
-                fallback_graph = _fallback_applied_graph(state, query, profile)
-                await send(
-                    {
-                        "type": "workflow_progress",
-                        "phase": "integrate",
-                        "status": "complete",
-                        "title": "Fallback architecture assembled",
-                        "detail": "Using a bounded architecture fallback after initial design input was unavailable.",
-                    }
-                )
-                return {
-                    **state,
-                    "graph_data": _attach_graph_version(fallback_graph),
-                    "graph_failure_code": None,
-                    "graph_operation": {
-                        "kind": operation_kind,
-                        "status": "candidate",
-                        "failure_code": None,
-                    },
-                }
             await send(
                 {
                     "type": "workflow_progress",
@@ -2357,6 +2111,8 @@ def _validate_patch_scope_before_normalization(
 def _validate_incremental_patch_identity(
     existing_graph: GraphData,
     patch: dict[str, Any],
+    *,
+    has_exact_permissions: bool,
 ) -> None:
     """Reject replacement semantics while leaving graph size unconstrained."""
     add_nodes = _patch_list(patch, "add_nodes")
@@ -2379,7 +2135,11 @@ def _validate_incremental_patch_identity(
         for operation in _patch_list(patch, "update_nodes")
         if isinstance(operation, dict)
     )
-    if len(existing_node_ids) > 1 and changed_node_ids == existing_node_ids:
+    if (
+        not has_exact_permissions
+        and len(existing_node_ids) > 1
+        and changed_node_ids == existing_node_ids
+    ):
         raise ValueError("an incremental patch cannot rewrite every existing node")
 
     existing_edge_ids = {
@@ -2394,7 +2154,11 @@ def _validate_incremental_patch_identity(
         for operation in _patch_list(patch, "update_edges")
         if isinstance(operation, dict)
     )
-    if len(existing_edge_ids) > 1 and changed_edge_ids == existing_edge_ids:
+    if (
+        not has_exact_permissions
+        and len(existing_edge_ids) > 1
+        and changed_edge_ids == existing_edge_ids
+    ):
         raise ValueError("an incremental patch cannot rewrite every existing edge")
 
 
@@ -2694,7 +2458,11 @@ def _apply_applied_graph_patch(
         )
     if not patch:
         raise ValueError("graph patch cannot be empty")
-    _validate_incremental_patch_identity(existing_graph, patch)
+    _validate_incremental_patch_identity(
+        existing_graph,
+        patch,
+        has_exact_permissions=repair_contract is not None,
+    )
     candidate: dict[str, Any] = copy.deepcopy(existing_graph)
     nodes, edges = _approved_patch_records(candidate)
     final_node_ids = _apply_node_patch(nodes, patch)

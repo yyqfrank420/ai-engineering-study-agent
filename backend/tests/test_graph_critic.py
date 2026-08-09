@@ -33,7 +33,7 @@ from agent.nodes.graph_critic import (
     _validate_review_protocol,
     graph_critic_node,
 )
-from agent.nodes.graph_worker import _GRAPH_PATCH_KEYS
+from agent.nodes.graph_worker import _GRAPH_PATCH_KEYS, _apply_applied_graph_patch
 from agent.stream_utils import StructuredLLMResponse
 from config import settings
 
@@ -199,7 +199,7 @@ def _critic_state(*, graph=None, complexity="prototype"):
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v49"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v50"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -217,6 +217,9 @@ def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
         require_topology_proofs=True
     )
     assert "every blocking repair in one exhaustive scorecard" in _GRAPH_CRITIC_SYSTEM
+    assert '[0,1,"required behavior"]' in _GRAPH_CRITIC_SYSTEM
+    assert '[0,"$new_node_1","required behavior"]' in _GRAPH_CRITIC_SYSTEM
+    assert "Integer `2` never represents a proposed node" in _GRAPH_CRITIC_SYSTEM
     assert "event-stream systems define bounded" in _GRAPH_CRITIC_SYSTEM
     assert "backpressure and overload behavior" in _GRAPH_CRITIC_SYSTEM
     assert "partition/order or event-time semantics" in _GRAPH_CRITIC_SYSTEM
@@ -233,9 +236,13 @@ async def test_request_scoped_critic_provider_call_ceiling_fails_closed(monkeypa
 
     async def unexpected_call(**kwargs):
         calls.append(kwargs)
-        raise AssertionError("critic provider must not be called past the request ceiling")
+        raise AssertionError(
+            "critic provider must not be called past the request ceiling"
+        )
 
-    monkeypatch.setattr("agent.nodes.graph_critic.stream_structured_llm", unexpected_call)
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm", unexpected_call
+    )
     state = _critic_state()
     state["graph_critic_call_count"] = 4
 
@@ -480,6 +487,45 @@ def test_local_component_additions_require_an_existing_graph_anchor():
         validate_local_repair_admission(contract, graph=graph)
 
 
+def test_local_component_addition_region_must_connect_to_existing_graph():
+    graph = {
+        "nodes": [{"id": "existing"}],
+        "edges": [],
+        "groups": [],
+    }
+    contract = _repair_contract(
+        scope="local",
+        failed_layer="components",
+        layer_selectors={
+            "components": {
+                "addition_count": 2,
+                "context_node_ids": ["existing"],
+            }
+        },
+    )
+    contract["layers"]["connections"] = _layer(
+        "fail",
+        0.7,
+        findings=["Connect the missing components."],
+        addition_count=2,
+        context_node_ids=["existing"],
+        connection_addition_obligations=[
+            {
+                "source": "existing",
+                "target": "$new_node_1",
+                "required_contract": "attach the new region",
+            },
+            {
+                "source": "$new_node_1",
+                "target": "$new_node_2",
+                "required_contract": "connect the new responsibilities",
+            },
+        ],
+    )
+
+    validate_local_repair_admission(contract, graph=graph)
+
+
 def test_appended_groups_can_organize_existing_components():
     graph = {
         "nodes": [{"id": "a"}],
@@ -554,6 +600,11 @@ def test_local_repair_admits_cross_layer_metadata_with_topology():
             "missing_graph_anchor",
         ),
         (
+            "disconnected_new_region",
+            "layers.connections.connection_addition_obligations",
+            "missing_graph_anchor",
+        ),
+        (
             "insufficient_edges",
             "layers.connections.addition_count",
             "insufficient_connection_additions",
@@ -594,7 +645,9 @@ def test_local_repair_admission_reports_safe_coordinates(
             "fail",
             0.7,
             findings=["Attach the missing components."],
-            addition_count=2 if case == "missing_anchor" else 1,
+            addition_count=(
+                2 if case in {"missing_anchor", "disconnected_new_region"} else 1
+            ),
             context_node_ids=[] if case == "missing_anchor" else ["existing"],
             connection_addition_obligations=(
                 [
@@ -609,7 +662,7 @@ def test_local_repair_admission_reports_safe_coordinates(
                         "required_contract": "attach the second missing component",
                     },
                 ]
-                if case == "missing_anchor"
+                if case in {"missing_anchor", "disconnected_new_region"}
                 else [
                     {
                         "source": "$new_node_1",
@@ -1175,6 +1228,123 @@ def test_connection_addition_count_is_derived_from_exact_obligations():
     ]
     assert connections["context_node_ids"] == ["gate", "audit"]
     _validate_repair_contract(normalized["repair_contract"], graph=graph)
+
+
+def test_two_node_scorecard_authorizes_exact_attached_component_patch():
+    graph = {
+        "graph_type": "architecture",
+        "design_origin": "applied",
+        "title": "Two-node candidate",
+        "nodes": [
+            {
+                "id": "entry",
+                "label": "Request entry",
+                "type": "gateway",
+                "technology": "HTTPS",
+                "description": "Receives a bounded request.",
+            },
+            {
+                "id": "worker",
+                "label": "Request worker",
+                "type": "service",
+                "technology": "Application service",
+                "description": "Processes the bounded request.",
+            },
+        ],
+        "edges": [
+            {
+                "source": "entry",
+                "target": "worker",
+                "label": "dispatches request",
+                "technology": "HTTPS",
+                "sync": "sync",
+                "flow": "runtime",
+                "description": "Dispatches the validated request.",
+            }
+        ],
+        "sequence": [
+            {
+                "step": 1,
+                "nodes": ["entry", "worker"],
+                "description": "Processes the request.",
+            }
+        ],
+        "assumptions": [],
+    }
+    payload = _passing_review_payload(topology_proofs={})
+    component_code = next(
+        index
+        for index, code in enumerate(_RUBRIC_CODES, start=1)
+        if _RUBRIC_CODE_OWNERS[code] == "components"
+    )
+    connection_code = next(
+        index
+        for index, code in enumerate(_RUBRIC_CODES, start=1)
+        if _RUBRIC_CODE_OWNERS[code] == "connections"
+    )
+    _set_model_layer(
+        payload,
+        "components",
+        finding_codes=[component_code],
+        context_node_indexes=[0],
+        addition_count=1,
+    )
+    _set_model_layer(
+        payload,
+        "connections",
+        finding_codes=[connection_code],
+        addition_obligations=[
+            [0, "$new_node_1", "route the request to an observable outcome"]
+        ],
+    )
+
+    normalized = _canonicalise_review_protocol(
+        payload,
+        graph=graph,
+        deterministic_findings=[],
+        review_context=[],
+        require_topology_proofs=False,
+    )
+    contract = normalized["repair_contract"]
+    validate_local_repair_admission(contract, graph=graph)
+    patched = _apply_applied_graph_patch(
+        graph,
+        {
+            "add_nodes": [
+                {
+                    "id": "outcome",
+                    "label": "Observable outcome",
+                    "type": "service",
+                    "technology": "Application service",
+                    "description": "Returns the completed request outcome.",
+                }
+            ],
+            "add_edges": [
+                {
+                    "source": "entry",
+                    "target": "outcome",
+                    "label": "returns outcome",
+                    "technology": "HTTPS",
+                    "sync": "sync",
+                    "flow": "runtime",
+                    "description": "Routes the request to its observable outcome.",
+                }
+            ],
+        },
+        safety_max_nodes=7,
+        resolved_complexity="prototype",
+        repair_contract=contract,
+    )
+
+    assert [node["id"] for node in patched["nodes"]] == [
+        "entry",
+        "worker",
+        "outcome",
+    ]
+    assert (patched["edges"][-1]["source"], patched["edges"][-1]["target"]) == (
+        "entry",
+        "outcome",
+    )
 
 
 def test_failed_topology_proof_requires_an_exact_repair_obligation():

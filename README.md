@@ -28,7 +28,7 @@ Production-oriented, graph-guided study companion for *AI Engineering* by Chip H
 3. enrich applied-design seeds into one explicit product brief, then challenge that same interpretation
 4. integrate their outputs into a domain-specific graph
 5. render the candidate privately in the browser and review the real screenshot plus architecture
-6. retain only dependency-safe passing review layers, keep the reviewed graph snapshot beside its scorecard, and let Kimi apply one semantic repair to exact failed records and directed connection obligations; one error-informed critic-contract correction may follow a rejected admission, then the complete candidate is revalidated and rerendered
+6. retain only dependency-safe passing review layers, keep the reviewed graph snapshot beside its scorecard, and let Kimi apply at most two semantic repair rounds to exact failed records and directed connection obligations; one error-informed critic-contract correction may follow a rejected admission, then the complete candidate is revalidated and rerendered
 7. finish the one-call walkthrough privately, then reveal the accepted graph and explanation together
 
 Chat runs over `/api/chat/ws`. The first frame authenticates the connection; subsequent

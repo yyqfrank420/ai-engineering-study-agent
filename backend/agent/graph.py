@@ -55,7 +55,7 @@ NodeResult = Awaitable[AgentState]
 AgentNode = Callable[[AgentState], NodeResult]
 
 _GRAPH_STAGE_DEADLINE_KEY = "_graph_stage_deadline_s"
-_MAX_GRAPH_REPAIR_ROUNDS = 1
+_MAX_GRAPH_REPAIR_ROUNDS = 2
 _MAX_GRAPH_CONTRACT_CORRECTIONS = 1
 _RETRYABLE_GRAPH_PATCH_FAILURE_CODES = {
     "graph_patch_invalid_preserved_existing_graph",

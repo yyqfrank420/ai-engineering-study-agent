@@ -200,8 +200,8 @@ The chronology is important: these were not repetitions of one identical defect.
 ## Current graph-review convergence checkpoint
 
 This state machine supersedes the historical repair limits and layer-lock descriptions below.
-Focused offline tests cover its contracts. A paid diagnostic is still required before the protected
-corpus runs and is pending explicit approval.
+Focused offline tests cover its contracts. Diagnostic `31333075986` exercised this state on the
+protected `graph-expansion` case and exposed the architect-boundary failure recorded below.
 The staged DAG and layer-as-generated architecture are Release 2 future work, outside this
 stabilization path.
 
@@ -209,20 +209,20 @@ stabilization path.
   scorecard. Every deterministic finding is classified exactly once.
 - The selected review depth is authoritative. Prototype review rejects production-only findings even
   when request text describes a production system. Production review retains all topology proofs.
-- Repair patches are record-scoped and may cover multiple disconnected regions. Every cited node,
-  edge, group, sequence, assumption, field, removal, and addition has its own exact permission;
-  topology proximity grants none. Each required connection addition names its exact directed
-  `source -> destination` obligation. A group move requires permission for both source and
-  destination groups.
+- Repair patches are record-scoped and may cover non-adjacent records in the same connected
+  candidate. Every cited node, edge, group, sequence, assumption, field, removal, and addition has
+  its own exact permission; topology proximity grants none. Each required connection addition names
+  its exact directed `source -> destination` obligation. A group move requires permission for both
+  source and destination groups.
 - Retained pass verdicts follow dependency invalidation. Component changes reopen components,
   connections, and composition. Edge changes reopen connections and composition. Composition-only
   changes reopen composition.
 - The workflow retains the reviewed graph snapshot beside its scorecard as the repair baseline; a
   later scorecard cannot be paired with a different graph version.
-- It permits one semantic repair and one error-informed critic-contract correction. An invalid local
-  admission preserves the current candidate, returns its safe typed validation path and rule to one
-  fresh critic correction, and consumes that correction budget. The corrected Kimi prompt cannot
-  repeat the rejected prompt.
+- It permits at most two successful semantic repair rounds and one error-informed critic-contract
+  correction. An invalid local admission preserves the current candidate, returns its safe typed
+  validation path and rule to one fresh critic correction, and consumes that correction budget. The
+  corrected Kimi prompt cannot repeat the rejected prompt.
 - A request-scoped counter caps Sonnet critic provider calls at four across initial review, schema
   correction, contract correction, and post-patch review. Reaching the ceiling fails closed.
 - A local contract may combine exact component or connection changes with the title and selected
@@ -239,15 +239,25 @@ stabilization path.
 
 ### Failed diagnostic evidence and next paid run
 
-Diagnostic `graph_repair_nonlocal` rejected an otherwise local repair contract. The prior diagnostic
-surface did not retain the specific admission path and rule, so it could not distinguish a malformed
-selector from an unsupported cross-layer title or assumption repair. The corrected contract admits
-the exact cross-layer cases above and returns typed safe admission evidence when it rejects one.
+Diagnostic `31333075986` ran only `graph-expansion` on exact head `2f88a5a`. The first turn failed
+after 267.912 seconds with no published graph. Five application calls cost $0.435752 and no judge
+call ran. Opus planning took 121.554 seconds, then local plan validation returned the generic
+`architecture_pass_invalid` code. The graph worker replaced the missing plan with a two-node
+prototype fallback. Sonnet used one protocol correction for an invalid connection-addition row.
+Kimi then spent 92.203 seconds on a patch that updated every node in the fallback, which the blanket
+incremental-identity guard rejected. The second corpus turn did not run.
 
-Offline coverage now exercises the corrected preservation, admission, correction-budget, and
-publication-state behavior. Another paid `graph-expansion` diagnostic remains pending explicit
-approval. Do not run it as an automatic retry or include it in the canonical corpus until approval is
-recorded.
+The recovery removes the aggregate 12,000-character plan rejection because its field schema permits
+larger valid plans and the provider call already has a token ceiling. Architect failures now expose
+stable structural codes. A missing architecture plan fails closed instead of entering a canonical or
+generic fallback. Exact critic permissions may update every cited record in a small graph, while
+unscoped whole-graph rewrites remain rejected. Critic and patch prompts now define non-adjacent repair
+authority, two-node addition endpoints, group-move permissions, and semantic ownership without the
+ambiguous disconnected-region wording.
+
+Offline coverage exercises these boundaries. Another paid `graph-expansion` diagnostic requires
+fresh approval. Do not run it as an automatic retry or include it in the canonical corpus before the
+focused diagnostic passes.
 
 ## Historical stabilization checkpoint
 
@@ -577,8 +587,8 @@ Most recent authoritative evidence:
 - Diagnostic `31056353630`: initial graph and critic both executed; failure is isolated to focused repair validation.
 - Diagnostic `31127543972`: edge IDs were accepted; the patch call hit exactly 3,200 output tokens and the server preserved the existing graph because no JSON object was emitted.
 - Diagnostic `31127721414`: the first repair published a valid candidate; the second repair failed because the patch protocol omitted and inconsistently required presentation fields.
-- The current stabilization tree passes 1,034 tracked backend tests at 90% total coverage. The
-  frontend passes 216 tests with 91.32% statements, 78.96% branches, 93.23% functions, and 93.65%
+- The current stabilization tree passes 1,211 tracked backend tests at 91% total coverage. The
+  frontend passes 217 tests with 91.32% statements, 78.87% branches, 93.23% functions, and 93.66%
   lines. Static analysis, dependency audits, ingestion artifacts, migrations, Terraform validation,
   the production frontend build, and the backend container build pass on the same working tree.
 - Backend/frontend staging readiness, dashboard smoke, capture, cleanup, artifact upload, latency accounting, and cost accounting all passed.

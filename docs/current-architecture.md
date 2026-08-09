@@ -41,8 +41,9 @@ This is the current runtime contract for the production-quality demo.
 7. The critic judges four disjoint artifact layers: components, connections, composition, and the
    rendered artifact. Each layer has its own hard pass gate. Sonnet returns a fixed scorecard of
    rubric codes and record indexes; the server expands them into exact selectors and read-only
-   context. A local semantic rejection can receive one Kimi K3 high typed patch against the exact
-   failed records, including records in disconnected topology regions. Uncited records stay locked.
+   context. A local semantic rejection can receive at most two successful Kimi K3 high typed repair
+   rounds against the exact failed records, including non-adjacent records in the connected
+   candidate. Uncited records stay locked.
    Component changes reopen component, connection, and composition review. Edge changes reopen
    connection and composition review. Composition-only changes reopen composition review. An invalid
    patch may receive one error-informed critic-contract correction before the patch is retried. A
@@ -78,11 +79,11 @@ persistence, so Cloud Run scale-out neither resets the limits nor stores raw ema
 limiter table.
 
 The applied-design path gives each role one explicit owner. Opus 5 xhigh writes the primary
-architecture brief. A second Opus 5 xhigh pass reconstructs the design from the request and evidence,
-then audits the primary plan. Kimi K3 low creates the initial graph topology. Kimi K3 high applies
-typed patches to local critic failures and published user refinements. Sonnet 5 medium reviews every
-graph candidate and revision. Opus 5 low writes the explanation stream. Renderer-only
-failures add no model calls. Retrieval and the standing checklist do not add model calls.
+architecture brief. Sonnet 5 medium reconstructs the design from the request and evidence, then
+audits the primary plan. Kimi K3 low creates the initial graph topology. Kimi K3 high applies typed
+patches to local critic failures and published user refinements. Sonnet 5 medium reviews every graph
+candidate and revision. Opus 5 low writes the explanation stream. Renderer-only failures add no
+model calls. Retrieval and the standing checklist do not add model calls.
 
 During steps 4-7 the client may send `steer`. The server cancels the active workflow, emits
 `response_reset`, and restarts with the steering correction folded into the same turn. `stop`

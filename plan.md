@@ -1,12 +1,12 @@
 # Architecture generation recovery and staged redesign plan
 
-Last updated: 2026-08-08
+Last updated: 2026-08-09
 
 ## Decision
 
 Restore the current architecture pipeline and deploy it before starting the staged generation redesign.
 
-The current release completes architecture planning, Kimi generation, private rendering, one semantic repair, one error-informed critic-contract correction, and post-patch review. The reviewed graph snapshot stays beside its scorecard. Dependency-aware layer retention reopens downstream review when an upstream owned record changes. A request-scoped four-call ceiling bounds Sonnet critic provider calls across all review stages. Diagnostic `31257810429` exposed serial semantic defect discovery. Diagnostic `31259489721` exposed serial scorecard validation. Diagnostic `31261404727` exposed model-owned completion state, which critic v41 replaced with a server-owned merge. Diagnostic `31262285743` then exposed a direct schema/parser contradiction: the provider schema allowed categorical strings while the applied topology parser required integer codes. The parser now accepts only the finite canonical codebook names or their integer codes.
+The current release completes architecture planning, Kimi generation, private rendering, at most two semantic repairs, one error-informed critic-contract correction, and post-patch review. The reviewed graph snapshot stays beside its scorecard. Dependency-aware layer retention reopens downstream review when an upstream owned record changes. A request-scoped four-call ceiling bounds Sonnet critic provider calls across all review stages. Diagnostic `31257810429` exposed serial semantic defect discovery. Diagnostic `31259489721` exposed serial scorecard validation. Diagnostic `31261404727` exposed model-owned completion state, which critic v41 replaced with a server-owned merge. Diagnostic `31262285743` then exposed a direct schema/parser contradiction: the provider schema allowed categorical strings while the applied topology parser required integer codes. The parser now accepts only the finite canonical codebook names or their integer codes.
 
 The redesign stays outside the release-critical path. It begins after the current pipeline passes the targeted live diagnostic and production smoke test.
 
@@ -20,18 +20,18 @@ The redesign stays outside the release-critical path. It begins after the curren
 4. Record safe validation paths and rule codes when critic output is rejected.
 5. Add paired prototype and production tests.
 6. Give the active critic verdict priority over speculative repair time while preserving synthesis and finalization.
-7. Keep whole-graph generation, private render, MECE review layers, dependency-aware retention and reopening, one semantic repair, and one error-informed critic-contract correction.
-8. Complete the first editable review before spending the one repair.
+7. Keep whole-graph generation, private render, MECE review layers, dependency-aware retention and reopening, at most two semantic repairs, and one error-informed critic-contract correction.
+8. Complete the first exhaustive editable review before spending the repair budget.
 
 ### Current status
 
 - Canonicalisation and final validation use the resolved architecture depth.
-- Critic v41 sends an empty proof object at prototype depth and keeps the full proof contract at production depth.
-- An initial editable rejection receives one clean completion pass against the same graph and render. The server retains the first valid review as a lower bound, unions new authority from the second review, and validates the merged contract. This consumes the sole error-informed critic-contract correction budget.
+- Prototype review sends an empty proof object and production review keeps the full proof contract.
+- The initial review returns one exhaustive scorecard. One bounded protocol correction can repair a malformed scorecard. A rejected patch can receive one separate error-informed contract correction with a safe validation path and rule.
 - The shared initial critic stage may borrow up to 195 seconds. The measured timing replay preserves 98 seconds for patching and 101 seconds for final review.
-- Repair scope is derived from failed layer ownership. It grants exact permissions for cited disconnected records and exact directed connection obligations. Group moves require both source and destination group authority. Editable defects enter one bounded patch and render-only defects fail closed.
-- The exact `122b1fd` diagnostic completed all graph stages and proved the repair pipeline works. Its remaining failure was an unchanged defect omitted by the first critic.
-- All 147 critic tests and 73 applied topology specification tests pass locally. The next paid action remains one exact-head `graph-expansion` diagnostic after independent review, commit, and exact-head CI.
+- Repair scope is derived from failed layer ownership. It grants exact permissions for cited non-adjacent records in one connected candidate and exact directed connection obligations. Every added component region must connect to an existing node. Group moves require both source and destination group authority. Editable defects enter at most two successful bounded repair rounds and render-only defects fail closed.
+- Diagnostic `31333075986` exposed a local architect response-limit conflict and an invalid fallback path before the intended graph review could complete. The current recovery removes that conflict and fails closed when architecture input is unavailable.
+- The current offline matrix passes 1,211 backend tests and 217 frontend tests. The next paid action remains one exact-head `graph-expansion` diagnostic after independent review, commit, and exact-head CI.
 
 ### Tests
 

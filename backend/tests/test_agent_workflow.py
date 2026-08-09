@@ -88,7 +88,7 @@ def test_draft_graph_publication_is_explicit(state, expected):
     assert _draft_graph_publication(state) == expected
 
 
-def test_failed_review_gets_one_semantic_repair_round():
+def test_failed_review_gets_two_semantic_repair_rounds():
     from agent.graph import (
         _repair_attempt_summary,
         _route_after_review,
@@ -97,6 +97,7 @@ def test_failed_review_gets_one_semantic_repair_round():
 
     assert _repair_attempt_summary(0) == "before a bounded repair could complete"
     assert _repair_attempt_summary(1) == "after 1 bounded repair attempt"
+    assert _repair_attempt_summary(2) == "after 2 bounded repair attempts"
 
     failed = {
         "graph_changed": True,
@@ -105,7 +106,7 @@ def test_failed_review_gets_one_semantic_repair_round():
     }
 
     assert _route_after_review({**failed, "graph_repair_round_count": 0}) == "revise"
-    assert _route_after_review({**failed, "graph_repair_round_count": 1}) == "reject"
+    assert _route_after_review({**failed, "graph_repair_round_count": 1}) == "revise"
     assert _route_after_review({**failed, "graph_repair_round_count": 2}) == "reject"
     assert (
         _route_after_review(
@@ -127,7 +128,7 @@ def test_failed_review_gets_one_semantic_repair_round():
         _route_after_revision(
             {**failed, "graph_repair_round_count": 2, "graph_changed": True}
         )
-        == "reject"
+        == "review"
     )
     assert (
         _route_after_revision(
@@ -211,6 +212,17 @@ def test_repair_round_and_contract_correction_counters_are_separate():
                 **failed,
                 "graph_revision_count": 0,
                 "graph_repair_round_count": 1,
+                "graph_contract_correction_count": 0,
+            }
+        )
+        == "revise"
+    )
+    assert (
+        _route_after_review(
+            {
+                **failed,
+                "graph_revision_count": 0,
+                "graph_repair_round_count": 2,
                 "graph_contract_correction_count": 0,
             }
         )
@@ -657,7 +669,11 @@ async def test_preserved_graph_is_not_emitted_but_unchanged_graph_resyncs(monkey
 
 
 @pytest.mark.asyncio
-async def test_langgraph_can_verify_one_bounded_repair_then_publish(monkeypatch):
+@pytest.mark.parametrize("approval_round", [1, 2])
+async def test_langgraph_can_verify_bounded_repairs_then_publish(
+    monkeypatch,
+    approval_round,
+):
     import agent.graph as agent_graph
 
     events = []
@@ -712,7 +728,7 @@ async def test_langgraph_can_verify_one_bounded_repair_then_publish(monkeypatch)
     async def fake_review(state):
         assert state["_graph_stage_deadline_s"] > time.monotonic()
         reviews.append(state["graph_data"]["title"])
-        if state.get("graph_revision_count") == 1:
+        if state.get("graph_revision_count") == approval_round:
             return {
                 **state,
                 "graph_review": {"approved": True, "score": 0.9, "missing": []},
@@ -740,9 +756,12 @@ async def test_langgraph_can_verify_one_bounded_repair_then_publish(monkeypatch)
     monkeypatch.setattr(agent_graph, "orchestrator_synthesise", fake_synth)
     result = await agent_graph.run_agent(_state(send), [], [], [])
 
-    assert reviews == ["First draft", "Repair 1"]
-    assert result["graph_revision_count"] == 1
-    assert result["graph_data"]["title"] == "Repair 1"
+    assert reviews == [
+        "First draft",
+        *(f"Repair {round_number}" for round_number in range(1, approval_round + 1)),
+    ]
+    assert result["graph_revision_count"] == approval_round
+    assert result["graph_data"]["title"] == f"Repair {approval_round}"
     assert result["graph_publication"] == "approved"
     assert result["graph_notice_sent"] is False
     assert result["response_text"] == "reviewed answer"
@@ -753,7 +772,8 @@ async def test_langgraph_can_verify_one_bounded_repair_then_publish(monkeypatch)
         if event.get("phase") == "revise" and event.get("status") == "retry"
     ]
     assert [event["detail"].split(".", 1)[0] for event in repair_events] == [
-        "Repair round 1 of 1",
+        f"Repair round {round_number} of 2"
+        for round_number in range(1, approval_round + 1)
     ]
     assert not any(event.get("type") == "graph_notice" for event in events)
 

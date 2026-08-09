@@ -66,7 +66,7 @@ def _complete_plan(**overrides):
 
 
 def test_architecture_roles_reason_about_enforced_control_paths():
-    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v19"
+    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v20"
     for production_requirement in (
         "At selected production depth only, keep risky customer writes",
         "At selected production depth only, treat production guarantees",
@@ -95,10 +95,14 @@ def test_architecture_roles_reason_about_enforced_control_paths():
     assert "partition/order or event-time semantics" in _ARCHITECT_SYSTEM
     assert "replay/checkpoint and deduplication ownership" in _ARCHITECT_SYSTEM
     assert "compatible schema evolution" in _ARCHITECT_SYSTEM
-    assert "complete JSON under 12,000 characters" in _ARCHITECT_SYSTEM
+    assert "field and list limits below are the complete response bounds" in (
+        _ARCHITECT_SYSTEM
+    )
     assert "single downstream design authority" in _CHALLENGER_SYSTEM
     assert "targeted correction audit, not an essay" in _CHALLENGER_SYSTEM
-    assert "complete JSON under 12,000 characters" in _CHALLENGER_SYSTEM
+    assert "field and list limits below are the complete response bounds" in (
+        _CHALLENGER_SYSTEM
+    )
     assert "one primary operational scenario" in _ARCHITECT_SYSTEM
     assert "one primary runtime flow starts at the real trigger" in _CHALLENGER_SYSTEM
     assert "authoring, reviewing" in _ARCHITECT_SYSTEM
@@ -442,17 +446,19 @@ async def test_architect_empty_success_stops_graph_input(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("text", "finish_reason"),
+    ("text", "finish_reason", "expected_code"),
     [
-        ("prefix {}", "end_turn"),
-        ("{}", "max_tokens"),
-        ("{}", None),
+        ("prefix {}", "end_turn", "architecture_pass_payload_invalid"),
+        ("[]", "end_turn", "architecture_pass_payload_invalid"),
+        ("{}", "max_tokens", "architecture_pass_truncated"),
+        ("{}", None, "architecture_pass_finish_invalid"),
     ],
 )
 async def test_architect_rejects_malformed_or_incomplete_structured_output(
     monkeypatch,
     text,
     finish_reason,
+    expected_code,
 ):
     events = []
 
@@ -478,20 +484,25 @@ async def test_architect_rejects_malformed_or_incomplete_structured_output(
     )
 
     assert result == {"architect_plan": {}, "architecture_ready": False}
-    assert events[-1]["failure_code"] == "architecture_pass_invalid"
+    assert events[-1]["failure_code"] == expected_code
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "plan",
+    ("plan", "expected_code"),
     [
-        _complete_plan(diagram_requirements=[]),
-        _complete_plan(actors=[f"actor-{index}" for index in range(11)]),
-        _complete_plan(status_update="x" * 12_000),
+        (
+            _complete_plan(diagram_requirements=[]),
+            "architecture_pass_incomplete",
+        ),
+        (
+            _complete_plan(actors=[f"actor-{index}" for index in range(11)]),
+            "architecture_pass_list_limit",
+        ),
     ],
 )
 async def test_architect_rejects_missing_commitments_or_response_limits(
-    monkeypatch, plan
+    monkeypatch, plan, expected_code
 ):
     events = []
 
@@ -518,7 +529,45 @@ async def test_architect_rejects_missing_commitments_or_response_limits(
     )
 
     assert result == {"architect_plan": {}, "architecture_ready": False}
-    assert events[-1]["failure_code"] == "architecture_pass_invalid"
+    assert events[-1]["failure_code"] == expected_code
+
+
+@pytest.mark.asyncio
+async def test_architect_accepts_schema_bounded_plan_over_legacy_aggregate_limit(
+    monkeypatch,
+):
+    plan = _complete_plan(
+        diagram_requirements=["d" * 240 for _ in range(24)],
+        runtime_flow=["r" * 300 for _ in range(30)],
+    )
+    assert len(json.dumps(plan, separators=(",", ":"))) > 12_000
+
+    async def model(**_kwargs):
+        return _structured_response(plan)
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr(
+        "agent.nodes.architecture_workers.stream_structured_llm",
+        model,
+    )
+
+    result = await architect_node(
+        {
+            "is_applied_design": True,
+            "design_query": "Design a service.",
+            "user_message": "Design a service.",
+            "complexity": "prototype",
+            "evidence_bundle": {},
+            "send": send,
+        }
+    )
+
+    assert result["architecture_ready"] is True
+    assert result["architect_plan"]["diagram_requirements"] == [
+        "d" * 240 for _ in range(24)
+    ]
 
 
 @pytest.mark.asyncio

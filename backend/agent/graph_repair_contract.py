@@ -113,6 +113,40 @@ def validate_local_repair_admission(
             path="layers.connections.addition_count",
             rule="insufficient_connection_additions",
         )
+    if components["addition_count"]:
+        new_node_ids = {
+            f"$new_node_{position}"
+            for position in range(1, components["addition_count"] + 1)
+        }
+        new_node_neighbors = {node_id: set() for node_id in new_node_ids}
+        nodes_anchored_to_existing: set[str] = set()
+        for obligation in layers["connections"]["connection_addition_obligations"]:
+            source = obligation["source"]
+            target = obligation["target"]
+            if source in new_node_ids and target in new_node_ids:
+                new_node_neighbors[source].add(target)
+                new_node_neighbors[target].add(source)
+            elif source in new_node_ids:
+                nodes_anchored_to_existing.add(source)
+            elif target in new_node_ids:
+                nodes_anchored_to_existing.add(target)
+
+        unseen = set(new_node_ids)
+        while unseen:
+            pending = {unseen.pop()}
+            region: set[str] = set()
+            while pending:
+                node_id = pending.pop()
+                region.add(node_id)
+                neighbors = new_node_neighbors[node_id] & unseen
+                unseen -= neighbors
+                pending.update(neighbors)
+            if region.isdisjoint(nodes_anchored_to_existing):
+                raise LocalRepairAdmissionError(
+                    "every new component region requires a connection to an existing graph node",
+                    path="layers.connections.connection_addition_obligations",
+                    rule="missing_graph_anchor",
+                )
 
 
 def _unique_strings(value: Any, field: str, failures: list[str]) -> list[str]:
