@@ -22,7 +22,7 @@ RUBRIC_CRITERIA = {
     ),
     "edge_semantics": (
         "connections",
-        "State what data or command moves on each directed edge.",
+        "Give each directed edge one distinct necessary contract, consolidate duplicate interactions, and keep reverse or parallel contracts compatible.",
     ),
     "assumption_hygiene": (
         "composition",
@@ -33,12 +33,12 @@ RUBRIC_CRITERIA = {
         "Name the production owners for applicable failure, observability, and rollout work.",
     ),
     "novice_clarity": (
-        "render",
-        "Make the entry, main path, controls, and outcomes readable in the screenshot.",
+        "composition",
+        "Use authored groups and sequence to make the entry, main path, controls, and outcomes easy to locate in the screenshot.",
     ),
     "logical_flow": (
         "connections",
-        "Make directed paths agree with the stated runtime behavior.",
+        "Start the primary operational path at its real trigger and follow directed contracts to an observable outcome.",
     ),
     "succinctness": (
         "components",
@@ -46,11 +46,11 @@ RUBRIC_CRITERIA = {
     ),
     "mece_scope": (
         "components",
-        "Give each material responsibility one clear owner and remove needless duplicates.",
+        "Give each material responsibility one clear owner, remove needless duplicates, and exclude diagram-authoring mechanics from the designed runtime.",
     ),
     "authored_composition": (
         "composition",
-        "Keep the title, groups, sequence, and assumptions consistent with graph records.",
+        "Use title, groups, and one primary sequence to expose the operational spine while secondary paths remain subordinate.",
     ),
     "brief_coverage": (
         "components",

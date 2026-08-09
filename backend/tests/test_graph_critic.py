@@ -193,7 +193,7 @@ def _critic_state(*, graph=None, complexity="prototype"):
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v44"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v46"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -459,7 +459,7 @@ def test_local_component_additions_require_an_existing_graph_anchor():
         validate_local_repair_admission(contract, graph=graph)
 
 
-def test_appended_groups_require_corresponding_new_components():
+def test_appended_groups_can_organize_existing_components():
     graph = {
         "nodes": [{"id": "a"}],
         "edges": [],
@@ -476,8 +476,7 @@ def test_appended_groups_require_corresponding_new_components():
         },
     )
 
-    with pytest.raises(ValueError, match="without new components"):
-        validate_local_repair_admission(contract, graph=graph)
+    validate_local_repair_admission(contract, graph=graph)
 
 
 def test_group_metadata_cannot_hide_disconnected_edge_regions():
@@ -923,7 +922,7 @@ def test_every_numbered_rubric_code_expands_to_its_canonical_finding():
     [
         ("components", 5, "connections"),
         ("connections", 6, "composition"),
-        ("composition", 8, "render"),
+        ("render", 8, "composition"),
         ("render", 1, "components"),
     ],
 )
@@ -1369,7 +1368,6 @@ def test_model_payload_rejects_server_owned_repair_fields():
     ("failed_layer", "expected_scope", "expected_route"),
     [
         ("connections", "local", "revise"),
-        ("render", "global", "reject"),
         (None, "none", "accept"),
     ],
 )
@@ -2807,7 +2805,7 @@ async def test_semantic_critic_reviews_the_private_rendered_image(
     assert challenger_tail not in content[0]["text"]
     assert "full-plan-duplicate-must-not-ship" not in content[0]["text"]
     assert "challenger-status-must-not-ship" not in content[0]["text"]
-    assert "Judge its visual hierarchy" in _GRAPH_CRITIC_SYSTEM
+    assert "Use it to verify that the authored entry" in _GRAPH_CRITIC_SYSTEM
 
 
 def test_review_packet_keeps_semantics_and_omits_duplicate_internal_metadata():
@@ -3783,3 +3781,87 @@ async def test_semantic_critic_outage_fails_closed(monkeypatch):
     )
     assert result["graph_review"]["review_status"] == "unavailable"
     assert "missing" not in result["graph_review"]
+
+
+def test_every_semantic_blocker_has_an_editable_owner():
+    assert "render` records the deterministic browser assessment" in _GRAPH_CRITIC_SYSTEM
+    assert "subjective visual\npreference is advice" in _GRAPH_CRITIC_SYSTEM
+    assert "Parallel edges between one component pair" in _GRAPH_CRITIC_SYSTEM
+    assert "one primary sequence expose" in _GRAPH_CRITIC_SYSTEM
+    assert all(
+        REPAIR_LAYER_PATCH_FIELDS[_RUBRIC_CODE_OWNERS[code]] for code in _RUBRIC_CODES
+    )
+
+
+def test_novice_clarity_authorizes_a_local_composition_repair():
+    graph = {
+        "nodes": [{"id": "entry"}, {"id": "outcome"}],
+        "edges": [{"source": "entry", "target": "outcome", "label": "returns"}],
+        "groups": [
+            {
+                "id": "runtime",
+                "label": "Primary runtime",
+                "kind": "runtime",
+                "nodeIds": ["entry", "outcome"],
+            }
+        ],
+        "sequence": [
+            {"step": 1, "nodes": ["entry", "outcome"], "description": "returns"}
+        ],
+        "assumptions": [],
+    }
+    payload = _passing_review_payload()
+    novice_clarity_code = _RUBRIC_CODES.index("novice_clarity") + 1
+    _set_model_layer(
+        payload,
+        "composition",
+        finding_codes=[novice_clarity_code],
+        group_indexes=[0],
+        composition_fields=["groups"],
+    )
+
+    normalized = _canonicalise_review_protocol(
+        payload,
+        graph=graph,
+        deterministic_findings=[],
+        review_context=[],
+        require_topology_proofs=False,
+    )
+
+    assert _RUBRIC_CODE_OWNERS["novice_clarity"] == "composition"
+    assert normalized["repair_contract"]["repair_scope"] == "local"
+    assert normalized["repair_contract"]["layers"]["composition"][
+        "composition_fields"
+    ] == ["groups"]
+
+
+def test_novice_clarity_can_add_a_group_for_existing_components():
+    graph = {
+        "nodes": [{"id": "entry"}, {"id": "outcome"}],
+        "edges": [{"source": "entry", "target": "outcome", "label": "returns"}],
+        "groups": [],
+        "sequence": [],
+        "assumptions": [],
+    }
+    payload = _passing_review_payload()
+    _set_model_layer(
+        payload,
+        "composition",
+        finding_codes=[_RUBRIC_CODES.index("novice_clarity") + 1],
+        composition_fields=["groups"],
+        group_addition_count=1,
+    )
+
+    normalized = _canonicalise_review_protocol(
+        payload,
+        graph=graph,
+        deterministic_findings=[],
+        review_context=[],
+        require_topology_proofs=False,
+    )
+    contract = normalized["repair_contract"]
+
+    validate_local_repair_admission(contract, graph=graph)
+    assert contract["layers"]["composition"]["composition_append_counts"] == {
+        "groups": 1
+    }

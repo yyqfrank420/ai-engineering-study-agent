@@ -41,7 +41,7 @@ from graph.runtime import select_canonical_graph
 logger = logging.getLogger(__name__)
 
 _APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v29"
-_APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v13"
+_APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v15"
 _APPLIED_GRAPH_TOPOLOGY_EFFORT = "low"
 _APPLIED_GRAPH_PATCH_EFFORT = "high"
 _MAX_GRAPH_PATCH_CHARS = 200_000
@@ -944,6 +944,9 @@ The graph projection contains a read-only global topology skeleton. Records sele
 carry their full mutable detail. Use the skeleton to keep each repair consistent with the whole graph,
 but do not copy locked detail into the patch. Map every blocking finding to a concrete permitted
 operation. Enforce behavioral guarantees with directed components and edges rather than prose alone.
+Preserve the primary operational spine. For clarity, density, or duplicate-record findings, prefer a
+permitted update, removal, or consolidation. Add a record only when the finding identifies a missing
+responsibility or contract.
 
 Source and target must be distinct. A node removal must also remove or redirect every incident edge.
 Omit keys that do not change. Groups, sequence, assumptions, and title are complete replacements when

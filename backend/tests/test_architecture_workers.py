@@ -7,7 +7,6 @@ from agent.nodes.architecture_workers import (
     _ARCHITECT_PROMPT_VERSION,
     _ARCHITECT_RESPONSE_SCHEMA,
     _ARCHITECT_SYSTEM,
-    _CHALLENGER_MAX_OUTPUT_TOKENS,
     _CHALLENGER_RESPONSE_SCHEMA,
     _CHALLENGER_SYSTEM,
     _apply_source_backed_plan_locks,
@@ -66,7 +65,7 @@ def _complete_plan(**overrides):
 
 
 def test_architecture_roles_reason_about_enforced_control_paths():
-    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v15"
+    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v17"
     assert "production guarantees as directed paths" in _ARCHITECT_SYSTEM
     assert "timeout-after-commit as an unknown outcome" in _ARCHITECT_SYSTEM
     assert "retrieved content stays untrusted" in _ARCHITECT_SYSTEM
@@ -83,6 +82,9 @@ def test_architecture_roles_reason_about_enforced_control_paths():
     assert "single downstream design authority" in _CHALLENGER_SYSTEM
     assert "targeted correction audit, not an essay" in _CHALLENGER_SYSTEM
     assert "complete JSON under 12,000 characters" in _CHALLENGER_SYSTEM
+    assert "one primary operational scenario" in _ARCHITECT_SYSTEM
+    assert "one primary runtime flow starts at the real trigger" in _CHALLENGER_SYSTEM
+    assert "authoring, reviewing" in _ARCHITECT_SYSTEM
 
 
 def test_architecture_worker_schemas_require_every_declared_object_field():
@@ -396,7 +398,7 @@ async def test_challenger_failure_stops_graph_input(monkeypatch):
     assert captured["model"] == settings.graph_qa_model
     assert "Primary architect candidate" in captured["messages"][0]["content"]
     assert captured["timeout_seconds"] == settings.architecture_role_timeout_s
-    assert captured["max_output_tokens"] == _CHALLENGER_MAX_OUTPUT_TOKENS
+    assert captured["max_output_tokens"] == settings.architecture_max_completion_tokens
     assert captured["response_schema"] is _CHALLENGER_RESPONSE_SCHEMA
 
 
@@ -695,3 +697,34 @@ async def test_early_design_frame_emits_nothing_without_a_ready_applied_design()
 
     assert result == {"early_response_text": ""}
     assert events == []
+
+
+@pytest.mark.asyncio
+async def test_challenger_reports_truncated_output_separately(monkeypatch):
+    events = []
+
+    async def truncated_model(**_kwargs):
+        return _structured_response("{}", finish_reason="max_tokens")
+
+    async def send(event):
+        events.append(event)
+
+    monkeypatch.setattr(
+        "agent.nodes.architecture_workers.stream_structured_llm",
+        truncated_model,
+    )
+    result = await challenger_node(
+        {
+            "is_applied_design": True,
+            "design_query": "Design a production model-serving stack.",
+            "user_message": "Design a production model-serving stack.",
+            "complexity": "production",
+            "evidence_bundle": {},
+            "architecture_ready": True,
+            "architect_plan": _complete_plan(),
+            "send": send,
+        }
+    )
+
+    assert result == {"challenger_review": {}, "architecture_ready": False}
+    assert events[-1]["failure_code"] == "architecture_review_truncated"

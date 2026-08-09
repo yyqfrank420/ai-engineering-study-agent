@@ -19,8 +19,7 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_ARCHITECT_PROMPT_VERSION = "architecture_roles_v15"
-_CHALLENGER_MAX_OUTPUT_TOKENS = 6_500
+_ARCHITECT_PROMPT_VERSION = "architecture_roles_v17"
 _REVIEW_PLAN_LIST_LIMITS = {
     "actors": 10,
     "inputs": 12,
@@ -167,6 +166,13 @@ concern only when it materially affects this scenario.
 - Compose the plan around a clear runtime spine, bounded parallel branches that rejoin, explicit
   decision/failure paths, and separate data and delivery planes. Close feedback into the next
   decision only when a repeated decision or learning loop materially exists.
+- Choose one primary operational scenario. Start its runtime flow at the actor, event source, or
+  first system boundary that receives the trigger, then follow directed data and control movement
+  to one observable outcome. Every branch rejoins that spine or ends at a named outcome.
+- A diagram responsibility earns its own component only when ownership, trust, authoritative state,
+  a decision, an externally meaningful action, or an outcome changes. Fold implementation detail
+  into its owning responsibility. Exclude work whose only purpose is authoring, reviewing,
+  explaining, laying out, or rendering the architecture diagram.
 - Identify the small set of material diagram commitments another agent must visibly reconcile.
   Include decided mechanisms (for example caching, fallback, or approval), every runtime mode's
   route back to an observable outcome, and a bypass around any conditional control when it does
@@ -250,6 +256,10 @@ graph is produced. Return one corrected complete plan plus the audit that caused
   state, reconciliation, overload behavior, migration, rollback, and observability when material.
 - Check whether the design confuses short-term context, curated long-term memory, and the
   authoritative system of record, or gives an AI unsafe direct write access.
+- Check that one primary runtime flow starts at the real trigger and follows directed contracts to
+  an observable outcome. Reject competing main paths, unexplained edge direction, branches without
+  a rejoin or outcome, diagram-authoring mechanics, and responsibilities without a distinct owner,
+  trust boundary, authoritative state, decision, action, or outcome.
 - Challenge invented vendors, live data, retrieval, or permissions.
 - Challenge any assumption presented as a user requirement and any evidence claim with the wrong provenance.
 - Trace material guarantees through the proposed control topology. Flag durable state that is only
@@ -397,10 +407,15 @@ async def challenger_node(state: AgentState) -> dict[str, Any]:
             response_schema=_CHALLENGER_RESPONSE_SCHEMA,
             effort="medium",
             timeout_seconds=architecture_timeout_seconds(state, review=True),
-            max_output_tokens=_CHALLENGER_MAX_OUTPUT_TOKENS,
+            max_output_tokens=settings.architecture_max_completion_tokens,
             temperature=settings.graph_temperature,
             telemetry=_telemetry(state, "architecture_challenger", profile.resolved),
         )
+        if response.finish_reason == "max_tokens":
+            raise _ArchitectureReviewError(
+                "architecture_review_truncated",
+                "challenger output exhausted its configured response budget",
+            )
         review = _normalise_challenger(_parse_complete_response(response))
         accepted_plan = _apply_source_backed_plan_locks(
             state.get("architect_plan") or {},

@@ -13,7 +13,7 @@ def test_applied_graph_prompts_define_generic_local_repair_boundaries():
     )
 
     assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v29"
-    assert _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION == "applied_topology_v13"
+    assert _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION == "applied_topology_v15"
     assert (
         "Choose graph size from the material design" in _APPLIED_GRAPH_TOPOLOGY_SYSTEM
     )

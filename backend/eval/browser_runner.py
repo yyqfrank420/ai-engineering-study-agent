@@ -37,7 +37,6 @@ from eval.runtime_budget import (
 )
 from eval.staging_runner import (
     detect_route,
-    extract_graph_data,
     extract_workers,
 )
 
@@ -401,7 +400,7 @@ def _required_graph_turn_failure(
             f"case {case.id} turn {step_index + 1} required a graph but received "
             "graph_notice",
         )
-    graph = extract_graph_data(events)
+    graph = _extract_public_graph_data(events)
     if not graph:
         return (
             "required_graph_missing",
@@ -836,7 +835,7 @@ def _deterministic_failure_details(
                 f"route expected {expected.route}, got {detect_route(events)}",
             )
         )
-    graph = extract_graph_data(events)
+    graph = _extract_public_graph_data(events)
     if expected.graph_emitted is not None and bool(graph) != expected.graph_emitted:
         failures.append(
             _failure_detail(

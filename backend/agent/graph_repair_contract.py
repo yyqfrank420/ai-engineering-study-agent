@@ -105,9 +105,6 @@ def validate_local_repair_admission(
             raise ValueError(
                 f"local repair cannot replace the whole {field} collection"
             )
-    if append_counts.get("groups", 0) > components["addition_count"]:
-        raise ValueError("local repair cannot append groups without new components")
-
     selected_edges = connections["edge_selectors"]
     selected_edge_pairs = [
         (selector["source"], selector["target"]) for selector in selected_edges

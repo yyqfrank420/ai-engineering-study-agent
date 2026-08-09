@@ -307,7 +307,7 @@ def test_required_graph_turn_without_notice_requires_graph_data():
     )
 
 
-def test_required_graph_turn_accepts_graph_candidate():
+def test_required_graph_turn_rejects_private_graph_candidate():
     from eval.browser_runner import _required_graph_turn_failure
 
     case = load_corpus().by_id["graph-expansion"]
@@ -315,8 +315,58 @@ def test_required_graph_turn_accepts_graph_candidate():
     assert _required_graph_turn_failure(
         case,
         0,
-        [{"type": "graph_candidate", "data": {"version": "graph-cand", "nodes": [], "edges": []}}],
-    ) is None
+        [
+            {
+                "type": "graph_candidate",
+                "data": {"version": "graph-cand", "nodes": [], "edges": []},
+            }
+        ],
+    ) == (
+        "required_graph_missing",
+        "case graph-expansion turn 1 required graph_data",
+    )
+
+
+def test_private_graph_candidate_is_not_reported_as_a_dom_render_mismatch():
+    from eval.browser_runner import _deterministic_failure_details
+
+    case = load_corpus().by_id["research"]
+    events = [
+        *[
+            {"type": "worker_status", "worker": worker, "status": "ready"}
+            for worker in case.deterministic.workers_include
+        ],
+        {
+            "type": "graph_candidate",
+            "data": {
+                "version": "private-candidate",
+                "nodes": [{"id": "source"}, {"id": "target"}],
+                "edges": [{"source": "source", "target": "target", "label": "sends"}],
+            },
+        },
+        {"type": "done"},
+    ]
+
+    codes = {
+        detail["code"]
+        for detail in _deterministic_failure_details(
+            case,
+            events,
+            rendered_nodes=0,
+            rendered_edges=0,
+        )
+    }
+
+    assert "graph_emission_mismatch" in codes
+    assert not codes.intersection(
+        {
+            "graph_render_mismatch",
+            "graph_edge_render_mismatch",
+            "graph_version_render_mismatch",
+            "graph_node_identity_mismatch",
+            "graph_edge_identity_mismatch",
+        }
+    )
 
 
 def test_graph_dom_inspection_is_only_enabled_for_renderable_graph_cases():
@@ -460,7 +510,7 @@ async def test_required_graph_turn_must_render_before_the_next_turn(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_send_case_steps_does_not_inspect_dom_for_graph_candidate_only(monkeypatch):
-    from eval.browser_runner import _send_case_steps
+    from eval.browser_runner import BrowserQualityError, _send_case_steps
 
     case = load_corpus().by_id["graph-expansion"]
     turn_graphs: list[dict] = []
@@ -487,17 +537,19 @@ async def test_send_case_steps_does_not_inspect_dom_for_graph_candidate_only(mon
     monkeypatch.setattr("eval.browser_runner._graph_dom_state", fail_if_dom_called)
 
     events: list[dict] = []
-    await _send_case_steps(
-        None,
-        case,
-        [],
-        events,
-        timeout_seconds=390,
-        turn_graphs=turn_graphs,
-    )
+    with pytest.raises(BrowserQualityError) as raised:
+        await _send_case_steps(
+            None,
+            case,
+            [],
+            events,
+            timeout_seconds=390,
+            turn_graphs=turn_graphs,
+        )
 
+    assert raised.value.code == "required_graph_missing"
     assert turn_graphs == []
-    assert len(events) == 4
+    assert len(events) == 2
 
 
 def test_required_graph_turn_rejects_missing_and_reused_versions():

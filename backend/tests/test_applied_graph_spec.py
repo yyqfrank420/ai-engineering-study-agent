@@ -705,6 +705,13 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     assert "member indexes" not in prompt
     assert "allow only non-root components 1 through the final component" in prompt
     assert "all material non-tree links" in prompt
+    assert "Make the root the primary runtime entry or trigger" in prompt
+    assert "Tree-edge direction and its incoming label must agree" in prompt
+    assert "primary sequence one obvious directed path" in prompt
+    assert "diagram authoring, rendering" in prompt
+    assert "Multiple edges between a component pair" in prompt
+    assert "A component earns its own row" in prompt
+    assert "An edge earns its own record" in prompt
     assert "compact JSON without indentation or line breaks" in prompt
     assert "diagram_commitments" not in prompt
     assert prompt.count("diagram_requirements") == 1

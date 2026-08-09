@@ -50,7 +50,7 @@ class CriticProtocolError(ValueError):
         self.rule = rule if rule in _PROTOCOL_ERROR_RULES else None
 
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v44"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v46"
 # Sonnet 5 high effort can spend the full output allowance on adaptive thinking
 # before emitting the required scorecard. Medium keeps the review inside one call.
 _GRAPH_CRITIC_EFFORT = "medium"
@@ -1153,20 +1153,30 @@ Compare the diagram with the user's exact request. Check all of the following:
    a feedback edge only when outcomes inform a later decision, adaptation, or learning loop; a finite
    read-only or advisory request may end at its observable outcome;
 4. safe action boundary: external mutations have policy, approval, audit, or rollback controls;
-5. edge semantics: edges say what data or command moves and in which direction;
+5. edge semantics: every edge carries one distinct contract needed to follow behavior or prove a
+   guarantee. Consolidate duplicate interactions. Parallel edges between one component pair must
+   carry compatible distinct contracts, and reverse edges must name a response, acknowledgement,
+   feedback, or control contract;
 6. assumption hygiene: important unknowns are explicit instead of invented as facts;
 7. selected depth: component responsibilities name the production owners for failure handling,
    observability, and rollout when those concerns apply.
-8. novice clarity: the screenshot makes the authored entry, main path, controls, and outcome easy to
-   locate. Missing semantic records belong to their graph layer instead of render.
-9. logical flow: directed edge paths agree with the runtime behavior. Sequence ordering belongs to
-   authored composition and must be reviewed there.
+8. novice clarity: authored groups and sequence make the entry, main path, controls, and outcome easy
+   to locate in the screenshot. Classify unclear node text under components and unclear edge direction
+   under connections. Exact screenshot geometry belongs to the deterministic render gate.
+9. logical flow: the primary operational path starts at its real actor, event source, scheduled
+   trigger, or first system receiver, then follows directed contracts to an observable outcome.
+   Every branch rejoins that spine or ends at a named outcome. Sequence ordering belongs to authored
+   composition and must be reviewed there.
 10. succinctness: node labels and responsibilities are concise rather than repetitive;
-11. MECE scope: major responsibilities have clear homes without needless duplicates, while
-    cross-cutting evaluation, security, and observability may intentionally span components.
-12. authored composition: the title, named zones, sequence, and assumptions organize the authored
-    graph without contradicting its records. Missing components, edges, or paths belong to their
-    owning layers.
+11. MECE scope: a component earns a node when ownership, trust, authoritative state, a decision, an
+    externally meaningful action, or an outcome changes. Fold other implementation detail into its
+    owner and reject components whose only purpose is authoring, reviewing, explaining, laying out,
+    or rendering this diagram. Cross-cutting evaluation, security, and observability may span
+    components when they carry distinct operational responsibility.
+12. authored composition: the title, named zones, assumptions, and one primary sequence expose the
+    operational spine without contradicting graph records. Supporting, offline, control, and
+    delivery paths remain subordinate to that sequence. Missing components, edges, or paths belong
+    to their owning layers.
 13. brief coverage: every checklist item that requires a responsibility has a component owner.
     Missing transitions and path semantics belong to connections, and stated unknowns belong to
     composition;
@@ -1226,10 +1236,16 @@ Compare the diagram with the user's exact request. Check all of the following:
     stream infrastructure from a finite request/response system.
 
 A deterministic browser gate checks exact render counts, clipping, overlap, and minimum text size.
-You also receive the private candidate screenshot. Judge its visual hierarchy, reading order,
-edge clarity, density, grouping, and ability to explain the system at a glance. Reject a diagram
-that is technically complete but visually confusing, cluttered, or aesthetically unfinished.
-Treat measured geometry as authoritative for exact pixel claims.
+You also receive the private candidate screenshot. Use it to verify that the authored entry,
+operational spine, controls, and outcome can be located. When the screenshot exposes confusing node
+content, routes, density, grouping, or sequence, classify the defect under the authored field that
+must change. Treat measured geometry as authoritative for exact pixel claims. A subjective visual
+preference is advice, not a blocking finding.
+
+The deterministic browser gate owns render geometry. Use the screenshot as evidence for authored
+defects and assign each semantic defect to the graph field that must change. Use components for node
+labels or responsibilities, connections for direction and edge semantics, and composition for title,
+groups, sequence, or assumptions. A semantic clarity defect never belongs to render.
 
 Reject a diagram dominated by labels such as Agent, Tool Use, Planning, Evaluation, Generation,
 Language Model, Sampling, Quality, Cost, Latency, Foundation Model, Memory, or Application. Reject
@@ -1253,9 +1269,10 @@ Do not bundle unrelated regions into one repair request.
 Use `finding_codes` only for a clear omission or defect that makes the diagram unsafe, misleading,
 unusable, or fails an explicit part of the user's request at the selected depth. The owner in the
 rubric codebook is authoritative. `components` owns node records. `connections` owns edge records.
-`composition` owns title, groups, sequence, and assumptions. `render` owns the screenshot and
-layout. These four ownership sets partition the mutable artifact. Review each layer against the full
-graph context, then classify the defect by the fields that must change. If one defect requires
+`composition` owns title, groups, sequence, and assumptions. These three sets partition the mutable
+graph artifact. `render` records the deterministic browser assessment and exposes no model-editable
+fields. Review each layer against the full graph context, then classify the defect by the fields that
+must change. If one defect requires
 changes in multiple layers, fail each owner with a code assigned to that owner. Optional hardening or a
 different valid design preference must not produce a finding code or rejection. Accept consolidated
 responsibilities when their descriptions and edges make the boundary clear. Concise node
