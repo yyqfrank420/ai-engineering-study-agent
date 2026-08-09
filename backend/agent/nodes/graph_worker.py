@@ -1318,6 +1318,52 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
                 "Applied architecture rejected: %s: %s", type(exc).__name__, exc
             )
             failure_code = _graph_design_failure_code(exc)
+            if (
+                failure_code == "graph_edit_scope_ambiguous"
+                and operation_kind == "edit"
+                and _looks_like_graph_followup(state.get("user_message", ""))
+            ):
+                await send(
+                    {
+                        "type": "workflow_progress",
+                        "phase": "integrate",
+                        "status": "active",
+                        "title": "Broad edit interpreted as refinement scope",
+                        "detail": "I could not lock a narrow patch, so I will rebuild the diagram from topic and keep existing ownership.",
+                    }
+                )
+                try:
+                    rebuilt_graph = await _generate_applied_architecture(
+                        {**state, "graph_intent": "create"},
+                        query,
+                        profile,
+                    )
+                    await send(
+                        {
+                            "type": "workflow_progress",
+                            "phase": "integrate",
+                            "status": "complete",
+                            "title": "Candidate architecture assembled",
+                            "detail": f"{len(rebuilt_graph.get('nodes') or [])} responsibilities are connected into a bounded runtime flow.",
+                        }
+                    )
+                    return {
+                        **state,
+                        "graph_data": _attach_graph_version(rebuilt_graph),
+                        "graph_operation": {
+                            "kind": operation_kind,
+                            "status": "candidate",
+                            "failure_code": None,
+                        },
+                    }
+                except Exception as rebuild_exc:
+                    logger.warning(
+                        "Broad edit rebuild failed: %s: %s",
+                        type(rebuild_exc).__name__,
+                        rebuild_exc,
+                    )
+                    failure_code = _graph_design_failure_code(rebuild_exc)
+
             preserved_graph = (
                 copy.deepcopy(state.get("graph_data"))
                 if _has_approved_applied_graph(state)

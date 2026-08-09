@@ -2453,6 +2453,58 @@ async def test_new_applied_topic_replaces_instead_of_patching_existing_graph(
 
 
 @pytest.mark.asyncio
+async def test_ambiguous_graph_edit_with_followup_markup_rebuilds_from_topic(
+    monkeypatch,
+):
+    existing = _domain_graph(5)
+    rebuilt = _domain_graph(7)
+    called_modes = []
+
+    async def fake_generate_applied_architecture(state, _query, _profile):
+        called_modes.append(state.get("graph_intent"))
+        if state.get("graph_intent") == "edit":
+            raise graph_worker.GraphPatchRejected(
+                "graph_edit_scope_ambiguous",
+                "edit scope is ambiguous",
+            )
+        return rebuilt
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr(graph_worker, "_generate_applied_architecture", fake_generate_applied_architecture)
+
+    result = await graph_worker.graph_worker_node(
+        {
+            "architecture_ready": True,
+            "architect_plan": {},
+            "challenger_review": {},
+            "send": send,
+            "design_query": "Expand the monitoring component while preserving the original graph topic and existing components.",
+            "user_message": "Expand the monitoring component while preserving the original graph topic and existing components.",
+            "history": [
+                {"role": "user", "content": "Design a production model-serving stack."},
+                {"role": "assistant", "content": "Initial design with gateway and router."},
+            ],
+            "graph_data": existing,
+            "approved_graph_data": copy.deepcopy(existing),
+            "graph_revision_count": 0,
+            "complexity": "prototype",
+            "research_context": "",
+            "rag_chunks": [],
+            "user_id": "user-1",
+            "session_id": "thread-1",
+        },
+        [],
+    )
+
+    assert called_modes == ["edit", "create"]
+    assert result["graph_data"]["nodes"] == rebuilt["nodes"]
+    assert result["graph_data"] is not existing
+    assert result["graph_operation"]["status"] == "candidate"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "message",
     [
