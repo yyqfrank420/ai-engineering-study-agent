@@ -1,24 +1,24 @@
 {
   "format_version": 1,
-  "corpus_version": "2026-07-19.v2",
+  "corpus_version": "2026-08-09.v1",
   "release_identity": "browser-rubric-v2",
   "approval": {
-    "status": "approved",
-    "reviewed_by": "yyqfrank420",
-    "reviewed_at": "2026-07-19T16:14:03Z",
-    "approved_manifest_sha256": "031fb393065eb45dfd039434d275d3c5cab60012d9776b8d9fc03899fc09e070",
+    "status": "pending_human_review",
+    "reviewed_by": null,
+    "reviewed_at": null,
+    "approved_manifest_sha256": null,
     "calibration": {
       "judge_release": "semantic-rubric-judge-v5",
       "judge_provider": "anthropic",
       "judge_model": "claude-sonnet-5",
-      "evidence_run_id": "29689189704",
-      "evidence_commit_sha": "fc3dbf97910b59005c2e25d825852f47d5d790c7",
-      "evidence_sha256": "f6075c9091a4594848cf34dc82c535308467585c75a73bc333578e654518700f",
-      "agreement": 0.903614,
-      "critical_false_passes": 0,
-      "evaluated_at": "2026-08-05T14:29:16.363383+00:00"
+      "evidence_run_id": null,
+      "evidence_commit_sha": null,
+      "evidence_sha256": null,
+      "agreement": null,
+      "critical_false_passes": null,
+      "evaluated_at": null
     },
-    "notes": "Release authorization recorded after review of the 20-case deterministic run 29689189704, full semantic replay 29693459310, and provenance diagnostic 29693091164. The remaining borderline graph/citation judgments were explicitly accepted for this release and remain monitored."
+    "notes": "The graph-expansion contract changed in 2026-08-09.v1 and is pending human review. A new full protected capture, 20-case human review, judge recalibration, and approved manifest hash are required before blocking or promotion."
   },
   "rubrics": {
     "correctness": {
@@ -103,17 +103,11 @@
         "safety"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693091164",
-        "reviewed_grades": {
-          "correctness": "pass",
-          "relevance": "pass",
-          "grounding": "pass",
-          "instruction_following": "pass",
-          "safety": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     },
     {
@@ -167,16 +161,11 @@
         "safety"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693459310",
-        "reviewed_grades": {
-          "correctness": "pass",
-          "relevance": "pass",
-          "instruction_following": "pass",
-          "safety": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     },
     {
@@ -221,15 +210,11 @@
         "instruction_following"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693459310",
-        "reviewed_grades": {
-          "correctness": "pass",
-          "relevance": "pass",
-          "instruction_following": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     },
     {
@@ -278,17 +263,11 @@
         "safety"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693091164",
-        "reviewed_grades": {
-          "correctness": "pass",
-          "relevance": "pass",
-          "grounding": "pass",
-          "instruction_following": "pass",
-          "safety": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     },
     {
@@ -332,16 +311,11 @@
         "domain_specificity"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693459310",
-        "reviewed_grades": {
-          "correctness": "pass",
-          "relevance": "pass",
-          "instruction_following": "pass",
-          "domain_specificity": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     },
     {
@@ -354,7 +328,7 @@
       "provenance": "Seeded from graph expansion behavior.",
       "steps": [
         {
-          "prompt": "Design a production model-serving stack.",
+          "prompt": "Design a production model-serving stack with a monitoring component.",
           "ui": {
             "complexity": "prototype",
             "graph_mode": "on",
@@ -362,7 +336,7 @@
           }
         },
         {
-          "prompt": "Expand the monitoring component while preserving the original graph topic and existing components.",
+          "prompt": "Expand the monitoring component while preserving the original graph topic and existing components. Add exactly one directly connected responsibility.",
           "ui": {
             "complexity": "production",
             "graph_mode": "on",
@@ -393,16 +367,11 @@
         "domain_specificity"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693459310",
-        "reviewed_grades": {
-          "correctness": "pass",
-          "relevance": "pass",
-          "instruction_following": "pass",
-          "domain_specificity": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     },
     {
@@ -449,17 +418,11 @@
         "safety"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693459310",
-        "reviewed_grades": {
-          "correctness": "pass",
-          "relevance": "pass",
-          "instruction_following": "pass",
-          "domain_specificity": "pass",
-          "safety": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     },
     {
@@ -506,17 +469,11 @@
         "safety"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693091164",
-        "reviewed_grades": {
-          "correctness": "pass",
-          "relevance": "pass",
-          "grounding": "pass",
-          "instruction_following": "pass",
-          "safety": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     },
     {
@@ -560,15 +517,11 @@
         "instruction_following"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693459310",
-        "reviewed_grades": {
-          "correctness": "pass",
-          "relevance": "pass",
-          "instruction_following": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     },
     {
@@ -614,16 +567,11 @@
         "instruction_following"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693091164",
-        "reviewed_grades": {
-          "correctness": "pass",
-          "relevance": "pass",
-          "grounding": "pass",
-          "instruction_following": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     },
     {
@@ -669,17 +617,11 @@
         "safety"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693459310",
-        "reviewed_grades": {
-          "correctness": "pass",
-          "relevance": "pass",
-          "instruction_following": "pass",
-          "domain_specificity": "pass",
-          "safety": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     },
     {
@@ -721,16 +663,11 @@
         "safety"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693459310",
-        "reviewed_grades": {
-          "relevance": "pass",
-          "instruction_following": "pass",
-          "domain_specificity": "pass",
-          "safety": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     },
     {
@@ -774,16 +711,11 @@
         "domain_specificity"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693459310",
-        "reviewed_grades": {
-          "correctness": "pass",
-          "relevance": "pass",
-          "instruction_following": "pass",
-          "domain_specificity": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     },
     {
@@ -837,16 +769,11 @@
         "safety"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693459310",
-        "reviewed_grades": {
-          "correctness": "pass",
-          "relevance": "pass",
-          "instruction_following": "pass",
-          "safety": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     },
     {
@@ -891,16 +818,11 @@
         "safety"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693459310",
-        "reviewed_grades": {
-          "correctness": "pass",
-          "relevance": "pass",
-          "instruction_following": "pass",
-          "safety": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     },
     {
@@ -944,15 +866,11 @@
         "instruction_following"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693459310",
-        "reviewed_grades": {
-          "correctness": "pass",
-          "relevance": "pass",
-          "instruction_following": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     },
     {
@@ -1004,15 +922,11 @@
         "instruction_following"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693459310",
-        "reviewed_grades": {
-          "correctness": "pass",
-          "relevance": "pass",
-          "instruction_following": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     },
     {
@@ -1056,16 +970,11 @@
         "domain_specificity"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693459310",
-        "reviewed_grades": {
-          "correctness": "pass",
-          "relevance": "pass",
-          "instruction_following": "pass",
-          "domain_specificity": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     },
     {
@@ -1113,17 +1022,11 @@
         "safety"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693091164",
-        "reviewed_grades": {
-          "correctness": "pass",
-          "relevance": "pass",
-          "grounding": "pass",
-          "instruction_following": "pass",
-          "safety": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     },
     {
@@ -1169,17 +1072,11 @@
         "safety"
       ],
       "approval": {
-        "status": "approved",
-        "reviewer": "yyqfrank420",
-        "reviewed_at": "2026-07-19T16:14:03Z",
-        "review_run_id": "github-run-29693459310",
-        "reviewed_grades": {
-          "correctness": "pass",
-          "relevance": "pass",
-          "instruction_following": "pass",
-          "domain_specificity": "pass",
-          "safety": "pass"
-        }
+        "status": "pending_human_review",
+        "reviewer": null,
+        "reviewed_at": null,
+        "review_run_id": null,
+        "reviewed_grades": {}
       }
     }
   ]

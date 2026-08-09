@@ -563,7 +563,9 @@ def test_new_design_intent_does_not_depend_on_existing_graph_state(message):
         "Add Prometheus",
     ],
 )
-def test_graph_followup_without_an_explicit_target_is_not_assumed_to_be_an_edit(message):
+def test_graph_followup_without_an_explicit_target_is_not_assumed_to_be_an_edit(
+    message,
+):
     from agent.complexity import resolve_graph_operation
 
     assert resolve_graph_operation(message, None) is None
@@ -574,7 +576,8 @@ def test_graph_followup_can_constrain_an_explicit_existing_artifact_edit():
 
     message = (
         "Expand the monitoring component while preserving the original graph "
-        "topic and existing components."
+        "topic and existing components. Add exactly one directly connected "
+        "responsibility."
     )
 
     assert resolve_graph_operation(message, None) == "edit"

@@ -90,6 +90,6 @@ def browser_suite_timeout_seconds(cases: Iterable[Any]) -> int:
 
 def semantic_suite_timeout_seconds(suite: str) -> int:
     budgets = _live_budgets()
-    if suite in {"pr", "smoke"}:
+    if suite in {"pr", "smoke", "diagnostic"}:
         return budgets["semantic_suite_timeout_seconds"]
     return budgets["semantic_full_suite_timeout_seconds"]

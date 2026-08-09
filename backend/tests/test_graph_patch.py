@@ -568,7 +568,8 @@ def test_unique_broad_expansion_compiles_one_child_and_one_directed_edge():
     contract, permissions = graph_worker._user_edit_scope(
         (
             "Expand the monitoring component while preserving the original "
-            "graph topic and existing components."
+            "graph topic and existing components. Add exactly one directly "
+            "connected responsibility."
         ),
         graph,
         resolved_complexity="prototype",
@@ -633,7 +634,8 @@ async def test_unique_broad_expansion_preserves_existing_records(monkeypatch):
     before = copy.deepcopy(existing)
     message = (
         "Expand the monitoring component while preserving the original graph "
-        "topic and existing components."
+        "topic and existing components. Add exactly one directly connected "
+        "responsibility."
     )
 
     updated = await _run_first_turn_patch(
@@ -3217,10 +3219,13 @@ async def test_ambiguous_graph_edit_with_followup_markup_preserves_approved_grap
             "architect_plan": {},
             "challenger_review": {},
             "send": send,
-            "design_query": "Expand the monitoring component while preserving the original graph topic and existing components.",
-            "user_message": "Expand the monitoring component while preserving the original graph topic and existing components.",
+            "design_query": "Expand the monitoring component while preserving the original graph topic and existing components. Add exactly one directly connected responsibility.",
+            "user_message": "Expand the monitoring component while preserving the original graph topic and existing components. Add exactly one directly connected responsibility.",
             "history": [
-                {"role": "user", "content": "Design a production model-serving stack."},
+                {
+                    "role": "user",
+                    "content": "Design a production model-serving stack with a monitoring component.",
+                },
                 {
                     "role": "assistant",
                     "content": "Initial design with gateway and router.",

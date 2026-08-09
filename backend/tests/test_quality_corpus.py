@@ -47,6 +47,94 @@ def test_empty_and_oversized_inputs_are_not_live_model_cases():
     assert all(len(prompt.encode("utf-8")) <= 12_000 for prompt in prompts)
 
 
+def test_graph_expansion_corpus_has_one_bounded_expansion():
+    from agent.complexity import resolve_complexity
+    from agent.nodes import graph_worker
+
+    corpus = load_corpus()
+    case = corpus.by_id["graph-expansion"]
+    first_turn, second_turn = case.steps
+
+    assert corpus.corpus_version == "2026-08-09.v1"
+    assert (
+        corpus.approval.status,
+        corpus.approval.reviewed_by,
+        corpus.approval.reviewed_at,
+        corpus.approval.approved_manifest_sha256,
+    ) == ("pending_human_review", None, None, None)
+    calibration = corpus.approval.calibration
+    assert (
+        calibration.judge_release,
+        calibration.judge_provider,
+        calibration.judge_model,
+    ) == ("semantic-rubric-judge-v5", "anthropic", "claude-sonnet-5")
+    assert (
+        calibration.evidence_run_id,
+        calibration.evidence_commit_sha,
+        calibration.evidence_sha256,
+        calibration.agreement,
+        calibration.critical_false_passes,
+        calibration.evaluated_at,
+    ) == (None, None, None, None, None, None)
+    assert (
+        case.approval.status,
+        case.approval.reviewer,
+        case.approval.reviewed_at,
+        case.approval.review_run_id,
+        case.approval.reviewed_grades,
+    ) == ("pending_human_review", None, None, None, {})
+    assert all(
+        other.approval.status == "pending_human_review"
+        and other.approval.reviewer is None
+        and other.approval.reviewed_at is None
+        and other.approval.review_run_id is None
+        and other.approval.reviewed_grades == {}
+        for other in corpus.cases
+    )
+    assert first_turn.prompt == (
+        "Design a production model-serving stack with a monitoring component."
+    )
+    assert second_turn.prompt == (
+        "Expand the monitoring component while preserving the original graph topic "
+        "and existing components. Add exactly one directly connected responsibility."
+    )
+    assert first_turn.ui.complexity == "prototype"
+    assert second_turn.ui.complexity == "production"
+    assert (
+        resolve_complexity(
+            first_turn.ui.complexity,
+            first_turn.prompt,
+        ).resolved
+        == "prototype"
+    )
+
+    contract, permissions = graph_worker._user_edit_scope(
+        second_turn.prompt,
+        {
+            "nodes": [{"id": "monitoring", "label": "Monitoring"}],
+            "edges": [],
+            "groups": [],
+            "sequence": [],
+            "assumptions": [],
+        },
+        resolved_complexity=second_turn.ui.complexity,
+    )
+
+    assert contract["layers"]["components"]["addition_count"] == 1
+    assert contract["layers"]["connections"]["connection_addition_obligations"] == [
+        {
+            "source": "monitoring",
+            "target": "$new_node_1",
+            "required_contract": (
+                "Add one directly connected responsibility that expands only "
+                "the named component."
+            ),
+        }
+    ]
+    assert permissions["allowed_new_node_count"] == 1
+    assert permissions["allowed_new_edge_count"] == 1
+
+
 def test_browser_budget_scales_with_turns_and_retains_a_hard_ceiling():
     corpus = load_corpus()
     one_turn = [corpus.by_id["rag-grounding"]]
@@ -79,6 +167,7 @@ def test_browser_budget_scales_with_turns_and_retains_a_hard_ceiling():
     assert browser_infrastructure_retry_count() == 0
     assert application_turn_timeout_seconds() == 970
     assert semantic_suite_timeout_seconds("pr") == 1200
+    assert semantic_suite_timeout_seconds("diagnostic") == 1200
     assert semantic_suite_timeout_seconds("full") == 3600
 
 
@@ -440,23 +529,28 @@ async def test_graph_dom_state_uses_supported_wait_for_function_signature():
 
 
 @pytest.mark.asyncio
-async def test_required_graph_turn_render_failure_ignores_graph_candidate_events(monkeypatch):
+async def test_required_graph_turn_render_failure_ignores_graph_candidate_events(
+    monkeypatch,
+):
     from eval.browser_runner import _required_graph_turn_render_failure
 
     class FailIfCalled:
         def locator(self, selector):
-            raise AssertionError(f"DOM should not be inspected for graph_candidate, got {selector}")
+            raise AssertionError(
+                f"DOM should not be inspected for graph_candidate, got {selector}"
+            )
 
         async def wait_for_function(self, *_args, **_kwargs):
             raise AssertionError("DOM should not be inspected for graph_candidate")
 
     case = load_corpus().by_id["graph-expansion"]
     events = [
-        {"type": "graph_candidate", "data": {"version": "graph-v1", "nodes": [], "edges": []}}
+        {
+            "type": "graph_candidate",
+            "data": {"version": "graph-v1", "nodes": [], "edges": []},
+        }
     ]
-    failure = await _required_graph_turn_render_failure(
-        FailIfCalled(), case, 0, events
-    )
+    failure = await _required_graph_turn_render_failure(FailIfCalled(), case, 0, events)
     assert failure is None
 
 
@@ -509,7 +603,9 @@ async def test_required_graph_turn_must_render_before_the_next_turn(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_send_case_steps_does_not_inspect_dom_for_graph_candidate_only(monkeypatch):
+async def test_send_case_steps_does_not_inspect_dom_for_graph_candidate_only(
+    monkeypatch,
+):
     from eval.browser_runner import BrowserQualityError, _send_case_steps
 
     case = load_corpus().by_id["graph-expansion"]
@@ -531,7 +627,9 @@ async def test_send_case_steps_does_not_inspect_dom_for_graph_candidate_only(mon
         ]
 
     async def fail_if_dom_called(*_args, **_kwargs):
-        raise AssertionError("DOM inspection should not run for private graph candidates")
+        raise AssertionError(
+            "DOM inspection should not run for private graph candidates"
+        )
 
     monkeypatch.setattr("eval.browser_runner._send_step", fake_send_step)
     monkeypatch.setattr("eval.browser_runner._graph_dom_state", fail_if_dom_called)
@@ -1471,24 +1569,24 @@ def test_unapproved_corpus_cannot_enable_the_blocking_judge(tmp_path):
         load_corpus(require_approved=True, path=path)
 
 
-def test_approved_hash_is_content_addressed(tmp_path):
+def _write_approved_corpus_fixture(tmp_path):
     raw = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
     raw["approval"].update(
         {
             "status": "approved",
             "reviewed_by": "reviewer",
             "reviewed_at": "2026-07-18T12:00:00Z",
-            "calibration": {
-                "judge_release": "semantic-rubric-judge-v1",
-                "judge_provider": "openai",
-                "judge_model": "claude-opus-5",
-                "evidence_run_id": "123456789",
-                "evidence_commit_sha": "a" * 40,
-                "evidence_sha256": "b" * 64,
-                "agreement": 0.9,
-                "critical_false_passes": 1,
-                "evaluated_at": "2026-07-18T12:00:00Z",
-            },
+            "approved_manifest_sha256": None,
+        }
+    )
+    raw["approval"]["calibration"].update(
+        {
+            "evidence_run_id": "123456789",
+            "evidence_commit_sha": "a" * 40,
+            "evidence_sha256": "b" * 64,
+            "agreement": 0.9,
+            "critical_false_passes": 1,
+            "evaluated_at": "2026-07-18T12:00:00Z",
         }
     )
     for case in raw["cases"]:
@@ -1507,6 +1605,12 @@ def test_approved_hash_is_content_addressed(tmp_path):
     path.write_text(json.dumps(raw), encoding="utf-8")
     raw["approval"]["approved_manifest_sha256"] = approval_manifest_sha256(path)
     path.write_text(json.dumps(raw), encoding="utf-8")
+    return path
+
+
+def test_approved_hash_is_content_addressed(tmp_path):
+    path = _write_approved_corpus_fixture(tmp_path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
 
     assert load_corpus(require_approved=True, path=path).approval.status == "approved"
 
@@ -1519,9 +1623,8 @@ def test_approved_hash_is_content_addressed(tmp_path):
 def test_approval_changes_do_not_change_behavior_identity_but_invalidate_approval(
     tmp_path,
 ):
-    raw = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
-    path = tmp_path / "cases.json"
-    path.write_text(json.dumps(raw), encoding="utf-8")
+    path = _write_approved_corpus_fixture(tmp_path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
     behavior_sha = corpus_sha256(path)
 
     raw["approval"]["calibration"]["evidence_sha256"] = "f" * 64
@@ -1871,13 +1974,16 @@ def test_selective_replay_writes_authenticated_hash_provenance(tmp_path):
     assert json.loads(provenance_path.read_text(encoding="utf-8")) == provenance
 
 
-def test_candidate_calibration_accepts_alternate_identity_but_production_rejects_it():
+def test_candidate_calibration_accepts_alternate_identity_but_production_rejects_it(
+    tmp_path,
+):
     from types import SimpleNamespace
 
     from eval.calibration import calculate_calibration
     from eval.live_runner import _assert_approved_judge_identity
 
-    corpus = load_corpus(require_approved=True)
+    approved_path = _write_approved_corpus_fixture(tmp_path)
+    corpus = load_corpus(require_approved=True, path=approved_path)
     candidate_provider = "openai"
     candidate_model = "gpt-5.4-mini-2026-03-17"
     evaluations = []
@@ -1911,7 +2017,7 @@ def test_candidate_calibration_accepts_alternate_identity_but_production_rejects
             "execution_mode": "semantic_replay",
             "status": "pass",
             "corpus_version": corpus.corpus_version,
-            "corpus_sha256": corpus_sha256(),
+            "corpus_sha256": corpus_sha256(approved_path),
             "evaluations": evaluations,
         },
         evidence_sha256=corpus.approval.calibration.evidence_sha256,

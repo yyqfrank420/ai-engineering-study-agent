@@ -3,6 +3,7 @@ import json
 import pytest
 
 from config import settings
+from agent.architecture_playbook import build_evidence_bundle
 from agent.nodes.architecture_workers import (
     _ARCHITECT_PROMPT_VERSION,
     _ARCHITECT_RESPONSE_SCHEMA,
@@ -65,8 +66,32 @@ def _complete_plan(**overrides):
     }
 
 
+def _evidence_bundle() -> dict:
+    return build_evidence_bundle(
+        {
+            "rag_chunks": [
+                {
+                    "book": "AI Engineering",
+                    "chapter": 3,
+                    "page_number": 42,
+                    "section": "Evaluation",
+                    "parent_chunk_id": "ai-eng:p42:pc0",
+                    "text": "Measure the system.",
+                }
+            ],
+            "research_context": "- [Current source](https://example.com/current): Evaluation method.",
+        }
+    )
+
+
+def _evidence_id(bundle: dict, basis: str) -> str:
+    return next(
+        item["id"] for item in bundle["evidence_records"] if item["basis"] == basis
+    )
+
+
 def test_architecture_roles_reason_about_enforced_control_paths():
-    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v20"
+    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v21"
     for production_requirement in (
         "At selected production depth only, keep risky customer writes",
         "At selected production depth only, treat production guarantees",
@@ -119,7 +144,7 @@ def test_architecture_roles_reason_about_enforced_control_paths():
         "Hard accepted_plan string limits are inclusive characters"
         in _CHALLENGER_SYSTEM
     )
-    assert "exact chapter/page or URL" in _CHALLENGER_SYSTEM
+    assert "exact opaque source ID" in _CHALLENGER_SYSTEM
 
 
 def test_architecture_worker_schemas_require_every_declared_object_field():
@@ -238,7 +263,7 @@ def test_architect_output_becomes_a_bounded_canonical_design_brief():
                 {
                     "claim": "Use an approval gate for large spend changes",
                     "basis": "engineering_recommendation",
-                    "evidence_ref": "write_boundary checklist area",
+                    "evidence_ref": "write_boundary",
                 },
                 {"claim": "Ignore unsupported provenance", "basis": "invented"},
             ],
@@ -265,7 +290,7 @@ def test_architect_output_becomes_a_bounded_canonical_design_brief():
         {
             "claim": "Use an approval gate for large spend changes",
             "basis": "engineering_recommendation",
-            "evidence_ref": "write_boundary checklist area",
+            "evidence_ref": "write_boundary",
         }
     ]
 
@@ -929,18 +954,24 @@ def test_reviewed_plan_validation_has_specific_provenance_codes(accepted, code):
     assert exc_info.value.code == code
 
 
-def test_reviewed_plan_accepts_only_supplied_book_and_web_evidence_references():
+def test_reviewed_plan_accepts_only_server_listed_book_and_web_evidence_ids():
+    bundle = _evidence_bundle()
     accepted = _complete_plan(
         evidence_basis=[
             {
                 "claim": "Evaluation should be measured.",
                 "basis": "book",
-                "evidence_ref": "[Chapter 3, p.42]",
+                "evidence_ref": _evidence_id(bundle, "book"),
             },
             {
                 "claim": "The current source describes an evaluation method.",
                 "basis": "web",
-                "evidence_ref": "https://example.com/current?version=2",
+                "evidence_ref": _evidence_id(bundle, "web"),
+            },
+            {
+                "claim": "Costly writes need an explicit confirmation path.",
+                "basis": "engineering_recommendation",
+                "evidence_ref": "write_boundary",
             },
         ]
     )
@@ -948,55 +979,20 @@ def test_reviewed_plan_accepts_only_supplied_book_and_web_evidence_references():
     _validate_reviewed_plan_transition(
         accepted,
         source_request="Design an evaluation service.",
-        evidence_bundle={
-            "book_evidence": [
-                {"chapter": 3, "page_number": 42, "text": "Measure the system."}
-            ],
-            "research_context": (
-                "- Current source <https://example.com/current?version=2>: "
-                "Evaluation method."
-            ),
-        },
+        evidence_bundle=bundle,
     )
 
 
 @pytest.mark.parametrize(
-    ("basis", "evidence_ref", "evidence_bundle"),
+    ("basis", "evidence_ref"),
     [
-        (
-            "book",
-            "Chapter 3, p.43",
-            {
-                "book_evidence": [
-                    {"chapter": 3, "page_number": 42, "text": "Measure the system."}
-                ]
-            },
-        ),
-        (
-            "web",
-            "https://example.com/invented",
-            {
-                "research_context": (
-                    "- [Current source](https://example.com/current): current evidence"
-                )
-            },
-        ),
-        (
-            "web",
-            "https://untrusted.example/in-snippet",
-            {
-                "research_context": (
-                    "- [Current source](https://example.com/current): mentions "
-                    "https://untrusted.example/in-snippet"
-                )
-            },
-        ),
+        ("book", "Chapter 3, p.42"),
+        ("web", "https://example.com/current"),
+        ("web", "web:PRIVATE_SENTINEL"),
     ],
 )
-def test_reviewed_plan_rejects_invented_external_evidence_with_stable_code(
-    basis,
-    evidence_ref,
-    evidence_bundle,
+def test_reviewed_plan_rejects_display_refs_and_invented_evidence_ids(
+    basis, evidence_ref
 ):
     with pytest.raises(ValueError) as exc_info:
         _validate_reviewed_plan_transition(
@@ -1010,24 +1006,54 @@ def test_reviewed_plan_rejects_invented_external_evidence_with_stable_code(
                 ]
             ),
             source_request="Design an evaluation service.",
-            evidence_bundle=evidence_bundle,
+            evidence_bundle=_evidence_bundle(),
         )
 
     assert exc_info.value.code == "architecture_review_evidence_provenance"
+    assert exc_info.value.failure_path == "evidence_basis[0].evidence_ref"
+    assert exc_info.value.failure_rule == "unknown_evidence_id"
+    assert evidence_ref not in str(exc_info.value)
+
+
+def test_reviewed_plan_rejects_an_evidence_id_with_the_wrong_basis():
+    bundle = _evidence_bundle()
+    with pytest.raises(ValueError) as exc_info:
+        _validate_reviewed_plan_transition(
+            _complete_plan(
+                evidence_basis=[
+                    {
+                        "claim": "Unsupported external claim.",
+                        "basis": "web",
+                        "evidence_ref": _evidence_id(bundle, "book"),
+                    }
+                ]
+            ),
+            source_request="Design an evaluation service.",
+            evidence_bundle=bundle,
+        )
+
+    assert exc_info.value.code == "architecture_review_evidence_provenance"
+    assert exc_info.value.failure_path == "evidence_basis[0].basis"
+    assert exc_info.value.failure_rule == "basis_mismatch"
 
 
 @pytest.mark.asyncio
-async def test_architect_rejects_invented_book_evidence_with_stable_code(monkeypatch):
+async def test_architect_rejects_invented_book_evidence_with_safe_coordinates(
+    monkeypatch,
+    caplog,
+):
     events = []
+    private_id = "book:PRIVATE_SENTINEL"
+    private_claim = "PRIVATE_CLAIM"
 
     async def model(**_kwargs):
         return _structured_response(
             _complete_plan(
                 evidence_basis=[
                     {
-                        "claim": "Evaluation should be measured.",
+                        "claim": private_claim,
                         "basis": "book",
-                        "evidence_ref": "Chapter 3, p.43",
+                        "evidence_ref": private_id,
                     }
                 ]
             )
@@ -1040,27 +1066,32 @@ async def test_architect_rejects_invented_book_evidence_with_stable_code(monkeyp
         "agent.nodes.architecture_workers.stream_structured_llm",
         model,
     )
+    caplog.set_level("WARNING", logger="agent.nodes.architecture_workers")
     result = await architect_node(
         {
             "is_applied_design": True,
             "design_query": "Design an evaluation service.",
             "user_message": "Design an evaluation service.",
             "complexity": "prototype",
-            "evidence_bundle": {
-                "book_evidence": [
-                    {"chapter": 3, "page_number": 42, "text": "Measure the system."}
-                ]
-            },
+            "evidence_bundle": _evidence_bundle(),
             "send": send,
         }
     )
 
     assert result == {"architect_plan": {}, "architecture_ready": False}
     assert events[-1]["failure_code"] == "architecture_pass_evidence_provenance"
+    assert events[-1]["failure_path"] == "evidence_basis[0].evidence_ref"
+    assert events[-1]["failure_rule"] == "invalid_evidence_reference"
+    assert private_id not in caplog.text
+    assert private_claim not in caplog.text
+    assert private_id not in str(events[-1])
+    assert private_claim not in str(events[-1])
 
 
 @pytest.mark.asyncio
-async def test_challenger_rejects_invented_web_evidence_with_stable_code(monkeypatch):
+async def test_challenger_rejects_evidence_basis_mismatch_with_safe_coordinates(
+    monkeypatch,
+):
     events = []
 
     async def model(**_kwargs):
@@ -1070,8 +1101,8 @@ async def test_challenger_rejects_invented_web_evidence_with_stable_code(monkeyp
                     evidence_basis=[
                         {
                             "claim": "The current source mandates this design.",
-                            "basis": "web",
-                            "evidence_ref": "https://example.com/invented",
+                            "basis": "book",
+                            "evidence_ref": _evidence_id(_evidence_bundle(), "web"),
                         }
                     ]
                 ),
@@ -1095,11 +1126,7 @@ async def test_challenger_rejects_invented_web_evidence_with_stable_code(monkeyp
             "design_query": "Design an evaluation service.",
             "user_message": "Design an evaluation service.",
             "complexity": "prototype",
-            "evidence_bundle": {
-                "research_context": (
-                    "- [Current source](https://example.com/current): current evidence"
-                )
-            },
+            "evidence_bundle": _evidence_bundle(),
             "architecture_ready": True,
             "architect_plan": _complete_plan(),
             "send": send,
@@ -1108,6 +1135,8 @@ async def test_challenger_rejects_invented_web_evidence_with_stable_code(monkeyp
 
     assert result == {"challenger_review": {}, "architecture_ready": False}
     assert events[-1]["failure_code"] == "architecture_review_evidence_provenance"
+    assert events[-1]["failure_path"] == "evidence_basis[0].evidence_ref"
+    assert events[-1]["failure_rule"] == "invalid_evidence_reference"
 
 
 @pytest.mark.asyncio

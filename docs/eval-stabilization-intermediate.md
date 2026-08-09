@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-09
 
-This document records the stabilization work through PR #41 (`codex/restore-live-eval-gate`) and the remaining production exit criteria. PRs #37 through #40 merged on 2026-08-07. PR #41 now contains the exact-tree live gate, compact Kimi topology boundary, MECE review contract, bounded repair workflow, fixed publication frame, and bounded label placement. It still needs one protected graph diagnostic, the canonical evaluation, merge, and deployment verification.
+This document records the stabilization work through PR #41 (`codex/restore-live-eval-gate`) and the remaining production exit criteria. PRs #37 through #40 merged on 2026-08-07. PR #41 now contains the exact-tree live gate, compact Kimi topology boundary, MECE review contract, bounded repair workflow, fixed publication frame, and bounded label placement. The current evidence-provenance and corpus correction has passed local review and the full offline CI matrix. It still needs a protected diagnostic after authorization, corpus approval, the canonical evaluation, merge, and deployment verification. No further paid run is authorized.
 
 ## Objective and operating rules
 
@@ -237,7 +237,26 @@ stabilization path.
 - Every candidate receives deterministic render validation.
 - Publication requires a final merged full-graph pass.
 
-### Failed diagnostic evidence and next paid run
+### Failed diagnostic evidence and current status
+
+Diagnostic `31335429802` ran only `graph-expansion`. It failed with
+`architecture_pass_evidence_provenance` after 170.265 seconds for the case and 168.228 seconds for
+the turn. It made two application calls, no judge calls, and cost $0.353252. The architect call took
+139.767 seconds and emitted 9,931 output tokens. Synthesis took 25.602 seconds. No graph was
+constructed or privately rendered. No fallback, Kimi, Sonnet, repair, or second corpus turn ran.
+
+The root defect was evidence ambiguity at the architecture boundary. The plan could use
+human-readable book or web references whose identity and basis could not be verified as one exact
+source record. The run also exposed a corpus precondition defect: the first `graph-expansion` prompt
+did not explicitly require the monitoring component that the second prompt asked to expand.
+
+The current recovery gives each bounded book and web source record an opaque hashed ID and
+requires that exact ID for book and web evidence references. Rejected provenance now reports only a
+safe evidence path and rule. The revised first corpus prompt explicitly requests a monitoring
+component. Its second prompt requests exactly one directly connected responsibility. The corpus is
+`2026-08-09.v1` and remains pending a fresh full protected capture, human review, judge calibration,
+and an approved manifest hash. No live success follows from these changes, and no further paid run is
+authorized.
 
 Diagnostic `31333075986` ran only `graph-expansion` on exact head `2f88a5a`. The first turn failed
 after 267.912 seconds with no published graph. Five application calls cost $0.435752 and no judge
@@ -255,9 +274,9 @@ unscoped whole-graph rewrites remain rejected. Critic and patch prompts now defi
 authority, two-node addition endpoints, group-move permissions, and semantic ownership without the
 ambiguous disconnected-region wording.
 
-Offline coverage exercises these boundaries. Another paid `graph-expansion` diagnostic requires
-fresh approval. Do not run it as an automatic retry or include it in the canonical corpus before the
-focused diagnostic passes.
+Offline coverage exercises these boundaries. The next paid `graph-expansion` diagnostic requires
+fresh authorization. Do not run it as an automatic retry or include this corpus revision in the
+canonical evaluation before its full capture, human review, calibration, and manifest hash complete.
 
 ## Historical stabilization checkpoint
 
@@ -315,12 +334,13 @@ Implementation state at that historical checkpoint:
   levels and use deterministic alternating tracks. Skip, wrap, and return edges use row and track
   gutters. The deterministic publication gate requires node titles of at least 11 pixels.
 - Regression coverage includes exact selection among parallel edges, unknown IDs, complete mutable context, shared addition defaults, update omission semantics, the 100-character label contract, larger bounded patches, partial repair windows, authored-only topology, and patch prompt identity.
-- The current stabilization tree passes 1,034 tracked backend tests at 90% total coverage. The
-  frontend passes 214 tests with 91.32% statements, 79.02% branches, 93.33% functions, and 93.64%
-  lines. Static analysis, dependency audits, ingestion artifacts, migrations, Terraform validation,
-  the production frontend build, and the backend container build pass on the same working tree.
+- At this historical checkpoint, the stabilization tree passed 1,034 tracked backend tests at 90%
+  total coverage. The frontend passed 214 tests with 91.32% statements, 79.02% branches, 93.33%
+  functions, and 93.64% lines. Static analysis, dependency audits, ingestion artifacts, migrations,
+  Terraform validation, the production frontend build, and the backend container build passed on
+  that working tree.
 
-Most recent authoritative evidence:
+Historical checkpoint evidence:
 
 - Diagnostic `31226616907` reached the private browser render, then Anthropic rejected the repeated
   four-layer Sonnet review schema with HTTP 400. A one-token replay captured the provider message:
@@ -587,13 +607,14 @@ Most recent authoritative evidence:
 - Diagnostic `31056353630`: initial graph and critic both executed; failure is isolated to focused repair validation.
 - Diagnostic `31127543972`: edge IDs were accepted; the patch call hit exactly 3,200 output tokens and the server preserved the existing graph because no JSON object was emitted.
 - Diagnostic `31127721414`: the first repair published a valid candidate; the second repair failed because the patch protocol omitted and inconsistently required presentation fields.
-- The current stabilization tree passes 1,211 tracked backend tests at 91% total coverage. The
+- The current stabilization tree passes 1,216 tracked backend tests at 91% total coverage. The
   frontend passes 217 tests with 91.32% statements, 78.87% branches, 93.23% functions, and 93.66%
   lines. Static analysis, dependency audits, ingestion artifacts, migrations, Terraform validation,
   the production frontend build, and the backend container build pass on the same working tree.
 - Backend/frontend staging readiness, dashboard smoke, capture, cleanup, artifact upload, latency accounting, and cost accounting all passed.
-- `main` contains PRs #37 through #40. PR #41 now needs one v42 exact-tree diagnostic before the
-  canonical run.
+- `main` contains PRs #37 through #40. Diagnostic `31335429802` later failed at
+  `architecture_pass_evidence_provenance`. Any follow-up paid diagnostic requires fresh explicit
+  authorization.
 
 ## Evaluation workflow lessons
 
@@ -618,9 +639,9 @@ Most recent authoritative evidence:
 
 ## Remaining execution order
 
-1. Pass the full offline gate on the exact tracked tree.
-2. Run one protected graph diagnostic and require a publishable first candidate or the bounded one-repair path.
-3. Run one uninterrupted canonical eight-case protected evaluation on that tree.
+1. The full offline gate has passed on the current tracked tree.
+2. After fresh explicit authorization, run one protected graph diagnostic and require a publishable first candidate or the bounded one-repair path.
+3. After separate fresh explicit authorization, run one uninterrupted canonical eight-case protected evaluation on that tree.
 4. Verify the exact-tree approval tag and required PR checks, then merge with the final-head guard.
 5. Monitor the `main` production workflow through immutable backend deployment, smoke/promotion, and Vercel deployment.
 6. Verify Cloud Run revision, digest, traffic, and the public backend and frontend URLs.

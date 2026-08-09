@@ -10,7 +10,7 @@ import re
 from typing import Any
 
 from adapters.llm_adapter import build_telemetry
-from agent.architecture_playbook import format_evidence_bundle
+from agent.architecture_playbook import evidence_records, format_evidence_bundle
 from agent.complexity import resolve_complexity
 from agent.deadlines import architecture_timeout_seconds
 from agent.state import AgentState
@@ -20,7 +20,6 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_ARCHITECT_PROMPT_VERSION = "architecture_roles_v20"
 _REVIEW_PLAN_LIST_LIMITS = {
     "actors": 10,
     "inputs": 12,
@@ -35,26 +34,48 @@ _REVIEW_PLAN_LIST_LIMITS = {
     "decisions": 20,
     "runtime_flow": 30,
 }
-_ANGLE_BRACKET_WEB_URL_PATTERN = re.compile(
-    r"<(https?://[^>\s]+)>",
-    re.IGNORECASE,
+_ARCHITECT_PROMPT_VERSION = "architecture_roles_v21"
+_SAFE_EVIDENCE_FAILURE_PATH = re.compile(
+    r"evidence_basis\[(?:0|[1-9][0-9]*)\]\.(?:basis|evidence_ref)"
 )
-_MARKDOWN_WEB_URL_PATTERN = re.compile(
-    r"\]\((https?://[^)\s]+)\)",
-    re.IGNORECASE,
-)
+_EVIDENCE_FAILURE_RULES = {
+    "basis_mismatch",
+    "invalid_basis",
+    "invalid_engineering_area",
+    "invalid_user_span",
+    "missing_evidence_id",
+    "unknown_evidence_id",
+}
+_PUBLIC_EVIDENCE_FAILURE_RULE = "invalid_evidence_reference"
 
 
-class _ArchitectureReviewError(ValueError):
-    def __init__(self, code: str, message: str) -> None:
+class _ArchitectureFailureError(ValueError):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        failure_path: str | None = None,
+        failure_rule: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.failure_path = (
+            failure_path
+            if failure_path and _SAFE_EVIDENCE_FAILURE_PATH.fullmatch(failure_path)
+            else None
+        )
+        self.failure_rule = (
+            failure_rule if failure_rule in _EVIDENCE_FAILURE_RULES else None
+        )
 
 
-class _ArchitecturePassError(ValueError):
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
+class _ArchitectureReviewError(_ArchitectureFailureError):
+    pass
+
+
+class _ArchitecturePassError(_ArchitectureFailureError):
+    pass
 
 
 def _strict_object_schema(properties: dict[str, Any]) -> dict[str, Any]:
@@ -262,8 +283,11 @@ concern only when it materially affects this scenario.
   finite request/response product.
 - At selected production depth only, treat every model and prompt as a versioned deployable with regression tests and rollback.
 - Do not draw the final graph and do not expose private chain-of-thought.
-- For every book- or web-grounded decision, include the exact chapter/page or URL from the supplied
-  bundle in evidence_ref. Never invent a source or imply that a snippet establishes more than it says.
+- For every book- or web-grounded decision, put the exact opaque source ID from the supplied source
+  records in evidence_ref. A display citation, URL, or source excerpt is never a valid evidence_ref.
+  Never invent a source or imply that a snippet establishes more than it says.
+- For user evidence, evidence_ref must be an exact phrase from the latest user request. For an
+  engineering recommendation, evidence_ref must be an exact supplied checklist area.
 - Remove repeated rationale before dropping a material actor, boundary, route, failure outcome, or
   decision. The field and list limits below are the complete response bounds.
 - Hard list limits are inclusive: actors 10; inputs 12; outputs 10; required_capabilities 18;
@@ -291,7 +315,7 @@ Return one JSON object and nothing else:
   "constraints": ["explicit user constraint only"],
   "assumptions": ["material assumption"],
   "open_questions": ["unknown that could materially change the design"],
-  "evidence_basis": [{"claim": "brief decision", "basis": "user|book|web|engineering_recommendation", "evidence_ref": "exact supplied chapter/page, URL, user phrase, or checklist area"}],
+  "evidence_basis": [{"claim": "brief decision", "basis": "user|book|web|engineering_recommendation", "evidence_ref": "opaque source ID for book/web, exact user phrase, or exact checklist area"}],
   "decisions": [{"area": "checklist area", "decision": "specific choice", "why": "short rationale"}],
   "runtime_flow": ["observable step"],
   "status_update": "one useful, non-sensitive finding to show while the user waits"
@@ -373,8 +397,11 @@ graph is produced. Return one corrected complete plan plus the audit that caused
   claim 240; each evidence_ref 500; each decision area 80; each decision and why 300; each
   runtime_flow step 300; status_update 220. Each risk area is limited to 80; each risk and
   mitigation to 300; each missing requirement and tradeoff to 260; review status_update to 220.
-- For every book- or web-grounded decision in accepted_plan, copy an exact chapter/page or URL
-  present in the supplied bundle into evidence_ref. Never invent or alter a source reference.
+- For every book- or web-grounded decision in accepted_plan, put the exact opaque source ID from
+  the supplied source records in evidence_ref. Display citations, URLs, and excerpts are never
+  valid evidence_ref values. Never invent or alter a source reference.
+- A user-sourced evidence_ref must remain an exact phrase from the latest user request. An
+  engineering recommendation evidence_ref must remain an exact supplied checklist area.
 </rules>
 
 <output_contract>
@@ -391,7 +418,7 @@ Return one JSON object and nothing else:
     "constraints": ["explicit user constraint only"],
     "assumptions": ["material assumption"],
     "open_questions": ["unknown that could materially change the design"],
-    "evidence_basis": [{"claim": "brief decision", "basis": "user|book|web|engineering_recommendation", "evidence_ref": "exact supplied reference"}],
+    "evidence_basis": [{"claim": "brief decision", "basis": "user|book|web|engineering_recommendation", "evidence_ref": "opaque source ID for book/web, exact user phrase, or exact checklist area"}],
     "decisions": [{"area": "checklist area", "decision": "specific choice", "why": "short rationale"}],
     "runtime_flow": ["observable step"],
     "status_update": "one useful, non-sensitive reviewed finding"
@@ -441,9 +468,10 @@ async def architect_node(state: AgentState) -> dict[str, Any]:
                 "architecture_pass_list_limit",
                 str(exc),
             ) from exc
-        _validate_external_evidence_references(
+        _validate_evidence_references(
             plan,
             state.get("evidence_bundle") or {},
+            source_request=str(state.get("user_message") or ""),
             error_type=_ArchitecturePassError,
             error_code="architecture_pass_evidence_provenance",
         )
@@ -459,10 +487,13 @@ async def architect_node(state: AgentState) -> dict[str, Any]:
             failure_code = exc.code
         else:
             failure_code = "architecture_pass_invalid"
+        failure_path, failure_rule = _provenance_failure_coordinates(exc)
         logger.warning(
-            "Architect role unavailable; graph generation stopped: %s (%s)",
+            "Architect role unavailable; graph generation stopped: type=%s code=%s path=%s rule=%s",
             type(exc).__name__,
             failure_code,
+            failure_path,
+            failure_rule,
         )
         await _progress(
             state,
@@ -471,6 +502,10 @@ async def architect_node(state: AgentState) -> dict[str, Any]:
             title="Architecture pass did not complete",
             detail="The diagram will stay unpublished because its architecture plan is incomplete.",
             failure_code=failure_code,
+            failure_path=_public_provenance_failure_path(failure_path),
+            failure_rule=(
+                _PUBLIC_EVIDENCE_FAILURE_RULE if failure_rule is not None else None
+            ),
         )
         return {"architect_plan": {}, "architecture_ready": False}
     await _progress(
@@ -549,10 +584,13 @@ async def challenger_node(state: AgentState) -> dict[str, Any]:
             failure_code = exc.code
         else:
             failure_code = "architecture_review_invalid"
+        failure_path, failure_rule = _provenance_failure_coordinates(exc)
         logger.warning(
-            "Architecture review unavailable; graph generation stopped: %s (%s)",
+            "Architecture review unavailable; graph generation stopped: type=%s code=%s path=%s rule=%s",
             type(exc).__name__,
             failure_code,
+            failure_path,
+            failure_rule,
         )
         await _progress(
             state,
@@ -561,6 +599,10 @@ async def challenger_node(state: AgentState) -> dict[str, Any]:
             title="Architecture review did not complete",
             detail="The diagram will stay unpublished because its independent review is incomplete.",
             failure_code=failure_code,
+            failure_path=_public_provenance_failure_path(failure_path),
+            failure_rule=(
+                _PUBLIC_EVIDENCE_FAILURE_RULE if failure_rule is not None else None
+            ),
         )
         return {"challenger_review": {}, "architecture_ready": False}
     await _progress(
@@ -784,78 +826,112 @@ def _normalised_source_text(value: Any) -> str:
     return " ".join(str(value or "").casefold().split())
 
 
-def _normalised_book_evidence_ref(value: Any) -> str:
-    reference = " ".join(str(value or "").casefold().split())
-    if len(reference) >= 2 and (reference[0], reference[-1]) in {
-        ("[", "]"),
-        ("(", ")"),
-    }:
-        return reference[1:-1].strip()
-    return reference
-
-
-def _book_evidence_allowlist(bundle: dict[str, Any]) -> set[str]:
-    references: set[str] = set()
-    raw_evidence = bundle.get("book_evidence")
-    evidence = raw_evidence if isinstance(raw_evidence, list) else []
-    for item in evidence:
-        if not isinstance(item, dict):
-            continue
-        chapter = item.get("chapter")
-        page_number = item.get("page_number")
-        if chapter is None or page_number is None:
-            continue
-        references.add(
-            _normalised_book_evidence_ref(f"Chapter {chapter}, p.{page_number}")
-        )
-    return references
-
-
-def _web_evidence_allowlist(bundle: dict[str, Any]) -> set[str]:
-    research_context = bundle.get("research_context")
-    if not isinstance(research_context, str):
-        return set()
+def _evidence_records_by_id(bundle: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {
-        match.group(1)
-        for pattern in (
-            _ANGLE_BRACKET_WEB_URL_PATTERN,
-            _MARKDOWN_WEB_URL_PATTERN,
-        )
-        for match in pattern.finditer(research_context)
+        item["id"]: item
+        for item in evidence_records(bundle)
+        if isinstance(item, dict)
+        and isinstance(item.get("id"), str)
+        and item["id"]
+        and isinstance(item.get("basis"), str)
     }
 
 
-def _normalised_web_evidence_ref(value: Any) -> str:
-    reference = str(value or "").strip()
-    if len(reference) >= 2 and reference.startswith("<") and reference.endswith(">"):
-        return reference[1:-1].strip()
-    return reference
+def _evidence_failure(
+    error_type: type[_ArchitecturePassError] | type[_ArchitectureReviewError],
+    error_code: str,
+    *,
+    path: str,
+    rule: str,
+) -> _ArchitectureFailureError:
+    return error_type(
+        error_code,
+        "architecture plan contains an invalid evidence provenance coordinate",
+        failure_path=path,
+        failure_rule=rule,
+    )
 
 
-def _validate_external_evidence_references(
+def _provenance_failure_coordinates(exc: Exception) -> tuple[str | None, str | None]:
+    if not isinstance(exc, _ArchitectureFailureError):
+        return None, None
+    return exc.failure_path, exc.failure_rule
+
+
+def _public_provenance_failure_path(failure_path: str | None) -> str | None:
+    if failure_path is None:
+        return None
+    record_path, _separator, _field = failure_path.partition(".")
+    return f"{record_path}.evidence_ref"
+
+
+def _validate_evidence_references(
     plan: dict[str, Any],
     evidence_bundle: dict[str, Any],
     *,
+    source_request: str,
     error_type: type[_ArchitecturePassError] | type[_ArchitectureReviewError],
     error_code: str,
 ) -> None:
-    book_allowlist = _book_evidence_allowlist(evidence_bundle)
-    web_allowlist = _web_evidence_allowlist(evidence_bundle)
-    for evidence in plan.get("evidence_basis") or []:
+    records_by_id = _evidence_records_by_id(evidence_bundle)
+    checklist_areas = {
+        item.get("area")
+        for item in (evidence_bundle.get("checklist") or [])
+        if isinstance(item, dict) and isinstance(item.get("area"), str)
+    }
+    source_text = _normalised_source_text(source_request)
+    for index, evidence in enumerate(plan.get("evidence_basis") or []):
         if not isinstance(evidence, dict):
             continue
         basis = evidence.get("basis")
         evidence_ref = evidence.get("evidence_ref")
-        if basis == "book":
-            supported = _normalised_book_evidence_ref(evidence_ref) in book_allowlist
-        elif basis == "web":
-            supported = _normalised_web_evidence_ref(evidence_ref) in web_allowlist
-        else:
-            continue
-        if not supported:
-            raise error_type(
+        path = f"evidence_basis[{index}]"
+        if basis not in {"user", "book", "web", "engineering_recommendation"}:
+            raise _evidence_failure(
+                error_type,
                 error_code,
-                f"architecture plan contains an unsupported {basis} evidence reference",
+                path=f"{path}.basis",
+                rule="invalid_basis",
+            )
+        if not isinstance(evidence_ref, str) or not evidence_ref:
+            raise _evidence_failure(
+                error_type,
+                error_code,
+                path=f"{path}.evidence_ref",
+                rule="missing_evidence_id",
+            )
+        if basis == "user":
+            if not _is_source_span(evidence_ref, source_text):
+                raise _evidence_failure(
+                    error_type,
+                    error_code,
+                    path=f"{path}.evidence_ref",
+                    rule="invalid_user_span",
+                )
+            continue
+        if basis == "engineering_recommendation":
+            if evidence_ref not in checklist_areas:
+                raise _evidence_failure(
+                    error_type,
+                    error_code,
+                    path=f"{path}.evidence_ref",
+                    rule="invalid_engineering_area",
+                )
+            continue
+        record = records_by_id.get(evidence_ref)
+        if record is None:
+            raise _evidence_failure(
+                error_type,
+                error_code,
+                path=f"{path}.evidence_ref",
+                rule="unknown_evidence_id",
+            )
+        if record.get("basis") != basis:
+            raise _evidence_failure(
+                error_type,
+                error_code,
+                path=f"{path}.basis",
+                rule="basis_mismatch",
             )
 
 
@@ -921,17 +997,10 @@ def _validate_reviewed_plan_transition(
                 "architecture_review_constraint_provenance",
                 "accepted plan contains an unsupported user constraint",
             )
-    for evidence in accepted.get("evidence_basis") or []:
-        if not isinstance(evidence, dict) or evidence.get("basis") != "user":
-            continue
-        if not _is_source_span(evidence.get("evidence_ref"), source_text):
-            raise _ArchitectureReviewError(
-                "architecture_review_evidence_provenance",
-                "accepted plan contains unsupported user-sourced evidence",
-            )
-    _validate_external_evidence_references(
+    _validate_evidence_references(
         accepted,
         evidence_bundle or {},
+        source_request=source_request,
         error_type=_ArchitectureReviewError,
         error_code="architecture_review_evidence_provenance",
     )
@@ -1010,6 +1079,8 @@ async def _progress(
     title: str,
     detail: str,
     failure_code: str | None = None,
+    failure_path: str | None = None,
+    failure_rule: str | None = None,
 ) -> None:
     event = {
         "type": "workflow_progress",
@@ -1020,4 +1091,8 @@ async def _progress(
     }
     if failure_code is not None:
         event["failure_code"] = failure_code
+    if failure_path is not None:
+        event["failure_path"] = failure_path
+    if failure_rule is not None:
+        event["failure_rule"] = failure_rule
     await state["send"](event)

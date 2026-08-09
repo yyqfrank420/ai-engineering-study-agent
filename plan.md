@@ -8,7 +8,7 @@ Restore the current architecture pipeline and deploy it before starting the stag
 
 The current release completes architecture planning, Kimi generation, private rendering, at most two semantic repairs, one error-informed critic-contract correction, and post-patch review. The reviewed graph snapshot stays beside its scorecard. Dependency-aware layer retention reopens downstream review when an upstream owned record changes. A request-scoped four-call ceiling bounds Sonnet critic provider calls across all review stages. Diagnostic `31257810429` exposed serial semantic defect discovery. Diagnostic `31259489721` exposed serial scorecard validation. Diagnostic `31261404727` exposed model-owned completion state, which critic v41 replaced with a server-owned merge. Diagnostic `31262285743` then exposed a direct schema/parser contradiction: the provider schema allowed categorical strings while the applied topology parser required integer codes. The parser now accepts only the finite canonical codebook names or their integer codes.
 
-The redesign stays outside the release-critical path. It begins after the current pipeline passes the targeted live diagnostic and production smoke test.
+The redesign stays outside the release-critical path. It begins after the current pipeline passes the targeted live diagnostic with fresh explicit authorization and then passes the production smoke test.
 
 ## Release 1: restore the current pipeline
 
@@ -31,7 +31,10 @@ The redesign stays outside the release-critical path. It begins after the curren
 - The shared initial critic stage may borrow up to 195 seconds. The measured timing replay preserves 98 seconds for patching and 101 seconds for final review.
 - Repair scope is derived from failed layer ownership. It grants exact permissions for cited non-adjacent records in one connected candidate and exact directed connection obligations. Every added component region must connect to an existing node. Group moves require both source and destination group authority. Editable defects enter at most two successful bounded repair rounds and render-only defects fail closed.
 - Diagnostic `31333075986` exposed a local architect response-limit conflict and an invalid fallback path before the intended graph review could complete. The current recovery removes that conflict and fails closed when architecture input is unavailable.
-- The current offline matrix passes 1,211 backend tests and 217 frontend tests. The next paid action remains one exact-head `graph-expansion` diagnostic after independent review, commit, and exact-head CI.
+- Diagnostic `31335429802` failed at `architecture_pass_evidence_provenance` before graph construction. It made two application calls, no judge calls, and cost $0.353252. The architect took 139.767 seconds and emitted 9,931 output tokens; synthesis took 25.602 seconds. The turn took 168.228 seconds and the case took 170.265 seconds. No graph, private render, fallback, Kimi, Sonnet, repair, or second turn ran.
+- The root cause was ambiguous book and web evidence identity at the architecture boundary, plus a `graph-expansion` corpus precondition that did not explicitly request the monitoring component before asking to expand it. The current correction uses opaque hashed book and web evidence IDs, returns safe provenance path and rule coordinates, explicitly requests monitoring in the first prompt, and limits the second prompt to one directly connected child.
+- Corpus `2026-08-09.v1` is pending a fresh full protected capture, human review, judge calibration, and approved manifest hash. No live success is recorded. No further paid run is authorized.
+- The current offline matrix passes 1,216 backend tests and 217 frontend tests.
 
 ### Tests
 
@@ -47,8 +50,8 @@ The redesign stays outside the release-critical path. It begins after the curren
 
 ### Release gate
 
-1. Run focused tests, static analysis, and the full offline CI matrix.
-2. Run one targeted `graph-expansion` real-model diagnostic.
+1. The focused tests, static analysis, and full offline CI matrix have passed on the current tree.
+2. After fresh explicit authorization, run one targeted `graph-expansion` real-model diagnostic.
 3. Require a fresh graph version, successful private render, completed semantic review, and explicit `approved`, `preserved`, or `withheld` publication state. An edit cannot fall back to creation.
 4. Merge and deploy only after the exact commit passes.
 5. Run a production smoke test and confirm stable traffic before beginning Release 2 work.

@@ -24,11 +24,11 @@ lines, and functions plus 75% branches. These suites use dummy credentials and
 fake provider clients; live model evaluation remains a separate protected gate.
 
 The stable branch checks are `CI required` and `Live eval required`. Both workflows
-listen to `pull_request`, trusted pushes, and `merge_group`. The 20-case corpus is
-approved and content-addressed, so trusted AI-impacting changes run the protected
-live gate and production promotion requires that exact approved tree. A future
-pending corpus still takes the fail-safe bootstrap path before installing browsers,
-authenticating to GCP, building images, mutating staging, or calling a model. Run
+listen to `pull_request`, trusted pushes, and `merge_group`. Corpus version
+`2026-08-09.v1` is pending human review after the graph-expansion contract changed.
+The live gate takes the fail-safe bootstrap path before installing browsers,
+authenticating to GCP, building images, mutating staging, or calling a model, and
+production promotion remains disabled until this exact corpus is approved. Run
 `scripts/configure_main_branch_protection.sh owner/repo` to inspect the current and
 proposed branch protection without writing. Add `--apply` only after reviewing the
 payload.
@@ -184,19 +184,21 @@ timeouts remain infrastructure failures and never masquerade as quality regressi
 
 ## Corpus approval and semantic policy
 
-`backend/eval/corpus/v1/cases.json` is a 20-case, versioned approved corpus. It contains
+`backend/eval/corpus/v1/cases.json` is a 20-case, versioned corpus. It contains
 conversation steps, UI modes, categories, risk tags, deterministic expectations,
 rubric references with pass/borderline/fail anchors, criticality, provenance, and
 per-case approval metadata. Generated answers remain artifacts; only prompts,
 rubrics, invariants, and intentionally reviewed exemplars belong in source control.
 
-The current `2026-07-19.v2` corpus and every case say `approved`; the manifest stores
-its reviewer, review runs, reviewed grades, canonical SHA-256, and a calibrated
-`semantic-rubric-judge-v5` result of 90.3614% agreement with zero critical false
-passes. Calibration run `31014653521` approved the Anthropic judge model
-`claude-sonnet-5` against frozen browser evidence from reviewed main run `29689189704`, commit
-`fc3dbf97910b59005c2e25d825852f47d5d790c7`, browser-evidence SHA-256
-`f6075c9091a4594848cf34dc82c535308467585c75a73bc333578e654518700f`.
+The current `2026-08-09.v1` corpus says `pending_human_review`. The graph-expansion
+case is pending because its first turn now requires a monitoring component at
+prototype UI depth and its second turn permits exactly one directly connected
+responsibility while preserving the original graph topic and existing components.
+All 20 case approvals are pending so the fresh full-corpus review is machine-enforced.
+Corpus reviewer, review time, approved manifest hash, calibration evidence identity,
+and calibration results are empty. `semantic-rubric-judge-v5`, Anthropic, and
+`claude-sonnet-5` remain configured judge selections; they are not approval evidence
+for this revision.
 
 `corpus_sha256()` hashes behavior only: corpus-level and per-case approval metadata
 are excluded while prompts, rubrics, UI modes, and deterministic expectations remain
@@ -204,10 +206,12 @@ covered. Recording calibration provenance therefore cannot change the corpus
 identity or create a digest/storage-prefix cycle. A separate approval-manifest hash
 covers all approval labels, reviewers, calibration baselines, and evidence identity
 except its own digest field. `--require-approved-corpus` validates that full
-manifest, so either behavior or provenance tampering fails closed. A future corpus
-revision must return changed cases to human review, run the full protected capture,
-record every case's artifact run and reviewed grades, recalibrate, and publish a new
-approved hash before it can block or promote.
+manifest, so either behavior or provenance tampering fails closed. Reapproving
+`2026-08-09.v1` requires a full protected 20-case capture, human review of all 20
+cases, a reviewer, review time, artifact run, and reviewed grades for every case,
+judge recalibration against that reviewed capture, the new calibration evidence and
+result fields, and a newly computed approved manifest hash. The corpus cannot block
+or promote until those records are complete.
 
 Compute calibration from saved evidence rather than entering it by inspection:
 
@@ -218,7 +222,7 @@ PYTHONPATH=backend python -m eval.calibration \
   --context artifacts/live-eval/replay-context.json
 ```
 
-With the approved corpus, deterministic failures block immediately. A clear
+With an approved corpus, deterministic failures block immediately. A clear
 semantic failure gets one independent second judgment; two clear failures block. A
 borderline grade or judge disagreement requires manual review. PR and scheduled
 evaluation use the blocking policy for an approved corpus, so every fresh manual-review
