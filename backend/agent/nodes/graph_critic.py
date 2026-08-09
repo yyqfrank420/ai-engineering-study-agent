@@ -14,6 +14,7 @@ from agent.deadlines import critic_timeout_seconds as _configured_critic_timeout
 from agent.graph_repair_contract import (
     APPROVAL_SCORE as _APPROVAL_SCORE,
     COMPOSITION_FIELDS as _COMPOSITION_FIELDS,
+    LocalRepairAdmissionError,
     REPAIR_LAYERS as _REPAIR_LAYERS,
     repair_scope_for_layers as _repair_scope_for_layers,
     validate_local_repair_admission as _validate_local_repair_admission,
@@ -40,6 +41,12 @@ _PROTOCOL_ERROR_RULES = {
     "ownership_mismatch",
     "unexpected_context",
 }
+_LOCAL_ADMISSION_RULES = {
+    "insufficient_connection_additions",
+    "missing_graph_anchor",
+    "unbounded_collection",
+    "invalid_local_admission",
+}
 
 
 class CriticProtocolError(ValueError):
@@ -57,6 +64,7 @@ _GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v47"
 _GRAPH_CRITIC_EFFORT = "medium"
 _GRAPH_CRITIC_CORRECTION_EFFORT = "medium"
 _GRAPH_CRITIC_CORRECTION_MAX_TOKENS = 8192
+_MAX_GRAPH_CONTRACT_CORRECTIONS = 1
 _GRAPH_STAGE_DEADLINE_KEY = "_graph_stage_deadline_s"
 _GRAPH_STAGE_FINALIZATION_HEADROOM_S = 1.0
 _MINIMUM_PUBLISHED_TEXT_PX = 11.0
@@ -1618,12 +1626,24 @@ def _enforce_local_repair_admission(
     try:
         _validate_local_repair_admission(contract, graph=graph)
     except ValueError as exc:
-        logger.info("Graph repair is outside the local patch lane: %s", exc)
+        admission_error = (
+            _local_admission_coordinate(exc.path, exc.rule)
+            if isinstance(exc, LocalRepairAdmissionError)
+            else _local_admission_coordinate(
+                "repair_contract", "invalid_local_admission"
+            )
+        )
+        logger.info(
+            "Graph repair is outside the local patch lane: path=%s rule=%s",
+            admission_error["path"],
+            admission_error["rule"],
+        )
         rejected = deepcopy(review)
         rejected.update(
             {
                 "terminal": True,
                 "failure_code": "graph_repair_nonlocal",
+                "admission_error": admission_error,
                 "revision_instruction": (
                     "The requested corrections exceed the bounded record-scoped patch contract. "
                     "The diagram was withheld without modifying the reviewed candidate."
@@ -1632,6 +1652,28 @@ def _enforce_local_repair_admission(
         )
         return rejected
     return review
+
+
+def _local_admission_coordinate(path: str, rule: str) -> dict[str, str]:
+    if not _SAFE_PROTOCOL_PATH.fullmatch(path) or rule not in _LOCAL_ADMISSION_RULES:
+        return {"path": "repair_contract", "rule": "invalid_local_admission"}
+    return {"path": path, "rule": rule}
+
+
+def _review_admission_error(review: dict[str, Any]) -> dict[str, str] | None:
+    admission_error = review.get("admission_error")
+    if not isinstance(admission_error, dict):
+        return None
+    path = admission_error.get("path")
+    rule = admission_error.get("rule")
+    if (
+        isinstance(path, str)
+        and _SAFE_PROTOCOL_PATH.fullmatch(path)
+        and isinstance(rule, str)
+        and rule in _LOCAL_ADMISSION_RULES
+    ):
+        return {"path": path, "rule": rule}
+    return None
 
 
 def _completed_critic_review(
@@ -1696,6 +1738,8 @@ async def graph_critic_node(state: AgentState) -> AgentState:
 
     profile = resolve_complexity(state.get("complexity", "auto"), query)
     revision_count = int(state.get("graph_revision_count", 0))
+    contract_correction_count = int(state.get("graph_contract_correction_count", 0))
+    admission_correction_used = False
     locked_layers = _locked_review_layers(state, graph)
     require_topology_proofs = (
         profile.resolved == "production" and "connections" not in locked_layers
@@ -1892,6 +1936,60 @@ async def graph_critic_node(state: AgentState) -> AgentState:
         if contract_correction is not None:
             review["contract_correction"] = deepcopy(contract_correction)
         review = _enforce_local_repair_admission(review, graph)
+        admission_error = _review_admission_error(review)
+        if (
+            admission_error is not None
+            and not protocol_corrected
+            and contract_correction is None
+            and contract_correction_count < _MAX_GRAPH_CONTRACT_CORRECTIONS
+        ):
+            validation_stage = "admission_correction"
+            logger.warning(
+                "Critic local admission rejected; requesting one contract correction: "
+                "path=%s rule=%s",
+                admission_error["path"],
+                admission_error["rule"],
+            )
+            correction_state = {**state, "graph_review": review}
+            admission_correction_used = True
+            response = await _request_critic_scorecard(
+                correction_state,
+                review_packet=review_packet,
+                render_result=render_result,
+                resolved_complexity=profile.resolved,
+                revision_count=revision_count,
+                contract_correction=admission_error,
+                locked_layers=locked_layers,
+                require_topology_proofs=require_topology_proofs,
+            )
+            raw = response.text
+            review = _completed_critic_review(
+                response,
+                graph=graph,
+                deterministic_findings=deterministic_findings,
+                review_context=review_packet["review_context"],
+                require_topology_proofs=require_topology_proofs,
+                resolved_depth=profile.resolved,
+                locked_layers=locked_layers,
+            )
+            review = _merge_locked_layer_verdicts(
+                review,
+                previous_review=state.get("graph_review") or {},
+                locked_layers=locked_layers,
+            )
+            _validate_review_protocol(
+                {
+                    "repair_contract": review["repair_contract"],
+                    "strengths": review.get("strengths") or [],
+                    "advice": review.get("advice") or [],
+                    "topology_proofs": review.get("topology_proofs") or [],
+                },
+                require_topology_proofs=profile.resolved == "production",
+                graph=graph,
+                deterministic_findings=deterministic_findings,
+            )
+            review = _enforce_local_repair_admission(review, graph)
+            review["admission_correction"] = deepcopy(admission_error)
     except Exception as exc:
         # Structural checks cannot prove semantic control boundaries. Fail closed
         # rather than publishing a plausible but unaudited architecture.
@@ -1912,6 +2010,10 @@ async def graph_critic_node(state: AgentState) -> AgentState:
         )
     review["layer_fingerprints"] = _review_layer_fingerprints(graph)
     review_unavailable = review.get("review_status") == "unavailable"
+    admission_error = _review_admission_error(review)
+    if admission_error is not None:
+        error_path = admission_error["path"]
+        error_rule = admission_error["rule"]
     progress_event = {
         "type": "workflow_progress",
         "phase": "review",
@@ -1933,7 +2035,11 @@ async def graph_critic_node(state: AgentState) -> AgentState:
             )[:260]
         ),
     }
-    if review_unavailable and error_path and error_rule:
+    if (
+        (review_unavailable or admission_error is not None)
+        and error_path
+        and error_rule
+    ):
         progress_event.update(
             {
                 "validation_stage": validation_stage,
@@ -1943,6 +2049,11 @@ async def graph_critic_node(state: AgentState) -> AgentState:
         )
     await state["send"](progress_event)
     reviewed_state = _reviewed_state(state, graph=graph, review=review)
+    if admission_correction_used:
+        reviewed_state = {
+            **reviewed_state,
+            "graph_contract_correction_count": contract_correction_count + 1,
+        }
     operation = reviewed_state.get("graph_operation")
     if (
         contract_correction is not None

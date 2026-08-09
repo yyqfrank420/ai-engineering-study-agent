@@ -120,6 +120,9 @@ class AgentState(TypedDict):
     graph_notice_sent: (
         bool  # True when we've already warned that no graph could be produced
     )
+    # Public disposition for this turn's graph. A preserved baseline remains
+    # available to synthesis and persistence but is not a newly published graph.
+    graph_publication: NotRequired[Literal["approved", "preserved"]]
     graph_review: NotRequired[dict[str, Any]]
     graph_operation: NotRequired[GraphOperation]
     graph_intent: NotRequired[Literal["create", "edit"] | None]

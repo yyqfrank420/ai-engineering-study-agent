@@ -468,11 +468,14 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
         }
     )
 
-    # Existing graphs can re-sync immediately. A changed graph stays private
-    # until the complete walkthrough is buffered, so users never see a half-
-    # explained candidate or mistake an early model draft for the final design.
-    delay_changed_graph = bool(current_graph and state.get("graph_changed"))
-    if current_graph and not delay_changed_graph:
+    # Existing graphs can re-sync immediately. A rejected graph operation keeps
+    # the approved baseline for persistence, but it is not a fresh graph result.
+    # A changed graph stays private until the complete walkthrough is buffered.
+    graph_is_preserved = state.get("graph_publication") == "preserved"
+    delay_changed_graph = bool(
+        current_graph and state.get("graph_changed") and not graph_is_preserved
+    )
+    if current_graph and not delay_changed_graph and not graph_is_preserved:
         await send({"type": "graph_data", "data": state["graph_data"]})
 
     # Build context from RAG chunks

@@ -456,7 +456,7 @@ def test_local_repair_rejects_whole_collection_composition_authority():
         validate_local_repair_admission(contract, graph=graph)
 
 
-def test_local_repair_rejects_unanchored_metadata_mixed_with_topology():
+def test_local_repair_admits_cross_layer_metadata_with_topology():
     graph = {
         "nodes": [{"id": "gate"}],
         "edges": [],
@@ -475,8 +475,83 @@ def test_local_repair_rejects_unanchored_metadata_mixed_with_topology():
         composition_fields=["title"],
     )
 
-    with pytest.raises(ValueError, match="unanchored title"):
-        validate_local_repair_admission(contract, graph=graph)
+    validate_local_repair_admission(contract, graph=graph)
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_path", "expected_rule"),
+    [
+        ("groups", "layers.composition.group_ids", "unbounded_collection"),
+        ("sequence", "layers.composition.sequence_indexes", "unbounded_collection"),
+        (
+            "assumptions",
+            "layers.composition.assumption_indexes",
+            "unbounded_collection",
+        ),
+        (
+            "missing_anchor",
+            "layers.components.context_node_ids",
+            "missing_graph_anchor",
+        ),
+        (
+            "insufficient_edges",
+            "layers.connections.addition_count",
+            "insufficient_connection_additions",
+        ),
+    ],
+)
+def test_local_repair_admission_reports_safe_coordinates(
+    case,
+    expected_path,
+    expected_rule,
+):
+    graph = {
+        "nodes": [{"id": "existing"}],
+        "edges": [],
+        "groups": (
+            [{"id": "runtime", "nodeIds": ["existing"]}]
+            if case in {"groups", "sequence", "assumptions"}
+            else []
+        ),
+        "sequence": [{"step": 1}],
+        "assumptions": ["Current assumption."],
+    }
+    if case in {"groups", "sequence", "assumptions"}:
+        contract = _repair_contract(
+            scope="local",
+            failed_layer="composition",
+            layer_selectors={
+                "composition": {"composition_fields": [case]},
+            },
+        )
+    else:
+        contract = _repair_contract(
+            scope="local",
+            failed_layer="components",
+            layer_selectors={"components": {"addition_count": 2}},
+        )
+        contract["layers"]["connections"] = _layer(
+            "fail",
+            0.7,
+            findings=["Attach the missing components."],
+            addition_count=2 if case == "missing_anchor" else 1,
+            context_node_ids=[] if case == "missing_anchor" else ["existing"],
+        )
+
+    review = _enforce_local_repair_admission(
+        {
+            "approved": False,
+            "review_status": "completed",
+            "repair_contract": contract,
+        },
+        graph,
+    )
+
+    assert review["failure_code"] == "graph_repair_nonlocal"
+    assert review["admission_error"] == {
+        "path": expected_path,
+        "rule": expected_rule,
+    }
 
 
 def test_repair_layer_patch_fields_are_a_mece_partition():
@@ -1661,6 +1736,124 @@ async def test_protocol_correction_requires_a_complete_scorecard(monkeypatch):
     correction = calls[1]["messages"][0]["content"][-1]["text"]
     assert "complete scorecard" in correction
     assert "every blocking defect" in correction
+
+
+@pytest.mark.asyncio
+async def test_completed_scorecard_admission_failure_gets_one_contract_correction(
+    monkeypatch,
+):
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "existing", "label": "Existing component"}],
+        "edges": [],
+        "groups": [],
+    }
+    component_code = next(
+        index
+        for index, code in enumerate(_RUBRIC_CODES, start=1)
+        if _RUBRIC_CODE_OWNERS[code] == "components"
+    )
+    connection_code = next(
+        index
+        for index, code in enumerate(_RUBRIC_CODES, start=1)
+        if _RUBRIC_CODE_OWNERS[code] == "connections"
+    )
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        payload = _passing_review_payload(topology_proofs={})
+        if len(calls) == 1:
+            _set_model_layer(
+                payload,
+                "components",
+                finding_codes=[component_code],
+                addition_count=2,
+            )
+            _set_model_layer(
+                payload,
+                "connections",
+                finding_codes=[connection_code],
+                addition_count=2,
+            )
+        return _structured_response(payload)
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+    state = _critic_state(graph=graph)
+    state["user_message"] = "Do not include this raw request in correction diagnostics."
+
+    result = await graph_critic_node(state)
+
+    assert [call["telemetry"]["operation"] for call in calls] == [
+        "graph_critic",
+        "graph_critic_contract_correction",
+    ]
+    correction = calls[1]["messages"][0]["content"][-1]["text"]
+    assert "Validation path: layers.components.context_node_ids" in correction
+    assert "Validation rule: missing_graph_anchor" in correction
+    assert state["user_message"] not in correction
+    assert result["graph_review"].get("terminal") is not True
+    assert result["graph_review"]["admission_correction"] == {
+        "path": "layers.components.context_node_ids",
+        "rule": "missing_graph_anchor",
+    }
+    assert result["graph_contract_correction_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_completed_scorecard_does_not_retry_after_contract_correction_is_consumed(
+    monkeypatch,
+):
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "existing", "label": "Existing component"}],
+        "edges": [],
+        "groups": [],
+    }
+    component_code = next(
+        index
+        for index, code in enumerate(_RUBRIC_CODES, start=1)
+        if _RUBRIC_CODE_OWNERS[code] == "components"
+    )
+    connection_code = next(
+        index
+        for index, code in enumerate(_RUBRIC_CODES, start=1)
+        if _RUBRIC_CODE_OWNERS[code] == "connections"
+    )
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        payload = _passing_review_payload(topology_proofs={})
+        _set_model_layer(
+            payload,
+            "components",
+            finding_codes=[component_code],
+            addition_count=2,
+        )
+        _set_model_layer(
+            payload,
+            "connections",
+            finding_codes=[connection_code],
+            addition_count=2,
+        )
+        return _structured_response(payload)
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+    state = _critic_state(graph=graph)
+    state["graph_contract_correction_count"] = 1
+
+    result = await graph_critic_node(state)
+
+    assert len(calls) == 1
+    assert result["graph_review"]["failure_code"] == "graph_repair_nonlocal"
+    assert result["graph_contract_correction_count"] == 1
 
 
 @pytest.mark.asyncio

@@ -182,6 +182,129 @@ async def test_explicit_runtime_flow_uses_applied_architecture_not_concept_map(
     assert result["graph_data"]["design_origin"] == "applied"
 
 
+def _approved_rebuild_graph():
+    return {
+        "graph_type": "architecture",
+        "design_origin": "applied",
+        "title": "Approved support ownership",
+        "version": "approved-v1",
+        "assumptions": ["The CRM is the accepted customer record."],
+        "nodes": [{"id": "support_owner", "label": "Support Owner"}],
+        "edges": [],
+        "sequence": [],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rebuilt_assumptions",
+    [[], ["The rebuild guessed a different source of truth."]],
+)
+async def test_broad_expansion_rebuild_preserves_accepted_assumptions(
+    monkeypatch,
+    rebuilt_assumptions,
+):
+    import agent.nodes.graph_worker as graph_worker
+
+    existing = _approved_rebuild_graph()
+    accepted = json.loads(json.dumps(existing))
+    calls = []
+
+    async def fake_generate(generation_state, _query, _profile):
+        calls.append(generation_state)
+        if len(calls) == 1:
+            raise graph_worker.GraphPatchRejected(
+                "graph_edit_scope_ambiguous",
+                "the expansion is broader than a narrow patch",
+            )
+        assert generation_state["graph_intent"] == "create"
+        assert generation_state["graph_data"] is existing
+        assert generation_state["approved_graph_data"] is accepted
+        return {
+            **existing,
+            "title": "Expanded support ownership",
+            "version": "model-owned-version",
+            "assumptions": rebuilt_assumptions,
+        }
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr(graph_worker, "_generate_applied_architecture", fake_generate)
+    result = await graph_worker.graph_worker_node(
+        {
+            "send": send,
+            "user_message": "Expand the diagram to show every support owner",
+            "design_query": "Expand the support ownership architecture",
+            "graph_intent": "edit",
+            "graph_data": existing,
+            "approved_graph_data": accepted,
+            "complexity": "prototype",
+        },
+        tools=[],
+    )
+
+    assert len(calls) == 2
+    assert result["graph_data"]["assumptions"] == accepted["assumptions"]
+    assert result["graph_data"]["version"] not in {
+        existing["version"],
+        "model-owned-version",
+    }
+    assert existing["assumptions"] == ["The CRM is the accepted customer record."]
+    assert result["graph_operation"] == {
+        "kind": "edit",
+        "status": "candidate",
+        "failure_code": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_broad_rebuild_allows_explicit_assumption_changes(monkeypatch):
+    import agent.nodes.graph_worker as graph_worker
+
+    existing = _approved_rebuild_graph()
+    accepted = json.loads(json.dumps(existing))
+    replacement_assumptions = ["The ticket ledger is now the customer record."]
+    calls = []
+
+    async def fake_generate(generation_state, _query, _profile):
+        calls.append(generation_state)
+        if len(calls) == 1:
+            raise graph_worker.GraphPatchRejected(
+                "graph_edit_scope_ambiguous",
+                "the expansion is broader than a narrow patch",
+            )
+        return {
+            **existing,
+            "title": "Expanded support ownership",
+            "assumptions": replacement_assumptions,
+        }
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr(graph_worker, "_generate_applied_architecture", fake_generate)
+    result = await graph_worker.graph_worker_node(
+        {
+            "send": send,
+            "user_message": (
+                "Expand the diagram and replace the assumptions with the ticket ledger "
+                "as the customer record"
+            ),
+            "design_query": "Expand the support ownership architecture",
+            "graph_intent": "edit",
+            "graph_data": existing,
+            "approved_graph_data": accepted,
+            "complexity": "prototype",
+        },
+        tools=[],
+    )
+
+    assert len(calls) == 2
+    assert result["graph_data"]["assumptions"] == replacement_assumptions
+    assert accepted["assumptions"] == ["The CRM is the accepted customer record."]
+
+
 @pytest.mark.asyncio
 async def test_graph_worker_abstains_without_canonical_support(monkeypatch, tmp_path):
     from tests.test_canonical_graph import SCHEMA_DIR, _write_parent_docs

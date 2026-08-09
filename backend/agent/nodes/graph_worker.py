@@ -91,6 +91,11 @@ _USER_EDIT_COMPOSITION = {
     "sequence": re.compile(r"\b(?:sequence|steps?)\b"),
     "assumptions": re.compile(r"\bassumptions?\b"),
 }
+_USER_EDIT_ASSUMPTION_CHANGE = re.compile(
+    r"\bassum(?:e|ing)\b|"
+    r"\b(?:add|change|delete|edit|expand|remove|replace|revise|update)\w*\b.{0,40}\bassumptions?\b|"
+    r"\bassumptions?\b.{0,40}\b(?:add|change|delete|edit|expand|remove|replace|revise|update)\w*\b"
+)
 _USER_EDIT_NODE_FIELDS = {
     "label": re.compile(r"\b(?:label|name|rename|typo)\w*\b"),
     "type": re.compile(r"\b(?:kind|type)\b"),
@@ -128,6 +133,22 @@ class GraphPatchRejected(ValueError):
         self.code = code
         self.path = path
         self.rule = rule
+
+
+def _preserve_accepted_assumptions(
+    rebuilt_graph: GraphData,
+    accepted_graph: GraphData,
+    user_message: str,
+) -> GraphData:
+    """Carry accepted assumptions across a rebuild unless the user changes them."""
+    if _USER_EDIT_ASSUMPTION_CHANGE.search(_reference_text(user_message)):
+        return rebuilt_graph
+    preserved = copy.deepcopy(rebuilt_graph)
+    accepted_assumptions = accepted_graph.get("assumptions")
+    preserved["assumptions"] = copy.deepcopy(
+        accepted_assumptions if isinstance(accepted_assumptions, list) else []
+    )
+    return preserved
 
 
 def _repair_review(review: dict[str, Any]) -> dict[str, Any]:
@@ -1386,6 +1407,13 @@ async def graph_worker_node(state: AgentState, tools: list) -> AgentState:
                         query,
                         profile,
                     )
+                    accepted_graph = state.get("approved_graph_data")
+                    if isinstance(accepted_graph, dict):
+                        rebuilt_graph = _preserve_accepted_assumptions(
+                            rebuilt_graph,
+                            accepted_graph,
+                            state.get("user_message", ""),
+                        )
                     await send(
                         {
                             "type": "workflow_progress",

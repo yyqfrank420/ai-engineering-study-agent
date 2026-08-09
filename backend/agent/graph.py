@@ -369,6 +369,11 @@ def build_agent_workflow(
                 )
                 reviewed = _without_graph_stage_deadline(reviewed)
                 if (reviewed.get("graph_review") or {}).get("approved"):
+                    publication = (
+                        {"graph_publication": "approved"}
+                        if reviewed.get("graph_changed")
+                        else {}
+                    )
                     operation = reviewed.get("graph_operation")
                     if (
                         isinstance(operation, dict)
@@ -376,8 +381,11 @@ def build_agent_workflow(
                     ):
                         reviewed = {
                             **reviewed,
+                            **publication,
                             "graph_operation": {**operation, "status": "applied"},
                         }
+                    elif publication:
+                        reviewed = {**reviewed, **publication}
                 return reviewed
         except (TimeoutError, StageAdmissionDenied):
             return {
@@ -397,7 +405,9 @@ def build_agent_workflow(
         repair_summary = _repair_attempt_summary(
             int(state.get("graph_revision_count", 0))
         )
-        preserve_candidate = _should_preserve_unreviewed_candidate(state)
+        preserve_candidate = _should_preserve_unreviewed_candidate(
+            state
+        ) and not state.get("approved_graph_data")
         if (
             not preserve_candidate
             and not state.get("graph_notice_sent")
@@ -435,6 +445,7 @@ def build_agent_workflow(
         operation = state.get("graph_operation")
         return {
             **restored,
+            **({"graph_publication": "preserved"} if not preserve_candidate else {}),
             "graph_notice_sent": preserve_candidate
             or state.get("graph_notice_sent", False),
             "graph_review": review,
@@ -653,5 +664,6 @@ async def run_agent(
             state.get("approved_graph_data", state.get("graph_data"))
         ),
     }
+    initial_state.pop("graph_publication", None)
     workflow = build_agent_workflow(rag_tools, graph_tools, node_detail_tools)
     return await workflow.ainvoke(initial_state, config={"recursion_limit": 24})

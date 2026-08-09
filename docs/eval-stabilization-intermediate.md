@@ -1,6 +1,6 @@
 # Live Evaluation Stabilization: Intermediate Record
 
-Last updated: 2026-08-08
+Last updated: 2026-08-09
 
 This document records the stabilization work through PR #41 (`codex/restore-live-eval-gate`) and the remaining production exit criteria. PRs #37 through #40 merged on 2026-08-07. PR #41 now contains the exact-tree live gate, compact Kimi topology boundary, MECE review contract, bounded repair workflow, fixed publication frame, and bounded label placement. It still needs one protected graph diagnostic, the canonical evaluation, merge, and deployment verification.
 
@@ -201,7 +201,7 @@ The chronology is important: these were not repetitions of one identical defect.
 
 This state machine supersedes the historical repair limits and layer-lock descriptions below.
 Focused offline tests cover its contracts. A paid diagnostic is still required before the protected
-corpus runs.
+corpus runs and is pending explicit approval.
 
 - Every initial candidate receives one exhaustive component, connection, composition, and render
   scorecard. Every deterministic finding is classified exactly once.
@@ -215,10 +215,30 @@ corpus runs.
   changes reopen composition.
 - The workflow retains a reviewed snapshot as the repair baseline.
 - It permits at most two successful semantic repairs and one error-informed contract correction. An
-  invalid patch preserves the current candidate and returns a safe validation path and rule to a
-  fresh critic call. The corrected Kimi prompt cannot repeat the rejected prompt.
+  invalid local-admission patch preserves the current candidate, returns a safe typed validation path
+  and rule to a fresh critic call, and consumes the single contract-correction budget. The corrected
+  Kimi prompt cannot repeat the rejected prompt.
+- A local contract may combine exact component or connection changes with the title and selected
+  assumption records that those semantic changes require. Assumption edits use exact indexed or
+  append permissions; unrelated composition records remain locked.
+- An ambiguous broad expansion rebuild preserves accepted assumptions unless the user explicitly
+  changes them. It cannot erase them as a side effect of selecting a new topology path.
+- A rejected expansion retains the approved graph internally. Its publication state is preserved and
+  the response does not emit stale `graph_data` for that rejected candidate.
 - Every candidate receives deterministic render validation.
 - Publication requires a final merged full-graph pass.
+
+### Failed diagnostic evidence and next paid run
+
+Diagnostic `graph_repair_nonlocal` rejected an otherwise local repair contract. The prior diagnostic
+surface did not retain the specific admission path and rule, so it could not distinguish a malformed
+selector from an unsupported cross-layer title or assumption repair. The corrected contract admits
+the exact cross-layer cases above and returns typed safe admission evidence when it rejects one.
+
+Offline coverage now exercises the corrected preservation, admission, correction-budget, and
+publication-state behavior. Another paid `graph-expansion` diagnostic remains pending explicit
+approval. Do not run it as an automatic retry or include it in the canonical corpus until approval is
+recorded.
 
 ## Historical stabilization checkpoint
 

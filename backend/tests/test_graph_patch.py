@@ -3,8 +3,8 @@ import json
 from types import SimpleNamespace
 
 import pytest
-
 from agent.complexity import resolve_complexity
+from agent.graph_repair_contract import validate_local_repair_admission
 from agent.nodes import graph_worker
 
 
@@ -1190,6 +1190,172 @@ def test_disconnected_exact_record_patch_preserves_uncited_records():
     assert updated["title"] == before["title"]
     assert updated.get("groups") == before.get("groups")
     assert updated["sequence"] == before["sequence"]
+
+
+def test_semantic_repair_can_update_an_edge_title_and_indexed_assumption():
+    existing = _domain_graph(5)
+    before = copy.deepcopy(existing)
+    selected_edge = {
+        key: existing["edges"][0][key] for key in ("source", "target", "label")
+    }
+    contract = _local_repair_contract(
+        failed_layers={
+            "connections": {"edge_selectors": [selected_edge]},
+            "composition": {
+                "composition_fields": ["title", "assumptions"],
+                "assumption_indexes": [0],
+            },
+        }
+    )
+
+    validate_local_repair_admission(contract, graph=existing)
+    updated = graph_worker._apply_applied_graph_patch(
+        existing,
+        {
+            "update_edges": [
+                {
+                    "edge_id": "edge_1",
+                    "set": {"description": "Carries the corrected intake contract."},
+                }
+            ],
+            "title": "Corrected marketplace fulfilment control loop",
+            "assumptions": ["Carriers publish versioned durable parcel events."],
+        },
+        safety_max_nodes=7,
+        resolved_complexity="prototype",
+        repair_contract=contract,
+    )
+
+    assert existing == before
+    assert updated["title"] == "Corrected marketplace fulfilment control loop"
+    assert updated["assumptions"] == [
+        "Carriers publish versioned durable parcel events."
+    ]
+    assert updated["edges"][0]["description"] == (
+        "Carries the corrected intake contract."
+    )
+    assert updated["edges"][1:] == before["edges"][1:]
+    assert updated["nodes"] == before["nodes"]
+
+
+def test_disconnected_semantic_repair_can_append_one_exact_assumption():
+    existing = _domain_graph(6)
+    before = copy.deepcopy(existing)
+    selected_indexes = (0, len(existing["edges"]) - 1)
+    selected_edges = [
+        {key: existing["edges"][index][key] for key in ("source", "target", "label")}
+        for index in selected_indexes
+    ]
+    contract = _local_repair_contract(
+        failed_layers={
+            "connections": {"edge_selectors": selected_edges},
+            "composition": {
+                "composition_fields": ["assumptions"],
+                "composition_append_counts": {"assumptions": 1},
+            },
+        }
+    )
+    appended_assumption = "Exception carriers expose durable reconciliation status."
+
+    validate_local_repair_admission(contract, graph=existing)
+    updated = graph_worker._apply_applied_graph_patch(
+        existing,
+        {
+            "update_edges": [
+                {
+                    "edge_id": graph_worker._patch_edge_id(index),
+                    "set": {"description": f"Corrected disconnected contract {index}."},
+                }
+                for index in selected_indexes
+            ],
+            "assumptions": [*existing["assumptions"], appended_assumption],
+        },
+        safety_max_nodes=8,
+        resolved_complexity="prototype",
+        repair_contract=contract,
+    )
+
+    assert existing == before
+    assert updated["assumptions"] == [*before["assumptions"], appended_assumption]
+    for index, edge in enumerate(updated["edges"]):
+        if index in selected_indexes:
+            assert edge["description"] == f"Corrected disconnected contract {index}."
+        else:
+            assert edge == before["edges"][index]
+
+
+def test_semantic_component_addition_can_update_the_exact_title():
+    existing = _domain_graph(4)
+    before = copy.deepcopy(existing)
+    anchor_node_id = "fulfilment_stage_1"
+    contract = _local_repair_contract(
+        failed_layers={
+            "components": {
+                "context_node_ids": [anchor_node_id],
+                "addition_count": 1,
+            },
+            "connections": {
+                "context_node_ids": [anchor_node_id],
+                "addition_count": 1,
+            },
+            "composition": {"composition_fields": ["title"]},
+        }
+    )
+
+    validate_local_repair_admission(contract, graph=existing)
+    updated = graph_worker._apply_applied_graph_patch(
+        existing,
+        {
+            "add_nodes": [
+                {
+                    "id": "exception_owner",
+                    "label": "Exception Owner",
+                    "type": "service",
+                    "technology": "Bounded worker",
+                    "description": "Owns the missing exception responsibility.",
+                }
+            ],
+            "add_edges": [
+                {
+                    "source": anchor_node_id,
+                    "target": "exception_owner",
+                    "label": "delegates exception handling",
+                    "technology": "Versioned event",
+                    "sync": "async",
+                    "flow": "control",
+                    "description": "Carries one bounded exception handoff.",
+                }
+            ],
+            "title": "Marketplace fulfilment and exception control loop",
+        },
+        safety_max_nodes=6,
+        resolved_complexity="prototype",
+        repair_contract=contract,
+    )
+
+    assert existing == before
+    assert updated["title"] == "Marketplace fulfilment and exception control loop"
+    assert updated["nodes"][:-1] == before["nodes"]
+    assert updated["nodes"][-1]["id"] == "exception_owner"
+    assert updated["edges"][: len(before["edges"])] == before["edges"]
+    assert updated["edges"][-1]["target"] == "exception_owner"
+
+
+@pytest.mark.parametrize("field", ["groups", "sequence", "assumptions"])
+def test_semantic_repair_rejects_unsafe_whole_collection_authority(field):
+    existing = _domain_graph(8, production=True)
+    selected_edge = {
+        key: existing["edges"][0][key] for key in ("source", "target", "label")
+    }
+    contract = _local_repair_contract(
+        failed_layers={
+            "connections": {"edge_selectors": [selected_edge]},
+            "composition": {"composition_fields": [field]},
+        }
+    )
+
+    with pytest.raises(ValueError, match=f"whole {field} collection"):
+        validate_local_repair_admission(contract, graph=existing)
 
 
 def test_failed_connection_layer_requires_explicit_edge_addition_permission():
@@ -3521,10 +3687,14 @@ def test_patch_contract_canonicalization_repairs_node_technology_and_edge_label(
             "normalize_whitespace",
         ),
         (
-            "routes verified parcel state to recovery owner after deterministic policy, "
-            "approval before execution with durable audit attribution",
-            "routes verified parcel state to recovery owner after deterministic policy, "
-            "approval before execution",
+            (
+                "routes verified parcel state to recovery owner after deterministic policy, "
+                "approval before execution with durable audit attribution"
+            ),
+            (
+                "routes verified parcel state to recovery owner after deterministic policy, "
+                "approval before execution"
+            ),
             "truncate_word_boundary",
         ),
     ],

@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 from typing import Any
 
-
 REPAIR_LAYERS = ("components", "connections", "composition", "render")
 COMPOSITION_FIELDS = ("title", "groups", "sequence", "assumptions")
 REPAIR_LAYER_PATCH_FIELDS = {
@@ -32,6 +31,15 @@ _ASSESSMENT_FIELDS = {
 }
 
 
+class LocalRepairAdmissionError(ValueError):
+    """A safe, stable coordinate for a rejected local repair contract."""
+
+    def __init__(self, message: str, *, path: str, rule: str) -> None:
+        super().__init__(message)
+        self.path = path
+        self.rule = rule
+
+
 def repair_scope_for_layers(layers: dict[str, Any]) -> str:
     """Derive repair scope from the layer ownership that grants mutation authority."""
     failed_layers = {
@@ -54,24 +62,25 @@ def validate_local_repair_admission(
     """Validate local record-scoped mutation authority before patching."""
     validate_repair_contract(contract, graph=graph)
     if contract["repair_scope"] != "local":
-        raise ValueError("only a local repair contract can enter the patch lane")
+        raise LocalRepairAdmissionError(
+            "only a local repair contract can enter the patch lane",
+            path="repair_contract.repair_scope",
+            rule="invalid_local_admission",
+        )
 
     layers = contract["layers"]
     components = layers["components"]
     composition = layers["composition"]
-    semantic_repair = (
-        components["status"] == "fail" or layers["connections"]["status"] == "fail"
-    )
     composition_fields = set(composition["composition_fields"])
-    if semantic_repair and composition_fields & {"title", "assumptions"}:
-        raise ValueError(
-            "a semantic patch cannot also rewrite unanchored title or assumption records"
-        )
 
+    selector_fields = {
+        "groups": "group_ids",
+        "sequence": "sequence_indexes",
+        "assumptions": "assumption_indexes",
+    }
     composition_selectors = {
-        "groups": composition["group_ids"],
-        "sequence": composition["sequence_indexes"],
-        "assumptions": composition["assumption_indexes"],
+        field: composition[selector_field]
+        for field, selector_field in selector_fields.items()
     }
     append_counts = composition["composition_append_counts"]
     for field, selectors in composition_selectors.items():
@@ -80,17 +89,25 @@ def validate_local_repair_admission(
             and not selectors
             and not append_counts.get(field)
         ):
-            raise ValueError(
-                f"local repair cannot replace the whole {field} collection"
+            raise LocalRepairAdmissionError(
+                f"local repair cannot replace the whole {field} collection",
+                path=f"layers.composition.{selector_fields[field]}",
+                rule="unbounded_collection",
             )
     context_node_ids = set(components["context_node_ids"]) | set(
         layers["connections"]["context_node_ids"]
     )
     if components["addition_count"] and not context_node_ids:
-        raise ValueError("local component additions require an existing graph anchor")
+        raise LocalRepairAdmissionError(
+            "local component additions require an existing graph anchor",
+            path="layers.components.context_node_ids",
+            rule="missing_graph_anchor",
+        )
     if layers["connections"]["addition_count"] < components["addition_count"]:
-        raise ValueError(
-            "local additions require enough edges to attach every new component"
+        raise LocalRepairAdmissionError(
+            "local additions require enough edges to attach every new component",
+            path="layers.connections.addition_count",
+            rule="insufficient_connection_additions",
         )
 
 

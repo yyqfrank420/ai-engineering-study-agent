@@ -476,6 +476,163 @@ def test_rejected_candidate_restores_immutable_approved_graph_baseline():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("review_status", "failure_code"),
+    [
+        ("completed", "graph_review_rejected"),
+        ("unavailable", "semantic_review_timeout"),
+    ],
+)
+async def test_rejected_expansion_preserves_baseline_without_publication(
+    monkeypatch,
+    review_status,
+    failure_code,
+):
+    import agent.graph as agent_graph
+
+    events = []
+    approved_graph = {
+        "design_origin": "applied",
+        "title": "Approved customer support graph",
+        "nodes": [],
+        "edges": [],
+        "sequence": [],
+        "version": "approved-v1",
+    }
+
+    async def send(event):
+        events.append(event)
+
+    async def fake_route(state):
+        return {**state, "route": "search"}
+
+    async def fake_search(state, _tools):
+        return state, None
+
+    async def fake_apply(state, _tools):
+        return {
+            **state,
+            "graph_changed": True,
+            "graph_data": {
+                **approved_graph,
+                "title": "Rejected expanded customer support graph",
+                "version": "candidate-v2",
+            },
+            "graph_operation": {
+                "kind": "edit",
+                "status": "candidate",
+                "failure_code": None,
+            },
+        }
+
+    async def fake_review(state):
+        return {
+            **state,
+            "graph_review": {
+                "approved": False,
+                "terminal": True,
+                "review_status": review_status,
+                "failure_code": failure_code,
+            },
+        }
+
+    async def fake_architect(_state):
+        return {}
+
+    async def fake_challenger(_state):
+        return {}
+
+    async def fake_expand(state, _tools, _wait_task):
+        return state
+
+    async def fake_synth(state):
+        assert state["graph_data"] == approved_graph
+        assert state["graph_publication"] == "preserved"
+        assert state["graph_changed"] is False
+        return {**state, "response_text": "The expansion was withheld."}
+
+    monkeypatch.setattr(agent_graph, "orchestrator_route", fake_route)
+    monkeypatch.setattr(agent_graph, "run_search_phase", fake_search)
+    monkeypatch.setattr(agent_graph, "architect_node", fake_architect)
+    monkeypatch.setattr(agent_graph, "challenger_node", fake_challenger)
+    monkeypatch.setattr(agent_graph, "apply_graph_worker", fake_apply)
+    monkeypatch.setattr(agent_graph, "maybe_expand_with_search_tool", fake_expand)
+    monkeypatch.setattr(agent_graph, "graph_critic_node", fake_review)
+    monkeypatch.setattr(agent_graph, "orchestrator_synthesise", fake_synth)
+
+    state = _state(send)
+    state.update(
+        {
+            "user_message": "expand on all the agents",
+            "graph_data": approved_graph,
+            "approved_graph_data": approved_graph,
+        }
+    )
+    result = await agent_graph.run_agent(state, [], [], [])
+
+    assert result["graph_data"] == approved_graph
+    assert result["graph_operation"]["status"] == "failed"
+    assert result["graph_publication"] == "preserved"
+    assert not any(event.get("type") == "graph_data" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_preserved_graph_is_not_emitted_but_unmarked_graph_resyncs(monkeypatch):
+    import agent.nodes.orchestrator_node as orchestrator
+
+    graph = {
+        "design_origin": "applied",
+        "title": "Approved customer support graph",
+        "nodes": [{"id": "support", "label": "Customer support"}],
+        "edges": [],
+        "sequence": [],
+        "version": "approved-v1",
+    }
+
+    async def fake_stream_blocks(**kwargs):
+        await kwargs["send"](
+            {
+                "type": "explanation_block",
+                "title": "Overview",
+                "content": "The approved graph remains available.",
+                "related_node_ids": ["support"],
+            }
+        )
+        return "The approved graph remains available."
+
+    monkeypatch.setattr(orchestrator, "stream_explanation_blocks", fake_stream_blocks)
+
+    async def run_synthesis(publication: str | None):
+        events = []
+
+        async def send(event):
+            events.append(event)
+
+        state = {
+            "send": send,
+            "history": [],
+            "user_message": "expand on all the agents",
+            "rag_chunks": [],
+            "graph_data": graph,
+            "graph_changed": False,
+        }
+        if publication is not None:
+            state["graph_publication"] = publication
+        result = await orchestrator.orchestrator_synthesise(state)
+        return result, events
+
+    preserved_result, preserved_events = await run_synthesis("preserved")
+    resynced_result, resynced_events = await run_synthesis(None)
+
+    assert preserved_result["graph_data"] == graph
+    assert not any(event.get("type") == "graph_data" for event in preserved_events)
+    assert resynced_result["graph_data"] == graph
+    assert [
+        event for event in resynced_events if event.get("type") == "graph_data"
+    ] == [{"type": "graph_data", "data": graph}]
+
+
+@pytest.mark.asyncio
 async def test_langgraph_can_verify_one_bounded_repair_then_publish(monkeypatch):
     import agent.graph as agent_graph
 
@@ -562,6 +719,7 @@ async def test_langgraph_can_verify_one_bounded_repair_then_publish(monkeypatch)
     assert reviews == ["First draft", "Repair 1"]
     assert result["graph_revision_count"] == 1
     assert result["graph_data"]["title"] == "Repair 1"
+    assert result["graph_publication"] == "approved"
     assert result["graph_notice_sent"] is False
     assert result["response_text"] == "reviewed answer"
     assert role_order == ["architect", "challenger"]
