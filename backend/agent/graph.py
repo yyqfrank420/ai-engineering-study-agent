@@ -103,6 +103,10 @@ def _failed_graph_operation(
     return None
 
 
+def _should_send_graph_notice(state: AgentState) -> bool:
+    return state.get("graph_mode", "auto") != "on"
+
+
 def _traced(name: str, node: AgentNode, **attributes) -> AgentNode:
     async def run(state: AgentState) -> AgentState:
         span_attributes = {
@@ -202,7 +206,7 @@ def build_agent_workflow(
                 return _without_graph_stage_deadline(drafted)
         except (TimeoutError, StageAdmissionDenied):
             restored = _restore_approved_graph_state(state)
-            if not state.get("graph_notice_sent"):
+            if not state.get("graph_notice_sent") and _should_send_graph_notice(state):
                 await state["send"](
                     {
                         "type": "graph_notice",
@@ -230,7 +234,7 @@ def build_agent_workflow(
             timeout_s = patch_timeout_seconds(revision_state)
         except StageAdmissionDenied:
             restored = _restore_approved_graph_state(state)
-            if not state.get("graph_notice_sent"):
+            if not state.get("graph_notice_sent") and _should_send_graph_notice(state):
                 await state["send"](
                     {
                         "type": "graph_notice",
@@ -269,7 +273,7 @@ def build_agent_workflow(
                 )
         except TimeoutError:
             restored = _restore_approved_graph_state(state)
-            if not state.get("graph_notice_sent"):
+            if not state.get("graph_notice_sent") and _should_send_graph_notice(state):
                 await state["send"](
                     {
                         "type": "graph_notice",
@@ -336,7 +340,7 @@ def build_agent_workflow(
         repair_summary = _repair_attempt_summary(
             int(state.get("graph_revision_count", 0))
         )
-        if not state.get("graph_notice_sent"):
+        if not state.get("graph_notice_sent") and _should_send_graph_notice(state):
             operation = state.get("graph_operation")
             failure_code = (
                 operation.get("failure_code") if isinstance(operation, dict) else None

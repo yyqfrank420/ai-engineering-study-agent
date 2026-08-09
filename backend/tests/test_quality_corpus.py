@@ -307,6 +307,21 @@ def test_required_graph_turn_without_notice_requires_graph_data():
     )
 
 
+def test_graph_dom_inspection_is_only_enabled_for_renderable_graph_cases():
+    from eval.browser_runner import _should_inspect_graph_dom
+
+    cases = load_corpus().by_id
+    graph_case = cases["graph-expansion"]
+    non_renderable_case = cases["graph-off"]
+    ambiguous_case = cases["ambiguity"]
+    graph_data = {"nodes": [{"id": "n1"}], "edges": []}
+
+    assert _should_inspect_graph_dom(graph_case, graph_data) is True
+    assert _should_inspect_graph_dom(graph_case, None) is False
+    assert _should_inspect_graph_dom(non_renderable_case, graph_data) is False
+    assert _should_inspect_graph_dom(ambiguous_case, graph_data) is False
+
+
 @pytest.mark.asyncio
 async def test_required_graph_turn_must_render_before_the_next_turn(monkeypatch):
     from eval.browser_runner import BrowserQualityError, _send_case_steps

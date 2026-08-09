@@ -496,3 +496,63 @@ async def test_langgraph_can_verify_one_bounded_repair_then_publish(monkeypatch)
         "Reworking the diagram 1 of 3",
     ]
     assert not any(event.get("type") == "graph_notice" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_langgraph_does_not_emit_graph_notice_when_graph_mode_on(monkeypatch):
+    import agent.graph as agent_graph
+
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    state = _state(send)
+
+    async def fake_route(incoming_state):
+        return {**incoming_state, "route": "search"}
+
+    async def fake_search(incoming_state, _tools):
+        return incoming_state, None
+
+    async def fake_apply_graph(incoming_state, _tools):
+        return {
+            **incoming_state,
+            "graph_changed": True,
+            "graph_data": {
+                "design_origin": "applied",
+                "title": "Draft",
+                "nodes": [],
+                "edges": [],
+                "sequence": [],
+            },
+        }
+
+    async def fake_review(incoming_state):
+        return {**incoming_state, "graph_review": {"approved": False, "terminal": True}}
+
+    async def fake_synth(incoming_state):
+        return {**incoming_state, "response_text": "ok"}
+
+    monkeypatch.setattr(agent_graph, "orchestrator_route", fake_route)
+    monkeypatch.setattr(agent_graph, "run_search_phase", fake_search)
+    monkeypatch.setattr(agent_graph, "apply_graph_worker", fake_apply_graph)
+    async def fake_architect(_incoming_state):
+        return {}
+
+    async def fake_challenger(_incoming_state):
+        return {}
+
+    monkeypatch.setattr(agent_graph, "architect_node", fake_architect)
+    monkeypatch.setattr(agent_graph, "challenger_node", fake_challenger)
+    async def fake_expand(incoming_state, _graph_tools, _search_tool_wait_task):
+        return incoming_state
+
+    monkeypatch.setattr(agent_graph, "maybe_expand_with_search_tool", fake_expand)
+    monkeypatch.setattr(agent_graph, "graph_critic_node", fake_review)
+    monkeypatch.setattr(agent_graph, "orchestrator_synthesise", fake_synth)
+
+    result = await agent_graph.run_agent(state, [], [], [])
+
+    assert not any(event.get("type") == "graph_notice" for event in events)
+    assert result["graph_notice_sent"] is True

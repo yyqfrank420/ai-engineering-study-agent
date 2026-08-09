@@ -486,6 +486,13 @@ async def _required_graph_turn_render_failure(
     return None
 
 
+def _should_inspect_graph_dom(
+    case: EvaluationCase,
+    graph: dict[str, Any] | None,
+) -> bool:
+    return bool(graph) and case.deterministic.graph_renderable is True
+
+
 async def _graph_dom_state(
     page: Page,
     graph: dict[str, Any] | None,
@@ -1419,7 +1426,7 @@ async def _run_browser_attempt(
         rendered_graph_version = None
         rendered_node_ids: list[str] = []
         rendered_edge_identities: list[dict[str, str]] = []
-        if not failure_details:
+        if not failure_details and _should_inspect_graph_dom(case, graph):
             try:
                 dom = await _graph_dom_state(page, graph)
                 rendered_node_ids = dom["node_ids"]
