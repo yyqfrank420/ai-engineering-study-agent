@@ -239,6 +239,15 @@ stabilization path.
 
 ### Failed diagnostic evidence and current status
 
+Diagnostic `31340006983` ran only `graph-expansion` on exact head `7ce69b6`. The Opus architect
+exhausted its 150-second role deadline at `xhigh` effort. Its accepted provider attempt ran for
+149.813 seconds with zero final output and no queue wait. The browser turn failed after 178.296
+seconds with no `graph_data`, private render, fallback, Kimi, Sonnet, repair, or second turn. The
+workflow conclusion was green only because a pending corpus makes diagnostic verdicts report-only.
+The architect now uses `high` effort. Its model, structured contract, independent challenger, graph
+critic, and fail-closed timeout remain unchanged. This correction passed the full offline matrix and
+needs a freshly authorized diagnostic before merge.
+
 Diagnostic `31335429802` ran only `graph-expansion`. It failed with
 `architecture_pass_evidence_provenance` after 170.265 seconds for the case and 168.228 seconds for
 the turn. It made two application calls, no judge calls, and cost $0.353252. The architect call took

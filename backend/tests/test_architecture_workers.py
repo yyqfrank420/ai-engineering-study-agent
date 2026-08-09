@@ -462,7 +462,7 @@ async def test_architect_empty_success_stops_graph_input(monkeypatch):
     )
 
     assert result == {"architect_plan": {}, "architecture_ready": False}
-    assert captured["effort"] == "xhigh"
+    assert captured["effort"] == "high"
     assert captured["model"] == settings.architecture_model
     assert captured["timeout_seconds"] == settings.architecture_role_timeout_s
     assert captured["max_output_tokens"] == settings.architecture_max_completion_tokens

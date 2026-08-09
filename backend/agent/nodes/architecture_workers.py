@@ -454,7 +454,7 @@ async def architect_node(state: AgentState) -> dict[str, Any]:
                 }
             ],
             response_schema=_ARCHITECT_RESPONSE_SCHEMA,
-            effort="xhigh",
+            effort="high",
             timeout_seconds=architecture_timeout_seconds(state, review=False),
             max_output_tokens=settings.architecture_max_completion_tokens,
             temperature=settings.graph_temperature,
