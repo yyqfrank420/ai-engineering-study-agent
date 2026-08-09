@@ -323,6 +323,61 @@ def test_graph_dom_inspection_is_only_enabled_for_renderable_graph_cases():
 
 
 @pytest.mark.asyncio
+async def test_graph_dom_state_uses_supported_wait_for_function_signature():
+    from eval.browser_runner import _graph_dom_state
+
+    calls: list[dict[str, object]] = []
+
+    class FakeLocator:
+        def __init__(self, kind: str):
+            self.kind = kind
+
+        async def evaluate_all(self, script):
+            del script
+            if self.kind == "nodes":
+                return ["source", "target"]
+            return [
+                {
+                    "source": "source",
+                    "target": "target",
+                    "label": "flows",
+                }
+            ]
+
+        async def get_attribute(self, _name):
+            raise AssertionError("graph canvas attribute is read from container")
+
+    class FakeCanvas:
+        def locator(self, selector):
+            if selector == "g.node":
+                return FakeLocator("nodes")
+            if selector == "path.edge-vis":
+                return FakeLocator("edges")
+            raise AssertionError(selector)
+
+        async def get_attribute(self, _name):
+            return "graph-1"
+
+    class FakePage:
+        def locator(self, selector):
+            assert selector == '[data-testid="graph-canvas"]'
+            return FakeCanvas()
+
+        async def wait_for_function(self, *_args, **kwargs):
+            calls.append({"args_count": len(_args), "kwargs": dict(kwargs)})
+            assert "arg" not in kwargs
+
+    graph = {"version": "graph-1"}
+
+    result = await _graph_dom_state(FakePage(), graph)
+
+    assert result["version"] == "graph-1"
+    assert calls == [
+        {"args_count": 1, "kwargs": {"timeout": 10000}},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_required_graph_turn_must_render_before_the_next_turn(monkeypatch):
     from eval.browser_runner import BrowserQualityError, _send_case_steps
 

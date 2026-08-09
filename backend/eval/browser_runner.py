@@ -500,12 +500,11 @@ async def _graph_dom_state(
     graph_version = graph.get("version") if isinstance(graph, dict) else None
     wait_for_function = getattr(page, "wait_for_function", None)
     if graph_version and callable(wait_for_function):
+        expected_version_js = json.dumps(graph_version)
         try:
             await wait_for_function(
-                """version => document.querySelector(
-                    '[data-testid="graph-canvas"]'
-                )?.getAttribute('data-rendered-graph-version') === version""",
-                graph_version,
+                f"""() => document.querySelector('[data-testid="graph-canvas"]')"""
+                f"""?.getAttribute('data-rendered-graph-version') === {expected_version_js}""",
                 timeout=10_000,
             )
         except PlaywrightTimeoutError:
