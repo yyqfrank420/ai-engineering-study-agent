@@ -421,6 +421,15 @@ def _required_graph_turn_failure(
     return None
 
 
+def _extract_public_graph_data(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for event in reversed(events):
+        if event.get("type") == "graph_data":
+            data = event.get("data")
+            if isinstance(data, dict):
+                return data
+    return None
+
+
 async def _required_graph_turn_render_failure(
     page: Page | None,
     case: EvaluationCase,
@@ -434,7 +443,7 @@ async def _required_graph_turn_render_failure(
         or case.steps[step_index].ui.graph_mode != "on"
     ):
         return None
-    graph = extract_graph_data(events)
+    graph = _extract_public_graph_data(events)
     if not graph:
         return None
     dom = await _graph_dom_state(page, graph)
@@ -650,7 +659,7 @@ async def _send_case_steps(
         )
         if graph_failure is not None:
             raise BrowserQualityError(*graph_failure)
-        turn_graph = extract_graph_data(step_events)
+        turn_graph = _extract_public_graph_data(step_events)
         if turn_graph and isinstance(turn_graph.get("version"), str):
             seen_graph_versions.add(turn_graph["version"])
         try:
@@ -1419,7 +1428,7 @@ async def _run_browser_attempt(
         except Exception as exc:
             failure_details.append(_exception_failure_detail(exc))
 
-        graph = extract_graph_data(case_events)
+        graph = _extract_public_graph_data(case_events)
         rendered_nodes = 0
         rendered_edges = 0
         rendered_graph_version = None

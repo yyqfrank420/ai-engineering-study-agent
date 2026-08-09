@@ -390,6 +390,27 @@ async def test_graph_dom_state_uses_supported_wait_for_function_signature():
 
 
 @pytest.mark.asyncio
+async def test_required_graph_turn_render_failure_ignores_graph_candidate_events(monkeypatch):
+    from eval.browser_runner import _required_graph_turn_render_failure
+
+    class FailIfCalled:
+        def locator(self, selector):
+            raise AssertionError(f"DOM should not be inspected for graph_candidate, got {selector}")
+
+        async def wait_for_function(self, *_args, **_kwargs):
+            raise AssertionError("DOM should not be inspected for graph_candidate")
+
+    case = load_corpus().by_id["graph-expansion"]
+    events = [
+        {"type": "graph_candidate", "data": {"version": "graph-v1", "nodes": [], "edges": []}}
+    ]
+    failure = await _required_graph_turn_render_failure(
+        FailIfCalled(), case, 0, events
+    )
+    assert failure is None
+
+
+@pytest.mark.asyncio
 async def test_required_graph_turn_must_render_before_the_next_turn(monkeypatch):
     from eval.browser_runner import BrowserQualityError, _send_case_steps
 
@@ -435,6 +456,48 @@ async def test_required_graph_turn_must_render_before_the_next_turn(monkeypatch)
 
     assert raised.value.code == "required_graph_turn_render_mismatch"
     assert step_order == [0]
+
+
+@pytest.mark.asyncio
+async def test_send_case_steps_does_not_inspect_dom_for_graph_candidate_only(monkeypatch):
+    from eval.browser_runner import _send_case_steps
+
+    case = load_corpus().by_id["graph-expansion"]
+    turn_graphs: list[dict] = []
+
+    async def fake_send_step(page, sent_case, step_index, frames, *, timeout_seconds):
+        del page, sent_case, frames, timeout_seconds
+        assert step_index in {0, 1}
+        return [
+            {
+                "type": "graph_candidate",
+                "data": {
+                    "version": f"graph-candidate-v{step_index + 1}",
+                    "nodes": [{"id": "candidate-node"}],
+                    "edges": [],
+                },
+            },
+            {"type": "done"},
+        ]
+
+    async def fail_if_dom_called(*_args, **_kwargs):
+        raise AssertionError("DOM inspection should not run for private graph candidates")
+
+    monkeypatch.setattr("eval.browser_runner._send_step", fake_send_step)
+    monkeypatch.setattr("eval.browser_runner._graph_dom_state", fail_if_dom_called)
+
+    events: list[dict] = []
+    await _send_case_steps(
+        None,
+        case,
+        [],
+        events,
+        timeout_seconds=390,
+        turn_graphs=turn_graphs,
+    )
+
+    assert turn_graphs == []
+    assert len(events) == 4
 
 
 def test_required_graph_turn_rejects_missing_and_reused_versions():
