@@ -5,6 +5,7 @@ import json
 import logging
 from typing import Any
 
+from agent.architecture_playbook import without_evidence_references
 from agent.state import GraphData
 from config import settings
 
@@ -174,7 +175,9 @@ def applied_graph_topology_prompt(
     design_input = {
         "request": _bounded_input(query, spec.query_chars),
         "depth": spec.depth,
-        "reviewed_plan": _without_status_update(architect_plan),
+        "reviewed_plan": _without_status_update(
+            without_evidence_references(architect_plan)
+        ),
     }
     return (
         "Build the complete architecture topology from the supplied design input. Include every "

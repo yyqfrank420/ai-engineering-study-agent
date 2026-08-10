@@ -12,7 +12,6 @@ import json
 import re
 from typing import Any
 
-
 ARCHITECTURE_CHECKLIST: tuple[tuple[str, str], ...] = (
     (
         "goal_and_contract",
@@ -189,6 +188,7 @@ def evidence_records(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     raw_records = bundle.get("evidence_records")
     if isinstance(raw_records, list):
         records = []
+        seen_ids: set[str] = set()
         for item in raw_records:
             if not isinstance(item, dict):
                 continue
@@ -208,8 +208,10 @@ def evidence_records(bundle: dict[str, Any]) -> list[dict[str, Any]]:
                 and display_ref
                 and isinstance(text, str)
                 and text
+                and evidence_id not in seen_ids
             ):
                 continue
+            seen_ids.add(evidence_id)
             records.append(item)
         return records
 
@@ -218,6 +220,30 @@ def evidence_records(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     research_context = str(bundle.get("research_context") or "")[:_RESEARCH_CONTEXT_MAX]
     book_records, _compatibility_items = _book_evidence_records(book_evidence)
     return [*book_records, *_web_evidence_records(research_context)]
+
+
+def evidence_reference_map(bundle: dict[str, Any]) -> dict[str, str]:
+    """Map short model-facing source slots to canonical evidence record IDs."""
+    return {
+        f"source_{index}": item["id"]
+        for index, item in enumerate(evidence_records(bundle), start=1)
+    }
+
+
+def without_evidence_references(plan: Any) -> Any:
+    """Remove internal evidence coordinates before sending a plan to another model."""
+    if not isinstance(plan, dict):
+        return plan
+    model_plan = dict(plan)
+    raw_evidence = plan.get("evidence_basis")
+    if isinstance(raw_evidence, list):
+        model_plan["evidence_basis"] = [
+            {key: value for key, value in item.items() if key != "evidence_ref"}
+            if isinstance(item, dict)
+            else item
+            for item in raw_evidence
+        ]
+    return model_plan
 
 
 def _prompt_json(value: dict[str, str]) -> str:
@@ -238,14 +264,14 @@ def format_evidence_bundle(bundle: dict[str, Any]) -> str:
         for item in bundle.get("checklist") or []
     )
     evidence_parts = []
-    for item in evidence_records(bundle):
-        evidence_id = item.get("id")
+    for index, item in enumerate(evidence_records(bundle), start=1):
+        source_ref = f"source_{index}"
         basis = item.get("basis")
         display_ref = item.get("display_ref")
         text = item.get("text")
         source_payload = _prompt_json({"display_ref": display_ref, "text": text})
         evidence_parts.append(
-            f"[{evidence_id}] {basis}\n"
+            f"[{source_ref}] {basis}\n"
             f"<untrusted_evidence_json>{source_payload}</untrusted_evidence_json>"
         )
     evidence = (
@@ -256,7 +282,7 @@ def format_evidence_bundle(bundle: dict[str, Any]) -> str:
         f"Stable review frame:\n{checklist}\n\n"
         "Source records:\n"
         f"{evidence}\n\n"
-        "For book or web evidence, evidence_ref must be the exact opaque source ID shown inside "
-        "square brackets, without the brackets. Display references and source text are never valid "
-        "evidence_ref values."
+        "For book or web evidence, evidence_ref must be the exact short source slot shown inside "
+        "square brackets, without the brackets, such as source_1. Display references and source "
+        "text are never valid evidence_ref values."
     )

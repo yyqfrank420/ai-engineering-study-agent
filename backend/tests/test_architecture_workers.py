@@ -1,8 +1,6 @@
 import json
 
 import pytest
-
-from config import settings
 from agent.architecture_playbook import build_evidence_bundle
 from agent.nodes.architecture_workers import (
     _ARCHITECT_PROMPT_VERSION,
@@ -23,6 +21,7 @@ from agent.nodes.architecture_workers import (
     format_diagram_commitments,
 )
 from agent.stream_utils import StructuredLLMResponse
+from config import settings
 
 
 def _structured_response(
@@ -91,7 +90,7 @@ def _evidence_id(bundle: dict, basis: str) -> str:
 
 
 def test_architecture_roles_reason_about_enforced_control_paths():
-    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v21"
+    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v22"
     for production_requirement in (
         "At selected production depth only, keep risky customer writes",
         "At selected production depth only, treat production guarantees",
@@ -144,7 +143,8 @@ def test_architecture_roles_reason_about_enforced_control_paths():
         "Hard accepted_plan string limits are inclusive characters"
         in _CHALLENGER_SYSTEM
     )
-    assert "exact opaque source ID" in _CHALLENGER_SYSTEM
+    assert "exact short source slot" in _ARCHITECT_SYSTEM
+    assert "exact short source slot" in _CHALLENGER_SYSTEM
 
 
 def test_architecture_worker_schemas_require_every_declared_object_field():
@@ -404,6 +404,30 @@ def test_challenger_context_includes_the_primary_plan_for_the_second_pass():
     assert "Bounded growth optimisation loop" in context
 
 
+def test_challenger_context_uses_source_slots_instead_of_canonical_ids():
+    bundle = _evidence_bundle()
+    canonical_id = _evidence_id(bundle, "book")
+    context = _worker_context(
+        {
+            "design_query": "evaluation service",
+            "evidence_bundle": bundle,
+        },
+        "Prototype depth",
+        primary_plan=_complete_plan(
+            evidence_basis=[
+                {
+                    "claim": "Evaluation should be measured.",
+                    "basis": "book",
+                    "evidence_ref": canonical_id,
+                }
+            ]
+        ),
+    )
+
+    assert "source_1" in context
+    assert canonical_id not in context
+
+
 @pytest.mark.asyncio
 async def test_architect_failure_stops_graph_input_instead_of_inventing_a_plan(
     monkeypatch,
@@ -596,6 +620,75 @@ async def test_architect_accepts_schema_bounded_plan_over_legacy_aggregate_limit
 
 
 @pytest.mark.asyncio
+async def test_architect_resolves_short_source_slots_before_validation_and_storage(
+    monkeypatch,
+):
+    bundle = build_evidence_bundle(
+        {
+            "rag_chunks": [
+                {
+                    "book": "AI Engineering",
+                    "chapter": chapter,
+                    "page_number": page,
+                    "section": "Evaluation",
+                    "parent_chunk_id": f"ai-eng:p{page}:pc0",
+                    "text": text,
+                }
+                for chapter, page, text in (
+                    (10, 473, "Measure the system before release."),
+                    (10, 474, "Monitor the released system."),
+                )
+            ],
+            "research_context": (
+                "- [Current source](https://example.com/current): "
+                "Keep evidence attached to decisions."
+            ),
+        }
+    )
+    captured = {}
+    plan = _complete_plan(
+        evidence_basis=[
+            {
+                "claim": f"Supported claim {index}.",
+                "basis": basis,
+                "evidence_ref": f"source_{index}",
+            }
+            for index, basis in enumerate(("book", "book", "web"), start=1)
+        ]
+    )
+
+    async def model(**kwargs):
+        captured.update(kwargs)
+        return _structured_response(plan)
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr(
+        "agent.nodes.architecture_workers.stream_structured_llm",
+        model,
+    )
+    result = await architect_node(
+        {
+            "is_applied_design": True,
+            "design_query": "Expand the existing graph.",
+            "user_message": "Expand the existing graph.",
+            "complexity": "prototype",
+            "evidence_bundle": bundle,
+            "send": send,
+        }
+    )
+
+    assert result["architecture_ready"] is True
+    assert [
+        item["evidence_ref"] for item in result["architect_plan"]["evidence_basis"]
+    ] == [item["id"] for item in bundle["evidence_records"]]
+    prompt = captured["messages"][0]["content"]
+    assert "[source_3] web" in prompt
+    assert all(item["id"] not in prompt for item in bundle["evidence_records"])
+
+
+@pytest.mark.asyncio
 async def test_challenger_failure_stops_graph_input(monkeypatch):
     captured = {}
 
@@ -750,6 +843,86 @@ async def test_challenger_replaces_the_candidate_with_one_reviewed_plan(monkeypa
     assert result["challenger_review"]["risks"][0]["area"] == "scope"
     assert "accepted_plan" not in result["challenger_review"]
     assert "Primary architect candidate" in captured["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_challenger_resolves_source_slots_and_keeps_canonical_storage(
+    monkeypatch,
+):
+    bundle = _evidence_bundle()
+    canonical_ids = [
+        _evidence_id(bundle, "book"),
+        _evidence_id(bundle, "web"),
+    ]
+    accepted_plan = _complete_plan(
+        evidence_basis=[
+            {
+                "claim": "Evaluation should be measured.",
+                "basis": "book",
+                "evidence_ref": "source_1",
+            },
+            {
+                "claim": "Current guidance describes evaluation.",
+                "basis": "web",
+                "evidence_ref": "source_2",
+            },
+        ]
+    )
+    captured = {}
+
+    async def model(**kwargs):
+        captured.update(kwargs)
+        return _structured_response(
+            {
+                "accepted_plan": accepted_plan,
+                "risks": [],
+                "missing_requirements": [],
+                "tradeoffs": [],
+                "status_update": "Reviewed.",
+            }
+        )
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr(
+        "agent.nodes.architecture_workers.stream_structured_llm",
+        model,
+    )
+    result = await challenger_node(
+        {
+            "is_applied_design": True,
+            "design_query": "Design an evaluation service.",
+            "user_message": "Design an evaluation service.",
+            "complexity": "prototype",
+            "evidence_bundle": bundle,
+            "architecture_ready": True,
+            "architect_plan": _complete_plan(
+                evidence_basis=[
+                    {
+                        "claim": "Evaluation should be measured.",
+                        "basis": "book",
+                        "evidence_ref": canonical_ids[0],
+                    },
+                    {
+                        "claim": "Current guidance describes evaluation.",
+                        "basis": "web",
+                        "evidence_ref": canonical_ids[1],
+                    },
+                ]
+            ),
+            "send": send,
+        }
+    )
+
+    assert result["architecture_ready"] is True
+    assert [
+        item["evidence_ref"] for item in result["architect_plan"]["evidence_basis"]
+    ] == canonical_ids
+    prompt = captured["messages"][0]["content"]
+    assert "source_1" in prompt
+    assert "source_2" in prompt
+    assert all(canonical_id not in prompt for canonical_id in canonical_ids)
 
 
 @pytest.mark.asyncio
@@ -1038,12 +1211,21 @@ def test_reviewed_plan_rejects_an_evidence_id_with_the_wrong_basis():
 
 
 @pytest.mark.asyncio
-async def test_architect_rejects_invented_book_evidence_with_safe_coordinates(
+@pytest.mark.parametrize(
+    "private_id",
+    [
+        "book:PRIVATE_SENTINEL",
+        "source_99",
+        "source_2",
+        _evidence_id(_evidence_bundle(), "book"),
+    ],
+)
+async def test_architect_rejects_invalid_model_book_refs_with_safe_coordinates(
     monkeypatch,
     caplog,
+    private_id,
 ):
     events = []
-    private_id = "book:PRIVATE_SENTINEL"
     private_claim = "PRIVATE_CLAIM"
 
     async def model(**_kwargs):
@@ -1089,8 +1271,14 @@ async def test_architect_rejects_invented_book_evidence_with_safe_coordinates(
 
 
 @pytest.mark.asyncio
-async def test_challenger_rejects_evidence_basis_mismatch_with_safe_coordinates(
+@pytest.mark.parametrize(
+    ("response_basis", "record_basis"),
+    [("book", "web"), ("book", "book")],
+)
+async def test_challenger_rejects_canonical_model_refs_with_safe_coordinates(
     monkeypatch,
+    response_basis,
+    record_basis,
 ):
     events = []
 
@@ -1101,8 +1289,10 @@ async def test_challenger_rejects_evidence_basis_mismatch_with_safe_coordinates(
                     evidence_basis=[
                         {
                             "claim": "The current source mandates this design.",
-                            "basis": "book",
-                            "evidence_ref": _evidence_id(_evidence_bundle(), "web"),
+                            "basis": response_basis,
+                            "evidence_ref": _evidence_id(
+                                _evidence_bundle(), record_basis
+                            ),
                         }
                     ]
                 ),

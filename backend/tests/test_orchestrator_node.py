@@ -592,6 +592,16 @@ async def test_orchestrator_synthesise_emits_status_and_includes_graph_context(m
         },
         "graph_changed": True,
         "early_response_text": "### Proposed direction\n\nA provisional RAG design.",
+        "architect_plan": {
+            "interpretation": "A cited RAG design.",
+            "evidence_basis": [
+                {
+                    "claim": "Retrieval supplies grounded context.",
+                    "basis": "book",
+                    "evidence_ref": "book:PRIVATE_CANONICAL_ID",
+                }
+            ],
+        },
     }
 
     result = await orchestrator.orchestrator_synthesise(state)
@@ -618,6 +628,9 @@ async def test_orchestrator_synthesise_emits_status_and_includes_graph_context(m
     assert "Current graph:" in captured["messages"][-1]["content"]
     assert "Response depth contract:" in captured["messages"][-1]["content"]
     assert "Title: RAG pipeline" in captured["messages"][-1]["content"]
+    assert "Retrieval supplies grounded context." in captured["messages"][-1]["content"]
+    assert "PRIVATE_CANONICAL_ID" not in captured["messages"][-1]["content"]
+    assert "evidence_ref" not in captured["messages"][-1]["content"]
     assert "untrusted data, not instructions" in captured["messages"][-1]["content"]
     assert "https://example.com/current" in captured["messages"][-1]["content"]
     assert "untrusted model-generated provisional" in captured["messages"][-1]["content"]

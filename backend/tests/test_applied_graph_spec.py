@@ -742,6 +742,13 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
         architect_plan={
             "required_capabilities": ["retriever"],
             "diagram_requirements": ["show accepted cache writes"],
+            "evidence_basis": [
+                {
+                    "claim": "Evaluation should be measured.",
+                    "basis": "book",
+                    "evidence_ref": "book:PRIVATE_CANONICAL_ID",
+                }
+            ],
             "status_update": "UI progress only",
         },
         spec=applied_graph_spec("production"),
@@ -765,6 +772,9 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     assert "Use the integer, never its name" in prompt
     assert "The positional integer-code wire format is canonical" in prompt
     assert "The reviewed_plan owns design decisions" in prompt
+    assert "Evaluation should be measured." in prompt
+    assert "PRIVATE_CANONICAL_ID" not in prompt
+    assert "evidence_ref" not in prompt
     assert "Do not emit lane or tier fields" in prompt
     assert "The server derives each lane from its authored group kind" in prompt
     for codebook in (

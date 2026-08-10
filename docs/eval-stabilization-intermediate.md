@@ -616,7 +616,7 @@ Historical checkpoint evidence:
 - Diagnostic `31056353630`: initial graph and critic both executed; failure is isolated to focused repair validation.
 - Diagnostic `31127543972`: edge IDs were accepted; the patch call hit exactly 3,200 output tokens and the server preserved the existing graph because no JSON object was emitted.
 - Diagnostic `31127721414`: the first repair published a valid candidate; the second repair failed because the patch protocol omitted and inconsistently required presentation fields.
-- The current stabilization tree passes 1,216 tracked backend tests at 91% total coverage. The
+- The current stabilization tree passes 1,224 tracked backend tests at 91% total coverage. The
   frontend passes 217 tests with 91.32% statements, 78.87% branches, 93.23% functions, and 93.66%
   lines. Static analysis, dependency audits, ingestion artifacts, migrations, Terraform validation,
   the production frontend build, and the backend container build pass on the same working tree.
@@ -624,6 +624,21 @@ Historical checkpoint evidence:
 - `main` contains PRs #37 through #40. Diagnostic `31335429802` later failed at
   `architecture_pass_evidence_provenance`. Any follow-up paid diagnostic requires fresh explicit
   authorization.
+- Diagnostic `31369358742` ran only `graph-expansion` on exact merged head `77df25e7`. The Opus
+  architect completed at high effort in 111.877 seconds, then the server rejected
+  `evidence_basis[2].evidence_ref`. Cloud Run recorded the private rule `unknown_evidence_id`; the
+  public artifact retained only `invalid_evidence_reference`. The model had been asked to reproduce
+  a 69-character hashed source ID. No graph, private render, Kimi, Sonnet, repair, judge call, or
+  second turn ran. The application made two logical calls across three provider attempts, took
+  153.688 seconds for the turn, and cost $0.300365. The green workflow was report-only because the
+  corpus remains pending human review.
+- Canonical evidence records keep their stable hashed IDs. Architecture models now see deterministic
+  request-scoped slots such as `source_1`, and the server accepts only those slots at architecture
+  model boundaries before resolving them to canonical IDs for provenance validation and storage.
+  The same translation hides internal IDs in the challenger candidate. Later graph and synthesis
+  prompts omit the canonical coordinates while retaining evidence claims. Unknown slots,
+  source-type mismatches, and model-supplied canonical IDs retain the existing fail-closed validator
+  and generic public error.
 
 ## Evaluation workflow lessons
 

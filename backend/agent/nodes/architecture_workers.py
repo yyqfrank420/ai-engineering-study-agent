@@ -2,21 +2,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from copy import deepcopy
 import json
 import logging
 import re
+from collections.abc import Iterable
+from copy import deepcopy
 from typing import Any
 
 from adapters.llm_adapter import build_telemetry
-from agent.architecture_playbook import evidence_records, format_evidence_bundle
+from config import settings
+
+from agent.architecture_playbook import (
+    evidence_records,
+    evidence_reference_map,
+    format_evidence_bundle,
+)
 from agent.complexity import resolve_complexity
 from agent.deadlines import architecture_timeout_seconds
 from agent.state import AgentState
 from agent.stream_utils import StructuredLLMResponse, stream_structured_llm
-from config import settings
-
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +38,7 @@ _REVIEW_PLAN_LIST_LIMITS = {
     "decisions": 20,
     "runtime_flow": 30,
 }
-_ARCHITECT_PROMPT_VERSION = "architecture_roles_v21"
+_ARCHITECT_PROMPT_VERSION = "architecture_roles_v22"
 _SAFE_EVIDENCE_FAILURE_PATH = re.compile(
     r"evidence_basis\[(?:0|[1-9][0-9]*)\]\.(?:basis|evidence_ref)"
 )
@@ -283,9 +287,13 @@ concern only when it materially affects this scenario.
   finite request/response product.
 - At selected production depth only, treat every model and prompt as a versioned deployable with regression tests and rollback.
 - Do not draw the final graph and do not expose private chain-of-thought.
-- For every book- or web-grounded decision, put the exact opaque source ID from the supplied source
-  records in evidence_ref. A display citation, URL, or source excerpt is never a valid evidence_ref.
-  Never invent a source or imply that a snippet establishes more than it says.
+- For every book- or web-grounded decision, copy the exact short source slot shown in square
+  brackets in the supplied source records into evidence_ref, such as source_1. Do not copy a
+  display citation, URL, source excerpt, or altered slot. Never invent a source or imply that a
+  snippet establishes more than it says.
+- evidence_basis may be empty. Include an entry only for a claim grounded in the latest user
+  request, one supplied source record, or one supplied checklist area. Keep uncited synthesis in
+  decisions or assumptions.
 - For user evidence, evidence_ref must be an exact phrase from the latest user request. For an
   engineering recommendation, evidence_ref must be an exact supplied checklist area.
 - Remove repeated rationale before dropping a material actor, boundary, route, failure outcome, or
@@ -315,7 +323,7 @@ Return one JSON object and nothing else:
   "constraints": ["explicit user constraint only"],
   "assumptions": ["material assumption"],
   "open_questions": ["unknown that could materially change the design"],
-  "evidence_basis": [{"claim": "brief decision", "basis": "user|book|web|engineering_recommendation", "evidence_ref": "opaque source ID for book/web, exact user phrase, or exact checklist area"}],
+  "evidence_basis": [{"claim": "brief decision", "basis": "user|book|web|engineering_recommendation", "evidence_ref": "short source slot for book/web, exact user phrase, or exact checklist area"}],
   "decisions": [{"area": "checklist area", "decision": "specific choice", "why": "short rationale"}],
   "runtime_flow": ["observable step"],
   "status_update": "one useful, non-sensitive finding to show while the user waits"
@@ -397,9 +405,12 @@ graph is produced. Return one corrected complete plan plus the audit that caused
   claim 240; each evidence_ref 500; each decision area 80; each decision and why 300; each
   runtime_flow step 300; status_update 220. Each risk area is limited to 80; each risk and
   mitigation to 300; each missing requirement and tradeoff to 260; review status_update to 220.
-- For every book- or web-grounded decision in accepted_plan, put the exact opaque source ID from
-  the supplied source records in evidence_ref. Display citations, URLs, and excerpts are never
-  valid evidence_ref values. Never invent or alter a source reference.
+- For every book- or web-grounded decision in accepted_plan, copy the exact short source slot shown
+  in square brackets in the supplied source records into evidence_ref, such as source_1. Do not
+  copy a display citation, URL, source excerpt, or altered slot. Never invent a source reference.
+- accepted_plan.evidence_basis may be empty. Include an entry only for a claim grounded in the
+  latest user request, one supplied source record, or one supplied checklist area. Keep uncited
+  synthesis in decisions or assumptions.
 - A user-sourced evidence_ref must remain an exact phrase from the latest user request. An
   engineering recommendation evidence_ref must remain an exact supplied checklist area.
 </rules>
@@ -418,7 +429,7 @@ Return one JSON object and nothing else:
     "constraints": ["explicit user constraint only"],
     "assumptions": ["material assumption"],
     "open_questions": ["unknown that could materially change the design"],
-    "evidence_basis": [{"claim": "brief decision", "basis": "user|book|web|engineering_recommendation", "evidence_ref": "opaque source ID for book/web, exact user phrase, or exact checklist area"}],
+    "evidence_basis": [{"claim": "brief decision", "basis": "user|book|web|engineering_recommendation", "evidence_ref": "short source slot for book/web, exact user phrase, or exact checklist area"}],
     "decisions": [{"area": "checklist area", "decision": "specific choice", "why": "short rationale"}],
     "runtime_flow": ["observable step"],
     "status_update": "one useful, non-sensitive reviewed finding"
@@ -460,7 +471,12 @@ async def architect_node(state: AgentState) -> dict[str, Any]:
             temperature=settings.graph_temperature,
             telemetry=_telemetry(state, "architecture_architect", profile.resolved),
         )
-        plan = _normalise_architect(_parse_architect_response(response))
+        plan = _resolve_model_evidence_references(
+            _normalise_architect(_parse_architect_response(response)),
+            state.get("evidence_bundle") or {},
+            error_type=_ArchitecturePassError,
+            error_code="architecture_pass_evidence_provenance",
+        )
         try:
             _validate_plan_list_limits(plan)
         except ValueError as exc:
@@ -561,6 +577,12 @@ async def challenger_node(state: AgentState) -> dict[str, Any]:
                 "challenger output exhausted its configured response budget",
             )
         review = _normalise_challenger(_parse_complete_response(response))
+        review["accepted_plan"] = _resolve_model_evidence_references(
+            review.get("accepted_plan") or {},
+            state.get("evidence_bundle") or {},
+            error_type=_ArchitectureReviewError,
+            error_code="architecture_review_evidence_provenance",
+        )
         accepted_plan = _apply_source_backed_plan_locks(
             state.get("architect_plan") or {},
             review.get("accepted_plan") or {},
@@ -669,18 +691,19 @@ def _worker_context(
 ) -> str:
     latest_user_request = str(state.get("user_message") or "")
     design_context = str(state.get("design_query") or latest_user_request)
+    evidence_bundle = state.get("evidence_bundle") or {}
     context = (
         f"Latest user request (authoritative for user requirements and user evidence):\n"
         f"{latest_user_request}\n\n"
         f"Design context (context only, not user-sourced):\n{design_context}\n\n"
         f"Selected depth:\n{answer_contract}\n\n"
-        f"Shared evidence bundle:\n{format_evidence_bundle(state.get('evidence_bundle') or {})}"
+        f"Shared evidence bundle:\n{format_evidence_bundle(evidence_bundle)}"
     )
     if primary_plan is None:
         return context
     return (
         f"{context}\n\nPrimary architect candidate (untrusted design input):\n"
-        f"{json.dumps(primary_plan, ensure_ascii=False)}"
+        f"{json.dumps(_model_facing_plan(primary_plan, evidence_bundle), ensure_ascii=False)}"
     )
 
 
@@ -835,6 +858,75 @@ def _evidence_records_by_id(bundle: dict[str, Any]) -> dict[str, dict[str, Any]]
         and item["id"]
         and isinstance(item.get("basis"), str)
     }
+
+
+def _resolve_model_evidence_references(
+    plan: dict[str, Any],
+    evidence_bundle: dict[str, Any],
+    *,
+    error_type: type[_ArchitecturePassError] | type[_ArchitectureReviewError],
+    error_code: str,
+) -> dict[str, Any]:
+    """Resolve request-scoped model slots before validation and storage."""
+    references = evidence_reference_map(evidence_bundle)
+    resolved = dict(plan)
+    evidence_basis = []
+    for index, item in enumerate(plan.get("evidence_basis") or []):
+        if not isinstance(item, dict) or item.get("basis") not in {"book", "web"}:
+            evidence_basis.append(item)
+            continue
+        evidence_ref = item.get("evidence_ref")
+        if not isinstance(evidence_ref, str) or not evidence_ref:
+            evidence_basis.append(item)
+            continue
+        canonical_id = references.get(evidence_ref)
+        if canonical_id is None:
+            raise _evidence_failure(
+                error_type,
+                error_code,
+                path=f"evidence_basis[{index}].evidence_ref",
+                rule="unknown_evidence_id",
+            )
+        evidence_basis.append({**item, "evidence_ref": canonical_id})
+    resolved["evidence_basis"] = evidence_basis
+    return resolved
+
+
+def _model_facing_plan(
+    plan: dict[str, Any],
+    evidence_bundle: dict[str, Any],
+) -> dict[str, Any]:
+    """Replace canonical evidence IDs with the short slots shown to reviewers."""
+    slots_by_id = {
+        evidence_id: source_ref
+        for source_ref, evidence_id in evidence_reference_map(evidence_bundle).items()
+    }
+    return _replace_external_evidence_references(plan, slots_by_id)
+
+
+def _replace_external_evidence_references(
+    plan: dict[str, Any],
+    references: dict[str, str],
+) -> dict[str, Any]:
+    replaced = dict(plan)
+    evidence_basis = []
+    for item in plan.get("evidence_basis") or []:
+        if not isinstance(item, dict) or item.get("basis") not in {"book", "web"}:
+            evidence_basis.append(item)
+            continue
+        evidence_ref = item.get("evidence_ref")
+        evidence_basis.append(
+            {
+                **item,
+                "evidence_ref": (
+                    references.get(evidence_ref, evidence_ref)
+                    if isinstance(evidence_ref, str)
+                    else evidence_ref
+                ),
+            }
+        )
+    replaced["evidence_basis"] = evidence_basis
+    return replaced
 
 
 def _evidence_failure(
