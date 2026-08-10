@@ -17,7 +17,10 @@ from typing import Literal
 from langgraph.graph import END, START, StateGraph
 
 from agent.architecture_playbook import build_evidence_bundle
-from agent.complexity import is_applied_system_design_request, resolve_design_query
+from agent.complexity import (
+    resolve_graph_operation,
+    resolve_design_query,
+)
 from agent.deadlines import (
     StageAdmissionDenied,
     WorkflowDeadlineExceeded,
@@ -26,17 +29,25 @@ from agent.deadlines import (
     patch_timeout_seconds,
     synthesis_timeout_seconds,
 )
-from agent.nodes.architecture_workers import architect_node, challenger_node
+from agent.nodes.architecture_workers import (
+    architect_node,
+    challenger_node,
+    early_design_frame_node,
+)
 from agent.nodes.graph_critic import graph_critic_node
-from agent.nodes.orchestrator_node import orchestrator_route, orchestrator_synthesise, quick_synthesise
+from agent.graph_repair_contract import validate_local_repair_admission
+from agent.nodes.orchestrator_node import (
+    orchestrator_route,
+    orchestrator_synthesise,
+    quick_synthesise,
+)
 from agent.pipeline_steps import (
     apply_graph_worker,
     maybe_expand_with_search_tool,
-    maybe_start_node_enrichment,
     run_parallel_research_phase,
     run_search_phase,
 )
-from agent.state import AgentState
+from agent.state import AgentState, GraphOperation, GraphPublicationDisposition
 from observability import start_span
 
 
@@ -44,7 +55,12 @@ NodeResult = Awaitable[AgentState]
 AgentNode = Callable[[AgentState], NodeResult]
 
 _GRAPH_STAGE_DEADLINE_KEY = "_graph_stage_deadline_s"
-_MAX_GRAPH_REVISIONS = 1
+_MAX_GRAPH_REPAIR_ROUNDS = 2
+_MAX_GRAPH_CONTRACT_CORRECTIONS = 1
+_RETRYABLE_GRAPH_PATCH_FAILURE_CODES = {
+    "graph_patch_invalid_preserved_existing_graph",
+    "graph_patch_no_effect",
+}
 
 
 def _with_graph_stage_deadline(state: AgentState, timeout_s: float) -> AgentState:
@@ -62,17 +78,54 @@ def _without_graph_stage_deadline(state: AgentState) -> AgentState:
 
 def _repair_attempt_summary(revision_count: int) -> str:
     if revision_count <= 0:
-        return "before a focused repair could complete"
-    suffix = "repair" if revision_count == 1 else "repairs"
-    return f"after {revision_count} focused {suffix}"
+        return "before a bounded repair could complete"
+    suffix = "attempt" if revision_count == 1 else "attempts"
+    return f"after {revision_count} bounded repair {suffix}"
 
 
-def _restore_approved_graph_state(state: AgentState) -> AgentState:
+def _restore_approved_graph_state(
+    state: AgentState,
+    *,
+    publication: GraphPublicationDisposition | None = None,
+) -> AgentState:
+    approved_graph = state.get("approved_graph_data")
     return {
         **state,
-        "graph_data": copy.deepcopy(state.get("approved_graph_data")),
+        "graph_data": copy.deepcopy(approved_graph),
         "graph_changed": False,
+        "graph_publication": publication
+        or ("preserved" if approved_graph is not None else "none"),
     }
+
+
+def _failed_graph_operation(
+    state: AgentState,
+    failure_code: str,
+) -> GraphOperation | None:
+    operation = state.get("graph_operation")
+    if isinstance(operation, dict):
+        return {**operation, "status": "failed", "failure_code": failure_code}
+    intent = state.get("graph_intent")
+    if intent in {"create", "edit"}:
+        return {
+            "kind": intent,
+            "status": "failed",
+            "failure_code": failure_code,
+        }
+    return None
+
+
+def _should_send_graph_notice(state: AgentState) -> bool:
+    return state.get("graph_mode", "auto") != "on"
+
+
+def _draft_graph_publication(state: AgentState) -> GraphPublicationDisposition:
+    if state.get("graph_changed"):
+        return "unreviewed"
+    operation = state.get("graph_operation")
+    if isinstance(operation, dict) and operation.get("status") == "failed":
+        return "preserved" if state.get("approved_graph_data") is not None else "none"
+    return "unchanged" if state.get("graph_data") is not None else "none"
 
 
 def _traced(name: str, node: AgentNode, **attributes) -> AgentNode:
@@ -101,6 +154,8 @@ def build_agent_workflow(
     checkpointed state. This keeps the graph state serialisable enough to migrate to
     a durable checkpointer later without ever attempting to persist live I/O handles.
     """
+
+    _ = node_detail_tools
 
     async def route(state: AgentState) -> AgentState:
         return await orchestrator_route(state)
@@ -134,16 +189,18 @@ def build_agent_workflow(
                 searched, wait_task = await run_search_phase(prepared, rag_tools)
             gathered = {**searched, "search_tool_wait_task": wait_task}
         bundle = build_evidence_bundle(gathered)
-        await state["send"]({
-            "type": "workflow_progress",
-            "phase": "evidence",
-            "status": "complete",
-            "title": "Evidence frame ready",
-            "detail": (
-                "One scenario search is now combined with the standing checks for data, evals, "
-                "security, latency, reliability, and deployment."
-            ),
-        })
+        await state["send"](
+            {
+                "type": "workflow_progress",
+                "phase": "evidence",
+                "status": "complete",
+                "title": "Evidence frame ready",
+                "detail": (
+                    "One scenario search is now combined with the standing checks for data, evals, "
+                    "security, latency, reliability, and deployment."
+                ),
+            }
+        )
         return {
             **gathered,
             "is_applied_design": is_applied,
@@ -156,6 +213,9 @@ def build_agent_workflow(
     async def challenge_plan(state: AgentState) -> AgentState:
         return await challenger_node(state)  # type: ignore[return-value]
 
+    async def show_early_design_frame(state: AgentState) -> AgentState:
+        return await early_design_frame_node(state)  # type: ignore[return-value]
+
     async def draft_graph(state: AgentState) -> AgentState:
         try:
             timeout_s = design_timeout_seconds(state)
@@ -164,77 +224,138 @@ def build_agent_workflow(
                     _with_graph_stage_deadline(state, timeout_s),
                     graph_tools,
                 )
-                return _without_graph_stage_deadline(drafted)
+                drafted = _without_graph_stage_deadline(drafted)
+                return {
+                    **drafted,
+                    "graph_publication": _draft_graph_publication(drafted),
+                }
         except (TimeoutError, StageAdmissionDenied):
             restored = _restore_approved_graph_state(state)
-            if not state.get("graph_notice_sent"):
-                await state["send"]({
-                    "type": "graph_notice",
-                    "message": (
-                        "The draft architecture did not meet the structural quality checks, so I "
-                        "kept the visual out rather than publishing a misleading graph. The written "
-                        "design is still available below."
-                    ),
-                })
-            return {**restored, "graph_notice_sent": True}
-
-    async def revise_graph(state: AgentState) -> AgentState:
-        revision_count = int(state.get("graph_revision_count", 0)) + 1
-        try:
-            timeout_s = patch_timeout_seconds(state)
-        except StageAdmissionDenied:
-            restored = _restore_approved_graph_state(state)
-            if not state.get("graph_notice_sent"):
-                await state["send"]({
-                    "type": "graph_notice",
-                    "message": (
-                        "I kept the approved diagram unchanged because there was not enough bounded "
-                        "time to repair and independently review another candidate."
-                    ),
-                })
+            if not state.get("graph_notice_sent") and _should_send_graph_notice(state):
+                await state["send"](
+                    {
+                        "type": "graph_notice",
+                        "message": (
+                            "The draft architecture did not meet the structural quality checks, so I "
+                            "kept the visual out rather than publishing a misleading graph. The written "
+                            "design is still available below."
+                        ),
+                    }
+                )
+            operation = _failed_graph_operation(state, "graph_design_timeout")
             return {
                 **restored,
                 "graph_notice_sent": True,
-                "graph_revision_count": revision_count,
+                **({"graph_operation": operation} if operation else {}),
             }
-        await state["send"]({
-            "type": "workflow_progress",
-            "phase": "revise",
-            "status": "retry",
-            "title": "Refining the diagram",
-            "detail": (
-                f"Applying bounded clarity repair {revision_count} of "
-                f"{_MAX_GRAPH_REVISIONS}, then checking "
-                "the real layout again."
-            ),
-        })
+
+    async def revise_graph(state: AgentState) -> AgentState:
+        repair_round_count = int(
+            state.get(
+                "graph_repair_round_count",
+                state.get("graph_revision_count", 0),
+            )
+        )
+        next_repair_round = repair_round_count + 1
+        revision_state = {
+            **state,
+            "graph_revision_count": next_repair_round,
+        }
+        try:
+            timeout_s = patch_timeout_seconds(revision_state)
+        except StageAdmissionDenied:
+            restored = _restore_approved_graph_state(state)
+            operation = _failed_graph_operation(state, "graph_patch_admission_denied")
+            if not state.get("graph_notice_sent") and _should_send_graph_notice(state):
+                await state["send"](
+                    {
+                        "type": "graph_notice",
+                        "message": (
+                            "I kept the approved diagram unchanged because there was not enough bounded "
+                            "time to repair and independently review another candidate."
+                        ),
+                    }
+                )
+            return {
+                **restored,
+                "graph_notice_sent": True,
+                "graph_revision_count": repair_round_count,
+                "graph_repair_round_count": repair_round_count,
+                **({"graph_operation": operation} if operation else {}),
+            }
+        await state["send"](
+            {
+                "type": "workflow_progress",
+                "phase": "revise",
+                "status": "retry",
+                "title": "Refining the diagram",
+                "detail": (
+                    f"Repair round {next_repair_round} of {_MAX_GRAPH_REPAIR_ROUNDS}. "
+                    "Any valid candidate will then be checked against the real layout."
+                ),
+            }
+        )
         try:
             async with asyncio.timeout(timeout_s):
                 revised = await apply_graph_worker(
                     _with_graph_stage_deadline(
-                        {**state, "graph_revision_count": revision_count},
+                        revision_state,
                         timeout_s,
                     ),
                     graph_tools,
                 )
         except TimeoutError:
             restored = _restore_approved_graph_state(state)
-            if not state.get("graph_notice_sent"):
-                await state["send"]({
-                    "type": "graph_notice",
-                    "message": (
-                        "I kept the approved diagram unchanged because the bounded repair did not "
-                        "finish in time for an independent review."
-                    ),
-                })
+            operation = _failed_graph_operation(
+                state,
+                "graph_patch_timeout_preserved_existing_graph",
+            )
+            if not state.get("graph_notice_sent") and _should_send_graph_notice(state):
+                await state["send"](
+                    {
+                        "type": "graph_notice",
+                        "message": (
+                            "I kept the approved diagram unchanged because the bounded repair did not "
+                            "finish in time for an independent review."
+                        ),
+                    }
+                )
             return {
                 **restored,
                 "graph_notice_sent": True,
-                "graph_revision_count": revision_count,
+                "graph_revision_count": repair_round_count,
+                "graph_repair_round_count": repair_round_count,
+                **({"graph_operation": operation} if operation else {}),
             }
+        revised = _without_graph_stage_deadline(revised)
+        operation = revised.get("graph_operation")
+        failed = isinstance(operation, dict) and operation.get("status") == "failed"
+        if failed:
+            validation_error = revised.get("graph_patch_validation_error")
+            correction_count = int(state.get("graph_contract_correction_count", 0))
+            can_correct = (
+                operation.get("failure_code") in _RETRYABLE_GRAPH_PATCH_FAILURE_CODES
+                and isinstance(validation_error, dict)
+                and isinstance(validation_error.get("path"), str)
+                and isinstance(validation_error.get("rule"), str)
+                and correction_count < _MAX_GRAPH_CONTRACT_CORRECTIONS
+            )
+            return {
+                **revised,
+                "graph_revision_count": repair_round_count,
+                "graph_repair_round_count": repair_round_count,
+                "graph_contract_correction_count": correction_count
+                + (1 if can_correct else 0),
+                "graph_contract_correction_pending": can_correct,
+            }
+        corrected = dict(revised)
+        corrected.pop("graph_patch_validation_error", None)
         return {
-            **_without_graph_stage_deadline(revised),
-            "graph_revision_count": revision_count,
+            **corrected,
+            "graph_revision_count": next_repair_round,
+            "graph_repair_round_count": next_repair_round,
+            "graph_contract_correction_pending": False,
+            "graph_publication": "unreviewed",
         }
 
     async def expand_context(state: AgentState) -> AgentState:
@@ -247,23 +368,54 @@ def build_agent_workflow(
 
     async def review_graph(state: AgentState) -> AgentState:
         if not state.get("graph_changed"):
-            return await graph_critic_node(state)
-        revision_count = int(state.get("graph_revision_count", 0))
+            reviewed = await graph_critic_node(state)
+            return {
+                **reviewed,
+                "graph_publication": (
+                    "unchanged" if reviewed.get("graph_data") is not None else "none"
+                ),
+            }
         try:
-            timeout_s = critic_timeout_seconds(state, revision_count)
+            timeout_s = critic_timeout_seconds(state)
             async with asyncio.timeout(timeout_s):
                 reviewed = await graph_critic_node(
                     _with_graph_stage_deadline(state, timeout_s)
                 )
-                return _without_graph_stage_deadline(reviewed)
+                reviewed = _without_graph_stage_deadline(reviewed)
+                if (reviewed.get("graph_review") or {}).get("approved"):
+                    publication: GraphPublicationDisposition = (
+                        "approved"
+                        if reviewed.get("graph_changed")
+                        else "unchanged"
+                        if reviewed.get("graph_data") is not None
+                        else "none"
+                    )
+                    operation = reviewed.get("graph_operation")
+                    if (
+                        isinstance(operation, dict)
+                        and operation.get("status") == "candidate"
+                    ):
+                        reviewed = {
+                            **reviewed,
+                            "graph_publication": publication,
+                            "graph_operation": {**operation, "status": "applied"},
+                        }
+                    else:
+                        reviewed = {**reviewed, "graph_publication": publication}
+                elif reviewed.get("graph_changed"):
+                    reviewed = {**reviewed, "graph_publication": "withheld"}
+                return reviewed
         except (TimeoutError, StageAdmissionDenied):
             return {
                 **state,
+                "graph_publication": (
+                    "withheld" if state.get("graph_changed") else "none"
+                ),
                 "graph_review": {
                     "approved": False,
                     "terminal": True,
-                    "score": 0.0,
-                    "missing": ["The independent semantic architecture review did not complete."],
+                    "review_status": "unavailable",
+                    "failure_code": "semantic_review_timeout",
                     "revision_instruction": "Keep the prior approved diagram unchanged.",
                 },
             }
@@ -271,11 +423,24 @@ def build_agent_workflow(
     async def reject_graph(state: AgentState) -> AgentState:
         review = state.get("graph_review") or {}
         approved_graph = state.get("approved_graph_data")
-        repair_summary = _repair_attempt_summary(int(state.get("graph_revision_count", 0)))
-        if not state.get("graph_notice_sent"):
-            await state["send"]({
-                "type": "graph_notice",
-                "message": (
+        repair_summary = _repair_attempt_summary(
+            int(state.get("graph_revision_count", 0))
+        )
+        notice_sent = bool(state.get("graph_notice_sent"))
+        if not notice_sent and _should_send_graph_notice(state):
+            operation = state.get("graph_operation")
+            failure_code = (
+                operation.get("failure_code") if isinstance(operation, dict) else None
+            )
+            if failure_code == "graph_edit_target_unavailable":
+                message = (
+                    "I couldn't apply that edit because this thread has no approved applied "
+                    "diagram to change. Create or redraw the architecture first."
+                )
+            elif failure_code == "graph_mode_disabled":
+                message = "I kept the diagram unchanged because graph mode is off for this turn."
+            else:
+                message = (
                     f"I couldn't make this diagram clear enough {repair_summary}, so I kept "
                     + (
                         "the prior approved visual unchanged."
@@ -284,13 +449,41 @@ def build_agent_workflow(
                     )
                     + " The written architecture is still available below; ask me to redraw it as "
                     "a simpler diagram if you want another pass."
-                ),
-            })
-        restored = _restore_approved_graph_state(state)
+                )
+            await state["send"](
+                {
+                    "type": "graph_notice",
+                    "message": message,
+                }
+            )
+            notice_sent = True
+        publication: GraphPublicationDisposition = (
+            "preserved"
+            if approved_graph is not None
+            else "withheld"
+            if state.get("graph_publication") in {"unreviewed", "withheld"}
+            or state.get("graph_changed")
+            else "none"
+        )
+        restored = _restore_approved_graph_state(state, publication=publication)
+        operation = state.get("graph_operation")
         return {
             **restored,
-            "graph_notice_sent": True,
+            "graph_notice_sent": notice_sent,
             "graph_review": review,
+            "graph_operation": (
+                {
+                    **operation,
+                    "status": "failed",
+                    "failure_code": (
+                        review.get("failure_code")
+                        or operation.get("failure_code")
+                        or "graph_review_rejected"
+                    ),
+                }
+                if isinstance(operation, dict)
+                else operation
+            ),
         }
 
     async def synthesise(state: AgentState) -> AgentState:
@@ -299,11 +492,9 @@ def build_agent_workflow(
             async with asyncio.timeout(timeout_s):
                 return await orchestrator_synthesise(state)
         except (TimeoutError, StageAdmissionDenied) as exc:
-            raise WorkflowDeadlineExceeded("synthesis exceeded its reserved deadline") from exc
-
-    async def enrich(state: AgentState) -> AgentState:
-        await maybe_start_node_enrichment(state, node_detail_tools)
-        return state
+            raise WorkflowDeadlineExceeded(
+                "synthesis exceeded its reserved deadline"
+            ) from exc
 
     workflow = StateGraph(AgentState)
     workflow.add_node("route", _traced("agent.orchestrator_route", route))
@@ -313,7 +504,11 @@ def build_agent_workflow(
         _traced(
             "agent.context_phase",
             gather_context,
-            **{"app.research_enabled": lambda state: state.get("research_enabled", False)},
+            **{
+                "app.research_enabled": lambda state: state.get(
+                    "research_enabled", False
+                )
+            },
         ),
     )
     workflow.add_node(
@@ -326,7 +521,13 @@ def build_agent_workflow(
     )
     workflow.add_node("architect", _traced("agent.architect", architecture_plan))
     workflow.add_node("challenger", _traced("agent.challenger", challenge_plan))
-    workflow.add_node("expand_context", _traced("agent.search_tool_wait", expand_context))
+    workflow.add_node(
+        "early_design_frame",
+        _traced("agent.early_design_frame", show_early_design_frame),
+    )
+    workflow.add_node(
+        "expand_context", _traced("agent.search_tool_wait", expand_context)
+    )
     workflow.add_node("review_graph", _traced("agent.graph_review", review_graph))
     workflow.add_node("revise_graph", _traced("agent.graph_revision", revise_graph))
     workflow.add_node("reject_graph", _traced("agent.graph_rejected", reject_graph))
@@ -338,7 +539,6 @@ def build_agent_workflow(
             **{"app.route": lambda state: state.get("route", "")},
         ),
     )
-    workflow.add_node("enrich", _traced("agent.node_enrichment_phase", enrich))
 
     workflow.add_edge(START, "route")
     workflow.add_conditional_edges(
@@ -353,7 +553,8 @@ def build_agent_workflow(
     workflow.add_edge("gather_context", "expand_context")
     workflow.add_edge("expand_context", "architect")
     workflow.add_edge("architect", "challenger")
-    workflow.add_edge("challenger", "draft_graph")
+    workflow.add_edge("challenger", "early_design_frame")
+    workflow.add_edge("early_design_frame", "draft_graph")
     workflow.add_edge("draft_graph", "review_graph")
     workflow.add_conditional_edges(
         "review_graph",
@@ -363,11 +564,14 @@ def build_agent_workflow(
     workflow.add_conditional_edges(
         "revise_graph",
         _route_after_revision,
-        {"review": "review_graph", "reject": "reject_graph"},
+        {
+            "review": "review_graph",
+            "correct": "review_graph",
+            "reject": "reject_graph",
+        },
     )
     workflow.add_edge("reject_graph", "synthesise")
-    workflow.add_edge("synthesise", "enrich")
-    workflow.add_edge("enrich", END)
+    workflow.add_edge("synthesise", END)
     return workflow.compile()
 
 
@@ -377,31 +581,72 @@ def _route_after_routing(state: AgentState) -> Literal["quick", "context"]:
 
 def _should_run_applied_design_roles(state: AgentState) -> bool:
     """Avoid paid design roles when the user explicitly disabled diagrams."""
-    return (
-        state.get("graph_mode", "auto") != "off"
-        and is_applied_system_design_request(
-            state.get("design_query") or state.get("user_message", "")
-        )
+    graph_intent = state.get("graph_intent") or resolve_graph_operation(
+        state.get("user_message", ""),
+        state.get("graph_data"),
     )
+    return state.get("graph_mode", "auto") != "off" and graph_intent == "create"
+
+
+def _has_applied_graph(graph_data: dict | None) -> bool:
+    return isinstance(graph_data, dict) and graph_data.get("design_origin") == "applied"
 
 
 def _route_after_review(state: AgentState) -> Literal["accept", "revise", "reject"]:
+    operation = state.get("graph_operation")
     graph = state.get("graph_data") or {}
-    if not state.get("graph_changed") or graph.get("design_origin") != "applied":
-        return "accept"
+    revision_count = int(
+        state.get("graph_repair_round_count", state.get("graph_revision_count", 0))
+    )
+    if (
+        isinstance(operation, dict)
+        and operation.get("status") == "failed"
+        and revision_count == 0
+    ):
+        return "reject"
     review = state.get("graph_review") or {}
+    repair_contract = review.get("repair_contract")
+    if not state.get("graph_changed"):
+        corrected_contract = (
+            review.get("review_status") == "completed"
+            and isinstance(repair_contract, dict)
+            and repair_contract.get("repair_scope") == "local"
+        )
+        if not corrected_contract and (
+            revision_count == 0 or graph.get("design_origin") != "applied"
+        ):
+            return "accept"
+    if isinstance(repair_contract, dict):
+        repair_scope = repair_contract.get("repair_scope")
+        if repair_scope == "none":
+            return "accept" if review.get("approved") else "reject"
+        if repair_scope == "global":
+            return "reject"
+        if repair_scope != "local":
+            return "reject"
+        try:
+            validate_local_repair_admission(repair_contract, graph=graph)
+        except ValueError:
+            return "reject"
     if review.get("approved"):
         return "accept"
-    if (
-        not review.get("terminal")
-        and int(state.get("graph_revision_count", 0)) < _MAX_GRAPH_REVISIONS
-    ):
+    if not review.get("terminal") and revision_count < _MAX_GRAPH_REPAIR_ROUNDS:
         return "revise"
     return "reject"
 
 
-def _route_after_revision(state: AgentState) -> Literal["review", "reject"]:
-    return "review" if state.get("graph_changed") and state.get("graph_data") else "reject"
+def _route_after_revision(state: AgentState) -> Literal["review", "correct", "reject"]:
+    repair_round_count = int(
+        state.get("graph_repair_round_count", state.get("graph_revision_count", 0))
+    )
+    if not state.get("graph_data"):
+        return "reject"
+    operation = state.get("graph_operation")
+    if isinstance(operation, dict) and operation.get("status") == "failed":
+        if state.get("graph_contract_correction_pending"):
+            return "correct"
+        return "reject"
+    return "review" if 0 < repair_round_count <= _MAX_GRAPH_REPAIR_ROUNDS else "reject"
 
 
 async def run_agent(
@@ -411,11 +656,41 @@ async def run_agent(
     node_detail_tools: list,
 ) -> AgentState:
     """Execute the request-scoped LangGraph workflow and return its final state."""
+    graph_intent = resolve_graph_operation(
+        state.get("user_message", ""),
+        state.get("graph_data"),
+    )
+    graph_operation = state.get("graph_operation")
+    if graph_intent == "edit" and state.get("graph_mode") == "off":
+        graph_operation = {
+            "kind": "edit",
+            "status": "failed",
+            "failure_code": "graph_mode_disabled",
+        }
+    elif graph_intent == "edit" and not _has_applied_graph(state.get("graph_data")):
+        graph_operation = {
+            "kind": "edit",
+            "status": "failed",
+            "failure_code": "graph_edit_target_unavailable",
+        }
     initial_state: AgentState = {
         **state,
+        "graph_intent": graph_intent,
+        **({"graph_operation": graph_operation} if graph_operation else {}),
         "graph_revision_count": state.get("graph_revision_count", 0),
+        "graph_repair_round_count": state.get(
+            "graph_repair_round_count", state.get("graph_revision_count", 0)
+        ),
+        "graph_contract_correction_count": state.get(
+            "graph_contract_correction_count", 0
+        ),
+        "graph_critic_call_count": 0,
+        "graph_contract_correction_pending": False,
         "approved_graph_data": copy.deepcopy(
             state.get("approved_graph_data", state.get("graph_data"))
+        ),
+        "graph_publication": (
+            "unchanged" if state.get("graph_data") is not None else "none"
         ),
     }
     workflow = build_agent_workflow(rag_tools, graph_tools, node_detail_tools)

@@ -73,6 +73,7 @@ describe('analytics service', () => {
     vi.resetModules();
     vi.stubEnv('VITE_POSTHOG_KEY', 'ph-key');
     vi.stubEnv('VITE_POSTHOG_HOST', 'https://posthog.example');
+    vi.stubEnv('VITE_IS_PRODUCTION', 'true');
     const analytics = await import('./analytics');
 
     const session = {
@@ -91,7 +92,10 @@ describe('analytics service', () => {
         autocapture: false,
       }));
       expect(posthog.identify).toHaveBeenCalledWith('user-1');
-      expect(posthog.capture).toHaveBeenCalledWith('auth_viewed', { mode: 'test' });
+      expect(posthog.capture).toHaveBeenCalledWith('auth_viewed', {
+        mode: 'test',
+        is_production: true,
+      });
       expect(posthog.reset).toHaveBeenCalled();
     });
   });

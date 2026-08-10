@@ -1,9 +1,9 @@
 import asyncio
+import copy
 import json
 
 from agent.architecture_playbook import build_evidence_bundle
 from agent.nodes.graph_worker import graph_worker_node
-from agent.nodes.node_detail_worker import enrich_all_nodes
 from agent.nodes.rag_worker import rag_worker_node
 from agent.nodes.research_worker import research_worker_node
 from agent.state import AgentState
@@ -30,47 +30,75 @@ async def apply_graph_worker(state: AgentState, graph_tools: list) -> AgentState
     graph_state = await graph_worker_node(state, graph_tools)
     new_graph = graph_state.get("graph_data")
     if new_graph is None:
-        if (
-            existing_graph is None
+        should_send_graph_notice = (
+            state.get("graph_mode", "auto") != "on"
+            and existing_graph is None
             and state.get("route") == "search"
             and not state.get("graph_notice_sent")
-        ):
-            message = (
-                "The draft architecture did not meet the structural quality checks, so I kept "
-                "the visual out rather than publishing a misleading graph. The written design "
-                "is still available below."
-                if state.get("is_applied_design")
-                else (
+        )
+        if should_send_graph_notice:
+            operation = graph_state.get("graph_operation")
+            if (
+                isinstance(operation, dict)
+                and operation.get("failure_code") == "graph_edit_target_unavailable"
+            ):
+                message = (
+                    "I couldn't apply that graph edit because this thread has no approved applied "
+                    "diagram to change. Create or redraw the architecture first."
+                )
+            elif state.get("is_applied_design"):
+                message = (
+                    "The draft architecture did not meet the structural quality checks, so I kept "
+                    "the visual out rather than publishing a misleading graph. The written design "
+                    "is still available below."
+                )
+            else:
+                message = (
                     "I found enough related material to explain this, but not enough grounded detail "
                     "from the book to draw a trustworthy graph for this exact question."
                 )
+            await state["send"](
+                {
+                    "type": "graph_notice",
+                    "message": message,
+                }
             )
-            await state["send"]({
-                "type": "graph_notice",
-                "message": message,
-            })
         return {
-            **state,
+            **graph_state,
             "graph_data": existing_graph,
             "graph_changed": False,
-            "graph_notice_sent": state.get("graph_notice_sent", False) or (
-                existing_graph is None and state.get("route") == "search"
-            ),
+            "graph_notice_sent": graph_state.get("graph_notice_sent", False)
+            or should_send_graph_notice,
         }
 
     if existing_graph is not None and _same_graph_artifact(existing_graph, new_graph):
+        aligned_graph = copy.deepcopy(existing_graph)
+        if new_graph.get("version") != aligned_graph.get("version"):
+            aligned_graph["version"] = new_graph.get("version")
+        operation = graph_state.get("graph_operation")
+        if (
+            isinstance(operation, dict)
+            and operation.get("status") == "candidate"
+            and operation.get("kind") in {"create", "edit"}
+        ):
+            operation = {
+                **operation,
+                "status": "failed",
+                "failure_code": "graph_patch_no_effect",
+            }
         return {
-            **state,
-            "graph_data": existing_graph,
+            **graph_state,
+            "graph_data": aligned_graph,
             "graph_changed": False,
-            "graph_notice_sent": state.get("graph_notice_sent", False),
+            "graph_notice_sent": graph_state.get("graph_notice_sent", False),
+            "graph_operation": operation,
         }
 
     return {
-        **state,
+        **graph_state,
         "graph_data": new_graph,
         "graph_changed": True,
-        "graph_notice_sent": state.get("graph_notice_sent", False),
+        "graph_notice_sent": graph_state.get("graph_notice_sent", False),
     }
 
 
@@ -78,10 +106,14 @@ def _same_graph_artifact(left: dict, right: dict) -> bool:
     """Ignore release stamps when a failed refinement reuses the approved graph."""
     left_payload = {key: value for key, value in left.items() if key != "version"}
     right_payload = {key: value for key, value in right.items() if key != "version"}
-    return json.dumps(left_payload, sort_keys=True) == json.dumps(right_payload, sort_keys=True)
+    return json.dumps(left_payload, sort_keys=True) == json.dumps(
+        right_payload, sort_keys=True
+    )
 
 
-async def run_search_phase(state: AgentState, rag_tools: list) -> tuple[AgentState, asyncio.Task | None]:
+async def run_search_phase(
+    state: AgentState, rag_tools: list
+) -> tuple[AgentState, asyncio.Task | None]:
     graph_mode = state.get("graph_mode", "auto")
     search_tool_wait_task = None
 
@@ -102,11 +134,13 @@ async def run_search_phase(state: AgentState, rag_tools: list) -> tuple[AgentSta
         and state.get("retrieval_notice")
         and state.get("request_id")
     ):
-        await state["send"]({
-            "type": "retrieval_notice",
-            "request_id": state["request_id"],
-            "message": state["retrieval_notice"],
-        })
+        await state["send"](
+            {
+                "type": "retrieval_notice",
+                "request_id": state["request_id"],
+                "message": state["retrieval_notice"],
+            }
+        )
         search_tool_wait_task = asyncio.create_task(
             state["await_search_tool_request"](
                 state["request_id"],
@@ -157,29 +191,3 @@ async def maybe_expand_with_search_tool(
         **expanded_state,
         "evidence_bundle": build_evidence_bundle(expanded_state),
     }
-
-
-async def maybe_start_node_enrichment(state: AgentState, node_detail_tools: list) -> None:
-    graph_data = state.get("graph_data")
-    if not graph_data or not graph_data.get("nodes"):
-        return
-
-    # Applied nodes already contain domain-specific responsibilities. Running
-    # the book-only node enricher would overwrite them with generic concepts
-    # and could imply citations for recommendations the book never made.
-    if graph_data.get("design_origin") == "applied":
-        return
-
-    rag_search_tool = node_detail_tools[0] if node_detail_tools else None
-    if not rag_search_tool:
-        return
-
-    await enrich_all_nodes(
-        nodes=graph_data["nodes"],
-        edges=graph_data.get("edges", []),
-        rag_search_tool=rag_search_tool,
-        send=state["send"],
-        graph_version=graph_data.get("version"),
-        user_id=state.get("user_id"),
-        thread_id=state.get("session_id"),
-    )

@@ -16,7 +16,12 @@ def test_staging_renderer_produces_a_bounded_visible_diagram():
             {"source": "objective", "target": "decision", "label": "constraints"},
             {"source": "decision", "target": "approval", "label": "proposal"},
             {"source": "approval", "target": "outcome", "label": "controlled action"},
-            {"source": "outcome", "target": "decision", "label": "feedback", "type": "loop"},
+            {
+                "source": "outcome",
+                "target": "decision",
+                "label": "feedback",
+                "type": "loop",
+            },
         ],
     }
 
@@ -31,7 +36,7 @@ def test_staging_renderer_produces_a_bounded_visible_diagram():
     assert report["overlap_count"] == 0
     assert report["clipped_nodes"] == 0
     assert report["clipped_edges"] == 0
-    assert report["minimum_text_px"] >= 6
+    assert report["minimum_text_px"] >= 11
 
 
 def test_staging_renderer_reports_only_edges_it_actually_draws():

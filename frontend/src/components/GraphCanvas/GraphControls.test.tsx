@@ -76,6 +76,21 @@ describe('graph detail controls', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('does not claim network accessibility for applied architecture nodes', () => {
+    render(
+      <NodeDetailPopup
+        node={{ ...serviceNode, design_origin: 'applied' }}
+        edges={[]}
+        onClose={vi.fn()}
+        onTellMeMore={vi.fn()}
+        onExpandGraph={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText('PUBLIC')).toBeNull();
+    expect(screen.queryByText('PRIVATE')).toBeNull();
+  });
+
   it('keeps decision nodes bounded to explanation', () => {
     render(
       <NodeDetailPopup

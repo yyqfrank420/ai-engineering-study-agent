@@ -8,16 +8,16 @@
 #              agent/context_manager.py, adapters/database_adapter.py
 # ─────────────────────────────────────────────────────────────────────────────
 
+import json
 import uuid
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from adapters.database_adapter import init_db
 from storage import message_store, thread_store
 from storage.errors import ThreadMessageLimitExceeded
 from storage.profile_store import upsert_profile
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -186,36 +186,119 @@ def test_message_cap_allows_up_to_limit(temp_data_dir, monkeypatch):
 # ── Graph size cap ────────────────────────────────────────────────────────────
 
 def test_save_graph_returns_true_under_limit(temp_data_dir, monkeypatch):
-    """save_graph should return True and persist when under the byte limit."""
+    """save_graph should return True and persist layout when under the byte limit."""
     init_db()
     from config import settings
     monkeypatch.setattr(settings, "max_graph_data_bytes", 1024 * 1024)  # 1 MB
 
     user_id = make_user()
     thread = thread_store.create_thread(user_id)
+    current_graph = {"version": "server-v2", "nodes": [{"id": "current"}], "edges": []}
+    assert thread_store.persist_turn(
+        user_id,
+        thread["id"],
+        title="Current",
+        user_content="question",
+        assistant_content="answer",
+        graph_data=current_graph,
+    )
 
-    small_graph = {"title": "tiny", "nodes": [], "edges": []}
-    result = thread_store.save_graph(user_id, thread["id"], small_graph)
+    view_state = {"nodePositions": {"current": {"x": 1, "y": 2}}}
+    stale_graph = {
+        "version": "client-v1",
+        "nodes": [{"id": "stale"}],
+        "edges": [{"source": "stale", "target": "removed"}],
+        "view_state": view_state,
+    }
+    result = thread_store.save_graph(user_id, thread["id"], stale_graph)
 
     assert result is True
-    assert thread_store.get_graph(user_id, thread["id"]) == small_graph
+    assert thread_store.get_graph(user_id, thread["id"]) == {
+        **current_graph,
+        "view_state": view_state,
+    }
 
 
 def test_save_graph_returns_false_over_limit(temp_data_dir, monkeypatch):
-    """save_graph should return False and NOT persist when over the byte limit."""
+    """save_graph should return False and preserve the graph when layout is too large."""
     init_db()
     from config import settings
-    monkeypatch.setattr(settings, "max_graph_data_bytes", 10)  # tiny limit
 
     user_id = make_user()
     thread = thread_store.create_thread(user_id)
+    current_graph = {"version": "server-v2", "nodes": [{"id": "current"}], "edges": []}
+    assert thread_store.persist_turn(
+        user_id,
+        thread["id"],
+        title="Current",
+        user_content="question",
+        assistant_content="answer",
+        graph_data=current_graph,
+    )
+    monkeypatch.setattr(settings, "max_graph_data_bytes", 10)  # tiny limit
 
-    large_graph = {"title": "huge", "nodes": [{"id": "n1", "data": "x" * 1000}], "edges": []}
+    large_graph = {"view_state": {"nodePositions": {"current": {"x": "x" * 1000}}}}
     result = thread_store.save_graph(user_id, thread["id"], large_graph)
 
     assert result is False
-    # Existing graph_data should remain None (nothing written)
-    assert thread_store.get_graph(user_id, thread["id"]) is None
+    assert thread_store.get_graph(user_id, thread["id"]) == current_graph
+
+
+def test_save_graph_uses_postgres_row_lock_and_preserves_semantic_graph(monkeypatch):
+    current_graph = {
+        "version": "server-v2",
+        "nodes": [{"id": "current"}],
+        "edges": [],
+    }
+
+    class Cursor:
+        def __init__(self, row=None):
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+    class Connection:
+        def __init__(self):
+            self.queries = []
+            self.updated_graph = None
+
+        def execute(self, query, params=()):
+            self.queries.append((query, params))
+            if query.lstrip().startswith("SELECT graph_data"):
+                return Cursor({"graph_data": current_graph})
+            if query.lstrip().startswith("UPDATE chat_threads"):
+                self.updated_graph = json.loads(params[0])
+            return Cursor()
+
+    connection = Connection()
+
+    @contextmanager
+    def fake_connect():
+        yield connection
+
+    from config import settings
+
+    monkeypatch.setattr(settings, "supabase_db_url", "postgresql://example")
+    monkeypatch.setattr(thread_store, "_connect", fake_connect)
+
+    view_state = {"nodePositions": {"current": {"x": 3, "y": 4}}}
+    assert thread_store.save_graph(
+        "user-1",
+        "thread-1",
+        {
+            "version": "client-v1",
+            "nodes": [{"id": "stale"}],
+            "edges": [{"source": "stale", "target": "removed"}],
+            "view_state": view_state,
+        },
+    )
+
+    select_query, select_params = connection.queries[0]
+    assert "FOR UPDATE" in select_query
+    assert "id = %s AND user_id = %s" in select_query
+    assert select_params == ("thread-1", "user-1")
+    assert connection.updated_graph == {**current_graph, "view_state": view_state}
 
 
 # ── Auto-condense ─────────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 
 import pytest
@@ -716,13 +717,39 @@ def test_live_eval_job_allows_setup_around_the_bounded_browser_suite():
     assert "timeout-minutes: 90" in workflow
     budgets = manifest["live"]["budgets"]
     settings = Settings(_env_file=None)
-    assert settings.agent_timeout_s == 360
+    assert settings.agent_timeout_s == 940
     assert settings.anthropic_max_concurrent_streams == 4
     assert budgets["application_turn_timeout_seconds"] == settings.agent_timeout_s + 30
     assert (
         budgets["browser_case_concurrency"] == settings.anthropic_max_concurrent_streams
     )
     assert budgets["browser_graph_case_concurrency"] == 2
+    corpus = json.loads(
+        (ROOT / "backend/eval/corpus/v1/cases.json").read_text(encoding="utf-8")
+    )
+    pr_case_ids = set(manifest["live"]["suites"]["pr"])
+    pr_cases = [case for case in corpus["cases"] if case["id"] in pr_case_ids]
+    # These are complete per-case path bounds for the current PR corpus. Logical
+    # calls assume one provider request. Provider attempts include every adapter
+    # retry and the configured Opus fallback. The tagged revision stops before
+    # attempt 65, so the 140-attempt failure envelope cannot be spent.
+    call_bounds = {
+        "rag-grounding": (7, 15),
+        "memory": (4, 12),
+        "graph-off": (2, 6),
+        "research": (9, 27),
+        "node-followup": (9, 20),
+        "graph-expansion": (17, 37),
+        "applied-domain": (8, 17),
+        "prompt-injection": (2, 6),
+    }
+    assert set(call_bounds) == {case["id"] for case in pr_cases}
+    logical_call_bound = sum(bound[0] for bound in call_bounds.values())
+    provider_attempt_bound = sum(bound[1] for bound in call_bounds.values())
+    assert logical_call_bound == 58
+    assert provider_attempt_bound == 140
+    assert logical_call_bound <= budgets["application_calls"] < provider_attempt_bound
+    assert budgets["browser_infrastructure_retry_count"] == 0
     assert budgets["browser_suite_max_timeout_seconds"] <= 60 * 60
     assert budgets["semantic_suite_timeout_seconds"] == 20 * 60
     assert budgets["semantic_full_suite_timeout_seconds"] == 60 * 60
@@ -737,7 +764,7 @@ def test_live_eval_job_allows_setup_around_the_bounded_browser_suite():
     scheduled = (ROOT / ".github/workflows/scheduled-eval.yml").read_text(
         encoding="utf-8"
     )
-    assert "timeout-minutes: 130" in scheduled
+    assert "timeout-minutes: 150" in scheduled
     assert "- id: browser\n        name: Start frontend and capture journeys" in scheduled
     assert "if: always() && hashFiles('artifacts/live-eval/browser-results.json') != ''" in scheduled
     assert "BROWSER_OUTCOME: ${{ steps.browser.outcome }}" in scheduled
@@ -752,12 +779,32 @@ def test_live_eval_job_allows_setup_around_the_bounded_browser_suite():
     request_timeout = terraform_variables.split(
         'variable "request_timeout_seconds"', 1
     )[1].split("}", 1)[0]
-    assert "default     = 420" in request_timeout
+    assert "default     = 1000" in request_timeout
     deploy_workflows = "\n".join(
         (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
         for name in ("live-eval.yml", "scheduled-eval.yml", "deploy-production.yml")
     )
-    assert deploy_workflows.count("--timeout 420s") == 3
+    production = (ROOT / ".github/workflows/deploy-production.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "timeout-minutes: 35" in production
+    assert deploy_workflows.count("--timeout 1000s") == 3
+    assert (
+        f"EVALUATION_PROVIDER_ATTEMPT_LIMIT: {budgets['application_calls']}"
+        in deploy_workflows
+    )
+    assert (
+        f"EVALUATION_PR_PROVIDER_ATTEMPT_LIMIT: {budgets['application_calls']}"
+        in deploy_workflows
+    )
+    assert (
+        f"EVALUATION_FULL_PROVIDER_ATTEMPT_LIMIT: "
+        f"{budgets['application_full_calls']}"
+        in deploy_workflows
+    )
+    assert deploy_workflows.count(
+        "EVALUATION_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}"
+    ) == 2
     assert (
         deploy_workflows.count(
             "--update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4"
@@ -768,8 +815,12 @@ def test_live_eval_job_allows_setup_around_the_bounded_browser_suite():
         encoding="utf-8"
     )
     assert 'ANTHROPIC_MAX_CONCURRENT_STREAMS = "4"' in terraform_locals
+    assert 'POSTHOG_API_KEY                   = "posthog-api-key"' in terraform_locals
+    assert 'POSTHOG_HOST                     = "https://eu.i.posthog.com"' in terraform_locals
     env_example = (ROOT / "backend/.env.example").read_text(encoding="utf-8")
     assert "ANTHROPIC_MAX_CONCURRENT_STREAMS=4" in env_example
+    assert "POSTHOG_API_KEY=" in env_example
+    assert "POSTHOG_HOST=https://eu.i.posthog.com" in env_example
 
 
 def test_browser_workflows_use_development_only_internal_auth_bootstrap():

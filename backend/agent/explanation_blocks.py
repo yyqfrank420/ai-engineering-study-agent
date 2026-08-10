@@ -13,6 +13,23 @@ from agent.prompt_security import protect_system_prompt
 
 SendEvent = Callable[[dict[str, Any]], Awaitable[None]]
 
+_BLOCK_KEYS = {
+    "block_id",
+    "title",
+    "content",
+    "related_node_ids",
+    "evidence_refs",
+}
+_MINIMUM_BLOCKS = 3
+_MAXIMUM_BLOCKS = 6
+
+_PRESERVED_EDIT_COMPLETION_SENTENCE = (
+    "The requested diagram edit was not approved, so the prior approved diagram remains unchanged."
+)
+_PRESERVED_CREATE_COMPLETION_SENTENCE = (
+    "The requested new diagram was not approved, so the prior approved diagram remains unchanged."
+)
+
 
 async def stream_explanation_blocks(
     *,
@@ -35,7 +52,22 @@ async def stream_explanation_blocks(
     raw_output = ""
     parse_buffer = ""
     emitted: list[dict[str, Any]] = []
+    emitted_ids: set[str] = set()
     decoder = json.JSONDecoder()
+    required_completion_sentence = _required_completion_sentence(messages)
+    pending_block: dict[str, Any] | None = None
+
+    async def emit(block: dict[str, Any]) -> None:
+        await send(_block_event(block, graph_version))
+
+    async def emit_parsed(block: dict[str, Any]) -> None:
+        nonlocal pending_block
+        if required_completion_sentence is None:
+            await emit(block)
+            return
+        if pending_block is not None:
+            await emit(pending_block)
+        pending_block = block
 
     response_stream = stream_response_compat(
         stream_response,
@@ -66,8 +98,13 @@ async def stream_explanation_blocks(
                     allowed_node_ids,
                 )
                 for block in parsed:
+                    if len(emitted) >= _MAXIMUM_BLOCKS:
+                        break
+                    if block["block_id"] in emitted_ids:
+                        continue
                     emitted.append(block)
-                    await send(_block_event(block, graph_version))
+                    emitted_ids.add(block["block_id"])
+                    await emit_parsed(block)
     except TimeoutError:
         timed_out = True
     finally:
@@ -84,7 +121,20 @@ async def stream_explanation_blocks(
     if not emitted:
         fallback = _fallback_block(raw_output)
         emitted.append(fallback)
-        await send(_block_event(fallback, graph_version))
+        emitted_ids.add(fallback["block_id"])
+        await emit_parsed(fallback)
+
+    for block in _supplementary_blocks(emitted_ids):
+        emitted.append(block)
+        emitted_ids.add(block["block_id"])
+        await emit_parsed(block)
+
+    if pending_block is not None:
+        _append_required_completion_sentence(
+            pending_block,
+            required_completion_sentence,
+        )
+        await emit(pending_block)
 
     return "\n\n".join(
         f"## {block['title']}\n\n{block['content']}"
@@ -120,19 +170,12 @@ def _decode_available(
 def _normalise_payload(value: Any, allowed_node_ids: set[str]) -> list[dict[str, Any]]:
     if not isinstance(value, dict):
         return []
-    nested = value.get("blocks")
-    if isinstance(nested, list):
-        return [
-            block
-            for item in nested
-            if (block := _normalise_block(item, allowed_node_ids)) is not None
-        ]
     block = _normalise_block(value, allowed_node_ids)
     return [block] if block else []
 
 
 def _normalise_block(value: Any, allowed_node_ids: set[str]) -> dict[str, Any] | None:
-    if not isinstance(value, dict):
+    if not isinstance(value, dict) or set(value) != _BLOCK_KEYS:
         return None
     content = "\n".join(line.rstrip() for line in str(value.get("content") or "").splitlines()).strip()
     if not content:
@@ -175,6 +218,86 @@ def _fallback_block(raw_output: str) -> dict[str, Any]:
         "related_node_ids": [],
         "evidence_refs": [],
     }
+
+
+def _supplementary_blocks(emitted_ids: set[str]) -> list[dict[str, Any]]:
+    templates = (
+        (
+            "design_assumptions",
+            "Assumptions to check",
+            "The model response did not provide a separate assumptions block.",
+        ),
+        (
+            "runtime_path",
+            "Runtime path",
+            "The model response did not provide a separate runtime-path block.",
+        ),
+        (
+            "controls",
+            "Controls to review",
+            "The model response did not provide a separate controls block.",
+        ),
+        (
+            "next_decision",
+            "Next decision",
+            "The model response did not provide a separate next-decision block.",
+        ),
+        (
+            "trade_offs",
+            "Trade-offs",
+            "The model response did not provide a separate trade-offs block.",
+        ),
+    )
+    blocks = []
+    for block_id, title, content in templates:
+        if len(emitted_ids) + len(blocks) >= _MINIMUM_BLOCKS:
+            break
+        if block_id in emitted_ids:
+            continue
+        blocks.append(
+            {
+                "block_id": block_id,
+                "title": title,
+                "content": content,
+                "related_node_ids": [],
+                "evidence_refs": [],
+            }
+        )
+    return blocks
+
+
+def _required_completion_sentence(messages: list[dict[str, Any]]) -> str | None:
+    if not messages:
+        return None
+    content = messages[-1].get("content")
+    if not isinstance(content, str):
+        return None
+    trusted_result = content.partition("<trusted_turn_result>")[2].partition(
+        "</trusted_turn_result>"
+    )[0]
+    if "Publication state: preserved." not in trusted_result:
+        return None
+    for sentence in (
+        _PRESERVED_EDIT_COMPLETION_SENTENCE,
+        _PRESERVED_CREATE_COMPLETION_SENTENCE,
+    ):
+        if sentence in trusted_result:
+            return sentence
+    return None
+
+
+def _append_required_completion_sentence(
+    block: dict[str, Any],
+    required_completion_sentence: str | None,
+) -> None:
+    if required_completion_sentence is None:
+        return
+    content = block["content"]
+    if required_completion_sentence not in content:
+        available_content = 4000 - len(required_completion_sentence) - 2
+        block["content"] = (
+            f"{content[:available_content]}\n\n{required_completion_sentence}"
+        )
 
 
 def _block_event(block: dict[str, Any], graph_version: str | None) -> dict[str, Any]:

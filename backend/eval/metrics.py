@@ -143,8 +143,13 @@ def extract_response_text(events: list[dict]) -> str:
 
 
 def extract_graph_data(events: list[dict]) -> dict | None:
-    graph_events = [e for e in events if e.get("type") == "graph_data"]
-    return graph_events[-1]["data"] if graph_events else None
+    for event in reversed(events):
+        event_type = event.get("type")
+        if event_type == "graph_data" or event_type == "graph_candidate":
+            data = event.get("data")
+            if isinstance(data, dict):
+                return data
+    return None
 
 
 def extract_error_text(run: dict) -> str:

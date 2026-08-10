@@ -1,4 +1,4 @@
-from eval.metrics import score_schema, score_test_case
+from eval.metrics import extract_graph_data, score_schema, score_test_case
 from eval.test_cases import TestCase
 
 
@@ -111,3 +111,25 @@ def test_schema_accepts_supported_architecture_node_types():
     assert result["node_types_valid"] is True
     assert result["node_types_valid_pass"] is True
     assert result["errors"] == []
+
+
+def test_extract_graph_data_prefers_graph_data_before_falling_back_to_candidate():
+    graph_data_events = [
+        {"type": "graph_candidate", "data": {"title": "candidate", "nodes": [], "edges": []}},
+        {"type": "graph_data", "data": {"title": "final", "nodes": [], "edges": []}},
+    ]
+
+    result = extract_graph_data(graph_data_events)
+
+    assert result == {"title": "final", "nodes": [], "edges": []}
+
+
+def test_extract_graph_data_ignores_invalid_graph_candidate_payload():
+    graph_data_events = [
+        {"type": "graph_data", "data": {"title": "final", "nodes": [], "edges": []}},
+        {"type": "graph_candidate", "data": 12},
+    ]
+
+    result = extract_graph_data(graph_data_events)
+
+    assert result == {"title": "final", "nodes": [], "edges": []}

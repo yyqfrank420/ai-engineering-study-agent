@@ -1,13 +1,13 @@
-import { act, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { GraphCandidate } from '../../types';
 import { GraphCanvas } from './index';
 
 
 vi.mock('./HiddenGraphEvaluator', () => ({
-  HiddenGraphEvaluator: ({ viewport }: { viewport: { width: number; height: number } }) => (
-    <div data-testid="evaluation-viewport">{viewport.width}x{viewport.height}</div>
+  HiddenGraphEvaluator: ({ candidate }: { candidate: GraphCandidate | null }) => (
+    <div data-testid="evaluation-candidate">{candidate?.evaluationId ?? 'none'}</div>
   ),
 }));
 
@@ -26,22 +26,8 @@ const candidate: GraphCandidate = {
 };
 
 
-describe('GraphCanvas candidate viewport', () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it('waits through zero-width reveal and tracks the narrow settled host viewport', () => {
-    let resizeCallback: ResizeObserverCallback | null = null;
-    class TestResizeObserver {
-      constructor(callback: ResizeObserverCallback) {
-        resizeCallback = callback;
-      }
-      observe() {}
-      disconnect() {}
-    }
-    vi.stubGlobal('ResizeObserver', TestResizeObserver);
-
+describe('GraphCanvas candidate evaluation', () => {
+  it('mounts candidate evaluation without waiting for live pane geometry', () => {
     render(
       <GraphCanvas
         graphData={null}
@@ -58,24 +44,6 @@ describe('GraphCanvas candidate viewport', () => {
       />,
     );
 
-    // JSDOM starts the host at zero size, matching SplitPane's reveal origin.
-    expect(screen.queryByTestId('evaluation-viewport')).toBeNull();
-
-    act(() => {
-      resizeCallback?.([
-        { contentRect: { width: 408.4, height: 462.2 } } as ResizeObserverEntry,
-      ], {} as ResizeObserver);
-    });
-
-    expect(screen.getByTestId('evaluation-viewport').textContent).toBe('408x462');
-
-    act(() => {
-      resizeCallback?.([
-        { contentRect: { width: 376.2, height: 462.2 } } as ResizeObserverEntry,
-      ], {} as ResizeObserver);
-    });
-
-    expect(screen.getByTestId('evaluation-viewport').textContent).toBe('376x462');
-    expect(screen.queryByText('760x500')).toBeNull();
+    expect(screen.getByTestId('evaluation-candidate').textContent).toBe('evaluation-1');
   });
 });

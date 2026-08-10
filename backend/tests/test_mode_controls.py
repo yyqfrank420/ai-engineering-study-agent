@@ -14,6 +14,7 @@ import pytest
 
 # ── ChatRequest field validation ──────────────────────────────────────────────
 
+
 class TestChatRequestValidation:
     """Validates that new mode-control fields accept valid values and
     coerce invalid values to sensible defaults rather than raising 422."""
@@ -179,12 +180,14 @@ def test_complexity_profiles_describe_depth_without_shaping_graph_counts(request
 def test_self_improving_applied_system_defaults_to_production_depth():
     from agent.complexity import resolve_complexity
 
-    profile = resolve_complexity("auto", "self-improving AI system for performance marketing")
+    profile = resolve_complexity(
+        "auto", "self-improving AI system for performance marketing"
+    )
 
     assert profile.resolved == "production"
 
 
-def test_terse_graph_followup_restores_the_original_design_context():
+def test_terse_graph_followup_keeps_labeled_artifact_context_only():
     from agent.complexity import resolve_design_query
 
     query = resolve_design_query(
@@ -192,6 +195,7 @@ def test_terse_graph_followup_restores_the_original_design_context():
         history=[
             {"role": "user", "content": "growth marketing multi-agent system"},
             {"role": "assistant", "content": "Here is the first design."},
+            {"role": "user", "content": "Compare fine-tuning methods"},
         ],
         graph_data={
             "title": "Campaign Optimisation Loop",
@@ -200,13 +204,440 @@ def test_terse_graph_followup_restores_the_original_design_context():
         },
     )
 
-    assert "growth marketing multi-agent system" in query
+    assert query.startswith(
+        "Existing graph context (not new user requirements): Campaign Optimisation Loop"
+    )
     assert "Campaign Optimisation Loop" in query
-    assert "Channel Executor" in query
-    assert query.endswith("expand the approval path")
+    assert "growth marketing multi-agent system" not in query
+    assert "Compare fine-tuning methods" not in query
+    assert "Channel Executor" not in query
+    assert "Outcome Attribution" not in query
+    assert query.endswith("Latest user request: expand the approval path")
+
+
+def test_terse_followup_without_graph_uses_only_most_recent_user_context():
+    from agent.complexity import resolve_design_query
+
+    query = resolve_design_query(
+        "go deeper",
+        history=[
+            {"role": "user", "content": "Design a growth marketing system"},
+            {"role": "assistant", "content": "Here is the design."},
+            {"role": "user", "content": "Explain outcome attribution"},
+            {"role": "assistant", "content": "Attribution links outcomes to actions."},
+        ],
+    )
+
+    assert query == (
+        "Most recent user context (background only): Explain outcome attribution\n"
+        "Latest user request: go deeper"
+    )
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Fix the typo in the cache label",
+        "Rename the cache node",
+        "Remove the stale edge",
+        "Change the edge label",
+        "Expand monitoring",
+    ],
+)
+def test_existing_applied_graph_edits_have_server_owned_intent(message):
+    from agent.complexity import is_existing_graph_edit_request
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [
+            {"id": "cache", "label": "Cache"},
+            {"id": "monitoring", "label": "Monitoring"},
+        ],
+        "groups": [{"id": "runtime", "label": "Runtime"}],
+    }
+
+    assert is_existing_graph_edit_request(message, graph)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Design a fraud detection system",
+        "Explain RAG",
+        "What is prompt caching?",
+        "Change the subject to retrieval",
+        "Add citations to the answer",
+        "Fix your explanation",
+        "Address the tradeoffs",
+        "Move on to RAG",
+        "How do I fix hallucinations?",
+        "Explain how to add prompt caching",
+        "How do I update a graph database?",
+        "Replace the graph database with Postgres",
+    ],
+)
+def test_new_topics_are_not_existing_graph_edits(message):
+    from agent.complexity import is_existing_graph_edit_request
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "cache", "label": "Cache"}],
+        "groups": [],
+    }
+
+    assert not is_existing_graph_edit_request(message, graph)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Update nodes",
+        "Change labels",
+        "Remove edges",
+    ],
+)
+def test_plural_graph_targets_are_existing_graph_edits(message):
+    from agent.complexity import is_existing_graph_edit_request
+
+    graph = {"design_origin": "applied", "nodes": [], "groups": []}
+
+    assert is_existing_graph_edit_request(message, graph)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Changing edge labels",
+        "Moving nodes",
+        "Removing edges",
+        "Renaming Cache",
+        "Replacing the graph",
+        "Updating nodes",
+        "Regenerating the diagram",
+    ],
+)
+def test_inflected_graph_edits_keep_their_intent(message):
+    from agent.complexity import is_existing_graph_edit_request
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "cache", "label": "Cache"}],
+        "groups": [],
+    }
+
+    assert is_existing_graph_edit_request(message, graph)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "How do I fix gradient flow?",
+        "Explain how to update model layers",
+        "How do I remove a preprocessing step?",
+    ],
+)
+def test_concept_nouns_do_not_grant_graph_edit_intent(message):
+    from agent.complexity import is_existing_graph_edit_request
+
+    graph = {"design_origin": "applied", "nodes": [], "groups": []}
+
+    assert not is_existing_graph_edit_request(message, graph)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Delete the Cache node",
+        "Connect the Cache node to the API node",
+        "Modify the Cache label",
+        "Revise the Cache description",
+    ],
+)
+def test_common_imperative_graph_edits_enter_the_patch_lane(message):
+    from agent.complexity import is_existing_graph_edit_request
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [
+            {"id": "cache", "label": "Cache"},
+            {"id": "api", "label": "API"},
+        ],
+        "groups": [],
+    }
+
+    assert is_existing_graph_edit_request(message, graph)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Do not update the current graph; explain RAG",
+        "Never remove the edge or add a node",
+        "Add labels to training data",
+        "Update React components",
+        "When should I add labels to training data?",
+        "Should I update React components?",
+        "Please explain how to add nodes to a graph",
+        "Describe the architecture",
+        "How does system design work?",
+        "Tell me what's new in system design",
+        "Summarize new developments in agent system design",
+        "I read a new article about system design",
+        "Design patterns for multi-agent systems",
+        "Build vs buy for an AI system",
+        "Map vs flatMap in agent workflows",
+    ],
+)
+def test_non_graph_requests_do_not_mutate_an_existing_graph(message):
+    from agent.complexity import (
+        is_existing_graph_edit_request,
+        is_new_applied_graph_request,
+    )
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "cache", "label": "Cache"}],
+        "groups": [],
+    }
+
+    assert not is_existing_graph_edit_request(message, graph)
+    assert not is_new_applied_graph_request(message, graph)
+
+
+def test_existing_graph_intent_separates_local_edit_and_new_artifact():
+    from agent.complexity import (
+        is_existing_graph_edit_request,
+        is_new_applied_graph_request,
+    )
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "cache", "label": "Cache"}],
+        "groups": [],
+    }
+
+    assert is_existing_graph_edit_request("Redesign the whole architecture", graph)
+    assert not is_new_applied_graph_request("Redesign the whole architecture", graph)
+    assert not is_existing_graph_edit_request("Design a fraud detection system", graph)
+    assert is_new_applied_graph_request("Design a fraud detection system", graph)
+
+
+def test_graph_operation_resolver_handles_ambiguous_mutation_language_once():
+    from agent.complexity import resolve_graph_operation
+
+    applied = {
+        "design_origin": "applied",
+        "nodes": [{"id": "monitoring", "label": "Monitoring"}],
+        "groups": [],
+    }
+    canonical = {**applied, "design_origin": "canonical"}
+
+    assert (
+        resolve_graph_operation(
+            "Design a fraud detection system and add monitoring components",
+            applied,
+        )
+        == "create"
+    )
+    assert resolve_graph_operation("Expand monitoring", applied) == "edit"
+    assert resolve_graph_operation("Expand monitoring", canonical) == "edit"
+    assert resolve_graph_operation("Add Prometheus", applied) is None
+    assert resolve_graph_operation("Update React components", applied) is None
+    assert (
+        resolve_graph_operation(
+            "Can you explain how to add components to a graph?",
+            applied,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Make monitoring more detailed",
+        "Increase monitoring coverage",
+        "Improve monitoring",
+        "Include Prometheus in monitoring",
+        "Replace Cache service with Redis",
+        "Rebuild API Gateway service",
+        "Redesign Cache service for production",
+        "Design the Cache service with Redis",
+        "Design the Cache node with Redis",
+        "Draw an improved Monitoring service",
+        "Show Cache service with Redis",
+        "Diagram the API Gateway service with auth",
+        "Enhance Monitoring",
+        "Modernize Cache service",
+    ],
+)
+def test_local_component_requests_remain_incremental_edits(message):
+    from agent.complexity import resolve_graph_operation
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [
+            {"id": "cache", "label": "Cache service"},
+            {"id": "gateway", "label": "API Gateway service"},
+            {"id": "monitoring", "label": "Monitoring"},
+        ],
+        "groups": [],
+    }
+
+    assert resolve_graph_operation(message, graph) == "edit"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Could you add Prometheus?",
+        "Enhance the observability layer",
+        "Expand on why this trade-off matters.",
+        "Make it clearer.",
+        "Include an example.",
+    ],
+)
+def test_targetless_mutation_language_does_not_edit_a_graph(message):
+    from agent.complexity import resolve_graph_operation
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "monitoring", "label": "Monitoring"}],
+        "groups": [],
+    }
+
+    assert resolve_graph_operation(message, graph) is None
+    assert resolve_graph_operation(message, None) is None
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Keep the current graph unchanged and add citations to the answer.",
+        "Keep the current graph as-is, but update the explanation.",
+        "Do not change the diagram, but add citations.",
+        "Preserve the diagram and revise the tradeoffs.",
+        "Expand on your explanation without changing the graph.",
+        "Without changing the graph, expand on all agents.",
+        "Show how the pieces fit together without updating the graph.",
+    ],
+)
+def test_answer_edits_cannot_borrow_a_graph_reference_from_another_clause(message):
+    from agent.complexity import resolve_graph_operation
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "monitoring", "label": "Monitoring"}],
+        "groups": [],
+    }
+
+    assert resolve_graph_operation(message, graph) is None
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Show me a fraud detection system architecture",
+        "Diagram a fraud detection system",
+        "Visualize a fraud detection system",
+        "How would you design a fraud detection system?",
+    ],
+)
+def test_new_design_intent_does_not_depend_on_existing_graph_state(message):
+    from agent.complexity import resolve_graph_operation
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "monitoring", "label": "Monitoring"}],
+        "groups": [],
+    }
+
+    assert resolve_graph_operation(message, None) == "create"
+    assert resolve_graph_operation(message, graph) == "create"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Expand monitoring",
+        "Add Prometheus",
+    ],
+)
+def test_graph_followup_without_an_explicit_target_is_not_assumed_to_be_an_edit(
+    message,
+):
+    from agent.complexity import resolve_graph_operation
+
+    assert resolve_graph_operation(message, None) is None
+
+
+def test_graph_followup_can_constrain_an_explicit_existing_artifact_edit():
+    from agent.complexity import resolve_graph_operation
+
+    message = (
+        "Expand the monitoring component while preserving the original graph "
+        "topic and existing components. Add exactly one directly connected "
+        "responsibility."
+    )
+
+    assert resolve_graph_operation(message, None) == "edit"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Expand the current graph",
+        "Add a monitoring node",
+        "Rename the graph title",
+    ],
+)
+def test_explicit_graph_targets_keep_edit_intent_without_loaded_graph(message):
+    from agent.complexity import resolve_graph_operation
+
+    assert resolve_graph_operation(message, None) == "edit"
+
+
+def test_negation_in_one_clause_does_not_cancel_a_later_explicit_graph_edit():
+    from agent.complexity import resolve_graph_operation
+
+    message = "Do not explain how to update a graph database; update the current graph"
+
+    assert resolve_graph_operation(message, None) == "edit"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Could you design a fraud detection system?",
+        "Can you create a fraud detection system?",
+        "Can you please draw a fraud detection system?",
+        "I want to design a fraud detection system",
+        "I'd like you to build a fraud detection system",
+        "Help me architect a fraud detection system",
+        "Can we design a fraud detection system?",
+        "Could we build an invoice reconciliation system?",
+        "We need to design a fraud detection system",
+        "Please build a new fraud detection system",
+    ],
+)
+def test_explicit_new_artifact_requests_replace_the_prior_domain(message):
+    from agent.complexity import (
+        is_existing_graph_edit_request,
+        is_new_applied_graph_request,
+    )
+
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "cache", "label": "Cache"}],
+        "groups": [],
+    }
+
+    assert not is_existing_graph_edit_request(message, graph)
+    assert is_new_applied_graph_request(message, graph)
 
 
 # ── research_worker._format_results ──────────────────────────────────────────
+
 
 class TestFormatResults:
     """Unit-tests the result formatting logic in isolation — no network calls."""
@@ -235,7 +666,9 @@ class TestFormatResults:
 
         raw = [
             self._make_result("https://reddit.com/r/ml", "Noise", "noise body"),
-            self._make_result("https://aws.amazon.com/blogs/ml", "AWS Blog", "useful content"),
+            self._make_result(
+                "https://aws.amazon.com/blogs/ml", "AWS Blog", "useful content"
+            ),
         ]
         result = _format_results(raw, noise_domains=["reddit.com"])
         assert "reddit.com" not in result
@@ -277,7 +710,7 @@ class TestFormatResults:
         from agent.nodes.research_worker import _format_results
 
         long_title = "X" * 200
-        long_body  = "Y" * 200
+        long_body = "Y" * 200
         raw = [self._make_result("https://example.com", long_title, long_body)]
         result = _format_results(raw, noise_domains=[])
         # Ellipsis markers should appear
@@ -288,7 +721,11 @@ class TestFormatResults:
     def test_bullet_format_has_domain_title_body(self):
         from agent.nodes.research_worker import _format_results
 
-        raw = [self._make_result("https://docs.anthropic.com/guide", "Claude Docs", "Helpful text")]
+        raw = [
+            self._make_result(
+                "https://docs.anthropic.com/guide", "Claude Docs", "Helpful text"
+            )
+        ]
         result = _format_results(raw, noise_domains=[])
         assert result.startswith("- Claude Docs — <https://docs.anthropic.com/guide>")
         assert "Claude Docs" in result
@@ -306,14 +743,20 @@ class TestFormatResults:
 
         raw = [
             self._make_result("javascript:alert(1)", "Unsafe", "body"),
-            self._make_result("https://user@example.com/private", "Credentials", "body"),
+            self._make_result(
+                "https://user@example.com/private", "Credentials", "body"
+            ),
             self._make_result("https://example.com/public", "Public", "body"),
         ]
 
-        assert _format_results(raw, noise_domains=[]) == "- Public — <https://example.com/public>: body"
+        assert (
+            _format_results(raw, noise_domains=[])
+            == "- Public — <https://example.com/public>: body"
+        )
 
 
 # ── research_worker_node error resilience ─────────────────────────────────────
+
 
 class TestResearchWorkerResilience:
     """Verifies that DDG failures don't crash the pipeline."""
@@ -325,13 +768,13 @@ class TestResearchWorkerResilience:
             events.append(event)
 
         return {
-            "user_message":      "RAG pipeline architecture",
-            "research_context":  "",
-            "complexity":        "auto",
-            "graph_mode":        "auto",
-            "research_enabled":  True,
-            "send":              send,
-            "_events":           events,
+            "user_message": "RAG pipeline architecture",
+            "research_context": "",
+            "complexity": "auto",
+            "graph_mode": "auto",
+            "research_enabled": True,
+            "send": send,
+            "_events": events,
         }
 
     def test_ddg_exception_returns_empty_context(self, monkeypatch):
@@ -350,7 +793,10 @@ class TestResearchWorkerResilience:
 
         assert result["research_context"] == ""
         assert result["research_status"] == "unavailable"
-        assert any("unavailable" in event.get("status", "").lower() for event in state["_events"])
+        assert any(
+            "unavailable" in event.get("status", "").lower()
+            for event in state["_events"]
+        )
 
     def test_worker_emits_status_event(self, monkeypatch):
         """A worker_status event is always sent, even before the search runs."""
@@ -362,8 +808,10 @@ class TestResearchWorkerResilience:
         asyncio.new_event_loop().run_until_complete(rw.research_worker_node(state))
 
         events = state["_events"]
-        assert any(e.get("type") == "worker_status" and e.get("worker") == "research"
-                   for e in events)
+        assert any(
+            e.get("type") == "worker_status" and e.get("worker") == "research"
+            for e in events
+        )
 
     def test_empty_ddg_results_returns_empty_context(self, monkeypatch):
         """Empty search results produce an empty research_context."""
@@ -385,11 +833,13 @@ class TestResearchWorkerResilience:
         monkeypatch.setattr(
             rw,
             "_run_ddg_searches",
-            lambda _queries, _limit: [{
-                "href": "https://example.com/report",
-                "title": "Report",
-                "body": "Current evidence",
-            }],
+            lambda _queries, _limit: [
+                {
+                    "href": "https://example.com/report",
+                    "title": "Report",
+                    "body": "Current evidence",
+                }
+            ],
         )
         state = self._make_state()
 
@@ -398,7 +848,9 @@ class TestResearchWorkerResilience:
         assert result["research_status"] == "ready"
         assert state["_events"][-1]["sources"] == ["https://example.com/report"]
 
-    def test_success_emits_bounded_research_evidence_for_allowlisted_internal_identity(self, monkeypatch):
+    def test_success_emits_bounded_research_evidence_for_allowlisted_internal_identity(
+        self, monkeypatch
+    ):
         import agent.nodes.research_worker as rw
 
         monkeypatch.setattr(rw.settings, "db_schema", "public")
@@ -410,11 +862,13 @@ class TestResearchWorkerResilience:
         monkeypatch.setattr(
             rw,
             "_run_ddg_searches",
-            lambda _queries, _limit: [{
-                "href": "https://example.com/report",
-                "title": "Report",
-                "body": "Current external evidence",
-            }],
+            lambda _queries, _limit: [
+                {
+                    "href": "https://example.com/report",
+                    "title": "Report",
+                    "body": "Current external evidence",
+                }
+            ],
         )
         state = {**self._make_state(), "user_email": "eval@example.com"}
 
@@ -429,26 +883,37 @@ class TestResearchWorkerResilience:
             ],
         }
 
-    def test_success_does_not_emit_research_evidence_for_non_allowlisted_identity(self, monkeypatch):
+    def test_success_does_not_emit_research_evidence_for_non_allowlisted_identity(
+        self, monkeypatch
+    ):
         import agent.nodes.research_worker as rw
 
-        monkeypatch.setattr(rw.settings, "internal_test_email_allowlist_raw", "eval@example.com")
+        monkeypatch.setattr(
+            rw.settings, "internal_test_email_allowlist_raw", "eval@example.com"
+        )
         monkeypatch.setattr(
             rw,
             "_run_ddg_searches",
-            lambda _queries, _limit: [{
-                "href": "https://example.com/report",
-                "title": "Report",
-                "body": "Current external evidence",
-            }],
+            lambda _queries, _limit: [
+                {
+                    "href": "https://example.com/report",
+                    "title": "Report",
+                    "body": "Current external evidence",
+                }
+            ],
         )
         state = {**self._make_state(), "user_email": "customer@example.com"}
 
         asyncio.run(rw.research_worker_node(state))
 
-        assert [event["type"] for event in state["_events"]] == ["worker_status", "worker_status"]
+        assert [event["type"] for event in state["_events"]] == [
+            "worker_status",
+            "worker_status",
+        ]
 
-    def test_build_queries_uses_current_year_instead_of_hard_coded_year(self, monkeypatch):
+    def test_build_queries_uses_current_year_instead_of_hard_coded_year(
+        self, monkeypatch
+    ):
         from datetime import datetime
 
         import agent.nodes.research_worker as rw
@@ -466,16 +931,25 @@ class TestResearchWorkerResilience:
         assert queries[1] == "RAG operating model workflow decision points KPIs"
         assert queries[2] == "RAG best practices failure modes 2032"
 
-    def test_build_queries_researches_the_domain_function_behind_a_terse_design_seed(self):
+    def test_build_queries_researches_the_domain_function_behind_a_terse_design_seed(
+        self,
+    ):
         import agent.nodes.research_worker as rw
 
         queries = rw._build_queries("growth marketing multi-agent system")
 
-        assert queries[0].startswith("growth marketing multi-agent system reference architecture")
-        assert queries[1] == "growth marketing operating model workflow decision points KPIs"
+        assert queries[0].startswith(
+            "growth marketing multi-agent system reference architecture"
+        )
+        assert (
+            queries[1]
+            == "growth marketing operating model workflow decision points KPIs"
+        )
         assert queries[2].startswith("growth marketing best practices failure modes ")
 
-    def test_worker_researches_restored_design_query_for_terse_followup(self, monkeypatch):
+    def test_worker_researches_restored_design_query_for_terse_followup(
+        self, monkeypatch
+    ):
         import agent.nodes.research_worker as rw
 
         captured_queries = []
@@ -525,7 +999,13 @@ class TestResearchWorkerResilience:
                 calls.append((query, max_results))
                 if query == "bad":
                     raise RuntimeError("search failed")
-                return [{"href": f"https://example.com/{query}", "title": query, "body": "body"}]
+                return [
+                    {
+                        "href": f"https://example.com/{query}",
+                        "title": query,
+                        "body": "body",
+                    }
+                ]
 
         monkeypatch.setitem(sys.modules, "ddgs", types.SimpleNamespace(DDGS=_DDGS))
 
@@ -555,14 +1035,18 @@ class TestResearchWorkerResilience:
             def text(self, query, max_results):
                 if len(sessions) == 1:
                     return []
-                return [{
-                    "href": "https://example.com/recovered",
-                    "title": query,
-                    "body": "recovered",
-                }]
+                return [
+                    {
+                        "href": "https://example.com/recovered",
+                        "title": query,
+                        "body": "recovered",
+                    }
+                ]
 
         monkeypatch.setitem(sys.modules, "ddgs", types.SimpleNamespace(DDGS=_DDGS))
-        monkeypatch.setattr("agent.nodes.research_worker.time.sleep", lambda _seconds: None)
+        monkeypatch.setattr(
+            "agent.nodes.research_worker.time.sleep", lambda _seconds: None
+        )
 
         results = _run_ddg_searches(["first", "second"], 2)
 

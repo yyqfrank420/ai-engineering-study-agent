@@ -5,8 +5,9 @@ type PostHogClient = typeof import('posthog-js')['default'];
 
 const STORAGE_KEY = 'agent.analytics.anonymous_id';
 const POSTHOG_KEY = (import.meta.env.VITE_POSTHOG_KEY as string | undefined)?.trim() ?? '';
-const POSTHOG_HOST = (import.meta.env.VITE_POSTHOG_HOST as string | undefined)?.trim() || 'https://us.i.posthog.com';
+const POSTHOG_HOST = (import.meta.env.VITE_POSTHOG_HOST as string | undefined)?.trim() || 'https://eu.i.posthog.com';
 const ANALYTICS_ENABLED = import.meta.env.VITE_ANALYTICS_ENABLED !== 'false';
+const IS_PRODUCTION = import.meta.env.VITE_IS_PRODUCTION === 'true';
 const PUBLIC_EVENTS = new Set<AnalyticsEventName>([
   'auth_viewed',
   'otp_requested',
@@ -88,7 +89,10 @@ export async function trackEvent(
   const payload: AnalyticsEventProperties = { ...properties };
 
   if (ANALYTICS_ENABLED && POSTHOG_KEY) {
-    withPostHog(client => client.capture(event, payload));
+    withPostHog(client => client.capture(event, {
+      ...payload,
+      is_production: IS_PRODUCTION,
+    }));
   }
 
   try {
