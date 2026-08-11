@@ -206,7 +206,8 @@ The staged DAG and layer-as-generated architecture are Release 2 future work, ou
 stabilization path.
 
 - Every initial candidate receives one exhaustive component, connection, composition, and render
-  scorecard. Every deterministic finding is classified exactly once.
+  scorecard. Every deterministic finding is classified exactly once. `novice_clarity` is advisory:
+  it may guide presentation improvements but cannot reject a candidate or create repair authority.
 - The selected review depth is authoritative. Prototype review rejects production-only findings even
   when request text describes a production system. Production review retains all topology proofs.
 - Repair patches are record-scoped and may cover non-adjacent records in the same connected
@@ -214,6 +215,9 @@ stabilization path.
   its own exact permission; topology proximity grants none. Each required connection addition names
   its exact directed `source -> destination` obligation. A group move requires permission for both
   source and destination groups.
+- `authored_composition` uses a server-owned title, groups, and sequence repair profile. The profile
+  grants only the selected indexed or append permissions required by the failed contract; critic and
+  patch output cannot widen it.
 - Retained pass verdicts follow dependency invalidation. Component changes reopen components,
   connections, and composition. Edge changes reopen connections and composition. Composition-only
   changes reopen composition.
@@ -222,7 +226,9 @@ stabilization path.
 - It permits at most two successful semantic repair rounds and one error-informed critic-contract
   correction. An invalid local admission preserves the current candidate, returns its safe typed
   validation path and rule to one fresh critic correction, and consumes that correction budget. The
-  corrected Kimi prompt cannot repeat the rejected prompt.
+  corrected Kimi prompt cannot repeat the rejected prompt. Each post-patch review classifies every
+  prior server-issued obligation as resolved or still failing. A repeated still-failing obligation
+  cannot consume a second repair in the same server-tracked class; the candidate fails closed.
 - A request-scoped counter caps Sonnet critic provider calls at four across initial review, schema
   correction, contract correction, and post-patch review. Reaching the ceiling fails closed.
 - A local contract may combine exact component or connection changes with the title and selected

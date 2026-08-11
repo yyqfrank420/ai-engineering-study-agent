@@ -39,14 +39,20 @@ This is the current runtime contract for the production-quality demo.
    and rendered off-screen at the user's real graph-pane dimensions. The browser returns a bounded,
    version-checked screenshot and layout report over idempotent WebSocket chunks.
 7. The critic judges four disjoint artifact layers: components, connections, composition, and the
-   rendered artifact. Each layer has its own hard pass gate. Sonnet returns a fixed scorecard of
+   rendered artifact. Each layer has its own hard pass gate. `novice_clarity` is advisory and cannot
+   reject a candidate or grant repair authority. Sonnet returns a fixed scorecard of
    rubric codes and record indexes; the server expands them into exact selectors and read-only
-   context. A local semantic rejection can receive at most two successful Kimi K3 high typed repair
+   context. The server owns the title, groups, and sequence repair profile for `authored_composition`;
+   critic and patch output cannot widen it. A local semantic rejection can receive at most two
+   successful Kimi K3 high typed repair
    rounds against the exact failed records, including non-adjacent records in the connected
    candidate. Uncited records stay locked.
    Component changes reopen component, connection, and composition review. Edge changes reopen
    connection and composition review. Composition-only changes reopen composition review. An invalid
-   patch may receive one error-informed critic-contract correction before the patch is retried. A
+   patch may receive one error-informed critic-contract correction before the patch is retried.
+   Every post-patch review classifies prior server obligations as resolved or still failing. A
+   repeated still-failing obligation cannot consume a second repair in the same server-tracked class
+   and fails closed. A
    graph-caused render failure can share the patch when an editable layer identifies the cause. A
    render-only failure, global design failure, or failed post-patch review suppresses the diagram.
    The entire turn has a four-call Sonnet critic ceiling, including schema corrections.

@@ -3,7 +3,11 @@ from copy import deepcopy
 
 import pytest
 from adapters.llm_adapter import _anthropic_response_schema
-from agent.architecture_rubric import repair_requirements
+from agent.architecture_rubric import (
+    ADVISORY_RUBRIC_CODES,
+    RUBRIC_CRITERIA,
+    repair_requirements,
+)
 from agent.graph import _route_after_review
 from agent.graph_repair_contract import (
     REPAIR_LAYER_PATCH_FIELDS,
@@ -25,9 +29,11 @@ from agent.nodes.graph_critic import (
     _deterministic_review,
     _enforce_local_repair_admission,
     _locked_review_layers,
+    _prior_open_obligations,
     _preflight_review_protocol,
     _prior_obligation_id,
     _review_packet,
+    _stop_repeated_repair_class,
     _semantic_graph_projection,
     _validate_repair_contract,
     _validate_review_protocol,
@@ -199,7 +205,7 @@ def _critic_state(*, graph=None, complexity="prototype"):
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v50"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v51"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -1100,8 +1106,9 @@ def test_every_numbered_rubric_code_expands_to_its_canonical_finding():
         assert normalized["repair_contract"]["layers"][layer]["blocking_findings"] == [
             f"Repair {code.replace('_', ' ')} in the {layer} layer."
             for code in _RUBRIC_CODES
-            if _RUBRIC_CODE_OWNERS[code] == layer
+            if _RUBRIC_CODE_OWNERS[code] == layer and code not in ADVISORY_RUBRIC_CODES
         ]
+    assert normalized["advice"] == [RUBRIC_CRITERIA["novice_clarity"][1]]
 
 
 @pytest.mark.parametrize(
@@ -1521,6 +1528,57 @@ def test_prior_obligation_dispositions_reject_unknown_server_ids():
             require_topology_proofs=False,
             prior_open_obligations=prior,
         )
+
+
+def test_still_failing_prior_obligation_stops_an_identical_second_repair_class():
+    finding = "Repair edge semantics in the connections layer."
+    obligation_id = _prior_obligation_id(layer="connections", finding=finding)
+    review = {
+        "approved": False,
+        "review_status": "completed",
+        "missing": [finding],
+        "prior_obligation_dispositions": [
+            {"prior_obligation_id": obligation_id, "status": "still_fail"}
+        ],
+    }
+
+    stopped = _stop_repeated_repair_class(
+        review,
+        prior_open_obligations=[
+            {"id": obligation_id, "layer": "connections", "finding": finding}
+        ],
+        repair_round_count=1,
+        contract_correction=None,
+    )
+
+    assert stopped["terminal"] is True
+    assert stopped["failure_code"] == "graph_repair_repeated_blocker_class"
+    assert stopped["missing"] == [finding]
+
+
+def test_resolved_prior_obligation_allows_a_distinct_second_repair():
+    finding = "Repair edge semantics in the connections layer."
+    obligation_id = _prior_obligation_id(layer="connections", finding=finding)
+    review = {
+        "approved": False,
+        "review_status": "completed",
+        "missing": ["Repair branch completion in the connections layer."],
+        "prior_obligation_dispositions": [
+            {"prior_obligation_id": obligation_id, "status": "resolved"}
+        ],
+    }
+
+    continued = _stop_repeated_repair_class(
+        review,
+        prior_open_obligations=[
+            {"id": obligation_id, "layer": "connections", "finding": finding}
+        ],
+        repair_round_count=1,
+        contract_correction=None,
+    )
+
+    assert continued is review
+    assert "terminal" not in continued
 
 
 def test_review_packet_carries_open_findings_and_prototype_filters_production_only():
@@ -4698,7 +4756,7 @@ def test_every_semantic_blocker_has_an_editable_owner():
     )
 
 
-def test_novice_clarity_authorizes_a_local_composition_repair():
+def test_novice_clarity_is_advisory_without_mutation_authority():
     graph = {
         "nodes": [{"id": "entry"}, {"id": "outcome"}],
         "edges": [{"source": "entry", "target": "outcome", "label": "returns"}],
@@ -4722,7 +4780,10 @@ def test_novice_clarity_authorizes_a_local_composition_repair():
         "composition",
         finding_codes=[novice_clarity_code],
         group_indexes=[0],
-        composition_fields=["groups"],
+        composition_fields=["groups", "sequence"],
+        sequence_indexes=[0],
+        group_addition_count=1,
+        sequence_addition_count=1,
     )
 
     normalized = _canonicalise_review_protocol(
@@ -4733,28 +4794,108 @@ def test_novice_clarity_authorizes_a_local_composition_repair():
         require_topology_proofs=False,
     )
 
+    contract = normalized["repair_contract"]
+    composition = contract["layers"]["composition"]
+
     assert _RUBRIC_CODE_OWNERS["novice_clarity"] == "composition"
-    assert normalized["repair_contract"]["repair_scope"] == "local"
-    assert normalized["repair_contract"]["layers"]["composition"][
-        "composition_fields"
-    ] == ["groups"]
+    assert contract["repair_scope"] == "none"
+    assert composition["status"] == "pass"
+    assert composition["blocking_findings"] == []
+    assert composition["group_ids"] == []
+    assert composition["composition_fields"] == []
+    assert composition["sequence_indexes"] == []
+    assert composition["composition_append_counts"] == {}
+    assert normalized["advice"]
+    assert RUBRIC_CRITERIA["novice_clarity"][1] in normalized["advice"]
 
 
-def test_novice_clarity_can_add_a_group_for_existing_components():
+def test_mixed_novice_clarity_and_authored_composition_only_blocks_composition():
     graph = {
         "nodes": [{"id": "entry"}, {"id": "outcome"}],
         "edges": [{"source": "entry", "target": "outcome", "label": "returns"}],
-        "groups": [],
-        "sequence": [],
+        "groups": [
+            {
+                "id": "runtime",
+                "label": "Primary runtime",
+                "kind": "runtime",
+                "nodeIds": ["entry", "outcome"],
+            }
+        ],
+        "sequence": [
+            {"step": 1, "nodes": ["entry", "outcome"], "description": "returns"}
+        ],
         "assumptions": [],
     }
     payload = _passing_review_payload()
     _set_model_layer(
         payload,
         "composition",
-        finding_codes=[_RUBRIC_CODES.index("novice_clarity") + 1],
+        finding_codes=[
+            _RUBRIC_CODES.index("novice_clarity") + 1,
+            _RUBRIC_CODES.index("authored_composition") + 1,
+        ],
+        group_indexes=[0],
+        composition_fields=["groups", "sequence"],
+        sequence_indexes=[0],
+    )
+
+    normalized = _canonicalise_review_protocol(
+        payload,
+        graph=graph,
+        deterministic_findings=[],
+        review_context=[],
+        require_topology_proofs=False,
+    )
+    composition = normalized["repair_contract"]["layers"]["composition"]
+
+    assert composition["status"] == "fail"
+    assert composition["blocking_findings"] == [
+        "Repair authored composition in the composition layer."
+    ]
+    assert composition["composition_fields"] == ["title", "groups", "sequence"]
+    assert composition["group_ids"] == ["runtime"]
+    assert composition["sequence_indexes"] == [0]
+    assert composition["composition_append_counts"] == {}
+    assert RUBRIC_CRITERIA["novice_clarity"][1] in normalized["advice"]
+
+
+def test_prior_open_obligations_filter_legacy_novice_clarity_blockers():
+    state = _critic_state()
+    state["graph_review"] = {
+        "repair_contract": _repair_contract(
+            scope="local",
+            failed_layer="composition",
+            findings=["Repair novice clarity in the composition layer."],
+            layer_selectors={"composition": {"composition_fields": ["groups"]}},
+        )
+    }
+
+    assert _prior_open_obligations(state, resolved_depth="production") == []
+
+
+def test_authored_composition_uses_full_profile_and_requires_record_selectors():
+    graph = {
+        "nodes": [{"id": "entry"}, {"id": "outcome"}],
+        "edges": [{"source": "entry", "target": "outcome", "label": "returns"}],
+        "groups": [
+            {
+                "id": "runtime",
+                "label": "Primary runtime",
+                "kind": "runtime",
+                "nodeIds": ["entry", "outcome"],
+            }
+        ],
+        "sequence": [
+            {"step": 1, "nodes": ["entry", "outcome"], "description": "returns"}
+        ],
+        "assumptions": [],
+    }
+    payload = _passing_review_payload(topology_proofs={})
+    _set_model_layer(
+        payload,
+        "composition",
+        finding_codes=[_RUBRIC_CODES.index("authored_composition") + 1],
         composition_fields=["groups"],
-        group_addition_count=1,
     )
 
     normalized = _canonicalise_review_protocol(
@@ -4766,7 +4907,10 @@ def test_novice_clarity_can_add_a_group_for_existing_components():
     )
     contract = normalized["repair_contract"]
 
-    validate_local_repair_admission(contract, graph=graph)
-    assert contract["layers"]["composition"]["composition_append_counts"] == {
-        "groups": 1
-    }
+    assert contract["layers"]["composition"]["composition_fields"] == [
+        "title",
+        "groups",
+        "sequence",
+    ]
+    with pytest.raises(ValueError, match="whole groups collection"):
+        validate_local_repair_admission(contract, graph=graph)

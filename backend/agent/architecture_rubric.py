@@ -118,6 +118,31 @@ RUBRIC_CODE_OWNERS = {
     code: owner for code, (owner, _requirement) in RUBRIC_CRITERIA.items()
 }
 
+# Screenshot readability is useful reviewer guidance, but it has no typed,
+# server-checkable closure rule. Keep its wire code stable without allowing a
+# subjective preference to withhold an otherwise valid graph.
+ADVISORY_RUBRIC_CODES = frozenset({"novice_clarity"})
+
+COMPOSITION_REPAIR_PROFILES = {
+    "assumption_hygiene": ("assumptions",),
+    "authored_composition": ("title", "groups", "sequence"),
+}
+
+
+def required_composition_repair_fields(criteria: list[str]) -> list[str]:
+    """Return server-owned composition authority required by hard criteria."""
+    required = {
+        field
+        for criterion in criteria
+        for field in COMPOSITION_REPAIR_PROFILES.get(criterion, ())
+    }
+    return [
+        field
+        for field in ("title", "groups", "sequence", "assumptions")
+        if field in required
+    ]
+
+
 TOPOLOGY_PROOF_REQUIREMENTS = {
     "state_effect_reconciliation": (
         "Show a directed witness from durable operation reservation through execution and authoritative read-back to every reconciliation outcome."

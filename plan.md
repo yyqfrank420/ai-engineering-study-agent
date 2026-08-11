@@ -20,7 +20,7 @@ The redesign stays outside the release-critical path. It begins after the curren
 4. Record safe validation paths and rule codes when critic output is rejected.
 5. Add paired prototype and production tests.
 6. Give the active critic verdict priority over speculative repair time while preserving synthesis and finalization.
-7. Keep whole-graph generation, private render, MECE review layers, dependency-aware retention and reopening, at most two semantic repairs, and one error-informed critic-contract correction.
+7. Keep whole-graph generation, private render, MECE review layers, dependency-aware retention and reopening, at most two semantic repairs, and one error-informed critic-contract correction. Treat `novice_clarity` as advisory, and fail closed when a repeated still-failing obligation would consume an identical repair class.
 8. Complete the first exhaustive editable review before spending the repair budget.
 
 ### Current status
@@ -29,7 +29,7 @@ The redesign stays outside the release-critical path. It begins after the curren
 - Prototype review sends an empty proof object and production review keeps the full proof contract.
 - The initial review returns one exhaustive scorecard. One bounded protocol correction can repair a malformed scorecard. A rejected patch can receive one separate error-informed contract correction with a safe validation path and rule.
 - The shared initial critic stage may borrow up to 195 seconds. The measured timing replay preserves 98 seconds for patching and 101 seconds for final review.
-- Repair scope is derived from failed layer ownership. It grants exact permissions for cited non-adjacent records in one connected candidate and exact directed connection obligations. Every added component region must connect to an existing node. Group moves require both source and destination group authority. Editable defects enter at most two successful bounded repair rounds and render-only defects fail closed.
+- Repair scope is derived from failed layer ownership. It grants exact permissions for cited non-adjacent records in one connected candidate and exact directed connection obligations. `authored_composition` uses a server-owned title, groups, and sequence repair profile. Every added component region must connect to an existing node. Group moves require both source and destination group authority. Editable defects enter at most two successful bounded repair rounds and one contract correction; a repeated still-failing prior obligation cannot consume an identical repair class. Render-only defects fail closed.
 - Diagnostic `31333075986` exposed a local architect response-limit conflict and an invalid fallback path before the intended graph review could complete. The current recovery removes that conflict and fails closed when architecture input is unavailable.
 - Diagnostic `31335429802` failed at `architecture_pass_evidence_provenance` before graph construction. It made two application calls, no judge calls, and cost $0.353252. The architect took 139.767 seconds and emitted 9,931 output tokens; synthesis took 25.602 seconds. The turn took 168.228 seconds and the case took 170.265 seconds. No graph, private render, fallback, Kimi, Sonnet, repair, or second turn ran.
 - Diagnostic `31340006983` reached the corrected evidence contract but the Opus architect exhausted its 150-second role deadline at `xhigh` effort. The accepted provider attempt ran for 149.813 seconds with zero final output and no queue wait. The turn failed closed before Kimi, Sonnet, rendering, repair, or turn two. Architect effort is now `high`; the model, response contract, independent review, and deadline stay unchanged.
@@ -47,6 +47,7 @@ The redesign stays outside the release-critical path. It begins after the curren
 - An initial editable rejection receives exactly one completion pass before repair.
 - A completion may add defects and selectors. Omitted prior repair evidence remains in the server-owned merged contract. The reviewed graph snapshot and scorecard remain paired by graph version.
 - Post-patch reviews do not start another completion pass.
+- `novice_clarity` produces advice only. Post-patch reviews classify every prior server obligation as resolved or still failing, and repeated still-failing obligations fail closed before a second repair in the same server-tracked class.
 - Safe error telemetry identifies the rejected field and rule without storing raw prompts or model output.
 - Existing graph critic, repair, workflow, API, and browser tests remain green.
 - Backend and frontend coverage stay at or above their current 90% thresholds.

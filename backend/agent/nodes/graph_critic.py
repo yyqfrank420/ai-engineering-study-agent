@@ -7,7 +7,13 @@ from copy import deepcopy
 from typing import Any
 
 from adapters.llm_adapter import build_telemetry
-from agent.architecture_rubric import RUBRIC_CODES, RUBRIC_CODE_OWNERS
+from agent.architecture_rubric import (
+    ADVISORY_RUBRIC_CODES,
+    RUBRIC_CODES,
+    RUBRIC_CODE_OWNERS,
+    RUBRIC_CRITERIA,
+    required_composition_repair_fields,
+)
 from agent.architecture_playbook import format_evidence_bundle
 from agent.complexity import resolve_complexity
 from agent.deadlines import critic_timeout_seconds as _configured_critic_timeout_seconds
@@ -58,7 +64,7 @@ class CriticProtocolError(ValueError):
         self.rule = rule if rule in _PROTOCOL_ERROR_RULES else None
 
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v50"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v51"
 # Sonnet 5 high effort can spend the full output allowance on adaptive thinking
 # before emitting the required scorecard. Medium keeps the review inside one call.
 _GRAPH_CRITIC_EFFORT = "medium"
@@ -86,6 +92,7 @@ Response-size contract:
 - If a repair changes several artifact types, fail each owning layer with its own finding code and
   indexes.
 - Passing layers have empty finding and selector arrays. Preserve every required layer.
+- `novice_clarity` is advisory. Do not emit code 8 or mutation selectors for it.
 - Classify every server-supplied prior open obligation exactly once as resolved or still_fail.
 """
 
@@ -102,7 +109,8 @@ def _strict_object_schema(properties: dict[str, Any]) -> dict[str, Any]:
 _RUBRIC_CODES = RUBRIC_CODES
 _RUBRIC_CODE_OWNERS = RUBRIC_CODE_OWNERS
 _RUBRIC_CODEBOOK = ", ".join(
-    f"{index}={name}[{_RUBRIC_CODE_OWNERS[name]}]"
+    f"{index}={name}[{_RUBRIC_CODE_OWNERS[name]}"
+    f"{' advisory' if name in ADVISORY_RUBRIC_CODES else ''}]"
     for index, name in enumerate(_RUBRIC_CODES, start=1)
 )
 
@@ -428,6 +436,10 @@ def _prior_open_obligations(
         _rubric_finding(_RUBRIC_CODE_OWNERS[code], code)
         for code in _PRODUCTION_ONLY_RUBRIC_CODES
     }
+    advisory_findings = {
+        _rubric_finding(_RUBRIC_CODE_OWNERS[code], code)
+        for code in ADVISORY_RUBRIC_CODES
+    }
     obligations: list[dict[str, str]] = []
     for layer in _REPAIR_LAYERS:
         assessment = previous_layers.get(layer)
@@ -435,6 +447,8 @@ def _prior_open_obligations(
             continue
         for finding in assessment.get("blocking_findings") or []:
             if not isinstance(finding, str) or not finding.strip():
+                continue
+            if finding in advisory_findings:
                 continue
             if resolved_depth != "production" and (
                 finding in production_findings
@@ -1215,6 +1229,7 @@ def _canonicalise_review_protocol(
     sequence = graph.get("sequence") or []
     assumptions = graph.get("assumptions") or []
     canonical_layers: dict[str, dict[str, Any]] = {}
+    advice: list[str] = []
     classified_deterministic_indexes: list[int] = []
     component_addition_count = 0
     connection_addition_obligations: list[dict[str, str]] = []
@@ -1224,12 +1239,19 @@ def _canonicalise_review_protocol(
         if not isinstance(row, list) or len(row) != len(fields):
             raise ValueError(f"{layer} scorecard row must contain {len(fields)} fields")
         assessment = dict(zip(fields, row, strict=True))
-        finding_codes = _unique_model_rubric_codes(
+        reported_finding_codes = _unique_model_rubric_codes(
             assessment.get("finding_codes"),
             path=f"layers.{layer}.finding_codes",
             layer=layer,
             resolved_depth=resolved_depth,
         )
+        advisory_codes = [
+            code for code in reported_finding_codes if code in ADVISORY_RUBRIC_CODES
+        ]
+        finding_codes = [
+            code for code in reported_finding_codes if code not in ADVISORY_RUBRIC_CODES
+        ]
+        advice.extend(RUBRIC_CRITERIA[code][1] for code in advisory_codes)
         deterministic_indexes = _unique_model_indexes(
             assessment.get("deterministic_finding_indexes"),
             path=f"layers.{layer}.deterministic_finding_indexes",
@@ -1254,7 +1276,11 @@ def _canonicalise_review_protocol(
             size=len(nodes),
         )
         status = "fail" if finding_codes or deterministic_indexes else "pass"
-        if status == "pass" and (context_indexes or context_node_indexes):
+        if (
+            status == "pass"
+            and not advisory_codes
+            and (context_indexes or context_node_indexes)
+        ):
             raise ValueError(f"passing {layer} layer cannot cite repair context")
         score = 1.0 if status == "pass" else 0.0
         context_findings = (
@@ -1365,11 +1391,22 @@ def _canonicalise_review_protocol(
             canonical["group_ids"] = [
                 str(groups[index].get("id") or "") for index in indexes
             ]
-            canonical["composition_fields"] = _unique_model_tokens(
+            selected_composition_fields = _unique_model_tokens(
                 assessment.get("composition_fields"),
                 path="layers.composition.composition_fields",
                 allowed=set(_COMPOSITION_FIELDS),
             )
+            required_composition_fields = required_composition_repair_fields(
+                finding_codes
+            )
+            authoritative_composition_fields = set(required_composition_fields)
+            if deterministic_indexes or not required_composition_fields:
+                authoritative_composition_fields.update(selected_composition_fields)
+            canonical["composition_fields"] = [
+                field
+                for field in _COMPOSITION_FIELDS
+                if field in authoritative_composition_fields
+            ]
             canonical["sequence_indexes"] = _unique_model_indexes(
                 assessment.get("sequence_indexes"),
                 path="layers.composition.sequence_indexes",
@@ -1407,6 +1444,22 @@ def _canonicalise_review_protocol(
                 )
                 if count > 0
             }
+        if status == "pass" and advisory_codes:
+            canonical.update(
+                {
+                    "blocking_findings": [],
+                    "node_ids": [],
+                    "edge_selectors": [],
+                    "group_ids": [],
+                    "composition_fields": [],
+                    "sequence_indexes": [],
+                    "assumption_indexes": [],
+                    "context_node_ids": [],
+                    "addition_count": 0,
+                    "connection_addition_obligations": [],
+                    "composition_append_counts": {},
+                }
+            )
         canonical_layers[layer] = canonical
     if sorted(classified_deterministic_indexes) != list(
         range(len(deterministic_findings))
@@ -1428,7 +1481,7 @@ def _canonicalise_review_protocol(
         return {
             "repair_contract": {"repair_scope": scope, "layers": canonical_layers},
             "strengths": [],
-            "advice": [],
+            "advice": list(dict.fromkeys(advice)),
             "topology_proofs": [],
             "prior_obligation_dispositions": dispositions,
         }
@@ -1601,7 +1654,7 @@ def _canonicalise_review_protocol(
     return {
         "repair_contract": {"repair_scope": scope, "layers": canonical_layers},
         "strengths": [],
-        "advice": [],
+        "advice": list(dict.fromkeys(advice)),
         "topology_proofs": canonical_proofs,
         "prior_obligation_dispositions": dispositions,
     }
@@ -1666,9 +1719,10 @@ Compare the diagram with the user's exact request. Check all of the following:
 6. assumption hygiene: important unknowns are explicit instead of invented as facts;
 7. selected depth: component responsibilities name the production owners for failure handling,
    observability, and rollout when those concerns apply.
-8. novice clarity: authored groups and sequence make the entry, main path, controls, and outcome easy
-   to locate in the screenshot. Classify unclear node text under components and unclear edge direction
-   under connections. Exact screenshot geometry belongs to the deterministic render gate.
+8. novice clarity: this criterion is advisory and never uses finding code 8. Classify a concrete
+   node-text defect under components, an edge-direction defect under connections, and a missing or
+   contradictory authored structure under criterion 12. Exact screenshot geometry belongs to the
+   deterministic render gate.
 9. logical flow: the primary operational path starts at its real actor, event source, scheduled
    trigger, or first system receiver, then follows directed contracts to an observable outcome.
    Every branch rejoins that spine or ends at a named outcome. Sequence ordering belongs to authored
@@ -1679,7 +1733,7 @@ Compare the diagram with the user's exact request. Check all of the following:
     owner and reject components whose only purpose is authoring, reviewing, explaining, laying out,
     or rendering this diagram. Cross-cutting evaluation, security, and observability may span
     components when they carry distinct operational responsibility.
-12. authored composition: the title, named zones, assumptions, and one primary sequence expose the
+12. authored composition: the title, named zones, and one primary sequence expose the
     operational spine without contradicting graph records. Supporting, offline, control, and
     delivery paths remain subordinate to that sequence. Missing components, edges, or paths belong
     to their owning layers.
@@ -1752,6 +1806,12 @@ The deterministic browser gate owns render geometry. Use the screenshot as evide
 defects and assign each semantic defect to the graph field that must change. Use components for node
 labels or responsibilities, connections for direction and edge semantics, and composition for title,
 groups, sequence, or assumptions. A semantic clarity defect never belongs to render.
+
+Do not reject for a subjective novice-clarity preference. The server treats code 8 as advice and
+removes any mutation authority attached to it. Criterion 12 is blocking only for a concrete defect
+in the authored title, groups, or primary sequence. A criterion 12 repair must cite all three fields,
+including exact group and sequence indexes or declared append counts. The server derives that field
+profile and rejects an incomplete contract.
 
 Reject a diagram dominated by labels such as Agent, Tool Use, Planning, Evaluation, Generation,
 Language Model, Sampling, Quality, Cost, Latency, Foundation Model, Memory, or Application. Reject
@@ -2094,6 +2154,59 @@ def _review_admission_error(review: dict[str, Any]) -> dict[str, str] | None:
     return None
 
 
+def _stop_repeated_repair_class(
+    review: dict[str, Any],
+    *,
+    prior_open_obligations: list[dict[str, str]],
+    repair_round_count: int,
+    contract_correction: dict[str, str] | None,
+) -> dict[str, Any]:
+    """Stop a second semantic repair for an obligation that the first did not close."""
+    if (
+        repair_round_count != 1
+        or contract_correction is not None
+        or review.get("terminal")
+        or review.get("review_status") != "completed"
+    ):
+        return review
+    still_failing_ids = {
+        disposition["prior_obligation_id"]
+        for disposition in review.get("prior_obligation_dispositions") or []
+        if isinstance(disposition, dict)
+        and disposition.get("status") == "still_fail"
+        and isinstance(disposition.get("prior_obligation_id"), str)
+    }
+    repeated = [
+        obligation
+        for obligation in prior_open_obligations
+        if obligation.get("id") in still_failing_ids
+    ]
+    if not repeated:
+        return review
+    rejected = deepcopy(review)
+    findings = list(
+        dict.fromkeys(
+            str(obligation["finding"])
+            for obligation in repeated
+            if isinstance(obligation.get("finding"), str)
+        )
+    )
+    rejected.update(
+        {
+            "approved": False,
+            "terminal": True,
+            "failure_code": "graph_repair_repeated_blocker_class",
+            "missing": findings,
+            "revision_instruction": (
+                "The first semantic repair did not close the same server-tracked "
+                "repair class. The diagram was withheld without repeating it. "
+                + " ".join(findings)[:600]
+            ),
+        }
+    )
+    return rejected
+
+
 def _completed_critic_review(
     response: StructuredLLMResponse,
     *,
@@ -2160,6 +2273,7 @@ async def graph_critic_node(state: AgentState) -> AgentState:
 
     profile = resolve_complexity(state.get("complexity", "auto"), query)
     revision_count = int(state.get("graph_revision_count", 0))
+    repair_round_count = int(state.get("graph_repair_round_count", revision_count))
     contract_correction_count = int(state.get("graph_contract_correction_count", 0))
     critic_call_count = int(state.get("graph_critic_call_count", 0))
 
@@ -2271,6 +2385,7 @@ async def graph_critic_node(state: AgentState) -> AgentState:
         )
         return _reviewed_state(state, graph=graph, review=review)
     raw = ""
+    prior_open_obligations: list[dict[str, str]] = []
     validation_stage = "initial"
     protocol_corrected = False
     error_path: str | None = None
@@ -2453,6 +2568,12 @@ async def graph_critic_node(state: AgentState) -> AgentState:
             failure_code=failure_code,
             reason="The independent semantic architecture review did not complete.",
         )
+    review = _stop_repeated_repair_class(
+        review,
+        prior_open_obligations=prior_open_obligations,
+        repair_round_count=repair_round_count,
+        contract_correction=contract_correction,
+    )
     review["layer_fingerprints"] = _review_layer_fingerprints(graph)
     review_unavailable = review.get("review_status") == "unavailable"
     admission_error = _review_admission_error(review)

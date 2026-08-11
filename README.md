@@ -28,7 +28,7 @@ Production-oriented, graph-guided study companion for *AI Engineering* by Chip H
 3. enrich applied-design seeds into one explicit product brief, then challenge that same interpretation
 4. integrate their outputs into a domain-specific graph
 5. render the candidate privately in the browser and review the real screenshot plus architecture
-6. retain only dependency-safe passing review layers, keep the reviewed graph snapshot beside its scorecard, and let Kimi apply at most two semantic repair rounds to exact failed records and directed connection obligations; one error-informed critic-contract correction may follow a rejected admission, then the complete candidate is revalidated and rerendered
+6. retain only dependency-safe passing review layers, keep the reviewed graph snapshot beside its scorecard, treat `novice_clarity` as advisory, and let Kimi apply at most two semantic repair rounds through server-owned repair profiles to exact failed records and directed connection obligations; one error-informed critic-contract correction may follow a rejected admission, while a repeated still-failing obligation cannot consume an identical repair class, then the complete candidate is revalidated and rerendered
 7. finish the one-call walkthrough privately, then reveal the accepted graph and explanation together
 
 Chat runs over `/api/chat/ws`. The first frame authenticates the connection; subsequent
@@ -65,7 +65,7 @@ Relevant docs:
 - **Explicit design roles**: Opus 5 xhigh writes and reviews the architecture brief, Kimi K3 low builds graph JSON, Kimi K3 high applies typed repairs, Sonnet 5 medium owns graph QA, and Sonnet 5 high owns the protected semantic judge.
 - **D3 architecture diagram**: Interactive graph with step-by-step walkthrough and node detail enrichment.
 - **Protected live evaluation**: Browser journeys, deterministic graph contracts, and reviewed semantic rubrics run against isolated no-traffic Cloud Run revisions.
-- **Bounded graph publication**: Repairs can cover cited disconnected records, require both source and destination group authority for a group move, and use explicit `approved`, `preserved`, or `withheld` publication states. An edit never falls back to creating a new graph.
+- **Bounded graph publication**: Repairs can cover cited disconnected records, use server-owned `authored_composition` title, groups, and sequence repair profiles, require both source and destination group authority for a group move, and use explicit `approved`, `preserved`, or `withheld` publication states. Repeated still-failing obligations cannot consume an identical repair class. An edit never falls back to creating a new graph.
 - **Selective evidence reuse**: Audited per-case evidence composition avoids repeating already-passing paid evaluations while requiring exact evidence for the unresolved case.
 - **Immutable production delivery**: Production deploys only the approved Artifact Registry digest for the exact Git tree, smokes it without traffic, then promotes that revision.
 
