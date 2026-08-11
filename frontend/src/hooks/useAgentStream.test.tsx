@@ -449,9 +449,16 @@ describe('useAgentStream', () => {
         graph_version: 'candidate-close',
         data: graph('candidate-close'),
       }, { kind: 'chat', clientRequestId: firstRequestId });
+      mocks.eventHandler?.({
+        type: 'graph_preview',
+        data: { ...graph('preview-close'), title: 'Closing preview' },
+      }, { kind: 'chat', clientRequestId: firstRequestId });
       closed.resolve(false);
     });
-    await waitFor(() => expect(screen.getByTestId('candidate-title').textContent).toBe(''));
+    await waitFor(() => {
+      expect(screen.getByTestId('candidate-title').textContent).toBe('');
+      expect(screen.getByTestId('graph-title').textContent).toBe('');
+    });
 
     const rejected = deferred<boolean>();
     mocks.sendMessage.mockReturnValueOnce(rejected.promise);
@@ -464,9 +471,16 @@ describe('useAgentStream', () => {
         graph_version: 'candidate-reject',
         data: graph('candidate-reject'),
       }, { kind: 'chat', clientRequestId: secondRequestId });
+      mocks.eventHandler?.({
+        type: 'graph_preview',
+        data: { ...graph('preview-reject'), title: 'Rejected preview' },
+      }, { kind: 'chat', clientRequestId: secondRequestId });
       rejected.reject(new Error('offline'));
     });
-    await waitFor(() => expect(screen.getByTestId('candidate-title').textContent).toBe(''));
+    await waitFor(() => {
+      expect(screen.getByTestId('candidate-title').textContent).toBe('');
+      expect(screen.getByTestId('graph-title').textContent).toBe('');
+    });
   });
 
   it('steers the active WebSocket run instead of opening a second run', () => {
@@ -494,6 +508,39 @@ describe('useAgentStream', () => {
 
     expect(screen.getByTestId('messages').textContent).not.toContain('obsolete draft');
     expect(screen.getByTestId('messages').textContent).toContain('revised answer');
+  });
+
+  it('rolls previews back and keeps only authoritative graph data across restarts', () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByText('hydrate'));
+    fireEvent.click(screen.getByText('send'));
+    const clientRequestId = mocks.sendMessage.mock.calls[0][4] as string;
+
+    act(() => {
+      mocks.eventHandler?.({
+        type: 'graph_preview',
+        data: { ...graph('preview'), title: 'Preview graph' },
+      }, { kind: 'chat', clientRequestId });
+    });
+    expect(screen.getByTestId('graph-title').textContent).toBe('Preview graph');
+
+    act(() => {
+      mocks.eventHandler?.({ type: 'response_reset' }, { kind: 'chat', clientRequestId });
+    });
+    expect(screen.getByTestId('graph-title').textContent).toBe('Agent Map');
+
+    act(() => {
+      mocks.eventHandler?.({
+        type: 'graph_data',
+        data: { ...graph('committed'), title: 'Committed graph' },
+      }, { kind: 'chat', clientRequestId });
+      mocks.eventHandler?.({
+        type: 'graph_preview',
+        data: { ...graph('later-preview'), title: 'Later preview' },
+      }, { kind: 'chat', clientRequestId });
+      mocks.eventHandler?.({ type: 'error', content: 'failed' }, { kind: 'chat', clientRequestId });
+    });
+    expect(screen.getByTestId('graph-title').textContent).toBe('Committed graph');
   });
 
   it('keeps candidates hidden and queues explanation blocks while reveal is paused', () => {

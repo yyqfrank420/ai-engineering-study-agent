@@ -171,6 +171,7 @@ def test_websocket_steer_cancels_draft_restarts_and_persists_combined_turn(
         lambda _user_id, _thread_id: approved_graph,
     )
     calls: list[str] = []
+    input_graphs: list[dict | None] = []
     terminal_deadlines: list[float] = []
     approved_baselines: list[dict] = []
     first_cancelled = False
@@ -178,6 +179,7 @@ def test_websocket_steer_cancels_draft_restarts_and_persists_combined_turn(
     async def fake_run_agent(state, _rag_tools, _graph_tools, _detail_tools):
         nonlocal first_cancelled
         calls.append(state["user_message"])
+        input_graphs.append(state["graph_data"])
         terminal_deadlines.append(state["terminal_deadline_s"])
         approved_baselines.append(state["approved_graph_data"])
         if len(calls) == 1:
@@ -230,6 +232,8 @@ def test_websocket_steer_cancels_draft_restarts_and_persists_combined_turn(
             )
             initial = _receive_until(socket, "response_delta")
             assert initial[-1]["content"] == "generic draft"
+            assert any(event["type"] == "graph_preview" for event in initial)
+            assert not any(event["type"] == "graph_data" for event in initial)
 
             socket.send_json(
                 {
@@ -247,6 +251,14 @@ def test_websocket_steer_cancels_draft_restarts_and_persists_combined_turn(
     assert approved_baselines[0] is not approved_graph
     assert approved_baselines[1] is not approved_graph
     assert approved_baselines[0] is not approved_baselines[1]
+    assert input_graphs == [approved_graph, approved_graph]
+    reset_index = next(
+        index for index, event in enumerate(events) if event["type"] == "response_reset"
+    )
+    assert events[reset_index - 1] == {
+        "type": "graph_data",
+        "data": approved_graph,
+    }
     assert any(event["type"] == "response_reset" for event in events)
     assert any(event["type"] == "steer_applied" for event in events)
     assert any(
@@ -258,6 +270,70 @@ def test_websocket_steer_cancels_draft_restarts_and_persists_combined_turn(
     assert [item["role"] for item in history] == ["user", "assistant"]
     assert "User steering update 1" in history[0]["content"]
     assert history[1]["content"] == "specific revised answer"
+
+
+def test_websocket_steer_reuses_graph_review_budget_after_cancellation(
+    temp_data_dir, monkeypatch
+):
+    app, _user, thread = _ready_app(temp_data_dir, monkeypatch)
+    budgets = []
+    first_cancelled = False
+
+    async def fake_run_agent(state, _rag_tools, _graph_tools, _detail_tools):
+        nonlocal first_cancelled
+        budget = state["_graph_review_budget"]
+        budgets.append(budget)
+        if len(budgets) == 1:
+            budget.claim_provider_call(correction=True)
+            await state["send"]({"type": "response_delta", "content": "draft"})
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                first_cancelled = True
+                raise
+
+        assert budget.critic_calls == 1
+        assert budget.contract_corrections == 1
+        budget.claim_provider_call(correction=False)
+        await state["send"]({"type": "response_delta", "content": "revised"})
+        return {**state, "response_text": "revised", "graph_data": None}
+
+    monkeypatch.setattr("api.chat_websocket.run_agent", fake_run_agent)
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/api/chat/ws", headers={"origin": "http://localhost:5173"}
+        ) as socket:
+            socket.send_json({"type": "auth", "access_token": "test-token"})
+            assert socket.receive_json() == {"type": "ready"}
+            socket.send_json(
+                {
+                    "type": "start",
+                    "thread_id": thread["id"],
+                    "content": "Design an approval workflow",
+                    "complexity": "prototype",
+                    "graph_mode": "on",
+                    "research_enabled": False,
+                    "client_request_id": "client-ws-budget",
+                }
+            )
+            _receive_until(socket, "response_delta")
+            socket.send_json(
+                {
+                    "type": "steer",
+                    "content": "Include the approval boundary",
+                    "client_request_id": "client-ws-budget",
+                }
+            )
+            _receive_until(socket, "done")
+
+    assert first_cancelled is True
+    assert len(budgets) == 2
+    assert budgets[0] is budgets[1]
+    assert budgets[0].state_counters() == {
+        "graph_critic_call_count": 2,
+        "graph_contract_correction_count": 1,
+    }
 
 
 def test_websocket_rejects_untrusted_browser_origin(temp_data_dir, monkeypatch):
@@ -431,7 +507,14 @@ def test_websocket_keeps_candidate_private_until_browser_evaluation(
             )
             published = _receive_until(socket, "done")
 
-    assert any(event.get("type") == "graph_data" for event in published)
+    preview_index = next(
+        index for index, event in enumerate(published) if event.get("type") == "graph_preview"
+    )
+    graph_data_index = next(
+        index for index, event in enumerate(published) if event.get("type") == "graph_data"
+    )
+    assert preview_index < graph_data_index < len(published) - 1
+    assert published[graph_data_index]["data"] == graph
     assert any(
         event.get("type") == "response_delta" and event.get("content") == "approved"
         for event in published

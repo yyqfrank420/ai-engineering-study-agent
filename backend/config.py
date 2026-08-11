@@ -15,6 +15,11 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+GRAPH_MAX_REPAIR_ROUNDS = 2
+GRAPH_MAX_CONTRACT_CORRECTIONS = 1
+GRAPH_MAX_CRITIC_CALLS = 1 + GRAPH_MAX_REPAIR_ROUNDS + GRAPH_MAX_CONTRACT_CORRECTIONS
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -65,7 +70,7 @@ class Settings(BaseSettings):
     # more room up to the hard cap without changing their visible output contract.
     llm_default_max_tokens: int = 12000
     llm_max_tokens: int = 131072
-    architecture_max_completion_tokens: int = 16000
+    architecture_max_completion_tokens: int = 12000
     graph_builder_max_completion_tokens: int = 65536
     graph_qa_max_completion_tokens: int = 16384
     # Hard timeout on the whole agent run (seconds); yields a timeout error event
@@ -74,15 +79,15 @@ class Settings(BaseSettings):
     agent_terminal_headroom_s: float = 30.0
     # Stage admission keeps this time inside the terminal window for orchestration.
     agent_orchestration_reserve_s: float = 30.0
-    # Bound the initial Kimi topology build and one typed repair while preserving
-    # independent review inside the terminal window.
+    # Bound the graph stages while preserving two reviewed repairs and one
+    # failed-patch contract correction inside the terminal window.
     graph_design_timeout_s: float = 150.0
     architecture_role_timeout_s: float = 150.0
-    graph_critic_timeout_s: float = 90.0
-    # Initial editable rejections receive one local repair pass before edit.
-    # Both reviews share this stage ceiling and may borrow saved upstream time.
+    graph_critic_timeout_s: float = 60.0
+    # A stage may borrow saved upstream time up to the hard cap. Admission still
+    # reserves every remaining review, repair, and correction attempt.
     graph_critic_max_timeout_s: float = 195.0
-    graph_patch_timeout_s: float = 180.0
+    graph_patch_timeout_s: float = 90.0
     # Kimi may use time saved by earlier stages up to this per-call ceiling.
     # Deadline admission still preserves the complete downstream review path.
     graph_builder_max_timeout_s: float = 240.0
@@ -446,11 +451,11 @@ class Settings(BaseSettings):
                 "GRAPH_CRITIC_MAX_TIMEOUT_S cannot be below the reserved critic timeout."
             )
         complete_architecture_path_s = (
-            2 * self.architecture_role_timeout_s
+            self.architecture_role_timeout_s
             + self.graph_design_timeout_s
             + self.graph_critic_timeout_s
-            + self.graph_patch_timeout_s
-            + self.graph_critic_timeout_s
+            + (GRAPH_MAX_REPAIR_ROUNDS + GRAPH_MAX_CONTRACT_CORRECTIONS)
+            * (self.graph_patch_timeout_s + self.graph_critic_timeout_s)
             + self.graph_synthesis_timeout_s
             + self.graph_finalization_reserve_s
         )

@@ -7,7 +7,13 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from config import settings
+from config import (
+    GRAPH_MAX_CONTRACT_CORRECTIONS,
+    GRAPH_MAX_REPAIR_ROUNDS,
+    settings,
+)
+
+MAX_GRAPH_REPAIR_ROUNDS = GRAPH_MAX_REPAIR_ROUNDS
 
 
 class StageAdmissionDenied(TimeoutError):
@@ -54,19 +60,15 @@ def architecture_timeout_seconds(
     graph_reserve_s = (
         settings.graph_design_timeout_s
         + settings.graph_critic_timeout_s
-        + settings.graph_patch_timeout_s
-        + settings.graph_critic_timeout_s
+        + (MAX_GRAPH_REPAIR_ROUNDS + GRAPH_MAX_CONTRACT_CORRECTIONS)
+        * (settings.graph_patch_timeout_s + settings.graph_critic_timeout_s)
         + settings.graph_synthesis_timeout_s
         + settings.graph_finalization_reserve_s
     )
     return _stage_timeout(
         state,
         max_s=settings.architecture_role_timeout_s,
-        downstream_reserve_s=(
-            graph_reserve_s
-            if review
-            else graph_reserve_s + settings.architecture_role_timeout_s
-        ),
+        downstream_reserve_s=graph_reserve_s,
         stage="architecture review" if review else "architecture pass",
     )
 
@@ -74,8 +76,8 @@ def architecture_timeout_seconds(
 def design_timeout_seconds(state: dict[str, Any]) -> float:
     downstream_reserve_s = (
         settings.graph_critic_timeout_s
-        + settings.graph_patch_timeout_s
-        + settings.graph_critic_timeout_s
+        + (MAX_GRAPH_REPAIR_ROUNDS + GRAPH_MAX_CONTRACT_CORRECTIONS)
+        * (settings.graph_patch_timeout_s + settings.graph_critic_timeout_s)
         + settings.graph_synthesis_timeout_s
         + settings.graph_finalization_reserve_s
     )
@@ -89,8 +91,24 @@ def design_timeout_seconds(state: dict[str, Any]) -> float:
 
 
 def critic_timeout_seconds(state: dict[str, Any]) -> float:
+    completed_repairs = int(
+        state.get("graph_repair_round_count", state.get("graph_revision_count", 0))
+    )
+    remaining_repairs = max(0, MAX_GRAPH_REPAIR_ROUNDS - completed_repairs)
+    correction_pending = bool(state.get("graph_contract_correction_pending"))
+    remaining_corrections = (
+        max(
+            0,
+            GRAPH_MAX_CONTRACT_CORRECTIONS
+            - int(state.get("graph_contract_correction_count", 0)),
+        )
+        if remaining_repairs and not correction_pending
+        else 0
+    )
     downstream_reserve_s = (
-        settings.graph_synthesis_timeout_s
+        (remaining_repairs + remaining_corrections)
+        * (settings.graph_patch_timeout_s + settings.graph_critic_timeout_s)
+        + settings.graph_synthesis_timeout_s
         + settings.graph_finalization_reserve_s
     )
     return _stage_timeout(
@@ -103,8 +121,17 @@ def critic_timeout_seconds(state: dict[str, Any]) -> float:
 
 
 def patch_timeout_seconds(state: dict[str, Any]) -> float:
+    current_repair = int(state.get("graph_revision_count", 1))
+    remaining_repairs = max(0, MAX_GRAPH_REPAIR_ROUNDS - current_repair)
+    remaining_corrections = max(
+        0,
+        GRAPH_MAX_CONTRACT_CORRECTIONS
+        - int(state.get("graph_contract_correction_count", 0)),
+    )
     following_reserve = (
         settings.graph_critic_timeout_s
+        + (remaining_repairs + remaining_corrections)
+        * (settings.graph_patch_timeout_s + settings.graph_critic_timeout_s)
         + settings.graph_synthesis_timeout_s
         + settings.graph_finalization_reserve_s
     )

@@ -227,6 +227,9 @@ async def test_eval_telemetry_is_thread_scoped_bounded_and_sanitized(monkeypatch
                 "cache_creation_input_tokens": 1_024,
                 "cache_read_input_tokens": 2_048,
                 "output_tokens": 5,
+                "system_chars": 120,
+                "message_chars": 56,
+                "schema_chars": 0,
                 "queue_wait_ms": 23,
                 "request_id": "request-1",
                 "client_request_id": "secret/path",
@@ -242,6 +245,8 @@ async def test_eval_telemetry_is_thread_scoped_bounded_and_sanitized(monkeypatch
                         "output_tokens": 5,
                         "queue_wait_ms": 23,
                         "duration_ms": 100,
+                        "first_reasoning_delta_ms": 37,
+                        "first_text_delta_ms": None,
                         "secret": "never-return",
                     }
                 ],
@@ -273,6 +278,9 @@ async def test_eval_telemetry_is_thread_scoped_bounded_and_sanitized(monkeypatch
                 "cache_creation_input_tokens": 1_024,
                 "cache_read_input_tokens": 2_048,
                 "output_tokens": 5,
+                "system_chars": 120,
+                "message_chars": 56,
+                "schema_chars": 0,
                 "provider_attempts": 1,
                 "queue_wait_ms": 23,
                 "attempts": [
@@ -287,6 +295,8 @@ async def test_eval_telemetry_is_thread_scoped_bounded_and_sanitized(monkeypatch
                         "output_tokens": 5,
                         "queue_wait_ms": 23,
                         "duration_ms": 100,
+                        "first_reasoning_delta_ms": 37,
+                        "first_text_delta_ms": None,
                     }
                 ],
                 "request_id": "request-1",

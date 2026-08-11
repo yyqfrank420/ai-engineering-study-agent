@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "corpus_version": "2026-08-09.v1",
+  "corpus_version": "2026-08-12.v1",
   "release_identity": "browser-rubric-v2",
   "approval": {
     "status": "pending_human_review",
@@ -18,7 +18,7 @@
       "critical_false_passes": null,
       "evaluated_at": null
     },
-    "notes": "The graph-expansion contract changed in 2026-08-09.v1 and is pending human review. A new full protected capture, 20-case human review, judge recalibration, and approved manifest hash are required before blocking or promotion."
+    "notes": "The graph-expansion contract changed in 2026-08-12.v1 and is pending human review. Each turn now requires visible graph output within 180 seconds, followed by authoritative graph_data after persistence. A new full protected capture, 20-case human review, judge recalibration, and approved manifest hash are required before blocking or promotion."
   },
   "rubrics": {
     "correctness": {
@@ -333,7 +333,8 @@
             "complexity": "prototype",
             "graph_mode": "on",
             "research_enabled": false
-          }
+          },
+          "graph_output_max_latency_ms": 180000
         },
         {
           "prompt": "Expand the monitoring component while preserving the original graph topic and existing components. Add exactly one directly connected responsibility.",
@@ -341,6 +342,13 @@
             "complexity": "production",
             "graph_mode": "on",
             "research_enabled": false
+          },
+          "graph_output_max_latency_ms": 180000,
+          "graph_expansion": {
+            "preserve_prior_graph": true,
+            "added_node_count": 1,
+            "new_node_directly_connected_to_prior_graph": true,
+            "new_node_connected_to_prior_label_contains": "monitor"
           }
         }
       ],
@@ -358,7 +366,8 @@
         "graph_renderable": true,
         "citations_required": false,
         "error_expected": false,
-        "cleanup": true
+        "cleanup": true,
+        "provider_fallback_allowed": false
       },
       "rubric_dimensions": [
         "correctness",

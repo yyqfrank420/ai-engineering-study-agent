@@ -25,7 +25,8 @@ fake provider clients; live model evaluation remains a separate protected gate.
 
 The stable branch checks are `CI required` and `Live eval required`. Both workflows
 listen to `pull_request`, trusted pushes, and `merge_group`. Corpus version
-`2026-08-09.v1` is pending human review after the graph-expansion contract changed.
+`2026-08-12.v1` is pending human review after the graph-expansion contract added a
+180-second per-turn visible graph-output deadline.
 The live gate takes the fail-safe bootstrap path before installing browsers,
 authenticating to GCP, building images, mutating staging, or calling a model, and
 production promotion remains disabled until this exact corpus is approved. Run
@@ -190,7 +191,7 @@ rubric references with pass/borderline/fail anchors, criticality, provenance, an
 per-case approval metadata. Generated answers remain artifacts; only prompts,
 rubrics, invariants, and intentionally reviewed exemplars belong in source control.
 
-The current `2026-08-09.v1` corpus says `pending_human_review`. The graph-expansion
+The current `2026-08-12.v1` corpus says `pending_human_review`. The graph-expansion
 case is pending because its first turn now requires a monitoring component at
 prototype UI depth and its second turn permits exactly one directly connected
 responsibility while preserving the original graph topic and existing components.
@@ -207,7 +208,7 @@ identity or create a digest/storage-prefix cycle. A separate approval-manifest h
 covers all approval labels, reviewers, calibration baselines, and evidence identity
 except its own digest field. `--require-approved-corpus` validates that full
 manifest, so either behavior or provenance tampering fails closed. Reapproving
-`2026-08-09.v1` requires a full protected 20-case capture, human review of all 20
+`2026-08-12.v1` requires a full protected 20-case capture, human review of all 20
 cases, a reviewer, review time, artifact run, and reviewed grades for every case,
 judge recalibration against that reviewed capture, the new calibration evidence and
 result fields, and a newly computed approved manifest hash. The corpus cannot block

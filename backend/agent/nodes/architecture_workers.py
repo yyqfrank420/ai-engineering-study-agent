@@ -38,7 +38,7 @@ _REVIEW_PLAN_LIST_LIMITS = {
     "decisions": 20,
     "runtime_flow": 30,
 }
-_ARCHITECT_PROMPT_VERSION = "architecture_roles_v22"
+_ARCHITECT_PROMPT_VERSION = "architecture_roles_v23"
 _SAFE_EVIDENCE_FAILURE_PATH = re.compile(
     r"evidence_basis\[(?:0|[1-9][0-9]*)\]\.(?:basis|evidence_ref)"
 )
@@ -213,7 +213,7 @@ _CHALLENGER_RESPONSE_SCHEMA = _strict_object_schema(
 )
 
 
-_ARCHITECT_SYSTEM = """<role>
+_ARCHITECT_SYSTEM_TEMPLATE = """<role>
 You are the primary AI systems architect. Produce a complete implementation plan for another
 agent to turn into a diagram. Think across the complete supplied review frame, but include a
 concern only when it materially affects this scenario.
@@ -242,8 +242,7 @@ concern only when it materially affects this scenario.
 - The selected depth is authoritative. At low depth, use only low-depth criteria and controls
   material to the request. At prototype depth, use only prototype criteria: concrete buildable
   boundaries and applicable requested failure paths. Do not require production hardening at either
-  low or prototype depth; record it as assumptions or open questions. At selected production depth
-  only, include applicable production controls as explicit routes and responsibilities.
+  low or prototype depth; record it as assumptions or open questions.
 - Compose the plan around a clear runtime spine, bounded parallel branches that rejoin, explicit
   decision/failure paths, and separate data and delivery planes. Close feedback into the next
   decision only when a repeated decision or learning loop materially exists.
@@ -258,7 +257,13 @@ concern only when it materially affects this scenario.
   Include decided mechanisms (for example caching, fallback, or approval), every runtime mode's
   route back to an observable outcome, and a bypass around any conditional control when it does
   not apply. Keep these domain-specific; do not turn optional hardening into a requirement.
-- Prefer reusable platform boundaries over one-off AI infrastructure. At selected production depth only, keep risky customer writes in dedicated contextual confirmation flows rather than a free-form model tool loop.
+- Prefer reusable platform boundaries over one-off AI infrastructure.
+- Untrusted retrieved content stays untrusted after filtering or sanitization.
+<production_only_rules>
+- At selected production depth only, include applicable production controls as explicit routes and
+  responsibilities.
+- At selected production depth only, keep risky customer writes in dedicated contextual confirmation
+  flows rather than a free-form model tool loop.
 - At selected production depth only, treat production guarantees as directed paths, not adjectives. A label or assumption that says
   durable, trusted, idempotent, approved, audited, or safe does not establish the guarantee. For a
   material external action, plan the path from authoritative observation through verification,
@@ -273,7 +278,6 @@ concern only when it materially affects this scenario.
   Make COMMITTED, NOT_FOUND, and STILL_UNKNOWN read-back outcomes explicit; fence or serialize
   concurrent actions on the same target. Revalidate token expiry, current policy, live preconditions,
   and action freshness immediately before execution, including automatically authorized lanes.
-- Untrusted retrieved content stays untrusted after filtering or sanitization.
 - At selected production depth only, require model output that can cause an action to cross typed
   deterministic validation and the relevant policy/interlock. Learning or configuration feedback
   must pass versioned offline evaluation, reviewed release,
@@ -286,6 +290,7 @@ concern only when it materially affects this scenario.
   late-data handling, and compatible schema evolution. Do not invent stream infrastructure for a
   finite request/response product.
 - At selected production depth only, treat every model and prompt as a versioned deployable with regression tests and rollback.
+</production_only_rules>
 - Do not draw the final graph and do not expose private chain-of-thought.
 - For every book- or web-grounded decision, copy the exact short source slot shown in square
   brackets in the supplied source records into evidence_ref, such as source_1. Do not copy a
@@ -329,6 +334,25 @@ Return one JSON object and nothing else:
   "status_update": "one useful, non-sensitive finding to show while the user waits"
 }
 </output_contract>"""
+
+
+def _architect_system_for_depth(depth: str) -> str:
+    before, separator, remainder = _ARCHITECT_SYSTEM_TEMPLATE.partition(
+        "<production_only_rules>\n"
+    )
+    production_rules, end_separator, after = remainder.partition(
+        "</production_only_rules>\n"
+    )
+    if not separator or not end_separator:
+        raise RuntimeError("architect production rule boundary is missing")
+    return (
+        f"{before}{production_rules}{after}"
+        if depth == "production"
+        else f"{before}{after}"
+    )
+
+
+_ARCHITECT_SYSTEM = _architect_system_for_depth("production")
 
 
 _CHALLENGER_SYSTEM = """<role>
@@ -457,7 +481,7 @@ async def architect_node(state: AgentState) -> dict[str, Any]:
     try:
         response = await stream_structured_llm(
             model=settings.architecture_model,
-            system=_ARCHITECT_SYSTEM,
+            system=_architect_system_for_depth(profile.resolved),
             messages=[
                 {
                     "role": "user",
@@ -465,7 +489,7 @@ async def architect_node(state: AgentState) -> dict[str, Any]:
                 }
             ],
             response_schema=_ARCHITECT_RESPONSE_SCHEMA,
-            effort="high",
+            effort="medium",
             timeout_seconds=architecture_timeout_seconds(state, review=False),
             max_output_tokens=settings.architecture_max_completion_tokens,
             temperature=settings.graph_temperature,
@@ -645,7 +669,7 @@ async def challenger_node(state: AgentState) -> dict[str, Any]:
 
 
 async def early_design_frame_node(state: AgentState) -> dict[str, Any]:
-    """Show the reviewed direction while the private diagram is still being built."""
+    """Show the provisional direction while the private diagram is being built."""
     if not state.get("is_applied_design", False) or not state.get(
         "architecture_ready", False
     ):
@@ -692,10 +716,18 @@ def _worker_context(
     latest_user_request = str(state.get("user_message") or "")
     design_context = str(state.get("design_query") or latest_user_request)
     evidence_bundle = state.get("evidence_bundle") or {}
+    repeats_latest_request = " ".join(design_context.split()) == " ".join(
+        latest_user_request.split()
+    )
+    design_context_block = (
+        ""
+        if repeats_latest_request
+        else f"Design context (context only, not user-sourced):\n{design_context}\n\n"
+    )
     context = (
         f"Latest user request (authoritative for user requirements and user evidence):\n"
         f"{latest_user_request}\n\n"
-        f"Design context (context only, not user-sourced):\n{design_context}\n\n"
+        f"{design_context_block}"
         f"Selected depth:\n{answer_contract}\n\n"
         f"Shared evidence bundle:\n{format_evidence_bundle(evidence_bundle)}"
     )

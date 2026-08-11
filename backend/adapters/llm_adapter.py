@@ -252,6 +252,20 @@ def _aggregate_attempt_token_usage(
     )
 
 
+def _record_first_delta_latency(
+    attempt_usage: dict[str, object],
+    *,
+    field: str,
+    attempt_started: float,
+) -> None:
+    """Record the first provider phase delta without retaining its content."""
+    if attempt_usage[field] is None:
+        attempt_usage[field] = max(
+            1,
+            int((time.perf_counter() - attempt_started) * 1000),
+        )
+
+
 def build_telemetry(
     operation: str,
     *,
@@ -337,6 +351,7 @@ def stream_response_compat(streamer, **kwargs):
         "max_output_tokens": kwargs.pop("max_output_tokens", None),
         "response_schema": kwargs.pop("response_schema", None),
         "allow_fallback": kwargs.pop("allow_fallback", None),
+        "provider_attempt_limit": kwargs.pop("provider_attempt_limit", None),
     }
     try:
         params = inspect.signature(streamer).parameters.values()
@@ -600,6 +615,7 @@ async def stream_response(
     max_output_tokens: int | None = None,
     response_schema: dict | None = None,
     allow_fallback: bool = True,
+    provider_attempt_limit: int | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
     """
     Stream a response with automatic retry + OpenAI fallback.
@@ -623,6 +639,8 @@ async def stream_response(
     """
     if max_output_tokens is not None and max_output_tokens <= 0:
         raise ValueError("max_output_tokens must be positive")
+    if provider_attempt_limit is not None and provider_attempt_limit <= 0:
+        raise ValueError("provider_attempt_limit must be positive")
     effective_max_output_tokens = min(
         (
             max_output_tokens
@@ -630,6 +648,14 @@ async def stream_response(
             else settings.llm_default_max_tokens
         ),
         settings.llm_max_tokens,
+    )
+    message_chars = len(
+        json.dumps(messages, ensure_ascii=False, separators=(",", ":"))
+    )
+    schema_chars = (
+        len(json.dumps(response_schema, separators=(",", ":")))
+        if response_schema is not None
+        else 0
     )
     prompt_sha256 = hashlib.sha256(system.encode("utf-8")).hexdigest()
     system_block: dict[str, object] = {
@@ -723,6 +749,9 @@ async def stream_response(
         metadata = {
             **details_metadata,
             "message_count": len(messages),
+            "system_chars": len(system),
+            "message_chars": message_chars,
+            "schema_chars": schema_chars,
             "thinking_budget": thinking_budget,
             "temperature": temperature,
             "top_p": top_p,
@@ -847,6 +876,8 @@ async def stream_response(
             if provider == "kimi" and not is_fallback
             else 1
         )
+        if provider_attempt_limit is not None:
+            attempt_limit = min(attempt_limit, provider_attempt_limit)
         for route_attempt in range(1, attempt_limit + 1):
             _reserve_evaluation_provider_attempt()
             provider_attempts += 1
@@ -861,6 +892,8 @@ async def stream_response(
                 "cache_read_input_tokens": 0,
                 "output_tokens": 0,
                 "queue_wait_ms": 0,
+                "first_reasoning_delta_ms": None,
+                "first_text_delta_ms": None,
                 "accepted": False,
                 "usage_complete": False,
             }
@@ -888,9 +921,19 @@ async def stream_response(
                 async for event in response:
                     if event[0] == "text":
                         attempt_usage["accepted"] = True
+                        _record_first_delta_latency(
+                            attempt_usage,
+                            field="first_text_delta_ms",
+                            attempt_started=attempt_started,
+                        )
                         output_chars += len(event[1])
                     elif event[0] == "thinking":
                         attempt_usage["accepted"] = True
+                        _record_first_delta_latency(
+                            attempt_usage,
+                            field="first_reasoning_delta_ms",
+                            attempt_started=attempt_started,
+                        )
                     elif event[0] == "usage":
                         attempt_usage["accepted"] = True
                         attempt_usage["usage_complete"] = True
@@ -966,7 +1009,13 @@ async def stream_response(
             yield event
         return
 
-    for attempt in range(1, settings.llm_max_retries + 1):
+    anthropic_attempt_limit = settings.llm_max_retries
+    if provider_attempt_limit is not None:
+        anthropic_attempt_limit = min(
+            anthropic_attempt_limit,
+            provider_attempt_limit,
+        )
+    for attempt in range(1, anthropic_attempt_limit + 1):
         tokens_yielded = False
         finish_reason: str | None = None
         _reserve_evaluation_provider_attempt()
@@ -982,6 +1031,8 @@ async def stream_response(
             "cache_read_input_tokens": 0,
             "output_tokens": 0,
             "queue_wait_ms": 0,
+            "first_reasoning_delta_ms": None,
+            "first_text_delta_ms": None,
             "accepted": False,
             "usage_complete": False,
         }
@@ -1033,8 +1084,18 @@ async def stream_response(
                     tokens_yielded = True
                     delta = event.delta
                     if delta.type == "thinking_delta":
+                        _record_first_delta_latency(
+                            attempt_usage,
+                            field="first_reasoning_delta_ms",
+                            attempt_started=attempt_started,
+                        )
                         yield ("thinking", delta.thinking)
                     elif delta.type == "text_delta":
+                        _record_first_delta_latency(
+                            attempt_usage,
+                            field="first_text_delta_ms",
+                            attempt_started=attempt_started,
+                        )
                         output_chars += len(delta.text)
                         yield ("text", delta.text)
             attempt_usage["status"] = (
@@ -1087,7 +1148,7 @@ async def stream_response(
                 "[llm] Anthropic attempt %s/%s failed: %s status=%s "
                 "request_id=%s provider_error=%s diagnostic=%s",
                 attempt,
-                settings.llm_max_retries,
+                anthropic_attempt_limit,
                 type(exc).__name__,
                 status,
                 request_id,
@@ -1096,7 +1157,7 @@ async def stream_response(
             )
             if _is_non_retryable_anthropic_error(exc):
                 break
-            if attempt < settings.llm_max_retries:
+            if attempt < anthropic_attempt_limit:
                 await asyncio.sleep(settings.llm_retry_delay_s)
 
     # All Anthropic attempts exhausted — try OpenAI fallback

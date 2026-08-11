@@ -34,6 +34,7 @@ PROVIDER_FAILURE = re.compile(
     r"(?:rate.?limit|429|provider.*unavailable|timed?\s*out|connection.*failed)", re.I
 )
 ManualReviewPolicy = Literal["blocking", "report-only"]
+_FAILURE_KINDS = frozenset({"infrastructure", "quality"})
 
 
 def _assert_approved_judge_identity(corpus: Any, judge: Any) -> None:
@@ -358,7 +359,23 @@ def _result_to_json(result) -> dict[str, Any]:
     }
 
 
-def _classify_deterministic(failures: list[str]) -> str:
+def _classify_deterministic(
+    failures: list[str],
+    failure_details: object = None,
+) -> str:
+    if failure_details is not None:
+        if not isinstance(failure_details, list) or not failure_details:
+            raise RuntimeError("browser capture failure_details must be a non-empty list")
+        failure_kinds = []
+        for detail in failure_details:
+            if not isinstance(detail, dict) or detail.get("kind") not in _FAILURE_KINDS:
+                raise RuntimeError("browser capture failure_details contains an invalid kind")
+            failure_kinds.append(detail["kind"])
+        return (
+            "infrastructure"
+            if all(kind == "infrastructure" for kind in failure_kinds)
+            else "quality"
+        )
     return (
         "infrastructure"
         if any(PROVIDER_FAILURE.search(failure) for failure in failures)
@@ -471,7 +488,10 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             browser_result.get("deterministic_failures") or []
         )
         if deterministic_failures:
-            classification = _classify_deterministic(list(deterministic_failures))
+            classification = _classify_deterministic(
+                list(deterministic_failures),
+                browser_result.get("failure_details"),
+            )
             decision = GateDecision(
                 "infrastructure" if classification == "infrastructure" else "fail",
                 "; ".join(deterministic_failures),

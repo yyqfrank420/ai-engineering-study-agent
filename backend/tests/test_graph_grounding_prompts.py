@@ -13,7 +13,7 @@ def test_applied_graph_prompts_define_record_scoped_repair_boundaries():
     )
 
     assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v34"
-    assert _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION == "applied_topology_v16"
+    assert _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION == "applied_topology_v17"
     assert (
         "Choose graph size from the material design" in _APPLIED_GRAPH_TOPOLOGY_SYSTEM
     )
@@ -35,7 +35,7 @@ def test_applied_graph_prompts_define_record_scoped_repair_boundaries():
     assert "repair-only edge_id values" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "non-adjacent records" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "source and destination group IDs" in _APPLIED_GRAPH_PATCH_SYSTEM
-    assert "server enforces the exact directed endpoints" in _APPLIED_GRAPH_PATCH_SYSTEM
+    assert "complete source, target, and label triple" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "post-patch critic verifies the" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "does not supply omitted behavior" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "cache lookup separate from" not in _APPLIED_GRAPH_PATCH_SYSTEM

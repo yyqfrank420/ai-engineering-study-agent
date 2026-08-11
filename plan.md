@@ -20,7 +20,7 @@ The redesign stays outside the release-critical path. It begins after the curren
 4. Record safe validation paths and rule codes when critic output is rejected.
 5. Add paired prototype and production tests.
 6. Give the active critic verdict priority over speculative repair time while preserving synthesis and finalization.
-7. Keep whole-graph generation, private render, MECE review layers, dependency-aware retention and reopening, at most two semantic repairs, and one error-informed critic-contract correction. Treat `novice_clarity` as advisory, and fail closed when a repeated still-failing obligation would consume an identical repair class.
+7. Keep whole-graph generation, private render, MECE review layers, dependency-aware retention and reopening, at most two semantic repairs, and one error-informed critic-contract correction. Treat `novice_clarity` as advisory at every depth. Treat `logical_flow`, `authored_composition`, and `branch_completion` as advisory outside production. Fail closed when a repeated still-failing obligation would consume an identical repair class.
 8. Complete the first exhaustive editable review before spending the repair budget.
 
 ### Current status
@@ -36,7 +36,7 @@ The redesign stays outside the release-critical path. It begins after the curren
 - Diagnostic `31369358742` ran only `graph-expansion` on merged head `77df25e7`. The Opus architect completed at `high` effort in 111.877 seconds, then provenance validation rejected `evidence_basis[2].evidence_ref` with the private rule `unknown_evidence_id`. The turn took 153.688 seconds and cost $0.300365. No graph, private render, Kimi, Sonnet, repair, or second turn ran. The pending corpus made the workflow report-only; it was not an AI-eval pass.
 - Canonical book and web evidence IDs remain hashed server-owned records. The architect and challenger receive short request-scoped slots such as `source_1`. The server accepts only those slots at each model boundary and resolves them to canonical IDs before validation and storage. Later graph and synthesis prompts retain evidence claims but omit canonical coordinates. Unknown slots, source-type mismatches, display citations, URLs, and model-supplied canonical IDs fail closed with generic public coordinates.
 - The graph-expansion corpus explicitly requests monitoring in the first prompt and limits the second prompt to one directly connected child.
-- Corpus `2026-08-09.v1` is pending a fresh full protected capture, human review, judge calibration, and approved manifest hash. No live success is recorded. No further paid run is authorized.
+- Corpus `2026-08-12.v1` is pending a fresh full protected capture, human review, judge calibration, and approved manifest hash. No live success is recorded. Up to three graph-expansion diagnostic runs are authorized for the latency and convergence fix.
 - The current offline matrix passes 1,224 backend tests and 217 frontend tests.
 
 ### Tests
@@ -47,7 +47,7 @@ The redesign stays outside the release-critical path. It begins after the curren
 - An initial editable rejection receives exactly one completion pass before repair.
 - A completion may add defects and selectors. Omitted prior repair evidence remains in the server-owned merged contract. The reviewed graph snapshot and scorecard remain paired by graph version.
 - Post-patch reviews do not start another completion pass.
-- `novice_clarity` produces advice only. Post-patch reviews classify every prior server obligation as resolved or still failing, and repeated still-failing obligations fail closed before a second repair in the same server-tracked class.
+- `novice_clarity` produces advice only. At prototype depth, `logical_flow`, `authored_composition`, and `branch_completion` also produce advice without mutation authority. Post-patch reviews classify every prior server obligation as resolved or still failing, and repeated still-failing obligations fail closed before a second repair in the same server-tracked class.
 - Safe error telemetry identifies the rejected field and rule without storing raw prompts or model output.
 - Existing graph critic, repair, workflow, API, and browser tests remain green.
 - Backend and frontend coverage stay at or above their current 90% thresholds.

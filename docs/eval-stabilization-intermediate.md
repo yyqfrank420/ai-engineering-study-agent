@@ -1,8 +1,8 @@
 # Live Evaluation Stabilization: Intermediate Record
 
-Last updated: 2026-08-09
+Last updated: 2026-08-12
 
-This document records the stabilization work through PR #41 (`codex/restore-live-eval-gate`) and the remaining production exit criteria. PRs #37 through #40 merged on 2026-08-07. PR #41 now contains the exact-tree live gate, compact Kimi topology boundary, MECE review contract, bounded repair workflow, fixed publication frame, and bounded label placement. The current evidence-provenance and corpus correction has passed local review and the full offline CI matrix. It still needs a protected diagnostic after authorization, corpus approval, the canonical evaluation, merge, and deployment verification. No further paid run is authorized.
+This document records the stabilization work through PR #41 (`codex/restore-live-eval-gate`) and the remaining production exit criteria. PRs #37 through #40 merged on 2026-08-07. PR #41 now contains the exact-tree live gate, compact Kimi topology boundary, MECE review contract, bounded repair workflow, fixed publication frame, and bounded label placement. The current evidence-provenance and corpus correction has passed local review and the full offline CI matrix. Three authorized `graph-expansion` diagnostics ran without a passing case. No further paid run is authorized, and the protected corpus remains unauthorized.
 
 ## Objective and operating rules
 
@@ -227,10 +227,14 @@ stabilization path.
   correction. An invalid local admission preserves the current candidate, returns its safe typed
   validation path and rule to one fresh critic correction, and consumes that correction budget. The
   corrected Kimi prompt cannot repeat the rejected prompt. Each post-patch review classifies every
-  prior server-issued obligation as resolved or still failing. A repeated still-failing obligation
-  cannot consume a second repair in the same server-tracked class; the candidate fails closed.
-- A request-scoped counter caps Sonnet critic provider calls at four across initial review, schema
-  correction, contract correction, and post-patch review. Reaching the ceiling fails closed.
+  prior server-issued typed blocker as resolved or still failing. The same semantic blocker may use
+  the second repair only when the new scorecard supplies a different exact repair fingerprint. The
+  same blocker with the same mutation authority fails closed without another Kimi call.
+- A request-scoped budget caps Sonnet critic provider calls at four across initial review, one shared
+  protocol or contract correction, and two post-patch reviews. The same budget object survives
+  WebSocket steering restarts, and reaching either ceiling fails closed before provider dispatch.
+- Layer locks retain the selected review depth with the scorecard. Moving from prototype to
+  production reopens connections and composition and requires fresh production topology proofs.
 - A local contract may combine exact component or connection changes with the title and selected
   assumption records that those semantic changes require. Assumption edits use exact indexed or
   append permissions; unrelated composition records remain locked.
@@ -250,9 +254,9 @@ exhausted its 150-second role deadline at `xhigh` effort. Its accepted provider 
 149.813 seconds with zero final output and no queue wait. The browser turn failed after 178.296
 seconds with no `graph_data`, private render, fallback, Kimi, Sonnet, repair, or second turn. The
 workflow conclusion was green only because a pending corpus makes diagnostic verdicts report-only.
-The architect now uses `high` effort. Its model, structured contract, independent challenger, graph
-critic, and fail-closed timeout remain unchanged. This correction passed the full offline matrix and
-needs a freshly authorized diagnostic before merge.
+The architect now uses `high` effort. Its model, structured contract, graph critic, and fail-closed
+timeout remain unchanged. The graph workflow no longer invokes the challenger. This correction
+passed the full offline matrix and needs a freshly authorized diagnostic before merge.
 
 Diagnostic `31335429802` ran only `graph-expansion`. It failed with
 `architecture_pass_evidence_provenance` after 170.265 seconds for the case and 168.228 seconds for
@@ -269,7 +273,7 @@ The current recovery gives each bounded book and web source record an opaque has
 requires that exact ID for book and web evidence references. Rejected provenance now reports only a
 safe evidence path and rule. The revised first corpus prompt explicitly requests a monitoring
 component. Its second prompt requests exactly one directly connected responsibility. The corpus is
-`2026-08-09.v1` and remains pending a fresh full protected capture, human review, judge calibration,
+`2026-08-12.v1` and remains pending a fresh full protected capture, human review, judge calibration,
 and an approved manifest hash. No live success follows from these changes, and no further paid run is
 authorized.
 
@@ -602,10 +606,10 @@ Historical checkpoint evidence:
   consistently one-based parent set by converting every parent reference together. Mixed conventions,
   forward references, cycles, non-integers, and out-of-range indexes still fail closed. The topology
   prompt includes concrete first-row and fifth-row bounds so the provider does not need the fallback.
-- The WebSocket now emits a deterministic design frame after the architect and challenger finish,
-  before Kimi topology generation. It carries the interpreted plan, bounded assumptions, and the
-  challenger risks. The final stored answer contains the same frame, so a slow graph call no longer
-  leaves the user without useful architecture text.
+- The WebSocket emits a provisional design frame after the architect finishes and before Kimi
+  topology generation. It carries the interpreted plan and bounded assumptions. The exhaustive
+  Sonnet graph critic owns the independent acceptance review; the pre-generation challenger is no
+  longer on the graph publication path.
 - Historical v42 transition: post-patch semantic review was authoritative. The removed layer-fingerprint lock could overwrite a
   newly discovered defect in an unchanged layer with an earlier pass result. Patch-time mutation
   locks still prevent Kimi from changing graph fields outside the approved repair contract.
@@ -622,8 +626,8 @@ Historical checkpoint evidence:
 - Diagnostic `31056353630`: initial graph and critic both executed; failure is isolated to focused repair validation.
 - Diagnostic `31127543972`: edge IDs were accepted; the patch call hit exactly 3,200 output tokens and the server preserved the existing graph because no JSON object was emitted.
 - Diagnostic `31127721414`: the first repair published a valid candidate; the second repair failed because the patch protocol omitted and inconsistently required presentation fields.
-- The current stabilization tree passes 1,224 tracked backend tests at 91% total coverage. The
-  frontend passes 217 tests with 91.32% statements, 78.87% branches, 93.23% functions, and 93.66%
+- The current stabilization tree passes 1,315 tracked backend tests at 91% total coverage. The
+  frontend passes 218 tests with 91.15% statements, 78.94% branches, 93.23% functions, and 93.52%
   lines. Static analysis, dependency audits, ingestion artifacts, migrations, Terraform validation,
   the production frontend build, and the backend container build pass on the same working tree.
 - Backend/frontend staging readiness, dashboard smoke, capture, cleanup, artifact upload, latency accounting, and cost accounting all passed.
@@ -645,6 +649,65 @@ Historical checkpoint evidence:
   prompts omit the canonical coordinates while retaining evidence claims. Unknown slots,
   source-type mismatches, and model-supplied canonical IDs retain the existing fail-closed validator
   and generic public error.
+
+## 2026-08-12 convergence and latency state
+
+- Diagnostic `31549644038` on commit `b64f66f` restored medium architect effort and produced a valid
+  plan in 78.784 seconds. Kimi returned after 81.252 seconds, but deterministic topology validation
+  rejected `connections.links[6]` with rule `topology` before private rendering. No preview or Sonnet
+  review ran. The browser stopped turn one at 180.083 seconds with no fallback; turn two did not run.
+  Three application calls ran. The two completed priced operations cost at least $0.232051; the
+  cancelled synthesis call left final cost incomplete. Retained telemetry cannot distinguish an
+  out-of-range endpoint from a self-link because authored model output is not stored.
+- Diagnostic `31549117335` on commit `1a279b6` stopped before graph generation because the
+  low-effort prototype architect exceeded a hard plan-list limit. The fail-closed boundary returned
+  `architecture_pass_list_limit`; Kimi and Sonnet were never called. Turn one ended in 88.836
+  seconds after two Opus calls, with no fallback, at $0.201845. Prototype architecture effort is
+  restored to medium because diagnostic `31547774792` proved that setting produced a valid plan.
+- Diagnostic `31547774792` on commit `67887c3` enforced the new deadline and stopped turn one at
+  180.122 seconds. The deterministic private render had passed at 127.374 seconds, but no visible
+  preview was emitted. The initial Sonnet review then produced an over-broad composition repair
+  contract. Local admission rejected it at `layers.composition.group_ids: unbounded_collection`,
+  and the deadline cancelled its correction call. Four application calls ran, fallback stayed off,
+  and turn two did not run.
+- The prior diagnostic on commit `9a3dcd2` spent 370.581 seconds on turn one and withheld the
+  graph. The active application calls were Opus architecture, Sonnet challenger, Kimi topology,
+  Sonnet review, Kimi patch, Sonnet post-patch review, and Opus explanation.
+- The challenger is no longer on the graph publication path. The Opus architecture pass uses
+  medium effort with a 12,000-token completion ceiling.
+- Prototype review treats `logical_flow`, `authored_composition`, and `branch_completion` as advice
+  when the graph is connected and renderable. The same findings remain blocking at production
+  depth. Disconnected paths, missing primary outcomes, and requested missing paths remain blocking
+  at every depth. Stored prototype-advisory findings cannot re-enter a later prototype review as
+  stale repair obligations.
+- Cross-link indexes use zero-based indexing. The deterministic boundary preserves that canonical
+  reading whenever all endpoints are valid. If the complete link array is invalid as zero-based and
+  valid as one-based, it converts every endpoint together. Mixed conventions, invalid endpoints,
+  self-links, duplicate links, and links duplicating tree edges still fail closed. Safe telemetry
+  records the convention decision without storing authored content. This correction matches a prior
+  observed Kimi parent-index error, but it is not live proof that diagnostic `31549644038` contained
+  one-based links.
+- Passing review layers retain their prior verdict. Component changes reopen components,
+  connections, and composition. Edge changes reopen connections and composition. Composition-only
+  changes reopen composition. A prototype-to-production transition reopens connections and
+  composition so production topology proofs cannot be inherited from a prototype review.
+- One record-scoped patch may edit several exact disconnected regions. Every edited record remains
+  named in the repair contract. Moving a node requires authority for both its source and destination
+  groups. Invalid patches preserve the candidate and receive at most one error-informed contract
+  correction. The workflow permits at most two successful semantic repair rounds.
+- A graph that passes deterministic graph and browser-render checks is emitted as a reversible
+  preview while semantic review continues. The transport emits authoritative `graph_data` only after
+  review and persistence, and restores the prior graph if the turn does not commit. The
+  `graph-expansion` live case records `graph_output_latency_ms` for each turn, actively
+  stops either turn with no visible graph by 180,000 ms, and reports `required_graph_slow`.
+- Prototype architect calls omit production-only system rules and do not repeat an identical request
+  as design context. Kimi receives every topology-bearing plan field while evidence rationale and UI
+  status text stay out of its prompt. The model roles and efforts remain Opus 5 medium for
+  architecture and Kimi K3 low for topology. These prompt reductions are offline-tested; no live
+  latency improvement is claimed.
+- LLM telemetry records safe character counts and per-attempt time to first reasoning and text
+  deltas. The protected eval endpoint exposes those counts without prompts or authored output so a
+  future diagnostic can separate prompt ingestion, reasoning, and constrained decoding time.
 
 ## Evaluation workflow lessons
 
@@ -670,8 +733,10 @@ Historical checkpoint evidence:
 ## Remaining execution order
 
 1. The full offline gate has passed on the current tracked tree.
-2. After fresh explicit authorization, run one protected graph diagnostic and require a publishable first candidate or the bounded one-repair path.
-3. After separate fresh explicit authorization, run one uninterrupted canonical eight-case protected evaluation on that tree.
+2. Fix the invalid Kimi cross-link boundary and obtain fresh authorization before another protected
+   `graph-expansion` diagnostic. Require both turns to publish within 180 seconds without fallback
+   while preserving the first graph during expansion.
+3. After the diagnostic passes and separate fresh explicit authorization, run one uninterrupted canonical eight-case protected evaluation on that tree.
 4. Verify the exact-tree approval tag and required PR checks, then merge with the final-head guard.
 5. Monitor the `main` production workflow through immutable backend deployment, smoke/promotion, and Vercel deployment.
 6. Verify Cloud Run revision, digest, traffic, and the public backend and frontend URLs.

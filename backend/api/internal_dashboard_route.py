@@ -74,6 +74,15 @@ def _nonnegative_int(value: Any, *, default: int = 0) -> int:
         return default
 
 
+def _nullable_nonnegative_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return None
+
+
 @router.get("/overview")
 async def dashboard_overview(_user=Depends(get_internal_dashboard_user)):
     now = time.time()
@@ -371,6 +380,12 @@ async def dashboard_eval_telemetry(
                     "output_tokens": _nonnegative_int(attempt.get("output_tokens")),
                     "queue_wait_ms": _nonnegative_int(attempt.get("queue_wait_ms")),
                     "duration_ms": _nonnegative_int(attempt.get("duration_ms")),
+                    "first_reasoning_delta_ms": _nullable_nonnegative_int(
+                        attempt.get("first_reasoning_delta_ms")
+                    ),
+                    "first_text_delta_ms": _nullable_nonnegative_int(
+                        attempt.get("first_text_delta_ms")
+                    ),
                 }
             )
         calls.append(
@@ -390,6 +405,9 @@ async def dashboard_eval_telemetry(
                     metadata.get("cache_read_input_tokens")
                 ),
                 "output_tokens": _nonnegative_int(metadata.get("output_tokens")),
+                "system_chars": _nonnegative_int(metadata.get("system_chars")),
+                "message_chars": _nonnegative_int(metadata.get("message_chars")),
+                "schema_chars": _nonnegative_int(metadata.get("schema_chars")),
                 "provider_attempts": max(
                     1,
                     _nonnegative_int(metadata.get("provider_attempts"), default=1),

@@ -173,6 +173,11 @@ export interface ResponseDeltaEvent {
 
 export interface GraphDataEvent {
   type: 'graph_data';
+  data: GraphData | null;
+}
+
+export interface GraphPreviewEvent {
+  type: 'graph_preview';
   data: GraphData;
 }
 
@@ -293,6 +298,7 @@ export type ServerEvent =
   | ThinkingDeltaEvent
   | ResponseDeltaEvent
   | GraphDataEvent
+  | GraphPreviewEvent
   | GraphCandidateEvent
   | WorkflowProgressEvent
   | ExplanationBlockEvent

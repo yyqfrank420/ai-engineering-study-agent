@@ -40,7 +40,7 @@ from graph.runtime import select_canonical_graph
 logger = logging.getLogger(__name__)
 
 _APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v34"
-_APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v16"
+_APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v17"
 _APPLIED_GRAPH_TOPOLOGY_EFFORT = "low"
 _APPLIED_GRAPH_PATCH_EFFORT = "high"
 _MAX_GRAPH_PATCH_CHARS = 200_000
@@ -62,6 +62,9 @@ _PATCH_EDGE_MUTABLE_FIELDS = (
     "flow",
     "description",
     "type",
+)
+_CRITIC_PATCH_EDGE_MUTABLE_FIELDS = tuple(
+    field for field in _PATCH_EDGE_MUTABLE_FIELDS if field not in {"source", "target"}
 )
 _USER_EDIT_ADDITION = re.compile(r"\b(?:add|expand|include)\w*\b")
 _USER_EDIT_REMOVAL = re.compile(r"\b(?:delete|remove|unlink)\w*\b|\bdisconnect\w*\b")
@@ -127,6 +130,7 @@ _USER_EDIT_EDGE_FIELDS = {
 }
 _USER_EDIT_NODE_REMOVAL = re.compile(r"\b(?:delete|remove)\w*\b")
 _USER_EDIT_ALL_CONNECTIONS = re.compile(r"\ball\b.{0,30}\b(?:connections?|edges?)\b")
+_USER_EDIT_EXACT_EDGE_ID = re.compile(r"\bedge[_\s-]*(?P<position>[1-9][0-9]*)\b")
 
 
 class GraphPatchRejected(ValueError):
@@ -289,7 +293,8 @@ def _repair_permissions(
         "removable_node_ids": layers["components"]["node_ids"],
         "editable_edges": editable_edges,
         "editable_edge_fields": {
-            edge["edge_id"]: list(_PATCH_EDGE_MUTABLE_FIELDS) for edge in editable_edges
+            edge["edge_id"]: list(_CRITIC_PATCH_EDGE_MUTABLE_FIELDS)
+            for edge in editable_edges
         },
         "removable_edge_ids": [edge["edge_id"] for edge in editable_edges],
         "editable_composition_fields": layers["composition"]["composition_fields"],
@@ -309,6 +314,7 @@ def _repair_permissions(
         "connection_addition_obligations": copy.deepcopy(
             layers["connections"]["connection_addition_obligations"]
         ),
+        "enforce_added_edge_contract_label": True,
         "allowed_new_group_ids": None,
         "composition_append_limits": layers["composition"]["composition_append_counts"],
         "required_assumption_text": None,
@@ -614,8 +620,16 @@ def _user_edit_edge_selectors(
     *,
     node_removal: bool,
 ) -> list[dict[str, str]]:
+    exact_edge_ids = {
+        _patch_edge_id(int(match.group("position")) - 1)
+        for match in _USER_EDIT_EXACT_EDGE_ID.finditer(text)
+    }
+    endpoint_matches = []
+    exact_edge_matches = []
+    matched_exact_edge_ids: set[str] = set()
+    labeled_matches = []
     selectors: list[dict[str, str]] = []
-    for edge in graph.get("edges") or []:
+    for index, edge in enumerate(graph.get("edges") or []):
         if not isinstance(edge, dict):
             continue
         source = str(edge.get("source") or "")
@@ -623,6 +637,7 @@ def _user_edit_edge_selectors(
         label = str(edge.get("label") or "")
         label_named = bool(label and f" {_reference_text(label)} " in f" {text} ")
         endpoints_named = len(node_ids) >= 2 and {source, target}.issubset(node_ids)
+        exact_edge_named = _patch_edge_id(index) in exact_edge_ids
         all_incident_named = bool(
             len(node_ids) == 1
             and _USER_EDIT_ALL_CONNECTIONS.search(text)
@@ -631,15 +646,53 @@ def _user_edit_edge_selectors(
         node_removal_dependency = node_removal and (
             source in node_ids or target in node_ids
         )
-        if any(
-            (
-                label_named,
-                endpoints_named,
-                all_incident_named,
-                node_removal_dependency,
-            )
+        selector = {"source": source, "target": target, "label": label}
+        if endpoints_named:
+            endpoint_matches.append(selector)
+        if exact_edge_named:
+            exact_edge_matches.append(selector)
+            matched_exact_edge_ids.add(_patch_edge_id(index))
+        if label_named:
+            labeled_matches.append(selector)
+        if (
+            exact_edge_named
+            or label_named
+            or all_incident_named
+            or node_removal_dependency
         ):
             selectors.append({"source": source, "target": target, "label": label})
+    if exact_edge_ids:
+        if matched_exact_edge_ids != exact_edge_ids:
+            raise ValueError("the exact edge ID is not present in the graph")
+        return exact_edge_matches
+    if endpoint_matches:
+        if labeled_matches:
+            endpoint_keys = {
+                (item["source"], item["target"], item["label"])
+                for item in endpoint_matches
+            }
+            qualified = [
+                item
+                for item in labeled_matches
+                if (item["source"], item["target"], item["label"])
+                in endpoint_keys
+            ]
+            if not qualified:
+                raise ValueError(
+                    "the named edge label does not match the identified endpoints"
+                )
+            return qualified
+        if len(endpoint_matches) > 1 and not _USER_EDIT_ALL_CONNECTIONS.search(text):
+            raise ValueError(
+                "the endpoint-only connection edit matches multiple edges; identify an edge label or exact edge ID"
+            )
+        return endpoint_matches
+    if labeled_matches:
+        if len(labeled_matches) > 1 and not _USER_EDIT_ALL_CONNECTIONS.search(text):
+            raise ValueError(
+                "the edge label matches multiple edges; identify endpoints or an exact edge ID"
+            )
+        return labeled_matches
     return selectors
 
 
@@ -997,6 +1050,7 @@ def _user_edit_scope(
         edge["edge_id"]: ([] if connection_removal else edge_fields)
         for edge in permissions["editable_edges"]
     }
+    permissions["enforce_added_edge_contract_label"] = False
     permissions["removable_edge_ids"] = (
         [edge["edge_id"] for edge in permissions["editable_edges"]]
         if connection_removal
@@ -1060,6 +1114,10 @@ def _graph_patch_failure_code(exc: Exception) -> str:
 
 def _patch_validation_coordinates(exc: Exception) -> tuple[str | None, str | None]:
     message = str(exc)
+    if isinstance(exc, json.JSONDecodeError) or "graph patch json could not be decoded" in message.lower():
+        return "patch", "json_decode"
+    if "graph patch json must be an object" in message.lower():
+        return "patch", "invalid_shape"
     locked_record = re.search(
         r"(?:graph patch|normalization) (?:changed|removed) locked "
         r"(?P<kind>group|node|edge|sequence|assumptions)(?: record)?: (?P<id>[A-Za-z0-9_]+)",
@@ -1075,11 +1133,20 @@ def _patch_validation_coordinates(exc: Exception) -> tuple[str | None, str | Non
         }[locked_record.group("kind")]
         return f"{collection}.{locked_record.group('id')}", "locked_record_changed"
     locked_group_move = re.search(
-        r"graph patch moved a node through locked group: (?P<id>[A-Za-z0-9_]+)",
+        r"graph patch moved a node through groups: "
+        r"(?P<ids>[A-Za-z0-9_]+(?:,[A-Za-z0-9_]+)+); locked group: "
+        r"(?P<locked_id>[A-Za-z0-9_]+)",
         message,
     )
     if locked_group_move:
-        return f"groups.{locked_group_move.group('id')}", "locked_record_changed"
+        group_ids = locked_group_move.group("ids").split(",")
+        return f"groups.{'.'.join(group_ids)}", "locked_record_changed"
+    if "added edges do not match the exact connection addition obligations" in message:
+        return "patch.add_edges", "addition_obligation_mismatch"
+    if "added edge labels do not match the exact connection addition obligations" in message:
+        return "patch.add_edges", "addition_obligation_mismatch"
+    if "graph patch changed locked edge fields" in message:
+        return "patch.update_edges", "unauthorized_field_change"
     if "produced no semantic change" in message.lower():
         return "patch", "no_effect"
     return None, None
@@ -1160,13 +1227,13 @@ connecting record. Moving a node between existing groups changes both group reco
 source and destination group IDs must be editable. Omit the move when either group is locked.
 
 Connection addition obligations are exact directed endpoint obligations. For each obligation, add
-one edge with the declared source and target. The order of add_edges is irrelevant except that
-`$new_node_N` always means the Nth record in add_nodes. Use that record's authored ID in add_edges,
-never the placeholder. Express required_contract through the edge's concise label and description.
-The server enforces the exact directed endpoints. The mandatory post-patch critic verifies the
-completed repair; it does not supply omitted behavior. Each added edge must itself express its
-obligation's required_contract across its label and description. Do not reverse, merge, or
-substitute endpoints.
+one edge with the declared source, target, and required_contract as its exact normalized label. The
+order of add_edges is irrelevant except that `$new_node_N` always means the Nth record in add_nodes.
+Use that record's authored ID in add_edges, never the placeholder. Copy required_contract into label
+after collapsing whitespace; do not paraphrase it or move it only into description. The server
+enforces the complete source, target, and label triple. The mandatory post-patch critic verifies the
+completed repair; it does not supply omitted behavior. Do not reverse, merge, or substitute
+endpoints.
 
 Source and target must be distinct. A node removal must also remove or redirect every incident edge.
 Omit keys that do not change. Groups, sequence, assumptions, and title are complete replacements when
@@ -1745,7 +1812,9 @@ def _validate_group_replacement_scope(
         if locked_groups:
             group_id = sorted(locked_groups)[0]
             raise ValueError(
-                f"graph patch moved a node through locked group: {group_id}"
+                "graph patch moved a node through groups: "
+                + ",".join(sorted(changed_existing_groups))
+                + f"; locked group: {group_id}"
             )
     for group_id, existing_group in existing_by_id.items():
         if group_id in editable_group_ids:
@@ -1898,6 +1967,7 @@ def _validate_added_record_scope(
             + ", ".join(sorted(unattached_node_ids))
         )
     expected_added_edge_endpoints = []
+    expected_added_edge_triples = []
     for obligation in permissions["connection_addition_obligations"]:
         resolved_endpoints = []
         for endpoint in (obligation["source"], obligation["target"]):
@@ -1911,11 +1981,40 @@ def _validate_added_record_scope(
                 endpoint = added_node_ids_in_order[position]
             resolved_endpoints.append(endpoint)
         expected_added_edge_endpoints.append(tuple(resolved_endpoints))
+        expected_added_edge_triples.append(
+            (
+                *expected_added_edge_endpoints[-1],
+                _normalise_obligation_edge_label(obligation["required_contract"]),
+            )
+        )
     if sorted(actual_added_edge_endpoints) != sorted(expected_added_edge_endpoints):
         raise ValueError(
             "added edges do not match the exact connection addition obligations"
         )
+    if permissions.get("enforce_added_edge_contract_label", True):
+        actual_added_edge_triples = [
+            (
+                *endpoints,
+                _normalise_obligation_edge_label(edge.get("label")),
+            )
+            for endpoints, edge in zip(actual_added_edge_endpoints, added_edges)
+        ]
+        if sorted(actual_added_edge_triples) != sorted(expected_added_edge_triples):
+            raise ValueError(
+                "added edge labels do not match the exact connection addition obligations"
+            )
     return added_node_ids
+
+
+def _normalise_obligation_edge_label(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ValueError("connection addition obligation label must be a string")
+    label = " ".join(value.split())
+    if not label or len(label) > GRAPH_EDGE_LABEL_CHARS:
+        raise ValueError(
+            "connection addition obligation label must be a bounded non-empty string"
+        )
+    return label
 
 
 def _validate_composition_appends(
@@ -2113,6 +2212,7 @@ def _validate_incremental_patch_identity(
     patch: dict[str, Any],
     *,
     has_exact_permissions: bool,
+    allow_edge_replacement: bool = False,
 ) -> None:
     """Reject replacement semantics while leaving graph size unconstrained."""
     add_nodes = _patch_list(patch, "add_nodes")
@@ -2121,7 +2221,7 @@ def _validate_incremental_patch_identity(
     remove_edges = _patch_list(patch, "remove_edges")
     if add_nodes and remove_nodes:
         raise ValueError("an incremental patch cannot add and remove nodes together")
-    if add_edges and remove_edges:
+    if add_edges and remove_edges and not allow_edge_replacement:
         raise ValueError("an incremental patch cannot add and remove edges together")
 
     existing_node_ids = {
@@ -2442,6 +2542,18 @@ def _apply_applied_graph_patch(
     # "unchanged". New records receive the same deterministic presentation
     # enrichment as initial topology records before strict validation.
     patch = {key: value for key, value in patch.items() if value is not None}
+    _validate_incremental_patch_identity(
+        existing_graph,
+        patch,
+        has_exact_permissions=repair_contract is not None,
+        allow_edge_replacement=bool(
+            repair_contract is not None
+            and (
+                mutation_permissions is None
+                or mutation_permissions.get("enforce_added_edge_contract_label", True)
+            )
+        ),
+    )
     if repair_contract is not None:
         _validate_patch_scope_before_normalization(
             existing_graph,
@@ -2458,11 +2570,6 @@ def _apply_applied_graph_patch(
         )
     if not patch:
         raise ValueError("graph patch cannot be empty")
-    _validate_incremental_patch_identity(
-        existing_graph,
-        patch,
-        has_exact_permissions=repair_contract is not None,
-    )
     candidate: dict[str, Any] = copy.deepcopy(existing_graph)
     nodes, edges = _approved_patch_records(candidate)
     final_node_ids = _apply_node_patch(nodes, patch)
@@ -2582,10 +2689,16 @@ def _parse_json_object(raw: str) -> dict[str, Any]:
     start = raw.find("{")
     end = raw.rfind("}")
     if start < 0 or end <= start:
-        raise ValueError("model did not return a JSON object")
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("graph patch JSON could not be decoded") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("graph patch JSON must be an object")
+        return payload
     payload = json.loads(raw[start : end + 1])
     if not isinstance(payload, dict):
-        raise ValueError("graph payload must be a JSON object")
+        raise ValueError("graph patch JSON must be an object")
     return payload
 
 

@@ -22,6 +22,7 @@ from agent.complexity import (
     resolve_design_query,
 )
 from agent.deadlines import (
+    MAX_GRAPH_REPAIR_ROUNDS,
     StageAdmissionDenied,
     WorkflowDeadlineExceeded,
     critic_timeout_seconds,
@@ -31,11 +32,11 @@ from agent.deadlines import (
 )
 from agent.nodes.architecture_workers import (
     architect_node,
-    challenger_node,
     early_design_frame_node,
 )
 from agent.nodes.graph_critic import graph_critic_node
 from agent.graph_repair_contract import validate_local_repair_admission
+from agent.graph_review_budget import GraphReviewBudget
 from agent.nodes.orchestrator_node import (
     orchestrator_route,
     orchestrator_synthesise,
@@ -55,8 +56,7 @@ NodeResult = Awaitable[AgentState]
 AgentNode = Callable[[AgentState], NodeResult]
 
 _GRAPH_STAGE_DEADLINE_KEY = "_graph_stage_deadline_s"
-_MAX_GRAPH_REPAIR_ROUNDS = 2
-_MAX_GRAPH_CONTRACT_CORRECTIONS = 1
+_MAX_GRAPH_REPAIR_ROUNDS = MAX_GRAPH_REPAIR_ROUNDS
 _RETRYABLE_GRAPH_PATCH_FAILURE_CODES = {
     "graph_patch_invalid_preserved_existing_graph",
     "graph_patch_no_effect",
@@ -147,6 +147,7 @@ def build_agent_workflow(
     rag_tools: list,
     graph_tools: list,
     node_detail_tools: list,
+    review_budget: GraphReviewBudget | None = None,
 ):
     """Build one request-scoped workflow with its bound tools.
 
@@ -154,6 +155,7 @@ def build_agent_workflow(
     checkpointed state. This keeps the graph state serialisable enough to migrate to
     a durable checkpointer later without ever attempting to persist live I/O handles.
     """
+    review_budget = review_budget or GraphReviewBudget()
 
     _ = node_detail_tools
 
@@ -210,11 +212,13 @@ def build_agent_workflow(
     async def architecture_plan(state: AgentState) -> AgentState:
         return await architect_node(state)  # type: ignore[return-value]
 
-    async def challenge_plan(state: AgentState) -> AgentState:
-        return await challenger_node(state)  # type: ignore[return-value]
-
     async def show_early_design_frame(state: AgentState) -> AgentState:
-        return await early_design_frame_node(state)  # type: ignore[return-value]
+        state_without_challenger = {**state, "challenger_review": {}}
+        framed = await early_design_frame_node(state_without_challenger)
+        # The graph critic independently audits the assembled candidate. Keep
+        # the retired pre-generation challenger output explicit so downstream
+        # prompt construction cannot reuse a prior value.
+        return {**framed, "challenger_review": {}}  # type: ignore[return-value]
 
     async def draft_graph(state: AgentState) -> AgentState:
         try:
@@ -332,20 +336,27 @@ def build_agent_workflow(
         failed = isinstance(operation, dict) and operation.get("status") == "failed"
         if failed:
             validation_error = revised.get("graph_patch_validation_error")
-            correction_count = int(state.get("graph_contract_correction_count", 0))
+            correction_count = review_budget.contract_corrections
             can_correct = (
                 operation.get("failure_code") in _RETRYABLE_GRAPH_PATCH_FAILURE_CODES
                 and isinstance(validation_error, dict)
                 and isinstance(validation_error.get("path"), str)
                 and isinstance(validation_error.get("rule"), str)
-                and correction_count < _MAX_GRAPH_CONTRACT_CORRECTIONS
+                and review_budget.can_claim_correction
             )
             return {
                 **revised,
+                # A rejected patch has not replaced the private candidate.
+                # Keep that exact candidate in the review lane while the
+                # critic corrects its mutation contract. ``graph_changed`` is
+                # also the transport's private-candidate marker, so it must
+                # remain true until this candidate is approved or withheld.
+                "graph_data": copy.deepcopy(state.get("graph_data")),
+                "graph_changed": True,
+                "graph_publication": "unreviewed",
                 "graph_revision_count": repair_round_count,
                 "graph_repair_round_count": repair_round_count,
-                "graph_contract_correction_count": correction_count
-                + (1 if can_correct else 0),
+                "graph_contract_correction_count": correction_count,
                 "graph_contract_correction_pending": can_correct,
             }
         corrected = dict(revised)
@@ -368,7 +379,7 @@ def build_agent_workflow(
 
     async def review_graph(state: AgentState) -> AgentState:
         if not state.get("graph_changed"):
-            reviewed = await graph_critic_node(state)
+            reviewed = await graph_critic_node(state, review_budget=review_budget)
             return {
                 **reviewed,
                 "graph_publication": (
@@ -379,7 +390,8 @@ def build_agent_workflow(
             timeout_s = critic_timeout_seconds(state)
             async with asyncio.timeout(timeout_s):
                 reviewed = await graph_critic_node(
-                    _with_graph_stage_deadline(state, timeout_s)
+                    _with_graph_stage_deadline(state, timeout_s),
+                    review_budget=review_budget,
                 )
                 reviewed = _without_graph_stage_deadline(reviewed)
                 if (reviewed.get("graph_review") or {}).get("approved"):
@@ -408,6 +420,7 @@ def build_agent_workflow(
         except (TimeoutError, StageAdmissionDenied):
             return {
                 **state,
+                **review_budget.state_counters(),
                 "graph_publication": (
                     "withheld" if state.get("graph_changed") else "none"
                 ),
@@ -520,7 +533,6 @@ def build_agent_workflow(
         ),
     )
     workflow.add_node("architect", _traced("agent.architect", architecture_plan))
-    workflow.add_node("challenger", _traced("agent.challenger", challenge_plan))
     workflow.add_node(
         "early_design_frame",
         _traced("agent.early_design_frame", show_early_design_frame),
@@ -548,12 +560,11 @@ def build_agent_workflow(
     )
     workflow.add_edge("quick_answer", END)
     # Resolve an optional weak-book web escalation before the canonical brief
-    # is written. The reviewer starts from the original evidence, then checks
-    # the primary plan as a clean second pass before graph construction.
+    # is written. The graph critic reviews the assembled candidate after graph
+    # construction against that same evidence.
     workflow.add_edge("gather_context", "expand_context")
     workflow.add_edge("expand_context", "architect")
-    workflow.add_edge("architect", "challenger")
-    workflow.add_edge("challenger", "early_design_frame")
+    workflow.add_edge("architect", "early_design_frame")
     workflow.add_edge("early_design_frame", "draft_graph")
     workflow.add_edge("draft_graph", "review_graph")
     workflow.add_conditional_edges(
@@ -673,18 +684,28 @@ async def run_agent(
             "status": "failed",
             "failure_code": "graph_edit_target_unavailable",
         }
+    supplied_budget = state.get("_graph_review_budget")
+    review_budget = (
+        supplied_budget
+        if isinstance(supplied_budget, GraphReviewBudget)
+        else GraphReviewBudget(
+            critic_calls=int(state.get("graph_critic_call_count", 0)),
+            contract_corrections=int(
+                state.get("graph_contract_correction_count", 0)
+            ),
+        )
+    )
+    workflow_state = dict(state)
+    workflow_state.pop("_graph_review_budget", None)
     initial_state: AgentState = {
-        **state,
+        **workflow_state,
         "graph_intent": graph_intent,
         **({"graph_operation": graph_operation} if graph_operation else {}),
         "graph_revision_count": state.get("graph_revision_count", 0),
         "graph_repair_round_count": state.get(
             "graph_repair_round_count", state.get("graph_revision_count", 0)
         ),
-        "graph_contract_correction_count": state.get(
-            "graph_contract_correction_count", 0
-        ),
-        "graph_critic_call_count": 0,
+        **review_budget.state_counters(),
         "graph_contract_correction_pending": False,
         "approved_graph_data": copy.deepcopy(
             state.get("approved_graph_data", state.get("graph_data"))
@@ -693,5 +714,10 @@ async def run_agent(
             "unchanged" if state.get("graph_data") is not None else "none"
         ),
     }
-    workflow = build_agent_workflow(rag_tools, graph_tools, node_detail_tools)
+    workflow = build_agent_workflow(
+        rag_tools,
+        graph_tools,
+        node_detail_tools,
+        review_budget=review_budget,
+    )
     return await workflow.ainvoke(initial_state, config={"recursion_limit": 24})

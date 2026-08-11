@@ -106,27 +106,55 @@ def applied_graph_spec(depth: str) -> AppliedGraphSpec:
     )
 
 
-def applied_graph_topology_schema(_spec: AppliedGraphSpec) -> dict[str, Any]:
+def applied_graph_topology_schema(spec: AppliedGraphSpec) -> dict[str, Any]:
+    # Keep positional rows compact for Anthropic's schema compiler. It does not
+    # support prefixItems, and the Anthropic adapter currently strips maxItems.
+    # Other structured-output providers enforce these bounds; Python validates
+    # tuple arity, aggregate capacity, and every scalar after parsing for all routes.
     integer_or_string = {
         "anyOf": [{"type": "integer"}, {"type": "string"}],
     }
-    root_record = {"type": "array", "items": integer_or_string}
-    component_record = {"type": "array", "items": integer_or_string}
-    link_record = {"type": "array", "items": integer_or_string}
-    group_record = {"type": "array", "items": integer_or_string}
+    root_record = {
+        "type": "array",
+        "maxItems": _ROOT_FIELD_COUNT,
+        "items": integer_or_string,
+    }
+    component_record = {
+        "type": "array",
+        "maxItems": _COMPONENT_FIELD_COUNT,
+        "items": integer_or_string,
+    }
+    link_record = {
+        "type": "array",
+        "maxItems": _LINK_FIELD_COUNT,
+        "items": integer_or_string,
+    }
+    group_record = {
+        "type": "array",
+        "maxItems": _GROUP_FIELD_COUNT,
+        "items": integer_or_string,
+    }
     return {
         "type": "object",
         "additionalProperties": False,
         "required": ["root", "components", "connections", "composition"],
         "properties": {
             "root": root_record,
-            "components": {"type": "array", "items": component_record},
+            "components": {
+                "type": "array",
+                "maxItems": max(0, spec.safety_max_nodes - 1),
+                "items": component_record,
+            },
             "connections": {
                 "type": "object",
                 "additionalProperties": False,
                 "required": ["links"],
                 "properties": {
-                    "links": {"type": "array", "items": link_record},
+                    "links": {
+                        "type": "array",
+                        "maxItems": spec.safety_max_edges,
+                        "items": link_record,
+                    },
                 },
             },
             "composition": {
@@ -135,10 +163,19 @@ def applied_graph_topology_schema(_spec: AppliedGraphSpec) -> dict[str, Any]:
                 "required": ["title", "groups", "steps"],
                 "properties": {
                     "title": {"type": "string"},
-                    "groups": {"type": "array", "items": group_record},
+                    "groups": {
+                        "type": "array",
+                        "maxItems": spec.safety_max_nodes,
+                        "items": group_record,
+                    },
                     "steps": {
                         "type": "array",
-                        "items": {"type": "array", "items": {"type": "integer"}},
+                        "maxItems": spec.safety_max_nodes,
+                        "items": {
+                            "type": "array",
+                            "maxItems": spec.safety_max_nodes,
+                            "items": {"type": "integer"},
+                        },
                     },
                 },
             },
@@ -151,10 +188,27 @@ def _bounded_input(value: Any, limit: int) -> str:
     return text[:limit]
 
 
-def _without_status_update(value: Any) -> Any:
-    if not isinstance(value, dict):
-        return value
-    return {key: item for key, item in value.items() if key != "status_update"}
+_TOPOLOGY_PLAN_FIELDS = (
+    "interpretation",
+    "actors",
+    "inputs",
+    "outputs",
+    "required_capabilities",
+    "diagram_requirements",
+    "outcome_measures",
+    "constraints",
+    "assumptions",
+    "open_questions",
+    "decisions",
+    "runtime_flow",
+)
+
+
+def _topology_architect_plan(value: Any) -> Any:
+    plan = without_evidence_references(value)
+    if not isinstance(plan, dict):
+        return plan
+    return {field: plan[field] for field in _TOPOLOGY_PLAN_FIELDS if field in plan}
 
 
 def applied_graph_topology_prompt(
@@ -175,27 +229,61 @@ def applied_graph_topology_prompt(
     design_input = {
         "request": _bounded_input(query, spec.query_chars),
         "depth": spec.depth,
-        "reviewed_plan": _without_status_update(
-            without_evidence_references(architect_plan)
-        ),
+        "reviewed_plan": _topology_architect_plan(architect_plan),
+    }
+    valid_example = {
+        "root": ["Client", 100, "Submits one request.", 0],
+        "components": [
+            [
+                0,
+                "Request gateway",
+                104,
+                "Validates and routes the request.",
+                0,
+                "sends request",
+                400,
+                500,
+            ],
+            [
+                1,
+                "Result service",
+                101,
+                "Returns the observable outcome.",
+                0,
+                "returns outcome",
+                400,
+                500,
+            ],
+        ],
+        "connections": {"links": []},
+        "composition": {
+            "title": "Request runtime",
+            "groups": [["Product runtime", 600]],
+            "steps": [[0], [1], [2]],
+        },
     }
     return (
         "Build the complete architecture topology from the supplied design input. Include every "
         "material responsibility, ownership boundary, runtime branch, control path, data store, "
         "delivery path, and failure outcome needed by this specific system. Use these exact tuple "
-        "layouts: root is [label,type,responsibility,group_index]; every remaining component is "
-        "[parent_index,label,type,responsibility,group_index,incoming_edge_label,flow,sync]; link "
-        "rows are [source_index,target_index,label,flow,sync]; group definition rows are "
-        "[label,kind]. String fields are labels, responsibilities, titles, and group labels. Integer "
-        "fields are every component, parent, source, target, group, and step index plus every "
-        "categorical type, flow, sync, and group-kind code. Categorical tuple fields and group kind use "
+        "layouts and scalar types. A root row has exactly 4 fields: "
+        "[label:string,type:integer,responsibility:string,group_index:integer]. Every remaining "
+        "component row has exactly 8 fields: [parent_index:integer,label:string,type:integer,"
+        "responsibility:string,group_index:integer,incoming_edge_label:string,flow:integer,"
+        "sync:integer]. A link row has exactly 5 fields: [source_index:integer,target_index:integer,"
+        "label:string,flow:integer,sync:integer]. A group definition row has exactly 2 fields: "
+        "[label:string,kind:integer]. The composition title is a string. Each composition step is a "
+        "nonempty array of integer component indexes. Do not use null, booleans, objects, omitted "
+        "tuple values, or placeholder strings inside any row. Categorical tuple fields and group kind use "
         f"integer codes. {codebook} The positional integer-code wire format is canonical. Use the "
         "integer, never its name, in the wire object. The reviewed_plan owns design decisions; use "
         "the request for domain vocabulary and stated context. You author "
         "the title, groups, component labels, component types, responsibilities, edge labels, flows, "
         "sync modes, and sequence membership. The server owns stable IDs, display technology and "
-        "transport labels, edge descriptions, lanes, tiers, and rendering state. The server derives "
-        "each lane from its authored group kind. Do not emit lane or tier fields. Choose the "
+        "transport labels, edge descriptions, lanes, tiers, assumptions, and rendering view state. "
+        "The server derives each lane from its authored group kind and carries assumptions from the "
+        "reviewed plan. Do not emit lane or tier fields. Do not emit assumptions, view_state, node "
+        "positions, or selected-node arrays. Choose the "
         "number of components, groups, and "
         "links from the design. Never merge distinct owners, trust "
         "boundaries, authoritative stores, decisions, or failure outcomes to make the diagram "
@@ -214,15 +302,24 @@ def applied_graph_topology_prompt(
         "needed to follow behavior or prove a guarantee. Consolidate semantically duplicate "
         "interactions. Multiple edges between a component pair must carry compatible distinct "
         "contracts. Reverse edges must name a distinct response, acknowledgement, feedback, or "
-        "control contract. The "
-        "root is component 0. A row "
+        "control contract. "
+        f"The complete topology may contain at most {spec.safety_max_nodes} nodes including root and "
+        f"at most {spec.safety_max_edges} total edges including component tree edges and links. "
+        f"Therefore components has at most {max(0, spec.safety_max_nodes - 1)} rows. Links alone may "
+        f"contain at most {spec.safety_max_edges} rows, and components plus links must not exceed "
+        f"{spec.safety_max_edges}. Groups, steps, and each step contain at most "
+        f"{spec.safety_max_nodes} entries. The root is component 0. A row "
         "at components[i] defines component i+1 and its one incoming tree edge. Parent indexes are "
         "zero-based and must be smaller than the component index, which makes one rooted acyclic "
         "topology. For example, components[0] must use parent 0 and components[4] may use parent "
         "0 through 4, never 5. Choose and enumerate groups before constructing root and component "
         "rows, then emit their definitions in composition.groups. Root and component rows reference "
         "those zero-based group positions. Every component must reference exactly one group. Links use component "
-        "indexes starting with root 0. "
+        "indexes starting with root 0. Emit only concrete zero-based integer indexes that reference "
+        "records present in this object. Never emit server node IDs such as n1, patch placeholders such "
+        "as $new_node_1, one-based indexes, forward parent indexes, or an index for a record that is not "
+        "defined. Labels and responsibilities are real nonempty authored strings, never placeholder "
+        "tokens. "
         "Composition steps use the same indexes and define a staged directed subgraph. A step lists "
         "the components entered in that stage, not their parent. The first step must include root 0; "
         "each other first-step component must have no incoming primary/runtime edge from another "
@@ -244,7 +341,10 @@ def applied_graph_topology_prompt(
         "paths when they apply. At the selected production depth only, include every applicable control, "
         "failure, observability, and delivery path. Keep the title at most 100 characters, node "
         "labels at most 60 characters, group labels at most 80 characters, responsibilities at most "
-        f"220 characters, and edge labels at most {spec.edge_label_chars} characters. Return only "
+        f"220 characters, and edge labels at most {spec.edge_label_chars} characters. A minimal valid "
+        "shape example is "
+        + json.dumps(valid_example, ensure_ascii=False, separators=(",", ":"))
+        + ". Use it only to understand the wire shape; author the actual domain topology. Return only "
         "the schema-constrained object as compact JSON without indentation or line breaks.\n"
         + json.dumps(design_input, ensure_ascii=False, separators=(",", ":"))
     )
@@ -503,29 +603,98 @@ def _validate_group_memberships(
     return memberships
 
 
+def _normalise_link_indexes(
+    endpoint_rows: list[tuple[int, int]], node_count: int
+) -> list[tuple[int, int]]:
+    zero_based = all(
+        0 <= endpoint < node_count
+        for endpoints in endpoint_rows
+        for endpoint in endpoints
+    )
+    # Values valid under both conventions remain canonical zero-based.
+    if zero_based:
+        return endpoint_rows
+
+    one_based = all(
+        1 <= endpoint <= node_count
+        for endpoints in endpoint_rows
+        for endpoint in endpoints
+    )
+    if one_based:
+        logger.info(
+            "Normalized one-based applied graph link indexes: node_count=%s "
+            "link_count=%s",
+            node_count,
+            len(endpoint_rows),
+        )
+        return [
+            (source_index - 1, target_index - 1)
+            for source_index, target_index in endpoint_rows
+        ]
+
+    for link_index, (source_index, target_index) in enumerate(endpoint_rows):
+        if not 0 <= source_index < node_count:
+            logger.info(
+                "Rejected applied graph link index convention: node_count=%s "
+                "link_count=%s zero_based_valid=false one_based_valid=false",
+                node_count,
+                len(endpoint_rows),
+            )
+            _raise_topology(f"connections.links[{link_index}][0]")
+        if not 0 <= target_index < node_count:
+            logger.info(
+                "Rejected applied graph link index convention: node_count=%s "
+                "link_count=%s zero_based_valid=false one_based_valid=false",
+                node_count,
+                len(endpoint_rows),
+            )
+            _raise_topology(f"connections.links[{link_index}][1]")
+    raise AssertionError("unreachable link index validation")
+
+
 def _validate_links(
     raw_links: list[Any],
     node_count: int,
     tree_edges: list[dict[str, str]],
     spec: AppliedGraphSpec,
 ) -> list[dict[str, str]]:
+    link_records = [
+        _required_tuple(
+            raw_edge,
+            _LINK_FIELD_COUNT,
+            path=f"connections.links[{link_index}]",
+        )
+        for link_index, raw_edge in enumerate(raw_links)
+    ]
+    endpoint_rows = [
+        (
+            _required_index(
+                edge_record[0], path=f"connections.links[{link_index}][0]"
+            ),
+            _required_index(
+                edge_record[1], path=f"connections.links[{link_index}][1]"
+            ),
+        )
+        for link_index, edge_record in enumerate(link_records)
+    ]
+    normalised_endpoints = _normalise_link_indexes(endpoint_rows, node_count)
+
     edges = list(tree_edges)
     seen_edges = {
         (edge["source"], edge["target"], edge["label"].lower())
         for edge in tree_edges
     }
-    for link_index, raw_edge in enumerate(raw_links):
+    for link_index, (edge_record, endpoints) in enumerate(
+        zip(link_records, normalised_endpoints, strict=True)
+    ):
         path = f"connections.links[{link_index}]"
-        edge_record = _required_tuple(raw_edge, _LINK_FIELD_COUNT, path=path)
-        source_index = _required_index(edge_record[0], path=f"{path}[0]")
-        target_index = _required_index(edge_record[1], path=f"{path}[1]")
-        if (
-            source_index < 0
-            or source_index >= node_count
-            or target_index < 0
-            or target_index >= node_count
-            or source_index == target_index
-        ):
+        source_index, target_index = endpoints
+        if source_index == target_index:
+            logger.info(
+                "Rejected applied graph self-link: node_count=%s link_count=%s",
+                node_count,
+                len(link_records),
+            )
             _raise_topology(path)
         edge = {
             "source": f"n{source_index + 1}",

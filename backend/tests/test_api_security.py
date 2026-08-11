@@ -185,11 +185,31 @@ def test_cloud_run_config_rejects_an_impossible_architecture_deadline():
         configured.validate_for_cloud_run()
 
 
+def test_cloud_run_config_deadline_boundary_includes_contract_correction():
+    values = {
+        "_env_file": None,
+        "supabase_db_url": "postgresql://example",
+        "anthropic_api_key": "anthropic-key",
+        "moonshot_api_key": "moonshot-key",
+        "graph_builder_model": "kimi-k3",
+        "supabase_url": "https://project.supabase.co",
+        "supabase_anon_key": "anon-key",
+        "supabase_jwt_issuer": "https://project.supabase.co/auth/v1",
+        "turnstile_secret_key": "turnstile-key",
+        "frontend_origin": "https://example.com",
+    }
+
+    with pytest.raises(RuntimeError, match="complete architecture repair path"):
+        Settings(**values, agent_timeout_s=932).validate_for_cloud_run()
+
+    Settings(**values, agent_timeout_s=933).validate_for_cloud_run()
+
+
 @pytest.mark.parametrize(
     "timeout_override",
     [
         {"graph_builder_max_timeout_s": 149},
-        {"graph_critic_max_timeout_s": 89},
+        {"graph_critic_max_timeout_s": 59},
     ],
 )
 def test_cloud_run_config_rejects_a_stage_max_below_its_reserved_time(

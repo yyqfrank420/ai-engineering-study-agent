@@ -61,7 +61,7 @@ RUBRIC_CRITERIA = {
     ),
     "independent_risk_coverage": (
         "components",
-        "Give each material challenger risk a named responsibility owner.",
+        "Give each material independently reviewed risk a named responsibility owner.",
     ),
     "gate_preserving_reuse": (
         "connections",
@@ -122,10 +122,23 @@ RUBRIC_CODE_OWNERS = {
 # server-checkable closure rule. Keep its wire code stable without allowing a
 # subjective preference to withhold an otherwise valid graph.
 ADVISORY_RUBRIC_CODES = frozenset({"novice_clarity"})
+PROTOTYPE_ADVISORY_RUBRIC_CODES = frozenset(
+    {
+        "logical_flow",
+        "authored_composition",
+        "branch_completion",
+    }
+)
+
+
+def advisory_rubric_codes(resolved_depth: str) -> frozenset[str]:
+    """Return criteria that cannot withhold a graph at the selected UI depth."""
+    if resolved_depth == "production":
+        return ADVISORY_RUBRIC_CODES
+    return ADVISORY_RUBRIC_CODES | PROTOTYPE_ADVISORY_RUBRIC_CODES
 
 COMPOSITION_REPAIR_PROFILES = {
     "assumption_hygiene": ("assumptions",),
-    "authored_composition": ("title", "groups", "sequence"),
 }
 
 

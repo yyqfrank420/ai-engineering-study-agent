@@ -81,6 +81,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
   const activeNodeStreamIdRef = useRef<string | null>(null);
   const authSessionRef = useRef<AuthSession | null>(authSession);
   const graphDataRef = useRef<GraphData | null>(null);
+  const durableGraphDataRef = useRef<GraphData | null>(null);
   const selectedNodeRef = useRef<SelectedNode | null>(null);
   const activeChatTerminalRef = useRef<string | null>(null);
   const explanationPausedRef = useRef(false);
@@ -124,6 +125,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
     queuedGraphDataRef.current = undefined;
     activeExplanationMessageIdsRef.current = [];
     graphDataRef.current = null;
+    durableGraphDataRef.current = null;
     selectedNodeRef.current = null;
     suggestionsCacheRef.current.clear();
     lastGraphKeyRef.current = 'null';
@@ -167,6 +169,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
     const nextGraph = normalizeGraphData(thread.graphData);
     lastGraphKeyRef.current = graphStructureKey(nextGraph);
     graphDataRef.current = nextGraph;
+    durableGraphDataRef.current = nextGraph;
     setGraphData(nextGraph);
   }, [resetThreadView]);
 
@@ -259,6 +262,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
         queuedExplanationBlocksRef.current = [];
         queuedGraphDataRef.current = undefined;
         setGraphCandidate(null);
+        publishGraph(durableGraphDataRef.current);
         setWorkflowProgress([]);
         break;
 
@@ -320,9 +324,13 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
         break;
 
       case 'steer_applied':
-      case 'stopped':
       case 'retrieval_evidence':
       case 'research_evidence':
+        break;
+
+      case 'stopped':
+        if (meta.kind !== 'chat') break;
+        publishGraph(durableGraphDataRef.current);
         break;
 
       case 'done':
@@ -364,6 +372,20 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
         break;
 
       case 'graph_data':
+        if (meta.kind !== 'chat') break;
+        {
+          const nextGraph = normalizeGraphData(event.data);
+          durableGraphDataRef.current = nextGraph;
+          setGraphCandidate(null);
+          if (explanationPausedRef.current) {
+            queuedGraphDataRef.current = nextGraph;
+            break;
+          }
+          publishGraph(nextGraph);
+        }
+        break;
+
+      case 'graph_preview':
         if (meta.kind !== 'chat') break;
         {
           const nextGraph = normalizeGraphData(event.data);
@@ -442,6 +464,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
           setProviderNotice(null);
           setStreamStatus('connected');
           setGraphCandidate(null);
+          publishGraph(durableGraphDataRef.current);
           queuedGraphDataRef.current = undefined;
           if (analytics) {
             activeChatTerminalRef.current = analytics.clientRequestId;
@@ -579,6 +602,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
         setRetrievalNotice(null);
         setProviderNotice(null);
         setGraphCandidate(null);
+        publishGraph(durableGraphDataRef.current);
         queuedGraphDataRef.current = undefined;
         setStreamStatus('connected');
         if (activeChatTerminalRef.current !== clientRequestId) {
@@ -619,6 +643,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
       setRetrievalNotice(null);
       setProviderNotice(null);
       setGraphCandidate(null);
+      publishGraph(durableGraphDataRef.current);
       queuedGraphDataRef.current = undefined;
       setStreamStatus('connected');
       if (activeChatTerminalRef.current !== clientRequestId) {
@@ -646,7 +671,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
         activeChatAnalyticsRef.current = null;
       }
     });
-  }, [activeThreadId, authSession, streamStatus]);
+  }, [activeThreadId, authSession, publishGraph, streamStatus]);
 
   const requestSearchTool = useCallback(async () => {
     if (!authSession || !activeThreadId || !retrievalNotice || retrievalNotice.requested) {
@@ -733,6 +758,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
     const clientRequestId = activeChatStreamIdRef.current;
     activeChatStreamIdRef.current = null;
     if (clientRequestId) agentTransport.stopGeneration(clientRequestId);
+    publishGraph(durableGraphDataRef.current);
     // Finalise any streaming message so it renders as complete
     if (streamingIdRef.current) {
       const id = streamingIdRef.current;
@@ -762,7 +788,7 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
         authSession,
       );
     }
-  }, [authSession]);
+  }, [authSession, publishGraph]);
 
   const toggleExplanationPause = useCallback(() => {
     const nextPaused = !explanationPausedRef.current;

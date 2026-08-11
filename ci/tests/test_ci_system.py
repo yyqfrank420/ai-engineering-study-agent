@@ -9,6 +9,7 @@ import pytest
 from config import Settings
 from eval.browser_runner import _execute_browser, _run_browser_attempt
 from scripts.ci_runner import (
+    _command_environment,
     classify_paths,
     load_manifest,
     select_offline_groups,
@@ -18,6 +19,26 @@ from scripts.ci_runner import (
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_ci_environment_defaults_include_frontend_supabase_client_config(monkeypatch):
+    monkeypatch.delenv("VITE_SUPABASE_URL", raising=False)
+    monkeypatch.delenv("VITE_SUPABASE_ANON_KEY", raising=False)
+
+    environment = _command_environment()
+
+    assert environment["VITE_SUPABASE_URL"] == "http://127.0.0.1:54321"
+    assert environment["VITE_SUPABASE_ANON_KEY"] == "ci-test-anon-key"
+
+
+def test_ci_environment_preserves_explicit_frontend_supabase_config(monkeypatch):
+    monkeypatch.setenv("VITE_SUPABASE_URL", "http://localhost:6543")
+    monkeypatch.setenv("VITE_SUPABASE_ANON_KEY", "explicit-test-key")
+
+    environment = _command_environment()
+
+    assert environment["VITE_SUPABASE_URL"] == "http://localhost:6543"
+    assert environment["VITE_SUPABASE_ANON_KEY"] == "explicit-test-key"
 
 
 def test_manifest_tracks_every_backend_test():

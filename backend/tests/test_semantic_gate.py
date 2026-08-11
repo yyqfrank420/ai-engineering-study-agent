@@ -26,6 +26,7 @@ from eval.judge_adapter import (
 )
 from eval.live_runner import (
     _assert_approved_judge_identity,
+    _classify_deterministic,
     _exit_code_for_statuses,
     _judge_payload,
     _load_resume_evaluations,
@@ -92,6 +93,32 @@ def test_report_only_review_never_masks_clear_or_infrastructure_failures():
     assert (
         _exit_code_for_statuses({"manual_review", "infrastructure"}, "report-only") == 2
     )
+
+
+def test_typed_browser_failure_details_override_legacy_error_text():
+    assert (
+        _classify_deterministic(
+            ["provider timed out"],
+            [{"kind": "quality"}],
+        )
+        == "quality"
+    )
+    assert (
+        _classify_deterministic(
+            ["graph data was withheld"],
+            [{"kind": "infrastructure"}],
+        )
+        == "infrastructure"
+    )
+
+
+def test_legacy_deterministic_failure_without_details_uses_text_classification():
+    assert _classify_deterministic(["provider timed out"]) == "infrastructure"
+
+
+def test_invalid_typed_browser_failure_details_are_rejected():
+    with pytest.raises(RuntimeError, match="invalid kind"):
+        _classify_deterministic(["provider timed out"], [{"kind": "unknown"}])
 
 
 @pytest.mark.asyncio

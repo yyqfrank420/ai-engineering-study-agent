@@ -398,16 +398,22 @@ def test_extract_helpers_return_expected_values():
         {"nodes": [{"label": "Retriever"}, {"id": "missing-label"}]}
     ) == {"Retriever"}
     assert extract_response_text(events) == "Hello world"
-    assert extract_graph_data([
-        {"type": "graph_candidate", "data": {"title": "candidate"}},
-        {"type": "graph_data", "data": {"title": "Graph"}},
-    ])["title"] == "Graph"
     assert (
-        extract_graph_data([
-            {"type": "graph_data", "data": {"title": "Graph"}},
-            {"type": "graph_candidate", "data": None},
-        ])
-        == {"title": "Graph"}
+        extract_graph_data(
+            [
+                {"type": "graph_candidate", "data": {"title": "candidate"}},
+                {"type": "graph_data", "data": {"title": "Graph"}},
+            ]
+        )["title"]
+        == "Graph"
+    )
+    assert (
+        extract_graph_data(
+            [
+                {"type": "graph_candidate", "data": {"title": "candidate"}},
+            ]
+        )
+        is None
     )
 
 
@@ -418,6 +424,38 @@ def test_extract_response_text_includes_progressive_explanation_blocks():
     ]
 
     assert extract_response_text(events) == "Interpretation\n\nRuntime path"
+
+
+def test_staging_graph_expectations_ignore_private_candidates():
+    step = StagingStep(
+        kind="chat",
+        description="private graph candidates are not published",
+        expect=StepExpectation(
+            graph_emitted=True,
+            graph_min_retained_node_ratio=0.6,
+        ),
+    )
+    run = {
+        "status_code": 200,
+        "events": [
+            {
+                "type": "graph_candidate",
+                "data": {"nodes": [{"id": "retained"}], "edges": []},
+            }
+        ],
+        "body_text": "",
+    }
+
+    failures = evaluate_expectation(
+        step,
+        run,
+        {"last_graph_data": {"nodes": [{"id": "retained"}], "edges": []}},
+    )
+
+    assert "graph_emitted expected True, got False" in failures
+    assert (
+        "graph quality expectations were set but no graph_data was emitted" in failures
+    )
 
 
 def test_staging_diagram_upload_uses_bounded_protocol_frames(monkeypatch):

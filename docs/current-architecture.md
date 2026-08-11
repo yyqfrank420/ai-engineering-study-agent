@@ -13,7 +13,7 @@ This is the current runtime contract for the production-quality demo.
 - `backend/`
   - FastAPI
   - request-scoped LangGraph orchestration
-  - sequential applied-design enrichment and challenge roles, plus a screenshot-aware critic with one bounded semantic revision
+  - applied-design enrichment, direct graph construction, and a screenshot-aware critic with up to two bounded semantic repairs
   - Supabase-backed user/thread/message persistence
   - FAISS-backed book retrieval loaded by a non-blocking readiness task
 - `ingestion/`
@@ -33,8 +33,7 @@ This is the current runtime contract for the production-quality demo.
    data/memory, evaluation, safety, idempotent writes, latency/cost, reliability, and deployment.
 5. The Architect enriches a terse seed into one explicit product brief: actors, authoritative inputs,
    controlled decisions/actions, outputs, measures, assumptions, evidence provenance, and runtime.
-   The Challenger then audits that exact interpretation before the graph worker integrates it into
-   domain responsibilities and directional flows.
+   The graph worker integrates that brief into domain responsibilities and directional flows.
 6. Deterministic architecture checks run first. A surviving candidate is sent as `graph_candidate`
    and rendered off-screen at the user's real graph-pane dimensions. The browser returns a bounded,
    version-checked screenshot and layout report over idempotent WebSocket chunks.
@@ -48,21 +47,28 @@ This is the current runtime contract for the production-quality demo.
    rounds against the exact failed records, including non-adjacent records in the connected
    candidate. Uncited records stay locked.
    Component changes reopen component, connection, and composition review. Edge changes reopen
-   connection and composition review. Composition-only changes reopen composition review. An invalid
+   connection and composition review. Composition-only changes reopen composition review. A
+   transition from prototype to production depth reopens connection and composition review and
+   requires a fresh complete topology-proof set. An invalid
    patch may receive one error-informed critic-contract correction before the patch is retried.
    Every post-patch review classifies prior server obligations as resolved or still failing. A
-   repeated still-failing obligation cannot consume a second repair in the same server-tracked class
+   still-failing typed blocker with the same exact repair fingerprint cannot consume a second repair
    and fails closed. A
    graph-caused render failure can share the patch when an editable layer identifies the cause. A
    render-only failure, global design failure, or failed post-patch review suppresses the diagram.
-   The entire turn has a four-call Sonnet critic ceiling, including schema corrections.
+   The entire turn has a four-call Sonnet critic ceiling and one shared correction token, including
+   WebSocket steering restarts.
    Published user refinements use the same typed patch boundary. The model chooses graph
-   size, groups, and runtime sequence from the design. Node and edge safety ceilings protect
-   persistence and rendering, stay out of the prompt, and reject malformed output without deleting
-   authored responsibilities or paths. Browser capture or geometry failure stops publication.
-8. The accepted graph remains private while one Opus 5 low-effort call completes its explanation cards. The
-   server then emits `graph_data` followed by the buffered cards, so an unfinished walkthrough never
-   reveals a new diagram. Pause can still hold card reveal in the browser without another model call.
+   size, groups, and runtime sequence from the design. The topology prompt states node and edge
+   safety ceilings, and provider schemas plus local validation enforce them to protect persistence
+   and rendering. Invalid topology is rejected without deleting authored responsibilities or paths.
+   Browser capture or geometry failure stops publication.
+8. After deterministic graph and browser-render checks pass, the server emits a reversible
+   `graph_preview` while semantic review continues. The transport retains the prior durable graph and
+   restores it after review failure, rejected repair, steering, stop, timeout, persistence failure,
+   or connection failure. A reviewed turn streams its explanation cards, persists, and then commits
+   the accepted graph with authoritative `graph_data`. Pause can still hold card reveal in the
+   browser without another model call.
 9. The transport persists the completed turn before emitting `done`.
 
 The model never writes SVG. Its typed graph JSON is an intermediate representation with named
@@ -84,12 +90,12 @@ capture use shared transactional storage. Rate-limit identifiers are HMAC-derive
 persistence, so Cloud Run scale-out neither resets the limits nor stores raw emails/IPs in the
 limiter table.
 
-The applied-design path gives each role one explicit owner. Opus 5 xhigh writes the primary
-architecture brief. Sonnet 5 medium reconstructs the design from the request and evidence, then
-audits the primary plan. Kimi K3 low creates the initial graph topology. Kimi K3 high applies typed
+The applied-design path gives each active role one explicit owner. Opus 5 medium writes the primary
+architecture brief. Kimi K3 low creates the initial graph topology. Kimi K3 high applies typed
 patches to local critic failures and published user refinements. Sonnet 5 medium reviews every graph
-candidate and revision. Opus 5 low writes the explanation stream. Renderer-only failures add no
-model calls. Retrieval and the standing checklist do not add model calls.
+candidate and revision. The graph workflow does not invoke the challenger worker. Opus 5 low writes
+the explanation stream. Renderer infrastructure failures add no model calls.
+Retrieval and the standing checklist do not add model calls.
 
 During steps 4-7 the client may send `steer`. The server cancels the active workflow, emits
 `response_reset`, and restarts with the steering correction folded into the same turn. `stop`

@@ -10,6 +10,7 @@ from agent.nodes.architecture_workers import (
     _CHALLENGER_SYSTEM,
     _REVIEW_PLAN_LIST_LIMITS,
     _apply_source_backed_plan_locks,
+    _architect_system_for_depth,
     _is_complete_architect_plan,
     _normalise_architect,
     _normalise_challenger,
@@ -90,7 +91,7 @@ def _evidence_id(bundle: dict, basis: str) -> str:
 
 
 def test_architecture_roles_reason_about_enforced_control_paths():
-    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v22"
+    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v23"
     for production_requirement in (
         "At selected production depth only, keep risky customer writes",
         "At selected production depth only, treat production guarantees",
@@ -145,6 +146,27 @@ def test_architecture_roles_reason_about_enforced_control_paths():
     )
     assert "exact short source slot" in _ARCHITECT_SYSTEM
     assert "exact short source slot" in _CHALLENGER_SYSTEM
+
+
+@pytest.mark.parametrize("depth", ["low", "prototype"])
+def test_nonproduction_architect_prompt_omits_production_only_rules(depth):
+    prototype_system = _architect_system_for_depth(depth)
+    flattened_system = " ".join(prototype_system.split())
+
+    assert "At selected production depth only" not in prototype_system
+    assert "production depth" not in flattened_system
+    assert "production controls as explicit routes" not in flattened_system
+    for production_directive in (
+        "durable atomic deduplication",
+        "stable operation identity",
+        "typed deterministic validation",
+        "bounded backpressure",
+    ):
+        assert production_directive not in flattened_system
+    assert "At prototype depth, use only prototype criteria" in prototype_system
+    assert "Prefer reusable platform boundaries" in prototype_system
+    assert "<output_contract>" in prototype_system
+    assert _architect_system_for_depth("production") == _ARCHITECT_SYSTEM
 
 
 def test_architecture_worker_schemas_require_every_declared_object_field():
@@ -390,6 +412,34 @@ def test_challenger_context_ignores_a_stale_architect_brief():
     assert "Channel write APIs are available" not in context
 
 
+def test_architect_context_does_not_repeat_identical_design_context():
+    context = _worker_context(
+        {
+            "user_message": "customer support chatbot",
+            "design_query": "customer support chatbot",
+            "evidence_bundle": {},
+        },
+        "Prototype depth",
+    )
+
+    assert context.count("customer support chatbot") == 1
+    assert "Design context" not in context
+
+
+def test_architect_context_does_not_repeat_whitespace_equivalent_design_context():
+    context = _worker_context(
+        {
+            "user_message": "customer support chatbot",
+            "design_query": "  customer   support chatbot\n",
+            "evidence_bundle": {},
+        },
+        "Prototype depth",
+    )
+
+    assert context.count("customer support chatbot") == 1
+    assert "Design context" not in context
+
+
 def test_challenger_context_includes_the_primary_plan_for_the_second_pass():
     context = _worker_context(
         {
@@ -479,18 +529,20 @@ async def test_architect_empty_success_stops_graph_input(monkeypatch):
             "is_applied_design": True,
             "design_query": "growth marketing multi-agent system",
             "user_message": "growth marketing multi-agent system",
-            "complexity": "auto",
+            "complexity": "prototype",
             "evidence_bundle": {},
             "send": send,
         }
     )
 
     assert result == {"architect_plan": {}, "architecture_ready": False}
-    assert captured["effort"] == "high"
+    assert captured["effort"] == "medium"
     assert captured["model"] == settings.architecture_model
     assert captured["timeout_seconds"] == settings.architecture_role_timeout_s
     assert captured["max_output_tokens"] == settings.architecture_max_completion_tokens
+    assert captured["max_output_tokens"] == 12000
     assert captured["response_schema"] is _ARCHITECT_RESPONSE_SCHEMA
+    assert "At selected production depth only" not in captured["system"]
 
 
 @pytest.mark.asyncio

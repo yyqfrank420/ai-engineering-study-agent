@@ -5,6 +5,7 @@ import pytest
 
 from agent.applied_graph_spec import (
     AppliedGraphSpecError,
+    _topology_architect_plan,
     applied_graph_spec,
     applied_graph_topology_prompt,
     applied_graph_topology_schema,
@@ -98,8 +99,9 @@ def test_node_safety_capacity_cannot_overlap_wire_category_codes(monkeypatch):
         applied_graph_spec("production")
 
 
-def test_topology_schema_uses_mece_positional_records_without_design_counts():
-    schema = applied_graph_topology_schema(applied_graph_spec("production"))
+def test_topology_schema_uses_compact_positional_records_with_resource_bounds():
+    spec = applied_graph_spec("production")
+    schema = applied_graph_topology_schema(spec)
     properties = schema["properties"]
     assert list(properties) == ["root", "components", "connections", "composition"]
     root = properties["root"]
@@ -107,34 +109,51 @@ def test_topology_schema_uses_mece_positional_records_without_design_counts():
     connections = properties["connections"]
     composition = properties["composition"]
     assert "minItems" not in components
-    assert "maxItems" not in components
+    assert components["maxItems"] == spec.safety_max_nodes - 1
     scalar_items = {
         "anyOf": [{"type": "integer"}, {"type": "string"}],
     }
     assert root == {
         "type": "array",
+        "maxItems": 4,
         "items": scalar_items,
     }
     assert components["items"] == {
         "type": "array",
+        "maxItems": 8,
         "items": scalar_items,
     }
+    assert connections["properties"]["links"]["maxItems"] == spec.safety_max_edges
+    assert connections["properties"]["links"]["items"]["maxItems"] == 5
     assert connections["properties"]["links"]["items"]["items"] == scalar_items
+    assert composition["properties"]["groups"]["maxItems"] == spec.safety_max_nodes
     assert composition["properties"]["groups"]["items"] == {
         "type": "array",
+        "maxItems": 2,
         "items": scalar_items,
     }
+    steps = composition["properties"]["steps"]
+    assert steps["maxItems"] == spec.safety_max_nodes
+    assert steps["items"]["maxItems"] == spec.safety_max_nodes
+    assert steps["items"]["items"] == {"type": "integer"}
     serialized = json.dumps(schema)
     for unsupported_or_shaping_keyword in (
-        "$ref", "$defs", "minItems", "maxItems", "minLength", "maxLength",
-        "allOf", "prefixItems",
+        "$ref",
+        "$defs",
+        "minItems",
+        "minLength",
+        "maxLength",
+        "allOf",
+        "prefixItems",
     ):
         assert unsupported_or_shaping_keyword not in serialized
 
 
 @pytest.mark.parametrize("node_count", [3, 14, 27])
 def test_validator_accepts_variable_material_topologies(node_count):
-    draft = validate_applied_graph_topology(_draft(node_count), applied_graph_spec("production"))
+    draft = validate_applied_graph_topology(
+        _draft(node_count), applied_graph_spec("production")
+    )
     assert len(draft["nodes"]) == node_count
     assert len(draft["edges"]) == node_count - 1
     _assert_rooted(draft)
@@ -234,9 +253,7 @@ def test_every_categorical_position_rejects_foreign_codes(
     elif section == "component":
         payload["components"][0][field_index] = foreign_code
     elif section == "link":
-        payload["connections"]["links"] = [
-            [0, 2, "material link", 400, 500]
-        ]
+        payload["connections"]["links"] = [[0, 2, "material link", 400, 500]]
         payload["connections"]["links"][0][field_index] = foreign_code
     else:
         payload["composition"]["groups"][0][field_index] = foreign_code
@@ -271,13 +288,9 @@ def test_compatibility_category_representations_are_normalized_in_every_tuple_la
     payload["components"][0][6] = "control"
     payload["components"][0][7] = "async"
     payload["composition"]["groups"][0][1] = "runtime"
-    payload["connections"]["links"] = [
-        [0, 2, "reports feedback", "feedback", "sync"]
-    ]
+    payload["connections"]["links"] = [[0, 2, "reports feedback", "feedback", "sync"]]
 
-    graph = validate_applied_graph_topology(
-        payload, applied_graph_spec("production")
-    )
+    graph = validate_applied_graph_topology(payload, applied_graph_spec("production"))
 
     assert graph["nodes"][0]["type"] == "service"
     assert graph["nodes"][1]["type"] == "decision"
@@ -542,7 +555,9 @@ def test_forward_parent_fails_instead_of_permitting_a_cycle():
 
 
 def test_deep_acyclic_parent_chain_is_preserved():
-    draft = validate_applied_graph_topology(_draft(18), applied_graph_spec("production"))
+    draft = validate_applied_graph_topology(
+        _draft(18), applied_graph_spec("production")
+    )
     parents = {edge["target"]: edge["source"] for edge in draft["edges"][:17]}
     assert parents["n18"] == "n17"
 
@@ -572,6 +587,82 @@ def test_cross_links_use_indexes_and_preserve_every_material_link():
     ]
 
 
+def test_consistent_one_based_cross_link_indexes_are_normalized(caplog):
+    payload = _draft(6)
+    payload["connections"]["links"] = [
+        [1, 5, "publishes measured feedback", 402, 501],
+        [6, 3, "rolls back failed release", 403, 501],
+    ]
+
+    with caplog.at_level("INFO", logger="agent.applied_graph_spec"):
+        draft = validate_applied_graph_topology(
+            payload, applied_graph_spec("production")
+        )
+
+    assert draft["edges"][-2:] == [
+        {
+            "source": "n1",
+            "target": "n5",
+            "label": "publishes measured feedback",
+            "flow": "feedback",
+            "sync": "async",
+        },
+        {
+            "source": "n6",
+            "target": "n3",
+            "label": "rolls back failed release",
+            "flow": "deployment",
+            "sync": "async",
+        },
+    ]
+    assert "Normalized one-based applied graph link indexes" in caplog.text
+
+
+def test_ambiguous_cross_link_indexes_remain_zero_based():
+    payload = _draft(6)
+    payload["connections"]["links"] = [
+        [1, 4, "publishes measured feedback", 402, 501],
+        [5, 2, "rolls back failed release", 403, 501],
+    ]
+
+    draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert [(edge["source"], edge["target"]) for edge in draft["edges"][-2:]] == [
+        ("n2", "n5"),
+        ("n6", "n3"),
+    ]
+
+
+def test_mixed_cross_link_index_conventions_fail_closed():
+    payload = _draft(6)
+    payload["connections"]["links"] = [
+        [0, 2, "canonical root path", 402, 501],
+        [4, 6, "one-based terminal path", 403, 501],
+    ]
+
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert caught.value.code == "graph_design_topology_invalid"
+    assert caught.value.path == "connections.links[1][1]"
+    assert caught.value.rule == "topology"
+
+
+def test_invalid_link_array_is_not_partially_normalized():
+    payload = _draft(6)
+    payload["connections"]["links"] = [
+        [1, 6, "otherwise one-based link", 402, 501],
+        [2, 7, "endpoint above either range", 403, 501],
+    ]
+
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert caught.value.code == "graph_design_topology_invalid"
+    assert caught.value.path == "connections.links[0][1]"
+    assert caught.value.rule == "topology"
+
+
 @pytest.mark.parametrize(
     "cross_link",
     [
@@ -587,12 +678,50 @@ def test_invalid_cross_link_fails_instead_of_disappearing(cross_link):
     assert caught.value.code == "graph_design_topology_invalid"
 
 
+def test_one_based_self_link_fails_after_normalization():
+    payload = _draft(6)
+    payload["connections"]["links"] = [[6, 6, "loop", 402, 501]]
+
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert caught.value.code == "graph_design_topology_invalid"
+    assert caught.value.path == "connections.links[0]"
+    assert caught.value.rule == "topology"
+
+
 def test_duplicate_cross_link_fails_instead_of_using_array_order():
     payload = _draft(5)
     duplicate = [1, 3, "material control", 401, 500]
     payload["connections"]["links"] = [duplicate, duplicate]
     with pytest.raises(AppliedGraphSpecError) as caught:
         validate_applied_graph_topology(payload, applied_graph_spec("production"))
+    assert caught.value.rule == "duplicate"
+
+
+def test_duplicate_one_based_cross_link_fails_after_normalization():
+    payload = _draft(6)
+    duplicate = [1, 6, "material control", 401, 500]
+    payload["connections"]["links"] = [duplicate, duplicate]
+
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert caught.value.path == "connections.links[1]"
+    assert caught.value.rule == "duplicate"
+
+
+def test_one_based_cross_link_duplicate_of_tree_edge_fails_after_normalization():
+    payload = _draft(6)
+    payload["connections"]["links"] = [
+        [1, 2, "passes validated action 2", 400, 500],
+        [6, 3, "forces one-based normalization", 402, 501],
+    ]
+
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert caught.value.path == "connections.links[0]"
     assert caught.value.rule == "duplicate"
 
 
@@ -667,7 +796,10 @@ def test_enrichment_preserves_authored_groups_and_runtime_sequence():
         architect_plan={"assumptions": ["The source API supports version reads."]},
     )
     assert [group["label"] for group in graph["groups"]] == [
-        "Product runtime", "Data and model services", "Delivery controls", "Operations",
+        "Product runtime",
+        "Data and model services",
+        "Delivery controls",
+        "Operations",
     ]
     assert {node_id for group in graph["groups"] for node_id in group["nodeIds"]} == {
         f"n{index}" for index in range(1, 15)
@@ -675,7 +807,14 @@ def test_enrichment_preserves_authored_groups_and_runtime_sequence():
     parallel_step = graph["sequence"][1]
     assert parallel_step["nodes"] == ["n2", "n3"]
     assert [node_id for step in graph["sequence"] for node_id in step["nodes"]] == [
-        "n1", "n2", "n3", "n4", "n5", "n6", "n7", "n8"
+        "n1",
+        "n2",
+        "n3",
+        "n4",
+        "n5",
+        "n6",
+        "n7",
+        "n8",
     ]
     assert graph["assumptions"] == ["The source API supports version reads."]
 
@@ -705,7 +844,7 @@ def test_worst_case_topology_serialization_is_bounded_by_resource_ceiling():
         for source in reversed(range(len(legacy_nodes)))
         for target in reversed(range(len(legacy_nodes)))
         if source != target and target != source + 1
-    ][:max(0, spec.safety_max_edges - tree_edge_count)]
+    ][: max(0, spec.safety_max_edges - tree_edge_count)]
     legacy_links = [
         {
             "source_index": source,
@@ -731,7 +870,55 @@ def test_worst_case_topology_serialization_is_bounded_by_resource_ceiling():
 
 def test_provider_schema_stays_below_compact_byte_budget():
     schema = applied_graph_topology_schema(applied_graph_spec("production"))
-    assert len(json.dumps(schema, separators=(",", ":"))) < 1_200
+    assert len(json.dumps(schema, separators=(",", ":"))) < 1_500
+
+
+def test_topology_plan_keeps_graph_inputs_and_omits_review_metadata():
+    plan = {
+        "interpretation": "Build one serving path.",
+        "actors": ["Client"],
+        "inputs": ["Request"],
+        "outputs": ["Response"],
+        "required_capabilities": ["Route requests"],
+        "diagram_requirements": ["Show the fallback route"],
+        "outcome_measures": ["p95 latency"],
+        "constraints": ["Prototype only"],
+        "assumptions": ["One provider is available"],
+        "open_questions": ["What is the traffic volume?"],
+        "evidence_basis": [
+            {
+                "claim": "Measure latency.",
+                "basis": "book",
+                "evidence_ref": "book:private",
+            }
+        ],
+        "decisions": [{"area": "routing", "decision": "Use fallback", "why": ""}],
+        "runtime_flow": ["Accept", "Route", "Return"],
+        "status_update": "Plan ready",
+    }
+
+    topology_plan = _topology_architect_plan(plan)
+
+    assert set(topology_plan) == {
+        "interpretation",
+        "actors",
+        "inputs",
+        "outputs",
+        "required_capabilities",
+        "diagram_requirements",
+        "outcome_measures",
+        "constraints",
+        "assumptions",
+        "open_questions",
+        "decisions",
+        "runtime_flow",
+    }
+    assert topology_plan["diagram_requirements"] == ["Show the fallback route"]
+    assert topology_plan["outcome_measures"] == ["p95 latency"]
+    assert topology_plan["open_questions"] == ["What is the traffic volume?"]
+    assert topology_plan["runtime_flow"] == ["Accept", "Route", "Return"]
+    assert "evidence_basis" not in topology_plan
+    assert "status_update" not in topology_plan
 
 
 def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
@@ -753,29 +940,59 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
         },
         spec=applied_graph_spec("production"),
     )
-    assert "Choose the number of components, groups, and links from the design" in prompt
+    assert (
+        "Choose the number of components, groups, and links from the design" in prompt
+    )
+    spec = applied_graph_spec("production")
+    assert f"at most {spec.safety_max_nodes} nodes including root" in prompt
+    assert f"at most {spec.safety_max_edges} total edges" in prompt
+    assert f"components has at most {spec.safety_max_nodes - 1} rows" in prompt
+    assert "components plus links must not exceed" in prompt
     assert "Never merge distinct owners" in prompt
-    assert "root is [label,type,responsibility,group_index]" in prompt
-    assert "group definition rows are [label,kind]" in prompt
-    assert "incoming_edge_label" in prompt
+    assert "root row has exactly 4 fields" in prompt
+    assert "component row has exactly 8 fields" in prompt
+    assert "link row has exactly 5 fields" in prompt
+    assert "group definition row has exactly 2 fields" in prompt
+    assert "incoming_edge_label:string" in prompt
+    assert "parent_index:integer,label:string,type:integer" in prompt
+    assert "source_index:integer,target_index:integer" in prompt
+    assert "nonempty array of integer component indexes" in prompt
+    assert "Do not use null, booleans, objects, omitted tuple values" in prompt
     assert "Type: 100=client,101=service" in prompt
     assert "Group kind: 600=runtime,601=data" in prompt
-    assert "String fields are labels, responsibilities, titles, and group labels" in prompt
     assert "The server owns stable IDs" in prompt
-    assert "Choose and enumerate groups before constructing root and component rows" in prompt
-    assert "At the selected production depth only, include every applicable control" in prompt
+    assert (
+        "Choose and enumerate groups before constructing root and component rows"
+        in prompt
+    )
+    assert (
+        "At the selected production depth only, include every applicable control"
+        in prompt
+    )
     assert "At prototype depth, use only prototype criteria" in prompt
-    assert "Do not add or require production hardening at low or prototype depth" in prompt
-    assert "At the selected production depth only, require a no-effect rejection outcome" in prompt
-    assert "distinct retry exhaustion, success, COMMITTED, NOT_FOUND, and STILL_UNKNOWN outcomes" in prompt
+    assert (
+        "Do not add or require production hardening at low or prototype depth" in prompt
+    )
+    assert (
+        "At the selected production depth only, require a no-effect rejection outcome"
+        in prompt
+    )
+    assert (
+        "distinct retry exhaustion, success, COMMITTED, NOT_FOUND, and STILL_UNKNOWN outcomes"
+        in prompt
+    )
     assert "distinct canary, promotion, and rollback delivery paths" in prompt
     assert "Use the integer, never its name" in prompt
     assert "The positional integer-code wire format is canonical" in prompt
     assert "The reviewed_plan owns design decisions" in prompt
-    assert "Evaluation should be measured." in prompt
+    assert "Evaluation should be measured." not in prompt
     assert "PRIVATE_CANONICAL_ID" not in prompt
     assert "evidence_ref" not in prompt
     assert "Do not emit lane or tier fields" in prompt
+    assert (
+        "Do not emit assumptions, view_state, node positions, or selected-node arrays"
+        in prompt
+    )
     assert "The server derives each lane from its authored group kind" in prompt
     for codebook in (
         module._NODE_TYPE_CODES,
@@ -790,9 +1007,15 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     assert "must be smaller than the component index" in prompt
     assert "Every component must reference exactly one group" in prompt
     assert "Links use component indexes starting with root 0" in prompt
+    assert "Never emit server node IDs such as n1" in prompt
+    assert "patch placeholders such as $new_node_1" in prompt
+    assert "one-based indexes" in prompt
     assert "member indexes" not in prompt
     assert "define a staged directed subgraph" in prompt
-    assert "Each component in every later step must have a directed primary/runtime edge" in prompt
+    assert (
+        "Each component in every later step must have a directed primary/runtime edge"
+        in prompt
+    )
     assert "all material non-tree links" in prompt
     assert "Make the root the primary runtime entry or trigger" in prompt
     assert "Tree-edge direction and its incoming label must agree" in prompt
@@ -802,6 +1025,9 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     assert "A component earns its own row" in prompt
     assert "An edge earns its own record" in prompt
     assert "compact JSON without indentation or line breaks" in prompt
+    assert '"root":["Client",100,"Submits one request.",0]' in prompt
+    assert '"connections":{"links":[]}' in prompt
+    assert '"steps":[[0],[1],[2]]' in prompt
     assert "diagram_commitments" not in prompt
     assert prompt.count("diagram_requirements") == 1
     assert "UI progress only" not in prompt
@@ -830,7 +1056,9 @@ async def test_dynamic_generator_uses_schema_once(monkeypatch):
             model="kimi-k3",
         )
 
-    monkeypatch.setattr(graph_worker, "stream_structured_llm", fake_stream_structured_llm)
+    monkeypatch.setattr(
+        graph_worker, "stream_structured_llm", fake_stream_structured_llm
+    )
     result = await graph_worker._generate_applied_architecture(
         {
             "graph_data": None,
@@ -848,7 +1076,15 @@ async def test_dynamic_generator_uses_schema_once(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["effort"] == "low"
     response_schema = calls[0]["response_schema"]
-    assert "maxItems" not in json.dumps(response_schema)
+    spec = applied_graph_spec("production")
+    assert (
+        response_schema["properties"]["components"]["maxItems"]
+        == spec.safety_max_nodes - 1
+    )
+    assert (
+        response_schema["properties"]["connections"]["properties"]["links"]["maxItems"]
+        == spec.safety_max_edges
+    )
 
 
 @pytest.mark.asyncio
@@ -859,7 +1095,9 @@ async def test_dynamic_generator_uses_schema_once(monkeypatch):
         ('{"title":', "end_turn", "graph_design_schema_invalid"),
     ],
 )
-async def test_dynamic_generator_classifies_provider_truncation(monkeypatch, text, finish_reason, code):
+async def test_dynamic_generator_classifies_provider_truncation(
+    monkeypatch, text, finish_reason, code
+):
     import agent.nodes.graph_worker as graph_worker
 
     async def fake_stream_structured_llm(**_kwargs):
@@ -872,7 +1110,9 @@ async def test_dynamic_generator_classifies_provider_truncation(monkeypatch, tex
             model="kimi-k3",
         )
 
-    monkeypatch.setattr(graph_worker, "stream_structured_llm", fake_stream_structured_llm)
+    monkeypatch.setattr(
+        graph_worker, "stream_structured_llm", fake_stream_structured_llm
+    )
     with pytest.raises(AppliedGraphSpecError) as caught:
         await graph_worker._generate_applied_architecture(
             {
