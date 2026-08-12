@@ -2,14 +2,14 @@
 
 Last updated: 2026-08-12
 
-Evidence in this record is current through the post-`7d64720` implementation on 2026-08-12. PRs #37
-through #40 merged on 2026-08-07, and PR #44 merged as `77df25e7`. The current
+Evidence in this record is current through paid diagnostic `31588931923` on exact head `ca8e3b2`
+on 2026-08-12. PRs #37 through #40 merged on 2026-08-07, and PR #44 merged as `77df25e7`. The
 evidence-provenance, graph-review, and latency corrections have passed local review and the full
-offline CI matrix. Eight consecutive recent `graph-expansion` diagnostics failed before that green
-push. The later pre-mortem corrections described below have also passed the full offline matrix.
-The latest three diagnostics consumed the three-run authorization. No paid run has executed on the
-new topology contract, no further paid run is authorized, and corpus `2026-08-12.v1` remains
-pending human review.
+offline CI matrix. Nine consecutive recent `graph-expansion` diagnostics have failed; there is no
+protected live success on the current branch. The latest paid run exposed a separate
+internal-reference contract defect. Its intended correction has not yet been proven by a live run.
+The authorized one-case diagnostic has been consumed; no further paid run is authorized. Corpus
+`2026-08-12.v1` remains pending human review.
 
 ## Objective and operating rules
 
@@ -24,11 +24,11 @@ pending human review.
 
 ## Recent diagnostic failure ledger
 
-This is the canonical chronology for recent `graph-expansion` failures through `fdd70d1`. Every
-row records a live product failure. A green workflow conclusion for the six report-only rows means
+This is the canonical chronology for recent `graph-expansion` failures through `ca8e3b2`. Every
+row records a live product failure. A green workflow conclusion for the seven report-only rows means
 the pending-corpus workflow uploaded its evidence and exited without enforcing the failed verdict.
-The first two workflow runs failed; the other six concluded green under that report-only policy.
-The retained `live-results.json` for every row says `status: fail`. All eight failures ended on turn
+The first two workflow runs failed; the other seven concluded green under that report-only policy.
+The retained `live-results.json` for every row says `status: fail`. All nine failures ended on turn
 1, emitted no visible graph to the user, skipped turn 2, and made no semantic judge call.
 Run links and exact heads come from GitHub Actions metadata. Latency, provider calls, failure codes,
 and cost come from each retained `scheduled-eval-<run>/browser-results.json`, `live-results.json`,
@@ -36,7 +36,7 @@ and `run-context.json` artifact. Model effort comes from source at the exact run
 older telemetry did not store effort. Minimum cost is used whenever an accepted provider call has
 incomplete usage.
 
-| UTC start | Run and exact head | Observed live failure | Correction status through `fdd70d1` | Application cost |
+| UTC start | Run and exact head | Observed live failure | Current correction status | Application cost |
 | --- | --- | --- | --- | ---: |
 | 2026-08-09 19:59 | [`31333075986`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31333075986), `2f88a5a` | Opus produced a plan in 121.554 seconds. An aggregate plan-size rejection returned `architecture_pass_invalid`, entered a two-node fallback, and ended with an unauthorized whole-fallback patch. Five calls ran; turn latency was 265.956 seconds. | Removed the aggregate size cap, added structural failure codes, made a missing plan fail closed, and enforced exact repair scope. | $0.435752 |
 | 2026-08-09 20:53 | [`31335429802`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31335429802), `b2bd76a` | Architecture failed `architecture_pass_evidence_provenance` after a 139.767-second, 9,931-token plan. Human-readable references could not identify one exact source. Two calls ran; turn latency was 168.228 seconds. | Added canonical source identity and exact evidence validation. The corpus now requests the monitoring component in turn 1. | $0.353252 |
@@ -46,8 +46,9 @@ incomplete usage.
 | 2026-08-11 23:46 | [`31547774792`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31547774792), `67887c3` | Private render passed at 127.374 seconds. Sonnet then emitted an over-broad composition contract, rejected at `layers.composition.group_ids: unbounded_collection`; the 180-second deadline cancelled correction before any visible preview. Four calls ran; turn latency was 180.122 seconds. | Prototype-only subjective findings are advisory, repair authority is record-bounded, invalid contracts receive one typed correction, and deterministic render success emits a reversible preview. | at least $0.276605 |
 | 2026-08-12 00:08 | [`31549117335`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31549117335), `1a279b6` | The `low`-effort architect violated a hard plan-list limit. The server returned `architecture_pass_list_limit`; Kimi and Sonnet did not run. Two Opus calls ran; turn latency was 88.836 seconds. | Restored prototype architecture to `medium`, which had produced a valid plan in the preceding diagnostic. | $0.201845 |
 | 2026-08-12 00:16 | [`31549644038`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31549644038), `b64f66f` | A valid architect plan took 78.784 seconds and Kimi took 81.252 seconds. Deterministic topology validation rejected `connections.links[6]` before private render, preview, or Sonnet. Three calls ran; turn latency reached 180.083 seconds. | The topology boundary accepts a uniformly one-based link array only when the entire array is invalid as zero-based and valid as one-based. Retained evidence cannot prove this run used one-based indexes, so this correction still needs live verification. | at least $0.232051 |
+| 2026-08-12 10:46 | [`31588931923`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31588931923), `ca8e3b2` | The architecture boundary rejected `evidence_basis[8].evidence_ref` under the private rule `invalid_engineering_area`. Two calls ran; the turn took 107.735 seconds and the case took 109.568 seconds. No Kimi, private render, critic, turn 2, or fallback ran. | Removed engineering recommendations from model-facing evidence. Checklist guidance now belongs in decisions or assumptions, and legacy model rows are discarded without weakening book, web, or user provenance. The green wrapper was report-only; the correction is not live-proven. | $0.236575 |
 
-Known application spend across these eight failures is at least **$2.474788**. Several provider
+Known application spend across these nine failures is at least **$2.711363**. Several provider
 calls have incomplete usage; row amounts marked `at least` are lower bounds. Diagnostic
 `31549644038` retained only `connections.links[6]: topology`; it did not retain authored output and
 cannot distinguish an out-of-range endpoint from a self-link.
@@ -708,6 +709,14 @@ Historical checkpoint evidence:
 The recent diagnostic failure ledger above is the canonical status and chronology. The entries
 below retain implementation detail for the latest convergence and latency corrections.
 
+- Diagnostic `31588931923` on exact head `ca8e3b2` ran one `graph-expansion` case. Architecture
+  validation rejected `evidence_basis[8].evidence_ref` under the private
+  `invalid_engineering_area` rule after two calls. The turn took 107.735 seconds, the case took
+  109.568 seconds, and application cost was $0.236575. Kimi, private rendering, critic review, turn
+  2, and fallback did not run. The workflow wrapper concluded green only because pending-corpus
+  diagnostics are report-only. Engineering-recommendation references are internal checklist
+  classifications, so they do not belong in external `evidence_basis` validation. This diagnosis and
+  its intended contract correction have no live success evidence.
 - Diagnostic `31549644038` on commit `b64f66f` restored medium architect effort and produced a valid
   plan in 78.784 seconds. Kimi returned after 81.252 seconds, but deterministic topology validation
   rejected `connections.links[6]` with rule `topology` before private rendering. No preview or Sonnet

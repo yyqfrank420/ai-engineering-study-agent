@@ -91,7 +91,7 @@ def _evidence_id(bundle: dict, basis: str) -> str:
 
 
 def test_architecture_roles_reason_about_enforced_control_paths():
-    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v23"
+    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v24"
     for production_requirement in (
         "At selected production depth only, keep risky customer writes",
         "At selected production depth only, treat production guarantees",
@@ -146,6 +146,10 @@ def test_architecture_roles_reason_about_enforced_control_paths():
     )
     assert "exact short source slot" in _ARCHITECT_SYSTEM
     assert "exact short source slot" in _CHALLENGER_SYSTEM
+    assert "State checklist-guided recommendations in decisions or" in _ARCHITECT_SYSTEM
+    assert "State checklist-guided recommendations in" in _CHALLENGER_SYSTEM
+    assert "engineering_recommendation" not in _ARCHITECT_SYSTEM
+    assert "engineering_recommendation" not in _CHALLENGER_SYSTEM
 
 
 @pytest.mark.parametrize("depth", ["low", "prototype"])
@@ -204,6 +208,9 @@ def test_architecture_worker_schemas_require_every_declared_object_field():
         ]
         == 500
     )
+    assert architect_properties["evidence_basis"]["items"]["properties"]["basis"][
+        "enum"
+    ] == ["user", "book", "web"]
     assert (
         architect_properties["decisions"]["items"]["properties"]["why"]["maxLength"]
         == 300
@@ -308,13 +315,7 @@ def test_architect_output_becomes_a_bounded_canonical_design_brief():
         "Let analytics-only requests bypass the channel write gate",
     ]
     assert brief["assumptions"] == ["Channel APIs support idempotent writes"]
-    assert brief["evidence_basis"] == [
-        {
-            "claim": "Use an approval gate for large spend changes",
-            "basis": "engineering_recommendation",
-            "evidence_ref": "write_boundary",
-        }
-    ]
+    assert brief["evidence_basis"] == []
 
 
 @pytest.mark.parametrize(
@@ -674,6 +675,7 @@ async def test_architect_accepts_schema_bounded_plan_over_legacy_aggregate_limit
 @pytest.mark.asyncio
 async def test_architect_resolves_short_source_slots_before_validation_and_storage(
     monkeypatch,
+    caplog,
 ):
     bundle = build_evidence_bundle(
         {
@@ -689,15 +691,24 @@ async def test_architect_resolves_short_source_slots_before_validation_and_stora
                 for chapter, page, text in (
                     (10, 473, "Measure the system before release."),
                     (10, 474, "Monitor the released system."),
+                    (10, 475, "Evaluate representative inputs."),
+                    (10, 476, "Track regressions."),
+                    (10, 477, "Review outcomes after release."),
                 )
             ],
             "research_context": (
                 "- [Current source](https://example.com/current): "
-                "Keep evidence attached to decisions."
+                "Keep evidence attached to decisions.\n"
+                "- [Second source](https://example.com/second): "
+                "Measure quality continuously.\n"
+                "- [Third source](https://example.com/third): "
+                "Review supported changes."
             ),
         }
     )
     captured = {}
+    events = []
+    invalid_engineering_area = "invalid_engineering_area"
     plan = _complete_plan(
         evidence_basis=[
             {
@@ -705,21 +716,32 @@ async def test_architect_resolves_short_source_slots_before_validation_and_stora
                 "basis": basis,
                 "evidence_ref": f"source_{index}",
             }
-            for index, basis in enumerate(("book", "book", "web"), start=1)
+            for index, basis in enumerate(
+                ("book", "book", "book", "book", "book", "web", "web", "web"),
+                start=1,
+            )
         ]
+        + [
+            {
+                "claim": "Use a checklist recommendation.",
+                "basis": "engineering_recommendation",
+                "evidence_ref": invalid_engineering_area,
+            }
+        ],
     )
 
     async def model(**kwargs):
         captured.update(kwargs)
         return _structured_response(plan)
 
-    async def send(_event):
-        return None
+    async def send(event):
+        events.append(event)
 
     monkeypatch.setattr(
         "agent.nodes.architecture_workers.stream_structured_llm",
         model,
     )
+    caplog.set_level("INFO", logger="agent.nodes.architecture_workers")
     result = await architect_node(
         {
             "is_applied_design": True,
@@ -735,8 +757,14 @@ async def test_architect_resolves_short_source_slots_before_validation_and_stora
     assert [
         item["evidence_ref"] for item in result["architect_plan"]["evidence_basis"]
     ] == [item["id"] for item in bundle["evidence_records"]]
+    assert len(result["architect_plan"]["evidence_basis"]) == 8
+    assert invalid_engineering_area not in json.dumps(result)
+    assert invalid_engineering_area not in json.dumps(events)
+    assert "Discarded legacy model evidence entries: count=1" in caplog.text
+    assert invalid_engineering_area not in caplog.text
+    assert "Use a checklist recommendation." not in caplog.text
     prompt = captured["messages"][0]["content"]
-    assert "[source_3] web" in prompt
+    assert "[source_8] web" in prompt
     assert all(item["id"] not in prompt for item in bundle["evidence_records"])
 
 
@@ -906,6 +934,7 @@ async def test_challenger_resolves_source_slots_and_keeps_canonical_storage(
         _evidence_id(bundle, "book"),
         _evidence_id(bundle, "web"),
     ]
+    legacy_checklist_reference = "legacy_checklist_reference"
     accepted_plan = _complete_plan(
         evidence_basis=[
             {
@@ -917,6 +946,11 @@ async def test_challenger_resolves_source_slots_and_keeps_canonical_storage(
                 "claim": "Current guidance describes evaluation.",
                 "basis": "web",
                 "evidence_ref": "source_2",
+            },
+            {
+                "claim": "Use a checklist recommendation.",
+                "basis": "engineering_recommendation",
+                "evidence_ref": "invalid_engineering_area",
             },
         ]
     )
@@ -961,6 +995,11 @@ async def test_challenger_resolves_source_slots_and_keeps_canonical_storage(
                         "basis": "web",
                         "evidence_ref": canonical_ids[1],
                     },
+                    {
+                        "claim": "Legacy checklist guidance.",
+                        "basis": "engineering_recommendation",
+                        "evidence_ref": legacy_checklist_reference,
+                    },
                 ]
             ),
             "send": send,
@@ -971,9 +1010,12 @@ async def test_challenger_resolves_source_slots_and_keeps_canonical_storage(
     assert [
         item["evidence_ref"] for item in result["architect_plan"]["evidence_basis"]
     ] == canonical_ids
+    assert "invalid_engineering_area" not in json.dumps(result)
     prompt = captured["messages"][0]["content"]
     assert "source_1" in prompt
     assert "source_2" in prompt
+    assert legacy_checklist_reference not in prompt
+    assert "Legacy checklist guidance." not in prompt
     assert all(canonical_id not in prompt for canonical_id in canonical_ids)
 
 
@@ -1179,7 +1221,7 @@ def test_reviewed_plan_validation_has_specific_provenance_codes(accepted, code):
     assert exc_info.value.code == code
 
 
-def test_reviewed_plan_accepts_only_server_listed_book_and_web_evidence_ids():
+def test_reviewed_plan_accepts_only_user_book_and_web_evidence():
     bundle = _evidence_bundle()
     accepted = _complete_plan(
         evidence_basis=[
@@ -1193,11 +1235,6 @@ def test_reviewed_plan_accepts_only_server_listed_book_and_web_evidence_ids():
                 "basis": "web",
                 "evidence_ref": _evidence_id(bundle, "web"),
             },
-            {
-                "claim": "Costly writes need an explicit confirmation path.",
-                "basis": "engineering_recommendation",
-                "evidence_ref": "write_boundary",
-            },
         ]
     )
 
@@ -1206,6 +1243,27 @@ def test_reviewed_plan_accepts_only_server_listed_book_and_web_evidence_ids():
         source_request="Design an evaluation service.",
         evidence_bundle=bundle,
     )
+
+
+def test_reviewed_plan_rejects_engineering_recommendation_as_evidence():
+    with pytest.raises(ValueError) as exc_info:
+        _validate_reviewed_plan_transition(
+            _complete_plan(
+                evidence_basis=[
+                    {
+                        "claim": "Costly writes need an explicit confirmation path.",
+                        "basis": "engineering_recommendation",
+                        "evidence_ref": "write_boundary",
+                    }
+                ]
+            ),
+            source_request="Design an evaluation service.",
+            evidence_bundle=_evidence_bundle(),
+        )
+
+    assert exc_info.value.code == "architecture_review_evidence_provenance"
+    assert exc_info.value.failure_path == "evidence_basis[0].basis"
+    assert exc_info.value.failure_rule == "invalid_basis"
 
 
 @pytest.mark.parametrize(

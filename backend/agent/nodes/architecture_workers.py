@@ -38,14 +38,13 @@ _REVIEW_PLAN_LIST_LIMITS = {
     "decisions": 20,
     "runtime_flow": 30,
 }
-_ARCHITECT_PROMPT_VERSION = "architecture_roles_v23"
+_ARCHITECT_PROMPT_VERSION = "architecture_roles_v24"
 _SAFE_EVIDENCE_FAILURE_PATH = re.compile(
     r"evidence_basis\[(?:0|[1-9][0-9]*)\]\.(?:basis|evidence_ref)"
 )
 _EVIDENCE_FAILURE_RULES = {
     "basis_mismatch",
     "invalid_basis",
-    "invalid_engineering_area",
     "invalid_user_span",
     "missing_evidence_id",
     "unknown_evidence_id",
@@ -150,7 +149,6 @@ _ARCHITECT_RESPONSE_SCHEMA = _strict_object_schema(
                             "user",
                             "book",
                             "web",
-                            "engineering_recommendation",
                         ],
                     },
                     "evidence_ref": _bounded_string_schema(500),
@@ -297,10 +295,9 @@ concern only when it materially affects this scenario.
   display citation, URL, source excerpt, or altered slot. Never invent a source or imply that a
   snippet establishes more than it says.
 - evidence_basis may be empty. Include an entry only for a claim grounded in the latest user
-  request, one supplied source record, or one supplied checklist area. Keep uncited synthesis in
-  decisions or assumptions.
-- For user evidence, evidence_ref must be an exact phrase from the latest user request. For an
-  engineering recommendation, evidence_ref must be an exact supplied checklist area.
+  request or one supplied source record. State checklist-guided recommendations in decisions or
+  assumptions. Keep uncited synthesis in decisions or assumptions.
+- For user evidence, evidence_ref must be an exact phrase from the latest user request.
 - Remove repeated rationale before dropping a material actor, boundary, route, failure outcome, or
   decision. The field and list limits below are the complete response bounds.
 - Hard list limits are inclusive: actors 10; inputs 12; outputs 10; required_capabilities 18;
@@ -328,7 +325,7 @@ Return one JSON object and nothing else:
   "constraints": ["explicit user constraint only"],
   "assumptions": ["material assumption"],
   "open_questions": ["unknown that could materially change the design"],
-  "evidence_basis": [{"claim": "brief decision", "basis": "user|book|web|engineering_recommendation", "evidence_ref": "short source slot for book/web, exact user phrase, or exact checklist area"}],
+  "evidence_basis": [{"claim": "brief decision", "basis": "user|book|web", "evidence_ref": "short source slot for book/web or exact user phrase"}],
   "decisions": [{"area": "checklist area", "decision": "specific choice", "why": "short rationale"}],
   "runtime_flow": ["observable step"],
   "status_update": "one useful, non-sensitive finding to show while the user waits"
@@ -433,10 +430,9 @@ graph is produced. Return one corrected complete plan plus the audit that caused
   in square brackets in the supplied source records into evidence_ref, such as source_1. Do not
   copy a display citation, URL, source excerpt, or altered slot. Never invent a source reference.
 - accepted_plan.evidence_basis may be empty. Include an entry only for a claim grounded in the
-  latest user request, one supplied source record, or one supplied checklist area. Keep uncited
-  synthesis in decisions or assumptions.
-- A user-sourced evidence_ref must remain an exact phrase from the latest user request. An
-  engineering recommendation evidence_ref must remain an exact supplied checklist area.
+  latest user request or one supplied source record. State checklist-guided recommendations in
+  decisions or assumptions. Keep uncited synthesis in decisions or assumptions.
+- A user-sourced evidence_ref must remain an exact phrase from the latest user request.
 </rules>
 
 <output_contract>
@@ -453,7 +449,7 @@ Return one JSON object and nothing else:
     "constraints": ["explicit user constraint only"],
     "assumptions": ["material assumption"],
     "open_questions": ["unknown that could materially change the design"],
-    "evidence_basis": [{"claim": "brief decision", "basis": "user|book|web|engineering_recommendation", "evidence_ref": "short source slot for book/web, exact user phrase, or exact checklist area"}],
+    "evidence_basis": [{"claim": "brief decision", "basis": "user|book|web", "evidence_ref": "short source slot for book/web or exact user phrase"}],
     "decisions": [{"area": "checklist area", "decision": "specific choice", "why": "short rationale"}],
     "runtime_flow": ["observable step"],
     "status_update": "one useful, non-sensitive reviewed finding"
@@ -811,12 +807,16 @@ def _normalise_architect(value: dict[str, Any]) -> dict[str, Any]:
     evidence_basis = []
     raw_evidence_basis = value.get("evidence_basis")
     evidence_values = raw_evidence_basis if isinstance(raw_evidence_basis, list) else []
+    discarded_engineering_recommendations = 0
     for item in evidence_values:
         if not isinstance(item, dict):
             continue
         claim = _text(item.get("claim"), 240)
         basis = _text(item.get("basis"), 40)
-        if claim and basis in {"user", "book", "web", "engineering_recommendation"}:
+        if basis == "engineering_recommendation":
+            discarded_engineering_recommendations += 1
+            continue
+        if claim and basis in {"user", "book", "web"}:
             evidence_basis.append(
                 {
                     "claim": claim,
@@ -824,6 +824,11 @@ def _normalise_architect(value: dict[str, Any]) -> dict[str, Any]:
                     "evidence_ref": _text(item.get("evidence_ref"), 500),
                 }
             )
+    if discarded_engineering_recommendations:
+        logger.info(
+            "Discarded legacy model evidence entries: count=%s",
+            discarded_engineering_recommendations,
+        )
 
     required_capabilities = _text_list(value.get("required_capabilities"), limit=200)
     diagram_requirements = _text_list(value.get("diagram_requirements"), limit=240)
@@ -933,7 +938,9 @@ def _model_facing_plan(
         evidence_id: source_ref
         for source_ref, evidence_id in evidence_reference_map(evidence_bundle).items()
     }
-    return _replace_external_evidence_references(plan, slots_by_id)
+    return _replace_external_evidence_references(
+        _normalise_architect(plan), slots_by_id
+    )
 
 
 def _replace_external_evidence_references(
@@ -998,11 +1005,6 @@ def _validate_evidence_references(
     error_code: str,
 ) -> None:
     records_by_id = _evidence_records_by_id(evidence_bundle)
-    checklist_areas = {
-        item.get("area")
-        for item in (evidence_bundle.get("checklist") or [])
-        if isinstance(item, dict) and isinstance(item.get("area"), str)
-    }
     source_text = _normalised_source_text(source_request)
     for index, evidence in enumerate(plan.get("evidence_basis") or []):
         if not isinstance(evidence, dict):
@@ -1010,7 +1012,7 @@ def _validate_evidence_references(
         basis = evidence.get("basis")
         evidence_ref = evidence.get("evidence_ref")
         path = f"evidence_basis[{index}]"
-        if basis not in {"user", "book", "web", "engineering_recommendation"}:
+        if basis not in {"user", "book", "web"}:
             raise _evidence_failure(
                 error_type,
                 error_code,
@@ -1031,15 +1033,6 @@ def _validate_evidence_references(
                     error_code,
                     path=f"{path}.evidence_ref",
                     rule="invalid_user_span",
-                )
-            continue
-        if basis == "engineering_recommendation":
-            if evidence_ref not in checklist_areas:
-                raise _evidence_failure(
-                    error_type,
-                    error_code,
-                    path=f"{path}.evidence_ref",
-                    rule="invalid_engineering_area",
                 )
             continue
         record = records_by_id.get(evidence_ref)

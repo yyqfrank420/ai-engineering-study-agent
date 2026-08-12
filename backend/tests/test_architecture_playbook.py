@@ -4,6 +4,7 @@ from agent.architecture_playbook import (
     evidence_records,
     evidence_reference_map,
     format_evidence_bundle,
+    without_evidence_references,
 )
 
 
@@ -181,3 +182,23 @@ def test_evidence_reference_map_deduplicates_canonical_record_ids():
     prompt = format_evidence_bundle(bundle)
     assert "First copy." in prompt
     assert "Conflicting duplicate." not in prompt
+
+
+def test_model_safe_plan_omits_engineering_recommendations_and_all_references():
+    plan = {
+        "evidence_basis": [
+            {"claim": "User constraint", "basis": "user", "evidence_ref": "phrase"},
+            {"claim": "Book claim", "basis": "book", "evidence_ref": "source_1"},
+            {
+                "claim": "Checklist guidance",
+                "basis": "engineering_recommendation",
+                "evidence_ref": "write_boundary",
+            },
+            "malformed",
+        ]
+    }
+
+    assert without_evidence_references(plan)["evidence_basis"] == [
+        {"claim": "User constraint", "basis": "user"},
+        {"claim": "Book claim", "basis": "book"},
+    ]

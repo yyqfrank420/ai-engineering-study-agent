@@ -231,7 +231,7 @@ def evidence_reference_map(bundle: dict[str, Any]) -> dict[str, str]:
 
 
 def without_evidence_references(plan: Any) -> Any:
-    """Remove internal evidence coordinates before sending a plan to another model."""
+    """Return model-safe external and user evidence without internal coordinates."""
     if not isinstance(plan, dict):
         return plan
     model_plan = dict(plan)
@@ -239,9 +239,8 @@ def without_evidence_references(plan: Any) -> Any:
     if isinstance(raw_evidence, list):
         model_plan["evidence_basis"] = [
             {key: value for key, value in item.items() if key != "evidence_ref"}
-            if isinstance(item, dict)
-            else item
             for item in raw_evidence
+            if isinstance(item, dict) and item.get("basis") in {"user", "book", "web"}
         ]
     return model_plan
 
