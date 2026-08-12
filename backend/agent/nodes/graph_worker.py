@@ -40,7 +40,7 @@ from graph.runtime import select_canonical_graph
 logger = logging.getLogger(__name__)
 
 _APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v34"
-_APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v19"
+_APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v20"
 _APPLIED_GRAPH_TOPOLOGY_EFFORT = "low"
 _APPLIED_GRAPH_PATCH_EFFORT = "high"
 _MAX_GRAPH_PATCH_CHARS = 200_000
@@ -1592,12 +1592,14 @@ async def _generate_applied_architecture(
     except AppliedGraphSpecError as exc:
         logger.warning(
             "Applied topology rejected: code=%s node_count=%s edge_count=%s path=%s rule=%s "
-            "finish_reason=%s response_chars=%s",
+            "observed_index=%s maximum_index=%s finish_reason=%s response_chars=%s",
             exc.code,
             exc.node_count,
             exc.edge_count,
             exc.path,
             exc.rule,
+            exc.observed_index,
+            exc.maximum_index,
             getattr(response, "finish_reason", None),
             len(response.text)
             if response is not None and isinstance(response.text, str)

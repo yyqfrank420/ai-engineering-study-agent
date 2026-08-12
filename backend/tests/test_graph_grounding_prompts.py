@@ -13,7 +13,7 @@ def test_applied_graph_prompts_define_record_scoped_repair_boundaries():
     )
 
     assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v34"
-    assert _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION == "applied_topology_v19"
+    assert _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION == "applied_topology_v20"
     assert (
         "Choose graph size from the material design" in _APPLIED_GRAPH_TOPOLOGY_SYSTEM
     )
@@ -561,7 +561,6 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
         for node_id in group["nodeIds"]
     }
     topology = {
-        "index_base": 0,
         "root": [
             payload["nodes"][0]["label"],
             type_codes[payload["nodes"][0]["type"]],
@@ -592,7 +591,7 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
         "composition": {
             "title": payload["title"],
             "groups": group_definitions,
-            "steps": [[index] for index in range(len(payload["nodes"]))],
+            "steps": list(range(len(payload["nodes"]))),
         },
     }
 

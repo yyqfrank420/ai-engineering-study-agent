@@ -78,6 +78,8 @@ class AppliedGraphSpecError(ValueError):
         edge_count: int | None = None,
         path: str | None = None,
         rule: str | None = None,
+        observed_index: int | None = None,
+        maximum_index: int | None = None,
     ) -> None:
         super().__init__(code)
         self.code = code
@@ -94,6 +96,16 @@ class AppliedGraphSpecError(ValueError):
             else None
         )
         self.rule = rule if rule in _ERROR_RULES else None
+        self.observed_index = (
+            observed_index
+            if isinstance(observed_index, int) and not isinstance(observed_index, bool)
+            else None
+        )
+        self.maximum_index = (
+            maximum_index
+            if isinstance(maximum_index, int) and not isinstance(maximum_index, bool)
+            else None
+        )
 
 
 def applied_graph_spec(depth: str) -> AppliedGraphSpec:
@@ -140,14 +152,12 @@ def applied_graph_topology_schema(spec: AppliedGraphSpec) -> dict[str, Any]:
         "type": "object",
         "additionalProperties": False,
         "required": [
-            "index_base",
             "root",
             "components",
             "connections",
             "composition",
         ],
         "properties": {
-            "index_base": {"type": "integer", "enum": [0, 1]},
             "root": root_record,
             "components": {
                 "type": "array",
@@ -180,11 +190,7 @@ def applied_graph_topology_schema(spec: AppliedGraphSpec) -> dict[str, Any]:
                     "steps": {
                         "type": "array",
                         "maxItems": spec.safety_max_nodes,
-                        "items": {
-                            "type": "array",
-                            "maxItems": spec.safety_max_nodes,
-                            "items": {"type": "integer"},
-                        },
+                        "items": {"type": "integer"},
                     },
                 },
             },
@@ -216,7 +222,6 @@ def applied_graph_topology_prompt(
         "depth": spec.depth,
     }
     valid_example = {
-        "index_base": 0,
         "root": ["Client", 100, "Submits one request.", 0],
         "components": [
             [
@@ -244,102 +249,77 @@ def applied_graph_topology_prompt(
         "composition": {
             "title": "Request runtime",
             "groups": [["Product runtime", 600]],
-            "steps": [[0], [1], [2]],
+            "steps": [0, 1, 2],
         },
     }
     return (
-        "Build the complete architecture topology from the supplied design input. Include every "
-        "material responsibility, ownership boundary, runtime branch, control path, data store, "
-        "delivery path, and failure outcome needed by this specific system. Use these exact tuple "
-        "layouts and scalar types. index_base is a required top-level integer: 0 or 1. "
-        "It declares the sole base for every parent index, link endpoint, group membership "
-        "index, and composition step index in this object. A root row has exactly 4 fields: "
-        "[label:string,type:integer,responsibility:string,group_index:integer]. Every remaining "
-        "component row has exactly 8 fields: [parent_index:integer,label:string,type:integer,"
-        "responsibility:string,group_index:integer,incoming_edge_label:string,flow:integer,"
-        "sync:integer]. A link row has exactly 5 fields: [source_index:integer,target_index:integer,"
-        "label:string,flow:integer,sync:integer]. A group definition row has exactly 2 fields: "
-        "[label:string,kind:integer]. The composition title is a string. Each composition step is a "
-        "nonempty array of integer component indexes. Do not use null, booleans, objects, omitted "
-        "tuple values, or placeholder strings inside any row. Categorical tuple fields and group kind use "
-        f"integer codes. {codebook} The positional integer-code wire format is canonical. Use the "
-        "integer, never its name, in the wire object. The request owns the objective, domain "
-        "vocabulary, and stated constraints. The selected depth and these rules own the initial "
-        "topology contract. An independent architecture review follows this reversible draft. You author "
-        "the title, groups, component labels, component types, responsibilities, edge labels, flows, "
-        "sync modes, and sequence membership. The server owns stable IDs, display technology and "
-        "transport labels, edge descriptions, lanes, tiers, assumptions, and rendering view state. "
-        "The server derives each lane from its authored group kind. Do not emit lane or tier fields. "
-        "Do not emit assumptions, view_state, node "
-        "positions, or selected-node arrays. Choose the "
-        "number of components, groups, and "
-        "links from the design. Never merge distinct owners, trust "
-        "boundaries, authoritative stores, decisions, or failure outcomes to make the diagram "
-        "smaller. Order components in a stable visual reading order. Make the root the primary "
-        "runtime entry or trigger. Do not use an internal coordinator as the root when a client, "
-        "event source, or scheduled trigger starts the depicted flow. Tree-edge direction and its "
-        "incoming label must agree: the parent sends the named data or command to the child. Make "
-        "the primary sequence one directed runtime flow from entry through controls to observable "
-        "outcomes. Production depth requires this sequence. Prototype depth may omit it for a non-flow "
-        "diagram. Every nonempty sequence includes the declared root index. Keep offline and supporting "
-        "paths outside that sequence. Do not add diagram "
-        "authoring, rendering, or graph-generation mechanics as domain components unless the request "
-        "requires them. A component earns its own row when ownership, trust, authoritative state, a "
-        "decision, an externally meaningful action, or an outcome changes; fold other implementation "
-        "detail into its owner. An edge earns its own record when it carries a distinct contract "
-        "needed to follow behavior or prove a guarantee. Consolidate semantically duplicate "
-        "interactions. Multiple edges between a component pair must carry compatible distinct "
-        "contracts. Reverse edges must name a distinct response, acknowledgement, feedback, or "
-        "control contract. "
-        f"The complete topology may contain at most {spec.safety_max_nodes} nodes including root and "
-        f"at most {spec.safety_max_edges} total edges including component tree edges and links. "
-        f"Therefore components has at most {max(0, spec.safety_max_nodes - 1)} rows. Links alone may "
-        f"contain at most {spec.safety_max_edges} rows, and components plus links must not exceed "
-        f"{spec.safety_max_edges}. Groups, steps, and each step contain at most "
-        f"{spec.safety_max_nodes} entries. The canonical server model has root position 0 and node n1. "
-        "In the wire object, every reference to root equals index_base: 0 when index_base is 0 and 1 "
-        "when index_base is 1. The server subtracts index_base from every declared reference before "
-        "validation. A row "
-        "at components[i] defines component i+1 and its one incoming tree edge. With index_base 0, "
-        "parent indexes are zero-based and must be smaller than the component index. With index_base "
-        "1, parent indexes are one-based and must not exceed the component row number. This makes "
-        "one rooted acyclic topology. Choose and enumerate groups before constructing root and component "
-        "rows, then emit their definitions in composition.groups. Root and component rows reference "
-        "those group positions using index_base. Every component must reference exactly one group. "
-        "Links and composition steps use the same declared component index base. Emit only concrete "
-        "integer indexes that reference records present in this object. Never mix index bases. Never "
-        "emit server node IDs such as n1, patch placeholders such as $new_node_1, forward parent "
-        "indexes, or an index for a record that is not "
-        "defined. Labels and responsibilities are real nonempty authored strings, never placeholder "
-        "tokens. "
-        "Composition steps use the same indexes and declare membership in the primary runtime sequence. "
-        "For a nonempty sequence, put every member index in one inner batch. The server derives stage "
-        "order from directed primary/runtime edges. Nested batches remain accepted for compatibility; "
-        "their boundaries and order have no semantic meaning. The selection must include the declared "
-        "root index, which equals index_base. Every other member must be reachable through sequence "
-        "members along a directed path rooted there. Every tree edge and every link with runtime flow is a "
-        "primary/runtime edge. Keep each component in at most one batch and omit supporting side paths "
-        "from sequence membership. "
-        "Include all material "
-        "non-tree links. Every approval decision "
-        "needs distinct approved and rejected routes. Edge labels state the visible action or control "
-        "contract. External mutations show "
-        "validation, approval, execution, authoritative state, and reconciliation as distinct "
-        "responsibilities when those boundaries apply. At low depth, use only low-depth criteria and "
-        "material requested runtime and control paths. At prototype depth, use only prototype criteria: "
-        "concrete buildable boundaries and applicable requested failure paths. Do not add or require "
-        "production hardening at low or prototype depth. At the selected production depth only, require "
-        "a no-effect rejection outcome, a separate bounded compensation route after an effect through "
-        "the normal controls, distinct retry exhaustion, success, COMMITTED, NOT_FOUND, and "
-        "STILL_UNKNOWN outcomes when they apply, and distinct canary, promotion, and rollback delivery "
-        "paths when they apply. At the selected production depth only, include every applicable control, "
-        "failure, observability, and delivery path. Keep the title at most 100 characters, node "
-        "labels at most 60 characters, group labels at most 80 characters, responsibilities at most "
-        f"220 characters, and edge labels at most {spec.edge_label_chars} characters. A minimal valid "
-        "shape example is "
+        "Build the complete architecture topology for the supplied design input. Preserve every "
+        "material owner, trust boundary, authoritative store, decision, runtime branch, control path, "
+        "failure outcome, and delivery boundary.\n"
+        "WIRE CONTRACT\n"
+        "Every index is zero-based. Use these exact rows:\n"
+        "root: [label:string,type:integer,responsibility:string,group_index:integer]\n"
+        "components[i]: [parent_index:integer,label:string,type:integer,responsibility:string,"
+        "group_index:integer,incoming_edge_label:string,flow:integer,sync:integer]\n"
+        "connections.links[i]: [source_index:integer,target_index:integer,label:string,flow:integer,"
+        "sync:integer]\n"
+        "composition.groups[i]: [label:string,kind:integer]\n"
+        "composition.title is a string. composition.steps is one flat array of integer node indexes. "
+        "Do not use null, booleans, objects, omitted tuple values, or placeholder strings inside rows. "
+        f"Use integer category codes, never names. {codebook}\n"
+        "INDEX RULES\n"
+        "Root is index 0 and becomes server node n1. components[i] defines node index i+1. Its parent "
+        "must be an existing earlier node index from 0 through i. For example, components[5][0] may "
+        "be 0 through 5; value 6 is self-reference and invalid. Group indexes address "
+        "composition.groups. Link endpoints and composition steps address nodes. Never emit server "
+        "node IDs, $new_node_N placeholders, forward parents, or undefined indexes.\n"
+        "TOPOLOGY RULES\n"
+        "Choose the number of components, groups, and links from the design. Choose and enumerate "
+        "groups before constructing root and component rows. Every component must reference exactly "
+        "one group. Make the root the primary runtime entry or trigger. Do not use an internal "
+        "coordinator when a client, event source, or schedule starts the flow. Tree-edge direction and "
+        "its incoming label must agree: the parent sends the named data or command to the child. "
+        "Include all material non-tree links. Multiple edges between the same pair need compatible, "
+        "distinct contracts. Reverse edges need a distinct response, acknowledgement, feedback, or "
+        "control contract. Every approval decision needs distinct approved and rejected routes. "
+        "External mutations show validation, approval, execution, authoritative state, and "
+        "reconciliation as separate responsibilities when those boundaries apply.\n"
+        "A component earns a row when ownership, trust, authoritative state, a decision, an external "
+        "action, or an outcome changes. Fold other implementation detail into its owner. An edge earns "
+        "a record when its contract is needed to follow behavior or prove a guarantee. Consolidate "
+        "semantic duplicates. Do not add diagram authoring, rendering, or graph-generation mechanics "
+        "unless requested.\n"
+        "SEQUENCE RULES\n"
+        "composition.steps declares primary runtime-sequence membership. The server derives stage "
+        "order from directed primary/runtime edges. A nonempty list includes root index 0. Every other "
+        "member must be reachable from root through selected members. Include each node at most once. "
+        "Omit offline and supporting side paths. Production depth requires a primary sequence. "
+        "Prototype depth may omit it for a non-flow diagram.\n"
+        "DEPTH RULES\n"
+        "At low depth, include requested material runtime and control paths only. At prototype depth, "
+        "use concrete buildable boundaries and applicable requested failure paths. Do not add "
+        "production hardening at low or prototype depth. At production depth, include every applicable "
+        "control, failure, observability, and delivery path. When applicable, include a no-effect "
+        "rejection outcome, bounded compensation after an effect through normal controls, distinct "
+        "retry exhaustion, success, COMMITTED, NOT_FOUND, and STILL_UNKNOWN outcomes, plus distinct "
+        "canary, promotion, and rollback paths.\n"
+        "OWNERSHIP AND LIMITS\n"
+        "The request owns the objective, domain vocabulary, and stated constraints. The selected depth "
+        "and these rules own the initial topology contract. An independent architecture review follows "
+        "this reversible draft. You author title, groups, component semantics, edge semantics, and "
+        "sequence membership. The server owns stable IDs, technology, transport, edge descriptions, "
+        "lanes, tiers, assumptions, positions, selections, and rendering state. The server derives each "
+        "lane from its authored group kind. Do not emit server-owned fields.\n"
+        f"Use at most {spec.safety_max_nodes} nodes including root and {spec.safety_max_edges} total "
+        f"edges including component tree edges and links. components has at most "
+        f"{max(0, spec.safety_max_nodes - 1)} rows. components plus links must not exceed "
+        f"{spec.safety_max_edges}. Groups and steps contain at most {spec.safety_max_nodes} entries. "
+        "Keep title at most 100 characters, node labels at most 60, group labels at most 80, "
+        f"responsibilities at most 220, and edge labels at most {spec.edge_label_chars}.\n"
+        "EXAMPLE\n"
         + json.dumps(valid_example, ensure_ascii=False, separators=(",", ":"))
-        + ". Use it only to understand the wire shape; author the actual domain topology. Return only "
-        "the schema-constrained object as compact JSON without indentation or line breaks.\n"
+        + "\nUse the example only for wire shape. Author the requested domain topology. Return only compact "
+        "schema-constrained JSON without indentation or line breaks.\nINPUT\n"
         + json.dumps(design_input, ensure_ascii=False, separators=(",", ":"))
     )
 
@@ -426,19 +406,6 @@ def _required_index(value: Any, *, path: str) -> int:
     return value
 
 
-def _required_index_base(value: Any) -> int:
-    index_base = _required_index(value, path="index_base")
-    if index_base not in {0, 1}:
-        raise AppliedGraphSpecError(
-            "graph_design_schema_invalid", path="index_base", rule="invalid_enum"
-        )
-    return index_base
-
-
-def _normalise_index(value: Any, *, index_base: int, path: str) -> int:
-    return _required_index(value, path=path) - index_base
-
-
 def _required_tuple(value: Any, size: int, *, path: str) -> list[Any]:
     if not isinstance(value, list):
         raise AppliedGraphSpecError(
@@ -451,9 +418,18 @@ def _required_tuple(value: Any, size: int, *, path: str) -> list[Any]:
     return value
 
 
-def _raise_topology(path: str) -> None:
+def _raise_topology(
+    path: str,
+    *,
+    observed_index: int | None = None,
+    maximum_index: int | None = None,
+) -> None:
     raise AppliedGraphSpecError(
-        "graph_design_topology_invalid", path=path, rule="topology"
+        "graph_design_topology_invalid",
+        path=path,
+        rule="topology",
+        observed_index=observed_index,
+        maximum_index=maximum_index,
     )
 
 
@@ -489,8 +465,6 @@ def _validate_components(
     raw_root: Any,
     raw_components: list[Any],
     spec: AppliedGraphSpec,
-    *,
-    index_base: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]], list[int]]:
     root = _required_tuple(raw_root, _ROOT_FIELD_COUNT, path="root")
     components = [
@@ -502,7 +476,7 @@ def _validate_components(
             spec=spec,
         )
     ]
-    group_indexes = [_normalise_index(root[3], index_base=index_base, path="root[3]")]
+    group_indexes = [_required_index(root[3], path="root[3]")]
     tree_edges: list[dict[str, str]] = []
     component_rows = [
         _required_tuple(
@@ -513,11 +487,7 @@ def _validate_components(
         for component_index, raw_component in enumerate(raw_components, start=1)
     ]
     parent_indexes = [
-        _normalise_index(
-            component[0],
-            index_base=index_base,
-            path=f"components[{index}][0]",
-        )
+        _required_index(component[0], path=f"components[{index}][0]")
         for index, component in enumerate(component_rows)
     ]
     for component_index, (component, parent_index) in enumerate(
@@ -526,7 +496,11 @@ def _validate_components(
     ):
         path = f"components[{component_index - 1}]"
         if parent_index < 0 or parent_index >= component_index:
-            _raise_topology(f"{path}[0]")
+            _raise_topology(
+                f"{path}[0]",
+                observed_index=parent_index,
+                maximum_index=component_index - 1,
+            )
         components.append(
             _validate_component(
                 component,
@@ -536,9 +510,7 @@ def _validate_components(
                 spec=spec,
             )
         )
-        group_indexes.append(
-            _normalise_index(component[4], index_base=index_base, path=f"{path}[4]")
-        )
+        group_indexes.append(_required_index(component[4], path=f"{path}[4]"))
         tree_edges.append(
             {
                 "source": f"n{parent_index + 1}",
@@ -593,8 +565,6 @@ def _validate_links(
     node_count: int,
     tree_edges: list[dict[str, str]],
     spec: AppliedGraphSpec,
-    *,
-    index_base: int,
 ) -> list[dict[str, str]]:
     link_records = [
         _required_tuple(
@@ -606,15 +576,11 @@ def _validate_links(
     ]
     endpoint_rows = [
         (
-            _normalise_index(
-                edge_record[0],
-                index_base=index_base,
-                path=f"connections.links[{link_index}][0]",
+            _required_index(
+                edge_record[0], path=f"connections.links[{link_index}][0]"
             ),
-            _normalise_index(
-                edge_record[1],
-                index_base=index_base,
-                path=f"connections.links[{link_index}][1]",
+            _required_index(
+                edge_record[1], path=f"connections.links[{link_index}][1]"
             ),
         )
         for link_index, edge_record in enumerate(link_records)
@@ -666,35 +632,24 @@ def _derive_sequence_steps(
     edges: list[dict[str, str]],
     *,
     require_sequence: bool,
-    index_base: int,
 ) -> list[int]:
     if require_sequence and not raw_steps:
         _raise_topology("composition.steps")
     seen_components: set[int] = set()
     component_paths: dict[int, str] = {}
-    for batch_index, raw_step in enumerate(raw_steps):
-        path = f"composition.steps[{batch_index}]"
-        if not isinstance(raw_step, list):
+    for item_index, value in enumerate(raw_steps):
+        component_path = f"composition.steps[{item_index}]"
+        component_index = _required_index(value, path=component_path)
+        if component_index < 0 or component_index >= node_count:
+            _raise_topology(component_path)
+        if component_index in seen_components:
             raise AppliedGraphSpecError(
-                "graph_design_schema_invalid", path=path, rule="container_type"
+                "graph_design_topology_invalid",
+                path=component_path,
+                rule="duplicate",
             )
-        if not raw_step:
-            _raise_topology(path)
-        for item_index, value in enumerate(raw_step):
-            component_path = f"{path}[{item_index}]"
-            component_index = _normalise_index(
-                value, index_base=index_base, path=component_path
-            )
-            if component_index < 0 or component_index >= node_count:
-                _raise_topology(component_path)
-            if component_index in seen_components:
-                raise AppliedGraphSpecError(
-                    "graph_design_topology_invalid",
-                    path=component_path,
-                    rule="duplicate",
-                )
-            seen_components.add(component_index)
-            component_paths[component_index] = component_path
+        seen_components.add(component_index)
+        component_paths[component_index] = component_path
 
     if raw_steps and 0 not in seen_components:
         _raise_topology("composition.steps[0]")
@@ -737,7 +692,6 @@ def validate_applied_graph_topology(
     spec: AppliedGraphSpec,
 ) -> dict[str, Any]:
     if not isinstance(payload, dict) or set(payload) != {
-        "index_base",
         "root",
         "components",
         "connections",
@@ -747,7 +701,6 @@ def validate_applied_graph_topology(
             "graph_design_schema_invalid", path="$", rule="key_set"
         )
 
-    index_base = _required_index_base(payload["index_base"])
     raw_root = payload["root"]
     raw_components = payload["components"]
     raw_connections = payload["connections"]
@@ -799,19 +752,16 @@ def validate_applied_graph_topology(
             rule="safety_limit",
         )
     components, tree_edges, group_indexes = _validate_components(
-        raw_root, raw_components, spec, index_base=index_base
+        raw_root, raw_components, spec
     )
     memberships = _validate_group_memberships(raw_groups, group_indexes, spec)
-    edges = _validate_links(
-        raw_links, node_count, tree_edges, spec, index_base=index_base
-    )
+    edges = _validate_links(raw_links, node_count, tree_edges, spec)
     sequence_steps = _derive_sequence_steps(
         raw_steps,
         node_count,
         tree_edges,
         edges,
         require_sequence=spec.depth == "production",
-        index_base=index_base,
     )
     nodes = [
         {
@@ -1019,7 +969,7 @@ def worst_case_topology_chars(spec: AppliedGraphSpec) -> int:
         "composition": {
             "title": "t" * spec.title_chars,
             "groups": groups,
-            "steps": [[index] for index in range(1, len(components) + 1)],
+            "steps": list(range(1, len(components) + 1)),
         },
     }
     return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))

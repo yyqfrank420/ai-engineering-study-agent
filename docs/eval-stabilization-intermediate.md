@@ -2,18 +2,16 @@
 
 Last updated: 2026-08-12
 
-Evidence in this record is current through paid diagnostic `31616927365` on exact head
-`5c9b27589a29aef90d77571f993a37ab089fa6ce`
+Evidence in this record is current through paid diagnostic `31619916923` on exact head
+`ae916b32818ea752e2cd6e46d4bcb31d69b1f025`
 on 2026-08-12. PRs #37 through #40 merged on 2026-08-07, and PR #44 merged as `77df25e7`. The
 evidence-provenance, graph-review, and latency corrections have passed local review and the full
-offline CI matrix. Twelve consecutive recent `graph-expansion` diagnostics have failed; there is no
-protected live success on the current branch. The latest paid run retained a valid ten-node,
-thirteen-edge graph and passed private rendering, then failed protocol validation during semantic
-review. Its final authoritative `graph_data` was `null`. The correction adds typed coordinates for
-root scorecard shape errors, preserves nested contract coordinates, and treats failure of the
-server-canonical review as a server invariant without a model retry. It has not yet been proven by a
-live run. One exact `graph-expansion` retry is authorized. Corpus `2026-08-12.v1` remains pending
-human review.
+offline CI matrix. Thirteen consecutive recent `graph-expansion` diagnostics have failed; there is
+no protected live success on the current branch. The latest paid run stopped before rendering when
+Kimi authored an invalid parent at `components[5][0]`. The model-facing topology contract now uses
+zero-based indexes only and represents sequence membership as one flat list. It has not yet been
+proven by a live run. No further paid run is authorized. Corpus `2026-08-12.v1` remains pending human
+review.
 
 ## Objective and operating rules
 
@@ -29,13 +27,13 @@ human review.
 ## Recent diagnostic failure ledger
 
 This is the canonical chronology for recent `graph-expansion` failures through
-`5c9b27589a29aef90d77571f993a37ab089fa6ce`. Every
+`ae916b32818ea752e2cd6e46d4bcb31d69b1f025`. Every
 row records a live product failure. A green workflow conclusion for a report-only row means the
 pending-corpus workflow uploaded its evidence and exited without enforcing the failed verdict. The
 initial workflow runs failed; later report-only diagnostics concluded green under that policy.
-The retained `live-results.json` for every row says `status: fail`. All twelve failures ended on turn
-1 and skipped turn 2. The latest two emitted a reversible preview but no authoritative graph; the
-preceding ten emitted no visible graph.
+The retained `live-results.json` for every row says `status: fail`. All thirteen failures ended on
+turn 1 and skipped turn 2. Two of the latest three emitted a reversible preview but no authoritative
+graph; the other eleven emitted no visible graph.
 Run links and exact heads come from GitHub Actions metadata. Latency, provider calls, failure codes,
 and cost come from each retained `scheduled-eval-<run>/browser-results.json`, `live-results.json`,
 and `run-context.json` artifact. Model effort comes from source at the exact run head because the
@@ -51,13 +49,14 @@ incomplete usage.
 | 2026-08-11 18:38 | [`31523789373`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31523789373), `9a3dcd2` | A seven-call serial path ran architect, challenger, topology, review, patch, post-patch review, and synthesis. The path withheld the graph after 370.581 seconds. | Removed the challenger from graph publication, bounded review and repair rounds, added dependency-aware layer locks, and added a reversible preview after deterministic render validation. | $0.607108 |
 | 2026-08-11 23:46 | [`31547774792`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31547774792), `67887c3` | Private render passed at 127.374 seconds. Sonnet then emitted an over-broad composition contract, rejected at `layers.composition.group_ids: unbounded_collection`; the 180-second deadline cancelled correction before any visible preview. Four calls ran; turn latency was 180.122 seconds. | Prototype-only subjective findings are advisory, repair authority is record-bounded, invalid contracts receive one typed correction, and deterministic render success emits a reversible preview. | at least $0.276605 |
 | 2026-08-12 00:08 | [`31549117335`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31549117335), `1a279b6` | The `low`-effort architect violated a hard plan-list limit. The server returned `architecture_pass_list_limit`; Kimi and Sonnet did not run. Two Opus calls ran; turn latency was 88.836 seconds. | Restored prototype architecture to `medium`, which had produced a valid plan in the preceding diagnostic. | $0.201845 |
-| 2026-08-12 00:16 | [`31549644038`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31549644038), `b64f66f` | A valid architect plan took 78.784 seconds and Kimi took 81.252 seconds. Deterministic topology validation rejected `connections.links[6]` before private render, preview, or Sonnet. Three calls ran; turn latency reached 180.083 seconds. | The topology boundary accepts a uniformly one-based link array only when the entire array is invalid as zero-based and valid as one-based. Retained evidence cannot prove this run used one-based indexes, so this correction still needs live verification. | at least $0.232051 |
+| 2026-08-12 00:16 | [`31549644038`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31549644038), `b64f66f` | A valid architect plan took 78.784 seconds and Kimi took 81.252 seconds. Deterministic topology validation rejected `connections.links[6]` before private render, preview, or Sonnet. Three calls ran; turn latency reached 180.083 seconds. | The topology wire contract now has one zero-based representation. Links, parents, groups, and sequence members use the same direct indexes. | at least $0.232051 |
 | 2026-08-12 10:46 | [`31588931923`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31588931923), `ca8e3b2` | The architecture boundary rejected `evidence_basis[8].evidence_ref` under the private rule `invalid_engineering_area`. Two calls ran; the turn took 107.735 seconds and the case took 109.568 seconds. No Kimi, private render, critic, turn 2, or fallback ran. | Removed engineering recommendations from model-facing evidence. Checklist guidance now belongs in decisions or assumptions, and legacy model rows are discarded without weakening book, web, or user provenance. The green wrapper was report-only; the correction is not live-proven. | $0.236575 |
 | 2026-08-12 15:24 | [`31612168038`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31612168038), `ad82144` | Kimi low returned a complete topology in 24.530 seconds on one attempt. Deterministic validation rejected `composition.steps[3][0]` because the model's sequence order conflicted with its directed tree. No preview, render, architecture review, semantic review, or turn 2 ran. Fallback synthesis completed after rejection. The case took 61.025 seconds. | Sequence batches now select membership only. The server derives stages by breadth-first traversal from the root across selected tree and runtime edges. Missing-root, duplicate, invalid, and unreachable selections still fail closed. | $0.082805 |
 | 2026-08-12 15:51 | [`31614596529`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31614596529), `5a3b5f1` | Kimi low produced a valid seven-node graph. Topology validation and private rendering passed, and the reversible preview appeared after 37.228 seconds. Initial Sonnet review and its one protocol correction both returned successfully, but the corrected canonical contract retained `group_ids` without authorized `groups` authority. Review failed at `layers.composition.group_ids: invalid_contract`; the preview was withdrawn, turn 2 was skipped, and the case ended after 289.826 seconds. Five calls ran without provider fallback. | Canonicalization now filters group IDs, sequence indexes, assumption indexes, and their append counts through the server-authorized composition fields as one atomic permission profile. | $0.426546 |
 | 2026-08-12 | [`31616927365`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31616927365), `5c9b27589a29aef90d77571f993a37ab089fa6ce` | The run retained a ten-node, thirteen-edge graph and emitted a reversible preview after 24.116 seconds. Private rendering passed, but semantic review failed with `semantic_review_protocol_invalid` at correction `critic_scorecard: invalid_contract`. Final `graph_data` was `null`; turn 2 was skipped. Five application calls ran without fallback. The turn took 263.485 seconds and the case took 265.625 seconds. | Preflight now checks the exact root scorecard shape and emits `critic_scorecard: invalid_shape`. Nested contract defects retain their leaf coordinates. A failed server-canonical invariant emits `canonical_review: invalid_server_state` and skips model correction. | $0.457343 |
+| 2026-08-12 | [`31619916923`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31619916923), `ae916b32818ea752e2cd6e46d4bcb31d69b1f025` | Kimi returned complete JSON, then deterministic validation rejected the sixth component parent at `components[5][0]: topology`. No graph, preview, private render, critic, or turn 2 ran. Two application calls ran without fallback. The turn took 52.083 seconds and the case took 54.158 seconds. | Removed the selectable index base and nested sequence batches from the internal topology wire format. Every reference is zero-based, sequence membership is one flat list, the prompt gives the exact late-row bound, and safe logs retain the observed and maximum parent indexes. | $0.074490 |
 
-Known application spend across these twelve failures is at least **$3.678057**. Several provider
+Known application spend across these thirteen failures is at least **$3.752547**. Several provider
 calls have incomplete usage; row amounts marked `at least` are lower bounds. Diagnostic
 `31549644038` retained only `connections.links[6]: topology`; it did not retain authored output and
 cannot distinguish an out-of-range endpoint from a self-link.
@@ -666,10 +665,9 @@ Historical checkpoint evidence:
   turn completed in 344.639 seconds, down from 719.136 seconds. Kimi returned provider-valid JSON,
   then local validation rejected the fifth component's parent reference at `components[4][0]`.
   No critic or patch ran.
-- Parent-reference decoding now preserves valid zero-based topology and also accepts a complete,
-  consistently one-based parent set by converting every parent reference together. Mixed conventions,
-  forward references, cycles, non-integers, and out-of-range indexes still fail closed. The topology
-  prompt includes concrete first-row and fifth-row bounds so the provider does not need the fallback.
+- Parent-reference decoding first accepted both complete zero-based and one-based parent sets. That
+  compatibility path was later removed after another off-by-one failure. Forward references, cycles,
+  non-integers, and out-of-range indexes still fail closed.
 - The WebSocket emits a provisional design frame after the architect finishes and before Kimi
   topology generation. It carries the interpreted plan and bounded assumptions. The exhaustive
   Sonnet graph critic owns the independent acceptance review; the pre-generation challenger is no
@@ -800,15 +798,12 @@ tests cannot establish provider response time.
   depth. Disconnected paths, missing primary outcomes, and requested missing paths remain blocking
   at every depth. Stored prototype-advisory findings cannot re-enter a later prototype review as
   stale repair obligations.
-- The topology wire object declares one required `index_base`, either 0 or 1. That declaration owns
-  every parent index, link endpoint, group membership index, and composition step index. The server
-  converts every reference to canonical zero-based indexes before topology validation. It no longer
-  infers parent and link conventions independently. References invalid under the declaration,
-  self-links, duplicate links, and links duplicating tree edges fail closed. This removes the
-  ambiguous representation class that remained after diagnostic `31549644038`.
-- Composition batches select primary runtime-sequence membership only. The topology prompt requests
-  one batch. The server accepts nested batches for compatibility, but their order and boundaries
-  have no semantic authority. It derives each selected node's stage as its shortest directed distance
+- The topology wire object has no selectable index base. Every parent, link endpoint, group
+  membership, and sequence member is zero-based. The prompt states the exact late-row parent bound,
+  and safe rejection logs retain the observed and maximum index. Self-links, duplicate links, and
+  links duplicating tree edges fail closed.
+- `composition.steps` is one flat list of primary runtime-sequence members. The server derives each
+  selected node's stage as its shortest directed distance
   from the root across selected tree edges and explicit runtime links. Invalid indexes, duplicates,
   a missing root, and unreachable selected nodes still fail closed. This removes the conflicting
   model-authored order that caused diagnostic `31612168038`.

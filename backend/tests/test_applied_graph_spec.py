@@ -54,35 +54,15 @@ def _draft(node_count: int = 14) -> dict:
         for index in range(1, node_count)
     ]
     return {
-        "index_base": 0,
         "root": node_records[0],
         "components": components,
         "connections": {"links": []},
         "composition": {
             "title": "Complete architecture",
             "groups": groups,
-            "steps": [[index] for index in range(min(7, node_count))],
+            "steps": list(range(min(7, node_count))),
         },
     }
-
-
-def _declared_index_base(payload: dict, index_base: int) -> dict:
-    payload["index_base"] = index_base
-    if index_base == 0:
-        return payload
-
-    payload["root"][3] += 1
-    for component in payload["components"]:
-        component[0] += 1
-        component[4] += 1
-    for link in payload["connections"]["links"]:
-        link[0] += 1
-        link[1] += 1
-    payload["composition"]["steps"] = [
-        [component_index + 1 for component_index in step]
-        for step in payload["composition"]["steps"]
-    ]
-    return payload
 
 
 def _assert_rooted(draft: dict) -> None:
@@ -128,13 +108,11 @@ def test_topology_schema_uses_compact_positional_records_with_resource_bounds():
     schema = applied_graph_topology_schema(spec)
     properties = schema["properties"]
     assert list(properties) == [
-        "index_base",
         "root",
         "components",
         "connections",
         "composition",
     ]
-    assert properties["index_base"] == {"type": "integer", "enum": [0, 1]}
     root = properties["root"]
     components = properties["components"]
     connections = properties["connections"]
@@ -165,8 +143,7 @@ def test_topology_schema_uses_compact_positional_records_with_resource_bounds():
     }
     steps = composition["properties"]["steps"]
     assert steps["maxItems"] == spec.safety_max_nodes
-    assert steps["items"]["maxItems"] == spec.safety_max_nodes
-    assert steps["items"]["items"] == {"type": "integer"}
+    assert steps["items"] == {"type": "integer"}
     serialized = json.dumps(schema)
     for unsupported_or_shaping_keyword in (
         "$ref",
@@ -190,12 +167,10 @@ def test_validator_accepts_variable_material_topologies(node_count):
     _assert_rooted(draft)
 
 
-@pytest.mark.parametrize("index_base", [0, 1])
-def test_declared_index_base_normalizes_every_reference_collection(index_base):
+def test_wire_references_are_zero_based_across_every_collection():
     payload = _draft(6)
     payload["connections"]["links"] = [[1, 4, "publishes feedback", 402, 501]]
-    payload["composition"]["steps"] = [[0], [1], [2], [3], [4], [5]]
-    payload = _declared_index_base(payload, index_base)
+    payload["composition"]["steps"] = [0, 1, 2, 3, 4, 5]
 
     draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
 
@@ -214,47 +189,15 @@ def test_declared_index_base_normalizes_every_reference_collection(index_base):
     _assert_rooted(draft)
 
 
-@pytest.mark.parametrize(
-    ("value", "rule"),
-    [(None, "key_set"), (True, "value_type"), ("0", "value_type"), (2, "invalid_enum")],
-)
-def test_index_base_is_required_and_limited_to_integer_zero_or_one(value, rule):
+def test_index_base_is_rejected_as_an_unknown_field():
     payload = _draft(4)
-    if value is None:
-        del payload["index_base"]
-    else:
-        payload["index_base"] = value
+    payload["index_base"] = 0
 
     with pytest.raises(AppliedGraphSpecError) as caught:
         validate_applied_graph_topology(payload, applied_graph_spec("production"))
 
-    assert caught.value.rule == rule
-
-
-@pytest.mark.parametrize(
-    "collection",
-    ["parent", "group", "link", "step"],
-)
-def test_mixed_index_conventions_fail_closed(collection):
-    payload = _declared_index_base(_draft(6), 1)
-    if collection == "parent":
-        payload["components"][0][0] = 0
-        expected_path = "components[0][0]"
-    elif collection == "group":
-        payload["root"][3] = 0
-        expected_path = "root[3]"
-    elif collection == "link":
-        payload["connections"]["links"] = [[0, 2, "mixed link", 402, 501]]
-        expected_path = "connections.links[0][0]"
-    else:
-        payload["composition"]["steps"][0] = [0]
-        expected_path = "composition.steps[0][0]"
-
-    with pytest.raises(AppliedGraphSpecError) as caught:
-        validate_applied_graph_topology(payload, applied_graph_spec("production"))
-
-    assert caught.value.code == "graph_design_topology_invalid"
-    assert caught.value.path == expected_path
+    assert caught.value.path == "$"
+    assert caught.value.rule == "key_set"
 
 
 @pytest.mark.parametrize(
@@ -479,8 +422,8 @@ def test_group_memberships_are_derived_from_component_rows():
     ]
 
 
-@pytest.mark.parametrize("steps", [[[]], [[1], [1]], [[99]]])
-def test_sequence_steps_are_nonempty_unique_component_indexes(steps):
+@pytest.mark.parametrize("steps", [[0, 0], [99]])
+def test_sequence_steps_are_unique_zero_based_node_indexes(steps):
     payload = _draft(4)
     payload["composition"]["steps"] = steps
     with pytest.raises(AppliedGraphSpecError) as caught:
@@ -488,9 +431,21 @@ def test_sequence_steps_are_nonempty_unique_component_indexes(steps):
     assert caught.value.code == "graph_design_topology_invalid"
 
 
+def test_nested_sequence_batches_are_rejected():
+    payload = _draft(4)
+    payload["composition"]["steps"] = [[0], [1]]
+
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert caught.value.code == "graph_design_schema_invalid"
+    assert caught.value.path == "composition.steps[0]"
+    assert caught.value.rule == "value_type"
+
+
 def test_sequence_uses_component_indexes_without_row_offset():
     payload = _draft(6)
-    payload["composition"]["steps"] = [[0], [1], [2], [3], [4], [5]]
+    payload["composition"]["steps"] = [0, 1, 2, 3, 4, 5]
 
     draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
 
@@ -501,7 +456,7 @@ def test_sequence_uses_component_indexes_without_row_offset():
 
 def test_sequence_can_start_at_root_and_follows_primary_tree_edges():
     payload = _draft(4)
-    payload["composition"]["steps"] = [[0], [1], [2]]
+    payload["composition"]["steps"] = [0, 1, 2]
 
     draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
 
@@ -522,8 +477,8 @@ def test_production_requires_a_primary_sequence_but_prototype_can_omit_it():
 @pytest.mark.parametrize(
     "steps",
     [
-        [[1, 2]],
-        [[1], [3]],
+        [1, 2],
+        [1, 3],
     ],
 )
 def test_sequence_requires_root_reachable_primary_runtime_membership(steps):
@@ -537,27 +492,18 @@ def test_sequence_requires_root_reachable_primary_runtime_membership(steps):
     assert caught.value.rule == "topology"
 
 
-def test_sequence_batch_order_is_derived_from_primary_topology():
+def test_sequence_list_order_is_derived_from_primary_topology():
     payload = _draft(5)
-    payload["composition"]["steps"] = [[0], [1], [2], [4], [3]]
+    payload["composition"]["steps"] = [4, 1, 3, 0, 2]
 
     draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
 
     assert [node["sequence_step"] for node in draft["nodes"]] == [1, 2, 3, 4, 5]
 
 
-def test_sequence_batch_boundaries_are_not_authoritative():
-    payload = _draft(5)
-    payload["composition"]["steps"] = [[4, 1], [3, 0, 2]]
-
-    draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
-
-    assert [node["sequence_step"] for node in draft["nodes"]] == [1, 2, 3, 4, 5]
-
-
-def test_sequence_root_batch_position_is_not_authoritative():
+def test_sequence_root_list_position_is_not_authoritative():
     payload = _draft(4)
-    payload["composition"]["steps"] = [[1], [0]]
+    payload["composition"]["steps"] = [1, 0]
 
     draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
 
@@ -568,7 +514,7 @@ def test_sequence_accepts_a_runtime_link_from_an_earlier_stage():
     payload = _draft(4)
     payload["components"][1][0] = 0
     payload["connections"]["links"] = [[1, 2, "starts staged runtime", 400, 500]]
-    payload["composition"]["steps"] = [[0], [1], [2]]
+    payload["composition"]["steps"] = [0, 1, 2]
 
     draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
 
@@ -578,7 +524,7 @@ def test_sequence_accepts_a_runtime_link_from_an_earlier_stage():
 def test_sequence_rejects_a_runtime_link_in_the_reverse_direction():
     payload = _draft(4)
     payload["connections"]["links"] = [[3, 1, "reverses staged runtime", 400, 500]]
-    payload["composition"]["steps"] = [[0], [1], [3]]
+    payload["composition"]["steps"] = [0, 1, 3]
 
     with pytest.raises(AppliedGraphSpecError) as caught:
         validate_applied_graph_topology(payload, applied_graph_spec("production"))
@@ -641,23 +587,20 @@ def test_invalid_parent_relationships_fail_closed(component_index, parent_index)
     assert caught.value.code == "graph_design_topology_invalid"
 
 
-def test_mixed_parent_index_conventions_fail_closed():
-    payload = _draft(4)
-    payload["components"][0][0] = 1
+def test_late_component_parent_must_reference_an_earlier_node():
+    payload = _draft(7)
+    assert payload["components"][5][0] == 5
+    validate_applied_graph_topology(payload, applied_graph_spec("production"))
+    payload["components"][5][0] = 6
 
     with pytest.raises(AppliedGraphSpecError) as caught:
         validate_applied_graph_topology(payload, applied_graph_spec("production"))
 
     assert caught.value.code == "graph_design_topology_invalid"
-    assert caught.value.path == "components[0][0]"
-
-
-def test_forward_parent_fails_instead_of_permitting_a_cycle():
-    payload = _draft(4)
-    payload["components"][0][0] = 2
-    with pytest.raises(AppliedGraphSpecError) as caught:
-        validate_applied_graph_topology(payload, applied_graph_spec("production"))
-    assert caught.value.code == "graph_design_topology_invalid"
+    assert caught.value.path == "components[5][0]"
+    assert caught.value.rule == "topology"
+    assert caught.value.observed_index == 6
+    assert caught.value.maximum_index == 5
 
 
 def test_deep_acyclic_parent_chain_is_preserved():
@@ -693,38 +636,11 @@ def test_cross_links_use_indexes_and_preserve_every_material_link():
     ]
 
 
-def test_one_based_cross_link_indexes_normalize_only_under_the_declared_base():
-    payload = _declared_index_base(_draft(6), 1)
+def test_invalid_zero_based_link_endpoint_fails_at_exact_coordinate():
+    payload = _draft(6)
     payload["connections"]["links"] = [
-        [1, 5, "publishes measured feedback", 402, 501],
-        [6, 3, "rolls back failed release", 403, 501],
-    ]
-
-    draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
-
-    assert draft["edges"][-2:] == [
-        {
-            "source": "n1",
-            "target": "n5",
-            "label": "publishes measured feedback",
-            "flow": "feedback",
-            "sync": "async",
-        },
-        {
-            "source": "n6",
-            "target": "n3",
-            "label": "rolls back failed release",
-            "flow": "deployment",
-            "sync": "async",
-        },
-    ]
-
-
-def test_invalid_link_array_fails_under_its_declared_base():
-    payload = _declared_index_base(_draft(6), 1)
-    payload["connections"]["links"] = [
-        [1, 6, "valid link", 402, 501],
-        [2, 7, "out-of-range link", 403, 501],
+        [0, 5, "valid link", 402, 501],
+        [1, 6, "out-of-range link", 403, 501],
     ]
 
     with pytest.raises(AppliedGraphSpecError) as caught:
@@ -750,50 +666,12 @@ def test_invalid_cross_link_fails_instead_of_disappearing(cross_link):
     assert caught.value.code == "graph_design_topology_invalid"
 
 
-def test_one_based_self_link_fails_after_declared_normalization():
-    payload = _declared_index_base(_draft(6), 1)
-    payload["connections"]["links"] = [[6, 6, "loop", 402, 501]]
-
-    with pytest.raises(AppliedGraphSpecError) as caught:
-        validate_applied_graph_topology(payload, applied_graph_spec("production"))
-
-    assert caught.value.code == "graph_design_topology_invalid"
-    assert caught.value.path == "connections.links[0]"
-    assert caught.value.rule == "topology"
-
-
 def test_duplicate_cross_link_fails_instead_of_using_array_order():
     payload = _draft(5)
     duplicate = [1, 3, "material control", 401, 500]
     payload["connections"]["links"] = [duplicate, duplicate]
     with pytest.raises(AppliedGraphSpecError) as caught:
         validate_applied_graph_topology(payload, applied_graph_spec("production"))
-    assert caught.value.rule == "duplicate"
-
-
-def test_duplicate_one_based_cross_link_fails_after_declared_normalization():
-    payload = _declared_index_base(_draft(6), 1)
-    duplicate = [1, 6, "material control", 401, 500]
-    payload["connections"]["links"] = [duplicate, duplicate]
-
-    with pytest.raises(AppliedGraphSpecError) as caught:
-        validate_applied_graph_topology(payload, applied_graph_spec("production"))
-
-    assert caught.value.path == "connections.links[1]"
-    assert caught.value.rule == "duplicate"
-
-
-def test_one_based_cross_link_duplicate_of_tree_edge_fails_after_declared_normalization():
-    payload = _declared_index_base(_draft(6), 1)
-    payload["connections"]["links"] = [
-        [1, 2, "passes validated action 2", 400, 500],
-        [6, 3, "forces one-based normalization", 402, 501],
-    ]
-
-    with pytest.raises(AppliedGraphSpecError) as caught:
-        validate_applied_graph_topology(payload, applied_graph_spec("production"))
-
-    assert caught.value.path == "connections.links[0]"
     assert caught.value.rule == "duplicate"
 
 
@@ -861,7 +739,7 @@ def test_enrichment_preserves_authored_groups_and_runtime_sequence():
     spec = applied_graph_spec("production")
     payload = _draft(14)
     payload["components"][1][0] = 0
-    payload["composition"]["steps"] = [[0], [1, 2], [3], [4], [5], [6], [7]]
+    payload["composition"]["steps"] = [0, 1, 2, 3, 4, 5, 6, 7]
     graph = enrich_applied_graph_topology(
         validate_applied_graph_topology(payload, spec),
         spec=spec,
@@ -952,23 +830,24 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
         query="Build a RAG runtime",
         spec=applied_graph_spec("production"),
     )
+    assert len(prompt) < 6_000
     assert (
         "Choose the number of components, groups, and links from the design" in prompt
     )
     spec = applied_graph_spec("production")
     assert f"at most {spec.safety_max_nodes} nodes including root" in prompt
-    assert f"at most {spec.safety_max_edges} total edges" in prompt
+    assert f"and {spec.safety_max_edges} total edges" in prompt
     assert f"components has at most {spec.safety_max_nodes - 1} rows" in prompt
     assert "components plus links must not exceed" in prompt
-    assert "Never merge distinct owners" in prompt
-    assert "root row has exactly 4 fields" in prompt
-    assert "component row has exactly 8 fields" in prompt
-    assert "link row has exactly 5 fields" in prompt
-    assert "group definition row has exactly 2 fields" in prompt
+    assert "Preserve every material owner" in prompt
+    assert "root: [label:string,type:integer" in prompt
+    assert "components[i]: [parent_index:integer" in prompt
+    assert "connections.links[i]: [source_index:integer" in prompt
+    assert "composition.groups[i]: [label:string,kind:integer]" in prompt
     assert "incoming_edge_label:string" in prompt
     assert "parent_index:integer,label:string,type:integer" in prompt
     assert "source_index:integer,target_index:integer" in prompt
-    assert "nonempty array of integer component indexes" in prompt
+    assert "flat array of integer node indexes" in prompt
     assert "Do not use null, booleans, objects, omitted tuple values" in prompt
     assert "Type: 100=client,101=service" in prompt
     assert "Group kind: 600=runtime,601=data" in prompt
@@ -977,33 +856,20 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
         "Choose and enumerate groups before constructing root and component rows"
         in prompt
     )
-    assert (
-        "At the selected production depth only, include every applicable control"
-        in prompt
-    )
-    assert "At prototype depth, use only prototype criteria" in prompt
-    assert (
-        "Do not add or require production hardening at low or prototype depth" in prompt
-    )
-    assert (
-        "At the selected production depth only, require a no-effect rejection outcome"
-        in prompt
-    )
+    assert "At production depth, include every applicable control" in prompt
+    assert "At prototype depth, use concrete buildable boundaries" in prompt
+    assert "Do not add production hardening at low or prototype depth" in prompt
+    assert "include a no-effect rejection outcome" in prompt
     assert (
         "distinct retry exhaustion, success, COMMITTED, NOT_FOUND, and STILL_UNKNOWN outcomes"
         in prompt
     )
-    assert "distinct canary, promotion, and rollback delivery paths" in prompt
-    assert "Use the integer, never its name" in prompt
-    assert "The positional integer-code wire format is canonical" in prompt
+    assert "distinct canary, promotion, and rollback paths" in prompt
+    assert "Use integer category codes, never names" in prompt
     assert "The request owns the objective" in prompt
     assert "independent architecture review follows" in prompt
     assert "evidence_ref" not in prompt
-    assert "Do not emit lane or tier fields" in prompt
-    assert (
-        "Do not emit assumptions, view_state, node positions, or selected-node arrays"
-        in prompt
-    )
+    assert "Do not emit server-owned fields" in prompt
     assert "The server derives each lane from its authored group kind" in prompt
     for codebook in (
         module._NODE_TYPE_CODES,
@@ -1013,42 +879,37 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     ):
         for code, token in codebook.items():
             assert f"{code}={token}" in prompt
-    assert "components[i] defines component i+1" in prompt
-    assert "index_base is a required top-level integer: 0 or 1" in prompt
-    assert "every reference to root equals index_base" in prompt
-    assert "server subtracts index_base from every declared reference" in prompt
-    assert "Every nonempty sequence includes the declared root index" in prompt
-    assert "put every member index in one inner batch" in prompt
-    assert "first step must include root 0" not in prompt
-    assert "must be smaller than the component index" in prompt
+    assert "Every index is zero-based" in prompt
+    assert "Root is index 0" in prompt
+    assert "components[i] defines node index i+1" in prompt
+    assert "an existing earlier node index from 0 through i" in prompt
+    assert "components[5][0] may be 0 through 5; value 6 is self-reference" in prompt
+    assert "composition.steps is one flat array" in prompt
     assert "Every component must reference exactly one group" in prompt
-    assert (
-        "Links and composition steps use the same declared component index base"
-        in prompt
-    )
-    assert "Never emit server node IDs such as n1" in prompt
-    assert "patch placeholders such as $new_node_1" in prompt
-    assert "Never mix index bases" in prompt
-    assert "member indexes" not in prompt
-    assert "declare membership in the primary runtime sequence" in prompt
+    assert "Link endpoints and composition steps address nodes" in prompt
+    assert "Never emit server node IDs" in prompt
+    assert "$new_node_N placeholders" in prompt
+    assert "declares primary runtime-sequence membership" in prompt
     assert (
         "server derives stage order from directed primary/runtime edges"
         in prompt
     )
-    assert "boundaries and order have no semantic meaning" in prompt
-    assert "sequence starts with the declared root index" not in prompt
+    assert "inner batch" not in prompt
+    assert "Nested batches" not in prompt
+    assert "index_base" not in prompt
+    assert "one-based" not in prompt
     assert "all material non-tree links" in prompt
     assert "Make the root the primary runtime entry or trigger" in prompt
     assert "Tree-edge direction and its incoming label must agree" in prompt
-    assert "primary sequence one directed runtime flow" in prompt
+    assert "Production depth requires a primary sequence" in prompt
     assert "diagram authoring, rendering" in prompt
-    assert "Multiple edges between a component pair" in prompt
-    assert "A component earns its own row" in prompt
-    assert "An edge earns its own record" in prompt
-    assert "compact JSON without indentation or line breaks" in prompt
-    assert '"index_base":0,"root":["Client",100,"Submits one request.",0]' in prompt
+    assert "Multiple edges between the same pair" in prompt
+    assert "A component earns a row" in prompt
+    assert "An edge earns a record" in prompt
+    assert "Return only compact schema-constrained JSON" in prompt
+    assert '"root":["Client",100,"Submits one request.",0]' in prompt
     assert '"connections":{"links":[]}' in prompt
-    assert '"steps":[[0],[1],[2]]' in prompt
+    assert '"steps":[0,1,2]' in prompt
     assert "diagram_commitments" not in prompt
     assert "diagram_requirements" not in prompt
     assert '"reviewed_plan"' not in prompt
@@ -1106,6 +967,48 @@ async def test_dynamic_generator_uses_schema_once(monkeypatch):
         response_schema["properties"]["connections"]["properties"]["links"]["maxItems"]
         == spec.safety_max_edges
     )
+
+
+@pytest.mark.asyncio
+async def test_dynamic_generator_logs_safe_parent_bounds(monkeypatch, caplog):
+    import agent.nodes.graph_worker as graph_worker
+
+    payload = _draft(7)
+    payload["components"][5][0] = 6
+    payload["components"][5][1] = "PRIVATE_SENTINEL"
+
+    async def fake_stream_structured_llm(**_kwargs):
+        return StructuredLLMResponse(
+            text=json.dumps(payload),
+            finish_reason="end_turn",
+            input_tokens=100,
+            output_tokens=500,
+            provider="moonshot",
+            model="kimi-k3",
+        )
+
+    monkeypatch.setattr(
+        graph_worker, "stream_structured_llm", fake_stream_structured_llm
+    )
+
+    with caplog.at_level("WARNING", logger="agent.nodes.graph_worker"):
+        with pytest.raises(AppliedGraphSpecError) as caught:
+            await graph_worker._generate_applied_architecture(
+                {
+                    "graph_data": None,
+                    "approved_graph_data": None,
+                    "architecture_ready": True,
+                },
+                "Build a runtime",
+                SimpleNamespace(resolved="prototype"),
+            )
+
+    assert caught.value.path == "components[5][0]"
+    assert caught.value.observed_index == 6
+    assert caught.value.maximum_index == 5
+    assert "path=components[5][0] rule=topology" in caplog.text
+    assert "observed_index=6 maximum_index=5" in caplog.text
+    assert "PRIVATE_SENTINEL" not in caplog.text
 
 
 @pytest.mark.asyncio
