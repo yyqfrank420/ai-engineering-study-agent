@@ -385,6 +385,54 @@ def test_websocket_replays_completed_idempotent_turn_without_running_agent(
 
     assert events == [
         {"type": "response_delta", "content": "Canonical stored answer"},
+        {"type": "graph_data", "data": None},
+        {"type": "done"},
+    ]
+
+
+def test_websocket_replays_completed_idempotent_turn_with_graph_before_done(
+    temp_data_dir, monkeypatch
+):
+    app, user, thread = _ready_app(temp_data_dir, monkeypatch)
+    graph = {
+        "version": "graph-v1",
+        "nodes": [{"id": "n1", "title": "Start"}],
+        "edges": [],
+    }
+    persist_turn(
+        user["id"],
+        thread["id"],
+        title="Stored",
+        user_content="Explain RAG",
+        assistant_content="Canonical stored answer",
+        graph_data=graph,
+        client_request_id="client-replay-2",
+    )
+
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("an idempotent replay must not call the model")
+
+    monkeypatch.setattr("api.chat_websocket.run_agent", fail_if_called)
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/api/chat/ws", headers={"origin": "http://localhost:5173"}
+        ) as socket:
+            socket.send_json({"type": "auth", "access_token": "test-token"})
+            assert socket.receive_json() == {"type": "ready"}
+            socket.send_json(
+                {
+                    "type": "start",
+                    "thread_id": thread["id"],
+                    "content": "Explain RAG",
+                    "client_request_id": "client-replay-2",
+                }
+            )
+            events = _receive_until(socket, "done")
+
+    assert events == [
+        {"type": "response_delta", "content": "Canonical stored answer"},
+        {"type": "graph_data", "data": graph},
         {"type": "done"},
     ]
 

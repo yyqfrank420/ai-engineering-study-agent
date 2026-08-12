@@ -5,7 +5,6 @@ import pytest
 
 from agent.applied_graph_spec import (
     AppliedGraphSpecError,
-    _topology_architect_plan,
     applied_graph_spec,
     applied_graph_topology_prompt,
     applied_graph_topology_schema,
@@ -920,71 +919,11 @@ def test_provider_schema_stays_below_compact_byte_budget():
     assert len(json.dumps(schema, separators=(",", ":"))) < 1_500
 
 
-def test_topology_plan_keeps_graph_inputs_and_omits_review_metadata():
-    plan = {
-        "interpretation": "Build one serving path.",
-        "actors": ["Client"],
-        "inputs": ["Request"],
-        "outputs": ["Response"],
-        "required_capabilities": ["Route requests"],
-        "diagram_requirements": ["Show the fallback route"],
-        "outcome_measures": ["p95 latency"],
-        "constraints": ["Prototype only"],
-        "assumptions": ["One provider is available"],
-        "open_questions": ["What is the traffic volume?"],
-        "evidence_basis": [
-            {
-                "claim": "Measure latency.",
-                "basis": "book",
-                "evidence_ref": "book:private",
-            }
-        ],
-        "decisions": [{"area": "routing", "decision": "Use fallback", "why": ""}],
-        "runtime_flow": ["Accept", "Route", "Return"],
-        "status_update": "Plan ready",
-    }
-
-    topology_plan = _topology_architect_plan(plan)
-
-    assert set(topology_plan) == {
-        "interpretation",
-        "actors",
-        "inputs",
-        "outputs",
-        "required_capabilities",
-        "diagram_requirements",
-        "outcome_measures",
-        "constraints",
-        "assumptions",
-        "open_questions",
-        "decisions",
-        "runtime_flow",
-    }
-    assert topology_plan["diagram_requirements"] == ["Show the fallback route"]
-    assert topology_plan["outcome_measures"] == ["p95 latency"]
-    assert topology_plan["open_questions"] == ["What is the traffic volume?"]
-    assert topology_plan["runtime_flow"] == ["Accept", "Route", "Return"]
-    assert "evidence_basis" not in topology_plan
-    assert "status_update" not in topology_plan
-
-
 def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     from agent import applied_graph_spec as module
 
     prompt = applied_graph_topology_prompt(
         query="Build a RAG runtime",
-        architect_plan={
-            "required_capabilities": ["retriever"],
-            "diagram_requirements": ["show accepted cache writes"],
-            "evidence_basis": [
-                {
-                    "claim": "Evaluation should be measured.",
-                    "basis": "book",
-                    "evidence_ref": "book:PRIVATE_CANONICAL_ID",
-                }
-            ],
-            "status_update": "UI progress only",
-        },
         spec=applied_graph_spec("production"),
     )
     assert (
@@ -1031,9 +970,8 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     assert "distinct canary, promotion, and rollback delivery paths" in prompt
     assert "Use the integer, never its name" in prompt
     assert "The positional integer-code wire format is canonical" in prompt
-    assert "The reviewed_plan owns design decisions" in prompt
-    assert "Evaluation should be measured." not in prompt
-    assert "PRIVATE_CANONICAL_ID" not in prompt
+    assert "The request owns the objective" in prompt
+    assert "independent architecture review follows" in prompt
     assert "evidence_ref" not in prompt
     assert "Do not emit lane or tier fields" in prompt
     assert (
@@ -1083,9 +1021,8 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     assert '"connections":{"links":[]}' in prompt
     assert '"steps":[[0],[1],[2]]' in prompt
     assert "diagram_commitments" not in prompt
-    assert prompt.count("diagram_requirements") == 1
-    assert "UI progress only" not in prompt
-    assert '"reviewed_plan"' in prompt
+    assert "diagram_requirements" not in prompt
+    assert '"reviewed_plan"' not in prompt
     assert '"architect_plan"' not in prompt
     assert '"challenger_review"' not in prompt
     assert "at most ten" not in prompt
@@ -1128,7 +1065,8 @@ async def test_dynamic_generator_uses_schema_once(monkeypatch):
     assert len(result["nodes"]) == 14
     assert len(result["groups"]) == 4
     assert len(calls) == 1
-    assert calls[0]["effort"] == "low"
+    assert calls[0]["effort"] == "high"
+    assert calls[0]["provider_attempt_limit"] == 1
     response_schema = calls[0]["response_schema"]
     spec = applied_graph_spec("production")
     assert (

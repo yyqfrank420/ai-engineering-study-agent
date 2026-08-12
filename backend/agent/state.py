@@ -149,6 +149,7 @@ class AgentState(TypedDict):
     approved_graph_data: NotRequired[GraphData | None]
     workflow_started_at_s: NotRequired[float]
     terminal_deadline_s: NotRequired[float]
+    graph_preview_deadline_s: NotRequired[float]
     search_tool_wait_task: NotRequired[Any]
     # Web search results from research_worker (empty string if not run)
     research_context: str
@@ -162,6 +163,7 @@ class AgentState(TypedDict):
     challenger_review: NotRequired[dict[str, Any]]
     early_response_text: NotRequired[str]
     diagram_evaluation: NotRequired[dict[str, Any]]
+    graph_render_admitted: NotRequired[bool]
 
     # ── Final outputs ─────────────────────────────────────────────────────────
     response_text: str  # synthesised response (Phase 2)

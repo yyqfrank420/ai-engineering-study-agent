@@ -1166,12 +1166,16 @@ async def test_synthesis_withholds_an_unreviewed_candidate(monkeypatch):
             "graph_changed": True,
             "graph_operation": {"kind": "create", "status": "draft"},
             "graph_publication": "unreviewed",
+            "architect_plan": {
+                "interpretation": "Rejected candidate-only architecture terms"
+            },
         }
     )
 
     prompt = captured["messages"][-1]["content"]
     assert "Publication state: withheld." in prompt
     assert "Unreviewed candidate" not in prompt
+    assert "Rejected candidate-only architecture terms" not in prompt
     assert not any(event["type"] == "graph_data" for event in events)
     assert result["graph_data"] is None
     assert result["graph_publication"] == "withheld"

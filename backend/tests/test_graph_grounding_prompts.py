@@ -13,7 +13,7 @@ def test_applied_graph_prompts_define_record_scoped_repair_boundaries():
     )
 
     assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v34"
-    assert _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION == "applied_topology_v18"
+    assert _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION == "applied_topology_v19"
     assert (
         "Choose graph size from the material design" in _APPLIED_GRAPH_TOPOLOGY_SYSTEM
     )
@@ -662,9 +662,8 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
         "control",
         "deployment",
     }
-    # Low effort leaves room for the independent critic without letting
-    # unbounded private reasoning consume the complete request deadline.
-    assert captured["effort"] == "low"
+    assert captured["effort"] == "high"
+    assert captured["provider_attempt_limit"] == 1
     assert captured["response_schema"]["properties"]["components"]["type"] == "array"
     links = captured["response_schema"]["properties"]["connections"]["properties"][
         "links"
@@ -677,8 +676,8 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
     assert "schema-constrained object" in captured["system"]
     prompt = captured["messages"][0]["content"]
     assert '"node_budget"' not in prompt
-    assert "Cache versioned channel reads" in prompt
-    assert '"reviewed_plan"' in prompt
+    assert "Cache versioned channel reads" not in prompt
+    assert '"reviewed_plan"' not in prompt
     assert '"challenger_review"' not in prompt
     assert '"diagram_commitments"' not in prompt
     assert "Designing a production domain architecture" in events[0]["status"]

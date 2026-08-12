@@ -5,7 +5,6 @@ import json
 import logging
 from typing import Any
 
-from agent.architecture_playbook import without_evidence_references
 from agent.state import GraphData
 from config import settings
 
@@ -197,33 +196,9 @@ def _bounded_input(value: Any, limit: int) -> str:
     return text[:limit]
 
 
-_TOPOLOGY_PLAN_FIELDS = (
-    "interpretation",
-    "actors",
-    "inputs",
-    "outputs",
-    "required_capabilities",
-    "diagram_requirements",
-    "outcome_measures",
-    "constraints",
-    "assumptions",
-    "open_questions",
-    "decisions",
-    "runtime_flow",
-)
-
-
-def _topology_architect_plan(value: Any) -> Any:
-    plan = without_evidence_references(value)
-    if not isinstance(plan, dict):
-        return plan
-    return {field: plan[field] for field in _TOPOLOGY_PLAN_FIELDS if field in plan}
-
-
 def applied_graph_topology_prompt(
     *,
     query: str,
-    architect_plan: Any,
     spec: AppliedGraphSpec,
 ) -> str:
     codebook = " ".join(
@@ -238,7 +213,6 @@ def applied_graph_topology_prompt(
     design_input = {
         "request": _bounded_input(query, spec.query_chars),
         "depth": spec.depth,
-        "reviewed_plan": _topology_architect_plan(architect_plan),
     }
     valid_example = {
         "index_base": 0,
@@ -288,13 +262,14 @@ def applied_graph_topology_prompt(
         "nonempty array of integer component indexes. Do not use null, booleans, objects, omitted "
         "tuple values, or placeholder strings inside any row. Categorical tuple fields and group kind use "
         f"integer codes. {codebook} The positional integer-code wire format is canonical. Use the "
-        "integer, never its name, in the wire object. The reviewed_plan owns design decisions; use "
-        "the request for domain vocabulary and stated context. You author "
+        "integer, never its name, in the wire object. The request owns the objective, domain "
+        "vocabulary, and stated constraints. The selected depth and these rules own the initial "
+        "topology contract. An independent architecture review follows this reversible draft. You author "
         "the title, groups, component labels, component types, responsibilities, edge labels, flows, "
         "sync modes, and sequence membership. The server owns stable IDs, display technology and "
         "transport labels, edge descriptions, lanes, tiers, assumptions, and rendering view state. "
-        "The server derives each lane from its authored group kind and carries assumptions from the "
-        "reviewed plan. Do not emit lane or tier fields. Do not emit assumptions, view_state, node "
+        "The server derives each lane from its authored group kind. Do not emit lane or tier fields. "
+        "Do not emit assumptions, view_state, node "
         "positions, or selected-node arrays. Choose the "
         "number of components, groups, and "
         "links from the design. Never merge distinct owners, trust "

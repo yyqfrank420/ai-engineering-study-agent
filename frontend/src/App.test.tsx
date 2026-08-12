@@ -146,7 +146,9 @@ vi.mock('./components/Chat/ChatInput', () => ({
 }));
 
 vi.mock('./components/GraphCanvas', () => ({
-  GraphCanvas: ({ onNodeClick, onTellMeMore, onExpandGraph }: {
+  GraphCanvas: ({ graphData, isPreview, onNodeClick, onTellMeMore, onExpandGraph }: {
+    graphData: GraphData | null;
+    isPreview?: boolean;
     onNodeClick: (node: { id: string; label: string; type: 'service'; technology: string; description: string; detail: null }) => void;
     onTellMeMore: (node: { id: string; label: string; type: 'service'; technology: string; description: string; detail: null }) => void;
     onExpandGraph: (node: { id: string; label: string; type: 'service'; technology: string; description: string; detail: null }) => void;
@@ -161,6 +163,8 @@ vi.mock('./components/GraphCanvas', () => ({
     };
     return (
       <section data-testid="graph-canvas">
+        <span data-testid="rendered-graph-title">{graphData?.title ?? ''}</span>
+        <span data-testid="rendered-graph-preview">{isPreview ? 'yes' : 'no'}</span>
         <button onClick={() => onNodeClick(node)}>Choose node</button>
         <button onClick={() => onTellMeMore(node)}>Tell me more</button>
         <button onClick={() => onExpandGraph(node)}>Expand graph</button>
@@ -248,6 +252,7 @@ const agentState = {
     { id: 'm2', role: 'assistant' as const, content: 'Grounded answer' },
   ],
   graphData: graph,
+  graphPreview: null,
   graphCandidate: null,
   workflowProgress: [],
   explanationPaused: false,
@@ -371,6 +376,22 @@ describe('App coordination', () => {
 
     fireEvent.click(screen.getByText('Toggle sidebar'));
     expect(screen.getByText('New chat').parentElement?.dataset.sidebarOpen).toBe('false');
+  });
+
+  it('renders a preview without writing it into the durable thread snapshot', async () => {
+    const preview = { ...graph, title: 'Private preview' };
+    vi.mocked(useAgentStream).mockReturnValue({ ...agentState, graphPreview: preview });
+
+    render(<App />);
+
+    await screen.findByTestId('graph-canvas');
+    expect(screen.getByTestId('rendered-graph-title').textContent).toBe('Private preview');
+    expect(screen.getByTestId('rendered-graph-preview').textContent).toBe('yes');
+    expect(writeThreadSnapshot).toHaveBeenCalledWith(
+      'user-1',
+      'thread-1',
+      expect.objectContaining({ graphData: graph }),
+    );
   });
 
   it('grounds a selected-text request and records mode changes', async () => {

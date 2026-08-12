@@ -94,6 +94,7 @@ async def stream_llm(
     timeout_seconds: float | None = None,
     max_output_tokens: int | None = None,
     allow_fallback: bool = True,
+    provider_attempt_limit: int | None = None,
     send: Callable[[dict], Awaitable[None]] | None = None,
     stream_deltas: bool = False,
     stream_thinking: bool = False,
@@ -125,6 +126,7 @@ async def stream_llm(
             telemetry=telemetry,
             max_output_tokens=max_output_tokens,
             allow_fallback=allow_fallback,
+            provider_attempt_limit=provider_attempt_limit,
         )
         async with aclosing(response):
             async for event_type, content in response:

@@ -90,8 +90,43 @@ def _evidence_id(bundle: dict, basis: str) -> str:
     )
 
 
+def test_architect_context_audits_the_exact_provisional_candidate():
+    context = _worker_context(
+        {
+            "user_message": "Design a serving runtime.",
+            "design_query": "Design a serving runtime.",
+            "graph_changed": True,
+            "graph_data": {
+                "design_origin": "applied",
+                "title": "Serving draft",
+                "nodes": [
+                    {
+                        "id": "n1",
+                        "label": "Request gateway",
+                        "type": "service",
+                        "description": "Routes inference requests.",
+                        "technology": "internal-only presentation metadata",
+                    }
+                ],
+                "edges": [],
+                "groups": [],
+                "sequence": [],
+                "assumptions": [],
+                "version": "private-version",
+            },
+            "evidence_bundle": {},
+        },
+        "prototype",
+    )
+
+    assert "Candidate architecture under review" in context
+    assert "Request gateway" in context
+    assert "internal-only presentation metadata" not in context
+    assert "private-version" not in context
+
+
 def test_architecture_roles_reason_about_enforced_control_paths():
-    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v24"
+    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v25"
     for production_requirement in (
         "At selected production depth only, keep risky customer writes",
         "At selected production depth only, treat production guarantees",

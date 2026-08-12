@@ -92,6 +92,7 @@ function Harness({
       <div data-testid="retrieval-requested">{agent.retrievalNotice?.requested ? 'yes' : 'no'}</div>
       <div data-testid="graph-notice">{agent.graphNotice?.message ?? ''}</div>
       <div data-testid="graph-title">{agent.graphData?.title ?? ''}</div>
+      <div data-testid="preview-title">{agent.graphPreview?.title ?? ''}</div>
       <div data-testid="candidate-title">{agent.graphCandidate?.data.title ?? ''}</div>
       <div data-testid="progress">{JSON.stringify(agent.workflowProgress)}</div>
       <div data-testid="paused">{agent.explanationPaused ? 'yes' : 'no'}</div>
@@ -100,6 +101,11 @@ function Harness({
       <button onClick={() => agent.sendMessage('hello', { complexity: 'production', graphMode: 'on', researchEnabled: true })}>send</button>
       <button onClick={() => agent.requestSearchTool()}>search</button>
       <button onClick={() => agent.selectNode(graph().nodes[0])}>node</button>
+      <button onClick={() => {
+        if (agent.graphPreview?.nodes[0]) {
+          agent.selectNode(agent.graphPreview.nodes[0]);
+        }
+      }}>preview node</button>
       <button onClick={() => agent.stopGeneration()}>stop</button>
       <button onClick={() => agent.toggleExplanationPause()}>pause</button>
       <button onClick={() => agent.hydrateThread({ messages: [{ id: 'm1', role: 'user', content: 'old' }], graphData: graph('2') })}>hydrate</button>
@@ -458,6 +464,7 @@ describe('useAgentStream', () => {
     await waitFor(() => {
       expect(screen.getByTestId('candidate-title').textContent).toBe('');
       expect(screen.getByTestId('graph-title').textContent).toBe('');
+      expect(screen.getByTestId('preview-title').textContent).toBe('');
     });
 
     const rejected = deferred<boolean>();
@@ -480,6 +487,7 @@ describe('useAgentStream', () => {
     await waitFor(() => {
       expect(screen.getByTestId('candidate-title').textContent).toBe('');
       expect(screen.getByTestId('graph-title').textContent).toBe('');
+      expect(screen.getByTestId('preview-title').textContent).toBe('');
     });
   });
 
@@ -510,7 +518,7 @@ describe('useAgentStream', () => {
     expect(screen.getByTestId('messages').textContent).toContain('revised answer');
   });
 
-  it('rolls previews back and keeps only authoritative graph data across restarts', () => {
+  it('displays previews separately and keeps only authoritative graph data across restarts', () => {
     render(<Harness />);
     fireEvent.click(screen.getByText('hydrate'));
     fireEvent.click(screen.getByText('send'));
@@ -522,12 +530,14 @@ describe('useAgentStream', () => {
         data: { ...graph('preview'), title: 'Preview graph' },
       }, { kind: 'chat', clientRequestId });
     });
-    expect(screen.getByTestId('graph-title').textContent).toBe('Preview graph');
+    expect(screen.getByTestId('graph-title').textContent).toBe('Agent Map');
+    expect(screen.getByTestId('preview-title').textContent).toBe('Preview graph');
 
     act(() => {
       mocks.eventHandler?.({ type: 'response_reset' }, { kind: 'chat', clientRequestId });
     });
     expect(screen.getByTestId('graph-title').textContent).toBe('Agent Map');
+    expect(screen.getByTestId('preview-title').textContent).toBe('');
 
     act(() => {
       mocks.eventHandler?.({
@@ -541,6 +551,109 @@ describe('useAgentStream', () => {
       mocks.eventHandler?.({ type: 'error', content: 'failed' }, { kind: 'chat', clientRequestId });
     });
     expect(screen.getByTestId('graph-title').textContent).toBe('Committed graph');
+    expect(screen.getByTestId('preview-title').textContent).toBe('');
+  });
+
+  it('clears previews on every terminal chat event', () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByText('send'));
+    const clientRequestId = mocks.sendMessage.mock.calls[0][4] as string;
+
+    const preview = (title: string) => {
+      act(() => {
+        mocks.eventHandler?.({
+          type: 'graph_preview',
+          data: { ...graph(title), title },
+        }, { kind: 'chat', clientRequestId });
+      });
+      expect(screen.getByTestId('preview-title').textContent).toBe(title);
+    };
+
+    preview('Reset preview');
+    act(() => {
+      mocks.eventHandler?.({ type: 'response_reset' }, { kind: 'chat', clientRequestId });
+    });
+    expect(screen.getByTestId('preview-title').textContent).toBe('');
+
+    preview('Stopped preview');
+    act(() => {
+      mocks.eventHandler?.({ type: 'stopped' }, { kind: 'chat', clientRequestId });
+    });
+    expect(screen.getByTestId('preview-title').textContent).toBe('');
+
+    preview('Done preview');
+    act(() => {
+      mocks.eventHandler?.({ type: 'done' }, { kind: 'chat', clientRequestId });
+    });
+    expect(screen.getByTestId('preview-title').textContent).toBe('');
+
+    preview('Error preview');
+    act(() => {
+      mocks.eventHandler?.({ type: 'error', content: 'failed' }, { kind: 'chat', clientRequestId });
+    });
+    expect(screen.getByTestId('preview-title').textContent).toBe('');
+  });
+
+  it('clears a preview-only selection after rollback while keeping authoritative graph', () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByText('hydrate'));
+    fireEvent.click(screen.getByText('send'));
+    const clientRequestId = mocks.sendMessage.mock.calls[0][4] as string;
+    const previewGraph = {
+      ...graph('preview-only'),
+      title: 'Transient preview',
+      nodes: [
+        {
+          id: 'preview-node',
+          label: 'Transient',
+          type: 'service' as const,
+          technology: 'LLM',
+          description: 'Draft-only node',
+          detail: null,
+        },
+      ],
+    };
+
+    act(() => {
+      mocks.eventHandler?.({
+        type: 'graph_preview',
+        data: previewGraph,
+      }, { kind: 'chat', clientRequestId });
+    });
+    expect(screen.getByTestId('preview-title').textContent).toBe('Transient preview');
+
+    fireEvent.click(screen.getByText('preview node'));
+    expect(screen.getByTestId('selected').textContent).toContain('preview-node:');
+
+    act(() => {
+      mocks.eventHandler?.({ type: 'response_reset' }, { kind: 'chat', clientRequestId });
+    });
+    expect(screen.getByTestId('preview-title').textContent).toBe('');
+    expect(screen.getByTestId('graph-title').textContent).toBe('Agent Map');
+    expect(screen.getByTestId('selected').textContent).toBe('');
+  });
+
+  it('publishes a queued authoritative graph on next send after paused explanation', () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByText('send'));
+    const clientRequestId = mocks.sendMessage.mock.calls[0][4] as string;
+
+    fireEvent.click(screen.getByText('pause'));
+    act(() => {
+      mocks.eventHandler?.({
+        type: 'graph_data',
+        data: { ...graph('committed'), title: 'Published graph' },
+      }, { kind: 'chat', clientRequestId });
+    });
+    expect(screen.getByTestId('graph-title').textContent).toBe('');
+
+    act(() => {
+      mocks.eventHandler?.({ type: 'done' }, { kind: 'chat', clientRequestId });
+    });
+    expect(screen.getByTestId('graph-title').textContent).toBe('');
+
+    fireEvent.click(screen.getByText('send'));
+    expect(screen.getByTestId('graph-title').textContent).toBe('Published graph');
   });
 
   it('keeps candidates hidden and queues explanation blocks while reveal is paused', () => {

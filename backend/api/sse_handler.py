@@ -52,15 +52,21 @@ def _make_agent_tools(request: HTTPConnection):
     from agent.tools.rag_worker_tools.get_section_tool import make_get_section_tool
     from agent.tools.rag_worker_tools.rag_search_tool import make_rag_search_tool
 
-    rag_search_tool = make_rag_search_tool(request.app.state.vectorstore, request.app.state.parent_docs)
+    rag_search_tool = make_rag_search_tool(
+        request.app.state.vectorstore, request.app.state.parent_docs
+    )
     get_section_tool = make_get_section_tool(request.app.state.parent_docs)
-    return [rag_search_tool, get_section_tool], [generate_graph, get_section_tool], [rag_search_tool]
+    return (
+        [rag_search_tool, get_section_tool],
+        [generate_graph, get_section_tool],
+        [rag_search_tool],
+    )
 
 
 # ── Request models ─────────────────────────────────────────────────────────────
 
 _VALID_COMPLEXITY = {"auto", "low", "prototype", "production"}
-_VALID_GRAPH_MODE  = {"auto", "on", "off"}
+_VALID_GRAPH_MODE = {"auto", "on", "off"}
 
 
 class ChatRequest(BaseModel):
@@ -107,8 +113,11 @@ class SearchToolRequest(BaseModel):
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
+
 @router.post("/chat")
-async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_current_user)):
+async def chat_endpoint(
+    body: ChatRequest, request: Request, user=Depends(get_current_user)
+):
     """
     Run the agent pipeline and stream events back as SSE.
     Pre-flight security gates run synchronously before opening the stream.
@@ -177,10 +186,18 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
         )
 
         async def replay_completed_turn():
-            yield sse({
-                "type": "response_delta",
-                "content": completed_turn["assistant_content"],
-            })
+            yield sse(
+                {
+                    "type": "response_delta",
+                    "content": completed_turn["assistant_content"],
+                }
+            )
+            yield sse(
+                {
+                    "type": "graph_data",
+                    "data": thread_store.get_graph(user_id, thread_id),
+                }
+            )
             yield sse({"type": "done"})
 
         return streaming_response(replay_completed_turn())
@@ -197,7 +214,9 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
 
     if not knowledge_base_ready(request):
         record_chat_rejected("knowledge_base_not_ready")
-        return sse_error("Knowledge base is still loading. Please try again in a moment.")
+        return sse_error(
+            "Knowledge base is still loading. Please try again in a moment."
+        )
 
     if not check_prompt_injection(content):
         record_chat_rejected("security_filter")
@@ -212,13 +231,20 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
     )
     if stream_id is None:
         record_chat_rejected("active_stream_limit")
-        return sse_error("Another response is already running. Stop it or wait for it to finish.")
+        return sse_error(
+            "Another response is already running. Stop it or wait for it to finish."
+        )
 
     # ── Build tools bound to the loaded FAISS index ────────────────────────────
     rag_tools, graph_tools, node_detail_tools = _make_agent_tools(request)
 
     async def stream():
-        from observability import change_active_chat_streams, record_agent_duration, record_cancel, record_timeout
+        from observability import (
+            change_active_chat_streams,
+            record_agent_duration,
+            record_cancel,
+            record_timeout,
+        )
 
         # Queue bridges the agent (which calls send()) and the SSE generator (which yields).
         # run_agent is launched as a task; we drain the queue while it runs.
@@ -230,7 +256,9 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
         first_token_latency_ms: int | None = None
         response_delta_count = 0
         graph_event_count = 0
-        history = message_store.get_history(user_id, thread_id, limit=settings.max_messages_per_thread)
+        history = message_store.get_history(
+            user_id, thread_id, limit=settings.max_messages_per_thread
+        )
         existing_graph = thread_store.get_graph(user_id, thread_id)
 
         enqueue_analytics_event(
@@ -269,18 +297,22 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
             try:
                 deadline = asyncio.get_event_loop().time() + timeout_s
                 while asyncio.get_event_loop().time() < deadline:
-                    if runtime_state_store.is_search_tool_requested(request_id, user_id, thread_id):
+                    if runtime_state_store.is_search_tool_requested(
+                        request_id, user_id, thread_id
+                    ):
                         return True
                     await asyncio.sleep(0.1)
                 return False
             finally:
                 runtime_state_store.delete_search_tool_request(request_id)
 
-        await send({
-            "type": "worker_status",
-            "worker": "orchestrator",
-            "status": "Question received — preparing context…",
-        })
+        await send(
+            {
+                "type": "worker_status",
+                "worker": "orchestrator",
+                "status": "Question received — preparing context…",
+            }
+        )
 
         workflow_started_at = asyncio.get_running_loop().time()
         terminal_deadline = (
@@ -290,33 +322,38 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
         )
 
         state: AgentState = {
-            "session_id":        thread_id,
-            "user_id":           user_id,
-            "user_email":        user["email"] or f"{user_id}@unknown.local",
-            "is_production":     is_production_traffic(user),
-            "request_id":        request_id,
+            "session_id": thread_id,
+            "user_id": user_id,
+            "user_email": user["email"] or f"{user_id}@unknown.local",
+            "is_production": is_production_traffic(user),
+            "request_id": request_id,
             "client_request_id": body.client_request_id,
-            "user_message":      content,
-            "history":           history,
-            "complexity":        body.complexity,
-            "graph_mode":        body.graph_mode,
-            "research_enabled":  body.research_enabled,
-            "route":             "",
-            "rag_chunks":        [],
+            "user_message": content,
+            "history": history,
+            "complexity": body.complexity,
+            "graph_mode": body.graph_mode,
+            "research_enabled": body.research_enabled,
+            "route": "",
+            "rag_chunks": [],
             "retrieval_relevance": "strong",
-            "retrieval_notice":  "",
-            "graph_data":        existing_graph,
-            "graph_changed":     False,
+            "retrieval_notice": "",
+            "graph_data": existing_graph,
+            "graph_changed": False,
             "graph_notice_sent": False,
-            "research_context":  "",
-            "response_text":     "",
-            "send":              send,
+            "research_context": "",
+            "response_text": "",
+            "send": send,
             "await_search_tool_request": await_search_tool_request,
             "workflow_started_at_s": workflow_started_at,
             "terminal_deadline_s": terminal_deadline,
+            "graph_preview_deadline_s": (
+                workflow_started_at + settings.graph_preview_timeout_s
+            ),
         }
 
-        agent_task = asyncio.create_task(run_agent(state, rag_tools, graph_tools, node_detail_tools))
+        agent_task = asyncio.create_task(
+            run_agent(state, rag_tools, graph_tools, node_detail_tools)
+        )
         change_active_chat_streams(1)
 
         try:
@@ -335,7 +372,9 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
                         thread_id=thread_id,
                         request_id=request_id,
                         client_request_id=body.client_request_id,
-                        numeric_value=max(1, int((time.perf_counter() - started_at) * 1000)),
+                        numeric_value=max(
+                            1, int((time.perf_counter() - started_at) * 1000)
+                        ),
                         unit="ms",
                         properties={
                             "stream_type": "chat",
@@ -344,7 +383,12 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
                             "graph_event_count": graph_event_count,
                         },
                     )
-                    yield sse({"type": "error", "content": "Response timed out — please try again"})
+                    yield sse(
+                        {
+                            "type": "error",
+                            "content": "Response timed out — please try again",
+                        }
+                    )
                     yield sse({"type": "done"})
                     return
                 try:
@@ -352,7 +396,9 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
                     if event.get("type") == "response_delta":
                         response_delta_count += 1
                         if first_token_latency_ms is None:
-                            first_token_latency_ms = max(1, int((time.perf_counter() - started_at) * 1000))
+                            first_token_latency_ms = max(
+                                1, int((time.perf_counter() - started_at) * 1000)
+                            )
                             enqueue_analytics_event(
                                 event_name="stream_first_token",
                                 event_category="stream",
@@ -383,7 +429,9 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
                             thread_id=thread_id,
                             request_id=request_id,
                             client_request_id=body.client_request_id,
-                            numeric_value=max(1, int((time.perf_counter() - started_at) * 1000)),
+                            numeric_value=max(
+                                1, int((time.perf_counter() - started_at) * 1000)
+                            ),
                             unit="ms",
                             properties={
                                 "stream_type": "chat",
@@ -423,7 +471,9 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
                     thread_id=thread_id,
                     request_id=request_id,
                     client_request_id=body.client_request_id,
-                    numeric_value=max(1, int((time.perf_counter() - started_at) * 1000)),
+                    numeric_value=max(
+                        1, int((time.perf_counter() - started_at) * 1000)
+                    ),
                     unit="ms",
                     properties={
                         "stream_type": "chat",
@@ -434,7 +484,9 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
                     },
                 )
                 logger.error("Agent stream failed: %s", type(exc).__name__)
-                yield sse({"type": "error", "content": "Response failed — please try again"})
+                yield sse(
+                    {"type": "error", "content": "Response failed — please try again"}
+                )
                 return
 
             final_state = agent_task.result()
@@ -442,7 +494,9 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
             try:
                 title = thread["title"]
                 if title == "New chat":
-                    title = truncate_utf8(content, min(60, settings.max_thread_title_bytes))
+                    title = truncate_utf8(
+                        content, min(60, settings.max_thread_title_bytes)
+                    )
                 graph_saved = thread_store.persist_turn(
                     user_id,
                     thread_id,
@@ -453,18 +507,22 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
                     client_request_id=body.client_request_id,
                 )
                 if not graph_saved:
-                    yield sse({
-                        "type": "error",
-                        "content": (
-                            "Graph is large — it's displayed above but won't be saved. "
-                            "Start a new chat to reset."
-                        ),
-                    })
+                    yield sse(
+                        {
+                            "type": "error",
+                            "content": (
+                                "Graph is large — it's displayed above but won't be saved. "
+                                "Start a new chat to reset."
+                            ),
+                        }
+                    )
             except ThreadMessageLimitExceeded:
-                yield sse({
-                    "type": "error",
-                    "content": "Thread message limit reached. Start a new chat to continue.",
-                })
+                yield sse(
+                    {
+                        "type": "error",
+                        "content": "Thread message limit reached. Start a new chat to continue.",
+                    }
+                )
                 return
             except Exception:
                 logger.exception("Chat result persistence failed")
@@ -485,7 +543,12 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
                         **output_shape,
                     },
                 )
-                yield sse({"type": "error", "content": "Response could not be saved — please try again"})
+                yield sse(
+                    {
+                        "type": "error",
+                        "content": "Response could not be saved — please try again",
+                    }
+                )
                 return
 
             duration_ms = max(1, int((time.perf_counter() - started_at) * 1000))
@@ -516,7 +579,9 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
                 thread_id=thread_id,
                 request_id=request_id,
                 client_request_id=body.client_request_id,
-                numeric_value=1.0 if final_state.get("retrieval_relevance") == "strong" else 0.3,
+                numeric_value=1.0
+                if final_state.get("retrieval_relevance") == "strong"
+                else 0.3,
                 unit="score",
                 properties={
                     "score_name": "retrieval_relevance",
@@ -527,20 +592,30 @@ async def chat_endpoint(body: ChatRequest, request: Request, user=Depends(get_cu
                 },
             )
 
+            yield sse(
+                {
+                    "type": "graph_data",
+                    "data": thread_store.get_graph(user_id, thread_id),
+                }
+            )
             yield sse({"type": "done"})
 
     return streaming_response(stream())
 
 
 @router.post("/chat/use-search-tool")
-async def use_search_tool_endpoint(body: SearchToolRequest, user=Depends(get_current_user)):
+async def use_search_tool_endpoint(
+    body: SearchToolRequest, user=Depends(get_current_user)
+):
     user_id = user["id"]
     thread = thread_store.get_thread(user_id, body.thread_id)
     if thread is None:
         return {"ok": False, "status": "thread_not_found"}
 
     runtime_state_store.prune_search_tool_requests(older_than_epoch=time.time())
-    requested = runtime_state_store.mark_search_tool_requested(body.request_id, user_id, body.thread_id)
+    requested = runtime_state_store.mark_search_tool_requested(
+        body.request_id, user_id, body.thread_id
+    )
     if not requested:
         return {"ok": False, "status": "expired"}
 
@@ -548,7 +623,9 @@ async def use_search_tool_endpoint(body: SearchToolRequest, user=Depends(get_cur
 
 
 @router.post("/node-selected")
-async def node_selected_endpoint(body: NodeSelectedRequest, request: Request, user=Depends(get_current_user)):
+async def node_selected_endpoint(
+    body: NodeSelectedRequest, request: Request, user=Depends(get_current_user)
+):
     """
     Generate 3 suggested follow-up questions for a clicked graph node.
     Streams a single suggested_questions event then a done event.
@@ -584,7 +661,9 @@ async def node_selected_endpoint(body: NodeSelectedRequest, request: Request, us
         ttl_s=45,
     )
     if stream_id is None:
-        return sse_error("Too many node detail requests are already running", include_done=True)
+        return sse_error(
+            "Too many node detail requests are already running", include_done=True
+        )
 
     history = message_store.get_history(user_id, thread_id, limit=6)
 

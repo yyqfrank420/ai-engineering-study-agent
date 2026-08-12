@@ -80,6 +80,7 @@ export default function App() {
   const {
     messages,
     graphData,
+    graphPreview,
     graphCandidate,
     workflowProgress,
     explanationPaused,
@@ -275,7 +276,8 @@ export default function App() {
     return <div style={loadingScreenStyle}>Loading session…</div>;
   }
 
-  const showGraphPane = !!graphData || !!graphCandidate || (isGenerating && graphMode !== 'off');
+  const displayedGraphData = graphPreview ?? graphData;
+  const showGraphPane = !!displayedGraphData || !!graphCandidate || (isGenerating && graphMode !== 'off');
   const dashboardActive = appRoute === 'internal-dashboard' && !!authSession;
 
   return (
@@ -341,7 +343,8 @@ export default function App() {
               left={
                 <Suspense fallback={<div style={panelFallbackStyle}>Loading graph…</div>}>
                   <GraphCanvas
-                    graphData={graphData}
+                    graphData={displayedGraphData}
+                    isPreview={graphPreview !== null}
                     // Reveal the complete architecture first. The sequence bar
                     // remains available for an intentional step-by-step tour.
                     animateSequence={false}

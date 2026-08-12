@@ -34,7 +34,7 @@ from agent.nodes.architecture_workers import (
     architect_node,
     early_design_frame_node,
 )
-from agent.nodes.graph_critic import graph_critic_node
+from agent.nodes.graph_critic import graph_critic_node, graph_render_gate_node
 from agent.graph_repair_contract import validate_local_repair_admission
 from agent.graph_review_budget import GraphReviewBudget
 from agent.nodes.orchestrator_node import (
@@ -210,7 +210,26 @@ def build_agent_workflow(
         }
 
     async def architecture_plan(state: AgentState) -> AgentState:
-        return await architect_node(state)  # type: ignore[return-value]
+        planned = await architect_node(state)
+        combined = {**state, **planned}
+        architecture_ready = bool(
+            planned.get("architecture_ready", bool(planned.get("architect_plan")))
+        )
+        combined = {**combined, "architecture_ready": architecture_ready}
+        if state.get("is_applied_design") and not architecture_ready:
+            return {
+                **combined,
+                "graph_review": {
+                    "approved": False,
+                    "terminal": True,
+                    "review_status": "unavailable",
+                    "failure_code": "architecture_pass_unavailable",
+                    "revision_instruction": (
+                        "Withdraw the provisional graph because its architecture review did not complete."
+                    ),
+                },
+            }
+        return combined  # type: ignore[return-value]
 
     async def show_early_design_frame(state: AgentState) -> AgentState:
         state_without_challenger = {**state, "challenger_review": {}}
@@ -252,6 +271,9 @@ def build_agent_workflow(
                 "graph_notice_sent": True,
                 **({"graph_operation": operation} if operation else {}),
             }
+
+    async def render_candidate(state: AgentState) -> AgentState:
+        return await graph_render_gate_node(state)
 
     async def revise_graph(state: AgentState) -> AgentState:
         repair_round_count = int(
@@ -532,6 +554,10 @@ def build_agent_workflow(
             **{"app.graph_mode": lambda state: state.get("graph_mode", "auto")},
         ),
     )
+    workflow.add_node(
+        "render_candidate",
+        _traced("agent.graph_private_render", render_candidate),
+    )
     workflow.add_node("architect", _traced("agent.architect", architecture_plan))
     workflow.add_node(
         "early_design_frame",
@@ -563,10 +589,23 @@ def build_agent_workflow(
     # is written. The graph critic reviews the assembled candidate after graph
     # construction against that same evidence.
     workflow.add_edge("gather_context", "expand_context")
-    workflow.add_edge("expand_context", "architect")
-    workflow.add_edge("architect", "early_design_frame")
-    workflow.add_edge("early_design_frame", "draft_graph")
-    workflow.add_edge("draft_graph", "review_graph")
+    workflow.add_edge("expand_context", "draft_graph")
+    workflow.add_conditional_edges(
+        "draft_graph",
+        _route_after_draft,
+        {"render": "render_candidate", "reject": "reject_graph"},
+    )
+    workflow.add_conditional_edges(
+        "render_candidate",
+        _route_after_render,
+        {"architect": "architect", "reject": "reject_graph"},
+    )
+    workflow.add_conditional_edges(
+        "architect",
+        _route_after_architect,
+        {"frame": "early_design_frame", "reject": "reject_graph"},
+    )
+    workflow.add_edge("early_design_frame", "review_graph")
     workflow.add_conditional_edges(
         "review_graph",
         _route_after_review,
@@ -590,13 +629,33 @@ def _route_after_routing(state: AgentState) -> Literal["quick", "context"]:
     return "quick" if state.get("route") == "simple" else "context"
 
 
+def _route_after_draft(state: AgentState) -> Literal["render", "reject"]:
+    operation = state.get("graph_operation")
+    if isinstance(operation, dict) and operation.get("status") == "failed":
+        return "reject"
+    return "render"
+
+
+def _route_after_render(state: AgentState) -> Literal["architect", "reject"]:
+    return "architect" if state.get("graph_render_admitted", False) else "reject"
+
+
+def _route_after_architect(state: AgentState) -> Literal["frame", "reject"]:
+    if state.get("is_applied_design") and not state.get("architecture_ready", False):
+        return "reject"
+    return "frame"
+
+
 def _should_run_applied_design_roles(state: AgentState) -> bool:
     """Avoid paid design roles when the user explicitly disabled diagrams."""
     graph_intent = state.get("graph_intent") or resolve_graph_operation(
         state.get("user_message", ""),
         state.get("graph_data"),
     )
-    return state.get("graph_mode", "auto") != "off" and graph_intent == "create"
+    return state.get("graph_mode", "auto") != "off" and graph_intent in {
+        "create",
+        "edit",
+    }
 
 
 def _has_applied_graph(graph_data: dict | None) -> bool:
@@ -690,9 +749,7 @@ async def run_agent(
         if isinstance(supplied_budget, GraphReviewBudget)
         else GraphReviewBudget(
             critic_calls=int(state.get("graph_critic_call_count", 0)),
-            contract_corrections=int(
-                state.get("graph_contract_correction_count", 0)
-            ),
+            contract_corrections=int(state.get("graph_contract_correction_count", 0)),
         )
     )
     workflow_state = dict(state)

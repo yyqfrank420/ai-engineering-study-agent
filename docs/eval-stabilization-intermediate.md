@@ -253,8 +253,9 @@ The chronology is important: these were not repetitions of one identical defect.
 This state machine supersedes the historical repair limits and layer-lock descriptions below.
 Focused offline tests cover its contracts. Diagnostic `31333075986` exercised this state on the
 protected `graph-expansion` case and exposed the architect-boundary failure recorded below.
-The staged DAG and layer-as-generated architecture are Release 2 future work, outside this
-stabilization path.
+This checkpoint described the former Opus-first stabilization path. The preview-first state machine
+recorded in the 2026-08-12 latency section supersedes its generation order while retaining the same
+review, repair, layer-lock, and publication contracts.
 
 - Every initial candidate receives one exhaustive component, connection, composition, and render
   scorecard. Every deterministic finding is classified exactly once. `novice_clarity` is advisory:
@@ -709,6 +710,41 @@ Historical checkpoint evidence:
 The recent diagnostic failure ledger above is the canonical status and chronology. The entries
 below retain implementation detail for the latest convergence and latency corrections.
 
+### Preview-first graph state machine
+
+The serial Opus-first path is retired. Initial graph creation now follows this order:
+
+1. Kimi K3 authors one topology candidate at high effort directly from the request, selected depth,
+   and server-owned topology contract. The call has one provider attempt.
+2. The server validates and normalizes the topology, then asks the browser to render that exact
+   candidate privately.
+3. A candidate that passes the deterministic browser gate is emitted as a reversible preview.
+4. Opus 5 medium audits the exact candidate against the request and evidence. Its plan supplies
+   review commitments and has no mutation authority.
+5. Sonnet 5 medium returns the exhaustive semantic scorecard. Publication still requires its latest
+   full-graph pass. Local failures use the existing exact-record Kimi repair contract and
+   dependency-aware layer locks.
+6. The transport emits authoritative `graph_data` only after turn persistence. Rejection, timeout,
+   cancellation, steering, or persistence failure restores the request-start approved graph.
+
+Initial topology and private rendering use a separate 170-second preview deadline. Topology has a
+140-second provider cap, private rendering retains its 15-second cap, and 15 seconds remain for
+preview finalization. Post-preview review and repair retain the terminal workflow deadline. The
+frontend stores preview and durable graphs separately, never writes preview view state, and promotes
+only an authoritative `graph_data` event.
+
+The initial Kimi effort is high because Kimi does not support medium. Supported values are low,
+high, and max. Opus and Sonnet remain medium. The next protected diagnostic must measure the latency
+and first-pass acceptance effect; offline tests cannot establish provider response time.
+
+- Diagnostic `31598216294` on exact head `ccd5c77` ran one `graph-expansion` case. Opus medium
+  completed in 89.249 seconds. The following Kimi low call ran for 88.507 seconds, began reasoning
+  after 8.427 seconds, emitted no topology text, and was cancelled at the 180-second browser limit.
+  No graph, private render, critic call, second turn, or fallback occurred. Known Opus cost was
+  $0.152365; Kimi cost was unavailable because the cancelled provider response contained no usage.
+  This run proved that two serial model calls before preview cannot reliably meet the visible-graph
+  contract.
+
 - Diagnostic `31588931923` on exact head `ca8e3b2` ran one `graph-expansion` case. Architecture
   validation rejected `evidence_basis[8].evidence_ref` under the private
   `invalid_engineering_area` rule after two calls. The turn took 107.735 seconds, the case took
@@ -771,21 +807,20 @@ below retain implementation detail for the latest convergence and latency correc
   cannot become ambiguous only because Monitoring Alerts also exists. Duplicate exact matches and
   multiple broad matches still fail closed.
 - Prototype architect calls omit production-only system rules and do not repeat an identical request
-  as design context. Kimi receives every topology-bearing plan field while evidence rationale and UI
-  status text stay out of its prompt. The model roles and efforts remain Opus 5 medium for
-  architecture and Kimi K3 low for topology. These prompt reductions are offline-tested; no live
-  latency improvement is claimed.
+  as design context. Kimi authors the reversible initial candidate before Opus and receives no
+  model-authored architecture plan. Opus then audits the exact candidate. The current efforts are
+  Kimi K3 high for initial topology and patching, Opus 5 medium for architecture review, and Sonnet 5
+  medium for semantic review. This order is offline-tested; no live latency improvement is claimed.
 - LLM telemetry records safe character counts and per-attempt time to first reasoning and text
   deltas. The protected eval endpoint exposes those counts without prompts or authored output so a
   future diagnostic can separate prompt ingestion, reasoning, and constrained decoding time.
 
 ## Known pre-run risks
 
-- The 180-second visible-graph target still has little measured margin. Diagnostic `31549644038`
-  spent about 79 seconds in architecture and 81 seconds in topology before deterministic validation.
-  A successful 15-second private render would put the preview close to the deadline. There is no
-  hidden local serial stage to remove. Lowering model effort previously reduced architecture quality,
-  so no unverified effort change is included here.
+- The 180-second visible-graph target remains live-unverified for Kimi high. The separate preview
+  deadline removes the serial Opus call, limits Kimi to one provider attempt, and reserves browser
+  render time. Historical high-effort Kimi probes were slower than low-effort probes, so the next
+  protected case must prove that the quality choice still meets the visible deadline.
 - Production topology proofs still allow reviewer-owned `not_applicable`. The server has no trusted
   semantic scope that states which of the five flow classes apply to a request. Deriving that scope
   from node labels, types, or the reviewer output would make model-authored text an authority. A

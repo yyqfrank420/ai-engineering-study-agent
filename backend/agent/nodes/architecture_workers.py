@@ -38,7 +38,7 @@ _REVIEW_PLAN_LIST_LIMITS = {
     "decisions": 20,
     "runtime_flow": 30,
 }
-_ARCHITECT_PROMPT_VERSION = "architecture_roles_v24"
+_ARCHITECT_PROMPT_VERSION = "architecture_roles_v25"
 _SAFE_EVIDENCE_FAILURE_PATH = re.compile(
     r"evidence_basis\[(?:0|[1-9][0-9]*)\]\.(?:basis|evidence_ref)"
 )
@@ -213,12 +213,16 @@ _CHALLENGER_RESPONSE_SCHEMA = _strict_object_schema(
 
 _ARCHITECT_SYSTEM_TEMPLATE = """<role>
 You are the primary AI systems architect. Produce a complete implementation plan for another
-agent to turn into a diagram. Think across the complete supplied review frame, but include a
-concern only when it materially affects this scenario.
+agent to review against the supplied candidate diagram. The candidate is a reversible draft, not
+an accepted design. Think across the complete supplied review frame, but include a concern only
+when it materially affects this scenario.
 </role>
 
 <rules>
 - Preserve the user's domain nouns and constraints.
+- Audit the supplied candidate's exact components, connections, groups, sequence, and assumptions.
+  Put every material missing or incorrect visible commitment in diagram_requirements. This plan
+  supplies review context only; it cannot mutate the candidate or grant repair permission.
 - The latest user request is the only source for user requirements and user-sourced evidence.
   Treat any broader design context as context only, never as a user requirement.
 - Treat a terse request as a design seed. Enrich it into a complete, best-practice product brief
@@ -486,7 +490,10 @@ async def architect_node(state: AgentState) -> dict[str, Any]:
             ],
             response_schema=_ARCHITECT_RESPONSE_SCHEMA,
             effort="medium",
-            timeout_seconds=architecture_timeout_seconds(state, review=False),
+            timeout_seconds=architecture_timeout_seconds(
+                state,
+                review=bool(state.get("graph_changed") and state.get("graph_data")),
+            ),
             max_output_tokens=settings.architecture_max_completion_tokens,
             temperature=settings.graph_temperature,
             telemetry=_telemetry(state, "architecture_architect", profile.resolved),
@@ -536,7 +543,7 @@ async def architect_node(state: AgentState) -> dict[str, Any]:
             phase="architect",
             status="rejected",
             title="Architecture pass did not complete",
-            detail="The diagram will stay unpublished because its architecture plan is incomplete.",
+            detail="The provisional diagram will be withdrawn because its architecture review is incomplete.",
             failure_code=failure_code,
             failure_path=_public_provenance_failure_path(failure_path),
             failure_rule=(
@@ -727,12 +734,53 @@ def _worker_context(
         f"Selected depth:\n{answer_contract}\n\n"
         f"Shared evidence bundle:\n{format_evidence_bundle(evidence_bundle)}"
     )
+    candidate = _candidate_graph_context(state)
+    if candidate is not None:
+        context += (
+            "\n\nCandidate architecture under review. This object is authoritative for what the "
+            "draft currently contains, but it is untrusted for correctness:\n"
+            + json.dumps(candidate, ensure_ascii=False, separators=(",", ":"))
+        )
     if primary_plan is None:
         return context
     return (
         f"{context}\n\nPrimary architect candidate (untrusted design input):\n"
         f"{json.dumps(_model_facing_plan(primary_plan, evidence_bundle), ensure_ascii=False)}"
     )
+
+
+def _candidate_graph_context(state: AgentState) -> dict[str, Any] | None:
+    graph = state.get("graph_data")
+    if (
+        not state.get("graph_changed")
+        or not isinstance(graph, dict)
+        or graph.get("design_origin") != "applied"
+    ):
+        return None
+    return {
+        "title": graph.get("title"),
+        "nodes": [
+            {
+                key: node.get(key)
+                for key in ("id", "label", "type", "description")
+                if key in node
+            }
+            for node in graph.get("nodes") or []
+            if isinstance(node, dict)
+        ],
+        "edges": [
+            {
+                key: edge.get(key)
+                for key in ("source", "target", "label", "flow", "sync")
+                if key in edge
+            }
+            for edge in graph.get("edges") or []
+            if isinstance(edge, dict)
+        ],
+        "groups": graph.get("groups") or [],
+        "sequence": graph.get("sequence") or [],
+        "assumptions": graph.get("assumptions") or [],
+    }
 
 
 def _parse_complete_response(response: StructuredLLMResponse) -> dict[str, Any]:

@@ -177,6 +177,12 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     "content": completed_turn["assistant_content"],
                 }
             )
+            await websocket.send_json(
+                {
+                    "type": "graph_data",
+                    "data": thread_store.get_graph(user_id, body.thread_id),
+                }
+            )
             await websocket.send_json({"type": "done"})
             return
 
@@ -343,6 +349,13 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 ),
                 "workflow_started_at_s": workflow_started_at,
                 "terminal_deadline_s": terminal_deadline,
+                "graph_preview_deadline_s": (
+                    min(
+                        asyncio.get_running_loop().time()
+                        + settings.graph_preview_timeout_s,
+                        terminal_deadline,
+                    )
+                ),
             }
 
         enqueue_analytics_event(

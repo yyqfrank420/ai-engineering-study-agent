@@ -40,8 +40,8 @@ from graph.runtime import select_canonical_graph
 logger = logging.getLogger(__name__)
 
 _APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v34"
-_APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v18"
-_APPLIED_GRAPH_TOPOLOGY_EFFORT = "low"
+_APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v19"
+_APPLIED_GRAPH_TOPOLOGY_EFFORT = "high"
 _APPLIED_GRAPH_PATCH_EFFORT = "high"
 _MAX_GRAPH_PATCH_CHARS = 200_000
 _MAX_EDGE_LABEL_PARTS = 4
@@ -1522,13 +1522,10 @@ async def _generate_applied_architecture(
         return await _generate_applied_architecture_patch(
             state, query, profile, approved_graph
         )
-    if not state.get("architecture_ready", False):
-        raise AppliedGraphSpecError("graph_architecture_input_unavailable")
     spec = applied_graph_spec(profile.resolved)
     schema = applied_graph_topology_schema(spec)
     prompt = applied_graph_topology_prompt(
         query=query,
-        architect_plan=state.get("architect_plan") or {},
         spec=spec,
     )
     response = None
@@ -1558,6 +1555,7 @@ async def _generate_applied_architecture(
             ),
             timeout_seconds=design_timeout_seconds(state),
             max_output_tokens=settings.graph_builder_max_completion_tokens,
+            provider_attempt_limit=1,
         )
         if response.finish_reason == "max_tokens":
             raise AppliedGraphSpecError(
@@ -1583,7 +1581,7 @@ async def _generate_applied_architecture(
         graph = enrich_applied_graph_topology(
             draft,
             spec=spec,
-            architect_plan=state.get("architect_plan") or {},
+            architect_plan={},
         )
         normalized = _normalise_applied_graph(
             graph,
@@ -1684,6 +1682,8 @@ async def _generate_applied_architecture_patch(
             top_p=settings.graph_top_p,
             top_k=settings.graph_top_k,
             effort=_APPLIED_GRAPH_PATCH_EFFORT,
+            allow_fallback=False,
+            provider_attempt_limit=1,
             telemetry=build_telemetry(
                 "graph_worker_applied_patch",
                 user_id=state.get("user_id"),

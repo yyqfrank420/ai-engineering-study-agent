@@ -213,10 +213,7 @@ def test_save_graph_returns_true_under_limit(temp_data_dir, monkeypatch):
     result = thread_store.save_graph(user_id, thread["id"], stale_graph)
 
     assert result is True
-    assert thread_store.get_graph(user_id, thread["id"]) == {
-        **current_graph,
-        "view_state": view_state,
-    }
+    assert thread_store.get_graph(user_id, thread["id"]) == current_graph
 
 
 def test_save_graph_returns_false_over_limit(temp_data_dir, monkeypatch):
@@ -237,7 +234,10 @@ def test_save_graph_returns_false_over_limit(temp_data_dir, monkeypatch):
     )
     monkeypatch.setattr(settings, "max_graph_data_bytes", 10)  # tiny limit
 
-    large_graph = {"view_state": {"nodePositions": {"current": {"x": "x" * 1000}}}}
+    large_graph = {
+        "version": "server-v2",
+        "view_state": {"nodePositions": {"current": {"x": "x" * 1000}}},
+    }
     result = thread_store.save_graph(user_id, thread["id"], large_graph)
 
     assert result is False
@@ -298,7 +298,38 @@ def test_save_graph_uses_postgres_row_lock_and_preserves_semantic_graph(monkeypa
     assert "FOR UPDATE" in select_query
     assert "id = %s AND user_id = %s" in select_query
     assert select_params == ("thread-1", "user-1")
-    assert connection.updated_graph == {**current_graph, "view_state": view_state}
+    assert connection.updated_graph is None
+
+
+def test_save_graph_updates_layout_for_matching_version(temp_data_dir):
+    init_db()
+    user_id = make_user()
+    thread = thread_store.create_thread(user_id)
+    current_graph = {
+        "version": "server-v2",
+        "nodes": [{"id": "current"}],
+        "edges": [],
+    }
+    assert thread_store.persist_turn(
+        user_id,
+        thread["id"],
+        title="Current",
+        user_content="question",
+        assistant_content="answer",
+        graph_data=current_graph,
+    )
+    view_state = {"nodePositions": {"current": {"x": 3, "y": 4}}}
+
+    assert thread_store.save_graph(
+        user_id,
+        thread["id"],
+        {"version": "server-v2", "view_state": view_state},
+    )
+
+    assert thread_store.get_graph(user_id, thread["id"]) == {
+        **current_graph,
+        "view_state": view_state,
+    }
 
 
 # ── Auto-condense ─────────────────────────────────────────────────────────────

@@ -4,6 +4,19 @@ import pytest
 
 
 def _state(send):
+    async def accept_diagram(graph):
+        return {
+            "screenshot_base64": "private-render",
+            "report": {
+                "rendered_nodes": len(graph.get("nodes") or []),
+                "rendered_edges": len(graph.get("edges") or []),
+                "overlap_count": 0,
+                "clipped_nodes": 0,
+                "clipped_edges": 0,
+                "minimum_text_px": 12,
+            },
+        }
+
     return {
         "session_id": "thread-1",
         "user_id": "user-1",
@@ -26,6 +39,7 @@ def _state(send):
         "response_text": "",
         "send": send,
         "await_search_tool_request": lambda *_args, **_kwargs: None,
+        "await_diagram_evaluation": accept_diagram,
     }
 
 
@@ -43,8 +57,8 @@ def test_graph_off_skips_paid_applied_design_roles():
 @pytest.mark.parametrize(
     ("message", "expected"),
     [
-        ("Fix the typo in the cache label", False),
-        ("Replace the current diagram", False),
+        ("Fix the typo in the cache label", True),
+        ("Replace the current diagram", True),
         ("Design a fraud detection system", True),
         ("Explain RAG", False),
     ],
@@ -311,6 +325,44 @@ def test_patch_admission_uses_available_time_after_following_reserve():
     assert max_timeout_s == settings.graph_builder_max_timeout_s
 
 
+def test_initial_design_uses_the_visible_preview_deadline(monkeypatch):
+    from agent import deadlines
+    from config import settings
+
+    monkeypatch.setattr(deadlines.time, "monotonic", lambda: 100.0)
+    timeout_s = deadlines.design_timeout_seconds(
+        {
+            "graph_revision_count": 0,
+            "graph_preview_deadline_s": 270.0,
+            "terminal_deadline_s": 1_000.0,
+        }
+    )
+
+    assert timeout_s == settings.graph_preview_design_timeout_s
+    assert (
+        timeout_s
+        + settings.diagram_evaluation_timeout_s
+        + settings.graph_preview_finalization_reserve_s
+        <= settings.graph_preview_timeout_s
+    )
+
+
+def test_initial_design_rejects_when_preview_reserve_is_exhausted(monkeypatch):
+    from agent import deadlines
+
+    monkeypatch.setattr(deadlines.time, "monotonic", lambda: 100.0)
+    with pytest.raises(
+        deadlines.StageAdmissionDenied, match="visible preview deadline"
+    ):
+        deadlines.design_timeout_seconds(
+            {
+                "graph_revision_count": 0,
+                "graph_preview_deadline_s": 110.0,
+                "terminal_deadline_s": 1_000.0,
+            }
+        )
+
+
 def test_architecture_admission_preserves_the_complete_downstream_path():
     from agent.deadlines import (
         MAX_GRAPH_REPAIR_ROUNDS,
@@ -495,8 +547,7 @@ def test_measured_completion_path_preserves_patch_and_final_review_time(monkeypa
     )
     clock["now"] += settings.graph_synthesis_timeout_s
     assert state["terminal_deadline_s"] - clock["now"] == pytest.approx(
-        settings.graph_finalization_reserve_s
-        + settings.agent_orchestration_reserve_s
+        settings.graph_finalization_reserve_s + settings.agent_orchestration_reserve_s
     )
 
 
@@ -551,8 +602,7 @@ def test_architecture_and_two_complete_patches_fit_the_request_deadline():
     assert all_stage_caps_s == 873
     assert terminal_window_s - all_stage_caps_s == 37
     assert (
-        all_stage_caps_s + settings.agent_orchestration_reserve_s
-        <= terminal_window_s
+        all_stage_caps_s + settings.agent_orchestration_reserve_s <= terminal_window_s
     )
 
 
@@ -591,6 +641,7 @@ async def test_rejected_expansion_preserves_baseline_without_publication(
     import agent.graph as agent_graph
 
     events = []
+    critic_calls = 0
     approved_graph = {
         "design_origin": "applied",
         "title": "Approved customer support graph",
@@ -626,6 +677,8 @@ async def test_rejected_expansion_preserves_baseline_without_publication(
         }
 
     async def fake_review(state, **_kwargs):
+        nonlocal critic_calls
+        critic_calls += 1
         assert state["graph_publication"] == "unreviewed"
         return {
             **state,
@@ -638,14 +691,14 @@ async def test_rejected_expansion_preserves_baseline_without_publication(
         }
 
     async def fake_architect(_state):
-        return {}
+        return {"architect_plan": {"interpretation": "expand approved graph"}}
 
     async def fake_expand(state, _tools, _wait_task):
         return state
 
     async def fake_early_design_frame(state):
         assert state["challenger_review"] == {}
-        return {"early_response_text": ""}
+        return {**state, "early_response_text": ""}
 
     async def fake_synth(state):
         assert state["graph_data"] == approved_graph
@@ -675,11 +728,14 @@ async def test_rejected_expansion_preserves_baseline_without_publication(
     assert result["graph_data"] == approved_graph
     assert result["graph_operation"]["status"] == "failed"
     assert result["graph_publication"] == "preserved"
+    assert critic_calls == 1
     assert not any(event.get("type") == "graph_data" for event in events)
 
 
 @pytest.mark.asyncio
-async def test_preserved_graph_is_not_previewed_but_unchanged_graph_resyncs(monkeypatch):
+async def test_preserved_graph_is_not_previewed_but_unchanged_graph_resyncs(
+    monkeypatch,
+):
     import agent.nodes.orchestrator_node as orchestrator
 
     graph = {
@@ -756,8 +812,11 @@ async def test_langgraph_can_verify_bounded_repairs_then_publish(
         return state, None
 
     async def fake_apply(state, _tools):
-        assert state["architect_plan"]["interpretation"] == "growth system"
-        assert state["challenger_review"] == {}
+        if state.get("graph_revision_count", 0) == 0:
+            assert "architect_plan" not in state
+        else:
+            assert state["architect_plan"]["interpretation"] == "growth system"
+            assert state["challenger_review"] == {}
         assert state["_graph_stage_deadline_s"] > time.monotonic()
         role_order.append("graph_builder")
         revision_count = state.get("graph_revision_count", 0)
@@ -809,6 +868,20 @@ async def test_langgraph_can_verify_bounded_repairs_then_publish(
     async def fake_synth(state):
         return {**state, "response_text": "reviewed answer"}
 
+    async def fake_render(graph):
+        role_order.append("private_render")
+        return {
+            "screenshot_base64": "private-render",
+            "report": {
+                "rendered_nodes": len(graph["nodes"]),
+                "rendered_edges": len(graph["edges"]),
+                "overlap_count": 0,
+                "clipped_nodes": 0,
+                "clipped_edges": 0,
+                "minimum_text_px": 12,
+            },
+        }
+
     monkeypatch.setattr(agent_graph, "orchestrator_route", fake_route)
     monkeypatch.setattr(agent_graph, "run_search_phase", fake_search)
     monkeypatch.setattr(agent_graph, "architect_node", fake_architect)
@@ -820,6 +893,7 @@ async def test_langgraph_can_verify_bounded_repairs_then_publish(
     initial_state["challenger_review"] = {
         "risks": [{"risk": "stale prior-turn risk", "mitigation": "ignore"}]
     }
+    initial_state["await_diagram_evaluation"] = fake_render
     result = await agent_graph.run_agent(initial_state, [], [], [])
 
     assert reviews == [
@@ -831,7 +905,12 @@ async def test_langgraph_can_verify_bounded_repairs_then_publish(
     assert result["graph_publication"] == "approved"
     assert result["graph_notice_sent"] is False
     assert result["response_text"] == "reviewed answer"
-    assert role_order[:3] == ["architect", "graph_builder", "critic"]
+    assert role_order[:4] == [
+        "graph_builder",
+        "private_render",
+        "architect",
+        "critic",
+    ]
     assert "challenger" not in role_order
     repair_events = [
         event
@@ -991,11 +1070,23 @@ async def test_two_distinct_connection_repairs_apply_exact_terminal_edges_and_pu
                 }
                 for node_id, label, description in (
                     ("request", "Campaign request", "Receives one campaign request."),
-                    ("gate", "Approval gate", "Classifies the requested campaign action."),
+                    (
+                        "gate",
+                        "Approval gate",
+                        "Classifies the requested campaign action.",
+                    ),
                     ("accepted", "Accepted action", "Owns approved action handling."),
                     ("rejected", "Rejected action", "Owns rejected action handling."),
-                    ("recovery", "Recovery action", "Owns retryable recovery handling."),
-                    ("outcome", "Campaign outcome", "Records the observable campaign result."),
+                    (
+                        "recovery",
+                        "Recovery action",
+                        "Owns retryable recovery handling.",
+                    ),
+                    (
+                        "outcome",
+                        "Campaign outcome",
+                        "Records the observable campaign result.",
+                    ),
                 )
             ],
             "edges": [
@@ -1086,9 +1177,7 @@ async def test_two_distinct_connection_repairs_apply_exact_terminal_edges_and_pu
             }
 
         contract = state["graph_review"]["repair_contract"]
-        obligations = (
-            initial_obligations if revision_count == 1 else second_obligations
-        )
+        obligations = initial_obligations if revision_count == 1 else second_obligations
         patch = {
             "add_edges": [
                 {
@@ -1139,9 +1228,9 @@ async def test_two_distinct_connection_repairs_apply_exact_terminal_edges_and_pu
                 },
             }
         if revision_count == 1:
-            assert {
-                edge["label"] for edge in state["graph_data"]["edges"]
-            } >= {item["required_contract"] for item in initial_obligations}
+            assert {edge["label"] for edge in state["graph_data"]["edges"]} >= {
+                item["required_contract"] for item in initial_obligations
+            }
             return {
                 **state,
                 "graph_review": {
@@ -1165,20 +1254,23 @@ async def test_two_distinct_connection_repairs_apply_exact_terminal_edges_and_pu
                 },
             }
         assert revision_count == 2
-        assert {
-            edge["label"] for edge in state["graph_data"]["edges"]
-        } >= {item["required_contract"] for item in second_obligations}
+        assert {edge["label"] for edge in state["graph_data"]["edges"]} >= {
+            item["required_contract"] for item in second_obligations
+        }
         return {
             **state,
             "graph_review": {
                 "approved": True,
                 "review_status": "completed",
-                "repair_contract": {"repair_scope": "none", "layers": {
-                    "components": layer(),
-                    "connections": layer(),
-                    "composition": layer(),
-                    "render": layer(),
-                }},
+                "repair_contract": {
+                    "repair_scope": "none",
+                    "layers": {
+                        "components": layer(),
+                        "connections": layer(),
+                        "composition": layer(),
+                        "render": layer(),
+                    },
+                },
                 "hard_blockers": [],
                 "prior_obligation_dispositions": [
                     {
@@ -1240,9 +1332,7 @@ async def test_two_distinct_connection_repairs_apply_exact_terminal_edges_and_pu
     assert [len(patch["add_edges"]) for patch in applied_patches] == [2, 1]
     assert result["graph_repair_round_count"] == 2
     assert result["graph_publication"] == "approved"
-    assert {
-        edge["label"] for edge in result["graph_data"]["edges"]
-    } >= {
+    assert {edge["label"] for edge in result["graph_data"]["edges"]} >= {
         item["required_contract"]
         for item in [*initial_obligations, *second_obligations]
     }

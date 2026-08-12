@@ -231,6 +231,7 @@ async def test_eval_telemetry_is_thread_scoped_bounded_and_sanitized(monkeypatch
                 "message_chars": 56,
                 "schema_chars": 0,
                 "queue_wait_ms": 23,
+                "effort": "high",
                 "request_id": "request-1",
                 "client_request_id": "secret/path",
                 "attempts": [
@@ -272,6 +273,7 @@ async def test_eval_telemetry_is_thread_scoped_bounded_and_sanitized(monkeypatch
                 "provider": "anthropic",
                 "model": "claude",
                 "status": "success",
+                "effort": "high",
                 "latency_ms": 100,
                 "fallback": False,
                 "input_tokens": 12,

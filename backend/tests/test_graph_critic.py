@@ -46,6 +46,7 @@ from agent.nodes.graph_critic import (
     _validate_corrected_group_move_authority,
     _validate_review_protocol,
     graph_critic_node,
+    graph_render_gate_node,
 )
 from agent.nodes.graph_worker import _GRAPH_PATCH_KEYS, _apply_applied_graph_patch
 from agent.stream_utils import StructuredLLMResponse
@@ -197,6 +198,93 @@ async def _accept_diagram(graph):
 
 async def _ignore_event(_event):
     return None
+
+
+@pytest.mark.asyncio
+async def test_render_gate_emits_reversible_preview_and_binds_result_to_candidate():
+    graph = _domain_graph()
+    graph["design_origin"] = "applied"
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    result = await graph_render_gate_node(
+        {
+            "graph_data": graph,
+            "graph_changed": True,
+            "send": send,
+            "await_diagram_evaluation": _accept_diagram,
+        }
+    )
+
+    assert result["graph_render_admitted"] is True
+    assert result["diagram_evaluation"]["result"]["screenshot_base64"] == (
+        "private-render"
+    )
+    assert events[-1] == {"type": "graph_preview", "data": graph}
+
+
+@pytest.mark.asyncio
+async def test_render_gate_withholds_layout_failure_before_review_models_run():
+    graph = _domain_graph()
+    graph["design_origin"] = "applied"
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    async def clipped(_graph):
+        return {
+            "screenshot_base64": "private-render",
+            "report": {
+                "rendered_nodes": len(graph["nodes"]),
+                "rendered_edges": len(graph["edges"]),
+                "overlap_count": 0,
+                "clipped_nodes": 1,
+                "clipped_edges": 0,
+                "minimum_text_px": 12,
+            },
+        }
+
+    result = await graph_render_gate_node(
+        {
+            "graph_data": graph,
+            "graph_changed": True,
+            "send": send,
+            "await_diagram_evaluation": clipped,
+        }
+    )
+
+    assert result["graph_render_admitted"] is False
+    assert result["graph_review"]["failure_code"] == (
+        "diagram_evaluation_layout_rejected"
+    )
+    assert not any(event.get("type") == "graph_preview" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_render_gate_bounds_preview_transport_by_absolute_deadline():
+    graph = _domain_graph()
+    graph["design_origin"] = "applied"
+
+    async def send(event):
+        if event.get("type") == "graph_preview":
+            await asyncio.Future()
+
+    result = await graph_render_gate_node(
+        {
+            "graph_data": graph,
+            "graph_changed": True,
+            "send": send,
+            "await_diagram_evaluation": _accept_diagram,
+            "graph_preview_deadline_s": asyncio.get_running_loop().time() + 0.02,
+        }
+    )
+
+    assert result["graph_render_admitted"] is False
+    assert result["graph_review"]["failure_code"] == "graph_preview_timeout"
+    assert "diagram_evaluation" not in result
 
 
 def _critic_state(*, graph=None, complexity="prototype"):
@@ -3177,6 +3265,54 @@ async def test_production_depth_reopens_prototype_connections_and_topology_proof
 
 
 @pytest.mark.asyncio
+async def test_production_rerun_with_proofless_prior_review_reopens_connections_and_rechecks_topology(
+    monkeypatch,
+):
+    reviewed_graph = _domain_graph()
+    node_ids = ("objective", "quality", "optimizer", "approval", "executor", "outcome")
+    for node, node_id in zip(reviewed_graph["nodes"], node_ids, strict=True):
+        node["id"] = node_id
+    reviewed_graph["edges"] = [
+        {"source": source, "target": target, "label": "passes bounded work"}
+        for source, target in zip(node_ids[:-1], node_ids[1:], strict=True)
+    ]
+    candidate = deepcopy(reviewed_graph)
+    candidate["assumptions"] = ["The production composition changed."]
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return _structured_response(
+            _passing_review_payload(
+                topology_proofs=_valid_model_topology_proofs(),
+            )
+        )
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+    state = _critic_state(graph=candidate, complexity="production")
+    state.update(
+        {
+            "reviewed_graph_data": reviewed_graph,
+            "graph_review": {
+                "repair_contract": _repair_contract(),
+                "topology_proofs": [],
+                "resolved_complexity": "production",
+            },
+        }
+    )
+
+    review = (await graph_critic_node(state))["graph_review"]
+
+    assert calls[0]["response_schema"] == _GRAPH_CRITIC_RESPONSE_SCHEMA
+    assert review["approved"] is True
+    assert review["locked_layers"] == ["components"]
+    assert len(review["topology_proofs"]) == len(_TOPOLOGY_PROOF_GUARANTEES)
+
+
+@pytest.mark.asyncio
 async def test_reviewed_graph_data_matches_the_scorecard_candidate(monkeypatch):
     graph = _domain_graph()
     graph["nodes"][0]["technology"] = "Candidate-specific implementation detail"
@@ -4510,6 +4646,7 @@ async def test_hard_render_failure_is_included_in_exhaustive_semantic_review(
     assert result["graph_review"]["approved"] is False
     assert any("overlapping" in item for item in result["graph_review"]["missing"])
     assert result["graph_review"]["terminal"] is True
+    assert "diagram_evaluation" not in result
     assert result["graph_review"]["review_status"] == "completed"
     assert result["graph_review"]["repair_contract"]["repair_scope"] == "global"
     assert (

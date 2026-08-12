@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import logging
@@ -390,6 +391,11 @@ def _review_layer_fingerprints(graph: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _has_complete_topology_proofs(previous_review: dict[str, Any]) -> bool:
+    proofs = previous_review.get("topology_proofs")
+    return isinstance(proofs, list) and len(proofs) == len(_TOPOLOGY_PROOF_GUARANTEES)
+
+
 def _locked_review_layers(
     state: AgentState,
     graph: dict[str, Any],
@@ -419,9 +425,9 @@ def _locked_review_layers(
         reopened.update(("connections", "composition"))
     if before["composition"] != after["composition"]:
         reopened.add("composition")
-    if (
-        resolved_depth == "production"
-        and previous_review.get("resolved_complexity") != "production"
+    if resolved_depth == "production" and (
+        previous_review.get("resolved_complexity") != "production"
+        or not _has_complete_topology_proofs(previous_review)
     ):
         reopened.update(("connections", "composition"))
     return {
@@ -2597,6 +2603,135 @@ def _completed_critic_review(
     return review
 
 
+async def graph_render_gate_node(state: AgentState) -> AgentState:
+    """Render one unpublished candidate before exposing a reversible preview."""
+    graph = state.get("graph_data")
+    if (
+        not state.get("graph_changed")
+        or not isinstance(graph, dict)
+        or graph.get("design_origin") != "applied"
+    ):
+        return {**state, "graph_render_admitted": True}
+
+    await state["send"](
+        {
+            "type": "workflow_progress",
+            "phase": "render",
+            "status": "active",
+            "title": "Rendering the candidate privately",
+            "detail": "The diagram stays hidden while the browser checks its real layout.",
+        }
+    )
+    await_render = state.get("await_diagram_evaluation")
+    unavailable_reason: str | None = None
+    render_result: dict[str, Any] = {}
+    if not callable(await_render):
+        unavailable_reason = "transport_unavailable"
+    else:
+        try:
+            preview_deadline = state.get("graph_preview_deadline_s")
+            if isinstance(preview_deadline, (int, float)):
+                remaining_s = float(preview_deadline) - time.monotonic()
+                if remaining_s <= 0:
+                    raise TimeoutError
+                async with asyncio.timeout(remaining_s):
+                    candidate_result = await await_render(graph)
+            else:
+                candidate_result = await await_render(graph)
+        except TimeoutError:
+            logger.warning("Browser diagram render unavailable: timeout")
+            unavailable_reason = "timeout"
+        except Exception as exc:
+            logger.warning("Browser diagram render unavailable: %s", type(exc).__name__)
+            unavailable_reason = "error"
+        else:
+            if isinstance(candidate_result, dict) and candidate_result:
+                render_result = candidate_result
+            else:
+                unavailable_reason = "missing"
+
+    if unavailable_reason is not None:
+        failure_code = f"diagram_evaluation_{unavailable_reason}"
+        review = _reviewer_failure(
+            failure_code=failure_code,
+            reason="The private browser render did not complete.",
+        )
+        await state["send"](
+            {
+                "type": "workflow_progress",
+                "phase": "review",
+                "status": "rejected",
+                "failure_code": failure_code,
+                "title": "Private render did not complete",
+                "detail": "The diagram will stay unpublished until browser rendering and visual QA complete.",
+            }
+        )
+        return {
+            **_reviewed_state(state, graph=graph, review=review),
+            "graph_render_admitted": False,
+        }
+
+    render_review = _deterministic_render_review(graph, render_result)
+    if not render_review.get("approved"):
+        review = {
+            **render_review,
+            "review_status": "completed",
+            "topology_proofs": [],
+        }
+        await state["send"](
+            {
+                "type": "workflow_progress",
+                "phase": "render",
+                "status": "rejected",
+                "failure_code": review.get("failure_code"),
+                "title": "Private browser rendering failed",
+                "detail": "The candidate did not meet the deterministic layout contract.",
+            }
+        )
+        return {
+            **_reviewed_state(state, graph=graph, review=review),
+            "graph_render_admitted": False,
+        }
+
+    await state["send"](
+        {
+            "type": "workflow_progress",
+            "phase": "render",
+            "status": "complete",
+            "title": "Private browser rendering passed",
+            "detail": "The browser layout checks passed. The candidate is ready for semantic review.",
+        }
+    )
+    try:
+        preview_deadline = state.get("graph_preview_deadline_s")
+        if isinstance(preview_deadline, (int, float)):
+            remaining_s = float(preview_deadline) - time.monotonic()
+            if remaining_s <= 0:
+                raise TimeoutError
+            async with asyncio.timeout(remaining_s):
+                await state["send"]({"type": "graph_preview", "data": graph})
+        else:
+            await state["send"]({"type": "graph_preview", "data": graph})
+    except TimeoutError:
+        review = _reviewer_failure(
+            failure_code="graph_preview_timeout",
+            reason="The reversible preview did not reach the transport deadline.",
+        )
+        return {
+            **_reviewed_state(state, graph=graph, review=review),
+            "graph_render_admitted": False,
+        }
+    return {
+        **state,
+        "diagram_evaluation": {
+            "graph_fingerprint": _content_fingerprint(graph),
+            "approved": True,
+            "result": render_result,
+        },
+        "graph_render_admitted": True,
+    }
+
+
 async def graph_critic_node(
     state: AgentState,
     *,
@@ -2668,9 +2803,20 @@ async def graph_critic_node(
         )
     ]
     render_result: dict[str, Any] = {}
+    cached_render = state.get("diagram_evaluation")
+    cached_render_matches = (
+        isinstance(cached_render, dict)
+        and cached_render.get("approved") is True
+        and cached_render.get("graph_fingerprint") == _content_fingerprint(graph)
+        and isinstance(cached_render.get("result"), dict)
+    )
+    if cached_render_matches:
+        render_result = cached_render["result"]
     render_unavailable_reason: str | None = None
     await_render = state.get("await_diagram_evaluation")
-    if callable(await_render):
+    if cached_render_matches:
+        pass
+    elif callable(await_render):
         await state["send"](
             {
                 "type": "workflow_progress",
@@ -2692,7 +2838,16 @@ async def graph_critic_node(
             if isinstance(candidate_render_result, dict) and candidate_render_result:
                 render_result = candidate_render_result
                 render_review = _deterministic_render_review(graph, render_result)
-                if not render_review.get("approved"):
+                if render_review.get("approved"):
+                    state = {
+                        **state,
+                        "diagram_evaluation": {
+                            "graph_fingerprint": _content_fingerprint(graph),
+                            "approved": True,
+                            "result": render_result,
+                        },
+                    }
+                else:
                     for finding in render_review.get("missing") or []:
                         deterministic_findings.append(
                             {
@@ -2725,7 +2880,10 @@ async def graph_critic_node(
             }
         )
         return _reviewed_state(state, graph=graph, review=review)
-    if not deterministic_findings:
+    render_approved = bool(render_result) and _deterministic_render_review(
+        graph, render_result
+    ).get("approved")
+    if render_approved and not cached_render_matches:
         await state["send"](
             {
                 "type": "workflow_progress",

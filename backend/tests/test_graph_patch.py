@@ -3675,12 +3675,26 @@ async def test_reusing_approved_graph_emits_worker_status():
 
 
 @pytest.mark.asyncio
-async def test_create_graph_fails_closed_when_architecture_context_is_unavailable():
+async def test_create_graph_does_not_require_architecture_context(monkeypatch):
     events = []
 
     async def send(event):
         events.append(event)
 
+    async def fake_topology(*_args, **_kwargs):
+        return {
+            "graph_type": "architecture",
+            "title": "Draft",
+            "nodes": [{"id": "n1", "label": "Request entry"}],
+            "edges": [],
+            "groups": [],
+            "sequence": [],
+            "assumptions": [],
+            "design_origin": "applied",
+            "resolved_complexity": "prototype",
+        }
+
+    monkeypatch.setattr(graph_worker, "_generate_applied_architecture", fake_topology)
     result = await graph_worker.graph_worker_node(
         {
             "architecture_ready": False,
@@ -3702,16 +3716,9 @@ async def test_create_graph_fails_closed_when_architecture_context_is_unavailabl
         [],
     )
 
-    assert result["graph_data"] is None
-    assert result["graph_failure_code"] == "graph_architecture_input_unavailable"
-    assert result["graph_operation"] == {
-        "kind": "create",
-        "status": "failed",
-        "failure_code": "graph_architecture_input_unavailable",
-    }
-    assert events[-1]["status"] == "rejected"
-    assert events[-1]["failure_code"] == "graph_architecture_input_unavailable"
-    assert all(event.get("type") != "graph_notice" for event in events)
+    assert result["graph_data"]["title"] == "Draft"
+    assert result["graph_operation"]["status"] == "candidate"
+    assert any(event.get("status") == "complete" for event in events)
 
 
 @pytest.mark.asyncio
@@ -3846,6 +3853,8 @@ async def test_targeted_existing_graph_followup_uses_incremental_patch_lane(
     assert calls[0]["telemetry"]["metadata"]["model_role"] == "incremental_patch"
     assert calls[0]["thinking_budget"] is None
     assert calls[0]["effort"] == "high"
+    assert calls[0]["provider_attempt_limit"] == 1
+    assert calls[0]["allow_fallback"] is False
     assert "Source and target must be distinct" in calls[0]["system"]
     assert "immutable" in calls[0]["system"]
     assert "repair-only edge_id values" in calls[0]["system"]
