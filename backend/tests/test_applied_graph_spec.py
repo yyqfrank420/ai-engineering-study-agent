@@ -1065,7 +1065,7 @@ async def test_dynamic_generator_uses_schema_once(monkeypatch):
     assert len(result["nodes"]) == 14
     assert len(result["groups"]) == 4
     assert len(calls) == 1
-    assert calls[0]["effort"] == "high"
+    assert calls[0]["effort"] == "low"
     assert calls[0]["provider_attempt_limit"] == 1
     response_schema = calls[0]["response_schema"]
     spec = applied_graph_spec("production")

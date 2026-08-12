@@ -714,7 +714,7 @@ below retain implementation detail for the latest convergence and latency correc
 
 The serial Opus-first path is retired. Initial graph creation now follows this order:
 
-1. Kimi K3 authors one topology candidate at high effort directly from the request, selected depth,
+1. Kimi K3 authors one topology candidate at low effort directly from the request, selected depth,
    and server-owned topology contract. The call has one provider attempt.
 2. The server validates and normalizes the topology, then asks the browser to render that exact
    candidate privately.
@@ -733,9 +733,19 @@ preview finalization. Post-preview review and repair retain the terminal workflo
 frontend stores preview and durable graphs separately, never writes preview view state, and promotes
 only an authoritative `graph_data` event.
 
-The initial Kimi effort is high because Kimi does not support medium. Supported values are low,
-high, and max. Opus and Sonnet remain medium. The next protected diagnostic must measure the latency
-and first-pass acceptance effect; offline tests cannot establish provider response time.
+Kimi does not support medium. Supported values are low, high, and max. Initial topology uses low
+because the independent Opus and Sonnet reviews protect publication quality and high effort has
+exhausted the preview deadline without emitting topology. Kimi repairs remain high. Opus and Sonnet
+remain medium. The next protected diagnostic must measure latency and first-pass acceptance; offline
+tests cannot establish provider response time.
+
+- Diagnostic `31610799035` on exact head `fd61175` ran one `graph-expansion` case with the
+  preview-first state machine. Kimi high received one attempt with no fallback and ran for 138.118
+  seconds. Reasoning began after 6.801 seconds, but the provider emitted no topology text before the
+  available design window expired. No graph, private render, architecture review, semantic review,
+  or second turn ran. The fallback synthesis took 27.344 seconds. Turn latency was 168.609 seconds
+  and case latency was 170.290 seconds. The run used two application calls and no fallback. Known
+  Opus cost was $0.063504; total cost was unavailable because Kimi returned incomplete usage.
 
 - Diagnostic `31598216294` on exact head `ccd5c77` ran one `graph-expansion` case. Opus medium
   completed in 89.249 seconds. The following Kimi low call ran for 88.507 seconds, began reasoning
@@ -809,18 +819,19 @@ and first-pass acceptance effect; offline tests cannot establish provider respon
 - Prototype architect calls omit production-only system rules and do not repeat an identical request
   as design context. Kimi authors the reversible initial candidate before Opus and receives no
   model-authored architecture plan. Opus then audits the exact candidate. The current efforts are
-  Kimi K3 high for initial topology and patching, Opus 5 medium for architecture review, and Sonnet 5
-  medium for semantic review. This order is offline-tested; no live latency improvement is claimed.
+  Kimi K3 low for initial topology, Kimi K3 high for patching, Opus 5 medium for architecture review,
+  and Sonnet 5 medium for semantic review. This order is offline-tested; no live latency improvement
+  is claimed.
 - LLM telemetry records safe character counts and per-attempt time to first reasoning and text
   deltas. The protected eval endpoint exposes those counts without prompts or authored output so a
   future diagnostic can separate prompt ingestion, reasoning, and constrained decoding time.
 
 ## Known pre-run risks
 
-- The 180-second visible-graph target remains live-unverified for Kimi high. The separate preview
-  deadline removes the serial Opus call, limits Kimi to one provider attempt, and reserves browser
-  render time. Historical high-effort Kimi probes were slower than low-effort probes, so the next
-  protected case must prove that the quality choice still meets the visible deadline.
+- The 180-second visible-graph target remains live-unverified for Kimi low in the preview-first path.
+  The separate preview deadline removes the serial Opus call, limits Kimi to one provider attempt,
+  and reserves browser render time. The next protected case must prove that low effort completes the
+  topology and that the downstream quality gates accept or safely repair it.
 - Production topology proofs still allow reviewer-owned `not_applicable`. The server has no trusted
   semantic scope that states which of the five flow classes apply to a request. Deriving that scope
   from node labels, types, or the reviewer output would make model-authored text an authority. A

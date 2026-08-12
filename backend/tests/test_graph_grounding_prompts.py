@@ -662,7 +662,7 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
         "control",
         "deployment",
     }
-    assert captured["effort"] == "high"
+    assert captured["effort"] == "low"
     assert captured["provider_attempt_limit"] == 1
     assert captured["response_schema"]["properties"]["components"]["type"] == "array"
     links = captured["response_schema"]["properties"]["connections"]["properties"][
