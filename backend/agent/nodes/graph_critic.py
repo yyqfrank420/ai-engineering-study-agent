@@ -1640,9 +1640,6 @@ def _canonicalise_review_protocol(
                 path="layers.composition.group_indexes",
                 size=len(groups),
             )
-            canonical["group_ids"] = [
-                str(groups[index].get("id") or "") for index in indexes
-            ]
             selected_composition_fields = _unique_model_tokens(
                 assessment.get("composition_fields"),
                 path="layers.composition.composition_fields",
@@ -1659,15 +1656,30 @@ def _canonicalise_review_protocol(
                 for field in _COMPOSITION_FIELDS
                 if field in authoritative_composition_fields
             ]
-            canonical["sequence_indexes"] = _unique_model_indexes(
+            canonical["group_ids"] = (
+                [str(groups[index].get("id") or "") for index in indexes]
+                if "groups" in authoritative_composition_fields
+                else []
+            )
+            selected_sequence_indexes = _unique_model_indexes(
                 assessment.get("sequence_indexes"),
                 path="layers.composition.sequence_indexes",
                 size=len(sequence),
             )
-            canonical["assumption_indexes"] = _unique_model_indexes(
+            canonical["sequence_indexes"] = (
+                selected_sequence_indexes
+                if "sequence" in authoritative_composition_fields
+                else []
+            )
+            selected_assumption_indexes = _unique_model_indexes(
                 assessment.get("assumption_indexes"),
                 path="layers.composition.assumption_indexes",
                 size=len(assumptions),
+            )
+            canonical["assumption_indexes"] = (
+                selected_assumption_indexes
+                if "assumptions" in authoritative_composition_fields
+                else []
             )
             canonical["composition_append_counts"] = {
                 field: count
@@ -1694,7 +1706,7 @@ def _canonicalise_review_protocol(
                         ),
                     ),
                 )
-                if count > 0
+                if count > 0 and field in authoritative_composition_fields
             }
         if status == "pass" and advisory_codes:
             canonical.update(

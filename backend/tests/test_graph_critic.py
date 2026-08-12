@@ -5762,3 +5762,59 @@ def test_authored_composition_sequence_repair_does_not_open_groups():
     assert contract["layers"]["composition"]["composition_fields"] == ["sequence"]
     assert contract["layers"]["composition"]["group_ids"] == []
     validate_local_repair_admission(contract, graph=graph)
+
+
+def test_blocking_composition_profile_discards_advisory_field_permissions():
+    graph = {
+        "nodes": [{"id": "entry"}, {"id": "outcome"}],
+        "edges": [{"source": "entry", "target": "outcome", "label": "returns"}],
+        "groups": [
+            {
+                "id": "runtime",
+                "label": "Primary runtime",
+                "kind": "runtime",
+                "nodeIds": ["entry", "outcome"],
+            }
+        ],
+        "sequence": [
+            {"step": 1, "nodes": ["entry", "outcome"], "description": "returns"}
+        ],
+        "assumptions": ["The caller is authenticated."],
+    }
+    payload = _passing_review_payload(topology_proofs={})
+    _set_model_layer(
+        payload,
+        "composition",
+        finding_codes=[
+            _RUBRIC_CODES.index("authored_composition") + 1,
+            _RUBRIC_CODES.index("assumption_hygiene") + 1,
+        ],
+        group_indexes=[0],
+        composition_fields=["groups", "sequence", "assumptions"],
+        sequence_indexes=[0],
+        assumption_indexes=[0],
+        group_addition_count=1,
+        sequence_addition_count=1,
+        assumption_addition_count=1,
+    )
+
+    normalized = _canonicalise_review_protocol(
+        payload,
+        graph=graph,
+        deterministic_findings=[],
+        review_context=[],
+        require_topology_proofs=False,
+        resolved_depth="prototype",
+    )
+
+    contract = normalized["repair_contract"]
+    composition = contract["layers"]["composition"]
+    assert contract["repair_scope"] == "local"
+    assert composition["status"] == "fail"
+    assert composition["composition_fields"] == ["assumptions"]
+    assert composition["group_ids"] == []
+    assert composition["sequence_indexes"] == []
+    assert composition["assumption_indexes"] == [0]
+    assert composition["composition_append_counts"] == {"assumptions": 1}
+    assert normalized["advice"] == [RUBRIC_CRITERIA["authored_composition"][1]]
+    validate_local_repair_admission(contract, graph=graph)

@@ -42,7 +42,9 @@ This is the current runtime contract for the production-quality demo.
    reject a candidate or grant repair authority. Sonnet returns a fixed scorecard of
    rubric codes and record indexes; the server expands them into exact selectors and read-only
    context. The server owns the title, groups, and sequence repair profile for `authored_composition`;
-   critic and patch output cannot widen it. A local semantic rejection can receive at most two
+   critic and patch output cannot widen it. Composition selectors and append counts survive
+   canonicalization only when their exact field remains authorized by that server-owned profile. A
+   local semantic rejection can receive at most two
    successful Kimi K3 high typed repair
    rounds against the exact failed records, including non-adjacent records in the connected
    candidate. Uncited records stay locked.
