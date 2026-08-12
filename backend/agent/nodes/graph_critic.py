@@ -70,7 +70,7 @@ class CriticProtocolError(ValueError):
         self.rule = rule if rule in _PROTOCOL_ERROR_RULES else None
 
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v54"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v55"
 # Sonnet 5 high effort can spend the full output allowance on adaptive thinking
 # before emitting the required scorecard. Medium keeps the review inside one call.
 _GRAPH_CRITIC_EFFORT = "medium"
@@ -2168,7 +2168,9 @@ interaction elements are delivered downstream and do not belong in the diagram.
 For an existing record defect, cite only the zero-based record indexes that may change. Use
 `node_indexes` only in components, `edge_indexes` only in connections, and `group_indexes`,
 `sequence_indexes`, `assumption_indexes`, plus `composition_fields` only in composition. A missing
-node or edge can fail its layer with an empty selector array because repair would add a record.
+node uses a positive component `addition_count`. A missing edge uses a nonempty connection
+`addition_obligations` array. A blocking components or connections row with neither an existing
+record selector nor an exact addition is invalid.
 Moving a node between groups changes two existing records. Cite both the source and destination
 group indexes. A destination-only group selector is an invalid permission contract.
 Use `context_indexes` for exact items in the packet's `review_context` and
@@ -2672,7 +2674,7 @@ def _completed_critic_review(
             resolved_depth=resolved_depth,
             prior_open_obligations=prior_open_obligations,
         )
-        _validate_server_canonical_review(
+        _validate_review_protocol(
             payload,
             require_topology_proofs=require_topology_proofs,
             graph=graph,

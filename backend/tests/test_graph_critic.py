@@ -301,7 +301,7 @@ def _critic_state(*, graph=None, complexity="prototype"):
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v54"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v55"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -5132,39 +5132,126 @@ async def test_protocol_correction_logs_safe_coordinates(
 
 
 @pytest.mark.asyncio
-async def test_server_canonical_review_failure_is_typed_and_not_retried(monkeypatch):
+@pytest.mark.parametrize(
+    ("layer", "rubric_code", "selector_field", "selector"),
+    [
+        ("components", "domain_specificity", "node_indexes", [0]),
+        ("connections", "edge_semantics", "edge_indexes", [0]),
+    ],
+)
+async def test_model_derived_repair_contract_failure_gets_one_protocol_correction(
+    monkeypatch,
+    layer,
+    rubric_code,
+    selector_field,
+    selector,
+):
     calls = []
-    events = []
+    invalid = _passing_review_payload(topology_proofs={})
+    finding_code = _RUBRIC_CODES.index(rubric_code) + 1
+    _set_model_layer(invalid, layer, finding_codes=[finding_code])
+    corrected = deepcopy(invalid)
+    _set_model_layer(corrected, layer, **{selector_field: selector})
 
     async def fake_stream_llm(**kwargs):
         calls.append(kwargs)
-        return _structured_response(_passing_review_payload(topology_proofs={}))
-
-    def reject_canonical_review(*_args, **_kwargs):
-        raise ValueError("PRIVATE_SERVER_INVARIANT")
-
-    async def send(event):
-        events.append(event)
+        return _structured_response(invalid if len(calls) == 1 else corrected)
 
     monkeypatch.setattr(
         "agent.nodes.graph_critic.stream_structured_llm",
         fake_stream_llm,
     )
     monkeypatch.setattr(
-        "agent.nodes.graph_critic._validate_review_protocol",
-        reject_canonical_review,
+        "agent.nodes.graph_critic._deterministic_review",
+        lambda *_args, **_kwargs: {
+            "approved": True,
+            "deterministic_findings": [],
+        },
     )
+    graph = _domain_graph()
+    for index, node in enumerate(graph["nodes"], start=1):
+        node["id"] = f"n{index}"
     state = _critic_state()
-    state["send"] = send
+    state["graph_data"] = graph
 
     result = await graph_critic_node(state)
 
-    assert len(calls) == 1
-    assert result["graph_review"]["failure_code"] == "semantic_review_protocol_invalid"
-    review_event = events[-1]
-    assert review_event["validation_stage"] == "initial"
-    assert review_event["validation_path"] == "canonical_review"
-    assert review_event["validation_rule"] == "invalid_server_state"
+    assert [call["telemetry"]["operation"] for call in calls] == [
+        "graph_critic",
+        "graph_critic_protocol_correction",
+    ]
+    assert calls[0]["messages"] != calls[1]["messages"]
+    correction = calls[1]["messages"][0]["content"][-1]["text"]
+    assert f"failed {layer} layer must cite" in correction
+    assert result["graph_review"]["review_status"] == "completed"
+    assert result["graph_review"]["repair_contract"]["layers"][layer][
+        "status"
+    ] == "fail"
+    assert result["graph_review"]["repair_contract"]["layers"][layer][
+        "node_ids" if layer == "components" else "edge_selectors"
+    ]
+    assert result["graph_review"].get("terminal") is not True
+
+
+@pytest.mark.asyncio
+async def test_cross_layer_addition_contract_failure_gets_one_protocol_correction(
+    monkeypatch,
+):
+    component_code = _RUBRIC_CODES.index("brief_coverage") + 1
+    connection_code = _RUBRIC_CODES.index("runtime_completeness") + 1
+    invalid = _passing_review_payload(topology_proofs={})
+    _set_model_layer(
+        invalid,
+        "components",
+        finding_codes=[component_code],
+        context_node_indexes=[0],
+        addition_count=1,
+    )
+    corrected = deepcopy(invalid)
+    _set_model_layer(
+        corrected,
+        "connections",
+        finding_codes=[connection_code],
+        addition_obligations=[[0, "$new_node_1", "routes to added responsibility"]],
+    )
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return _structured_response(invalid if len(calls) == 1 else corrected)
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic._deterministic_review",
+        lambda *_args, **_kwargs: {
+            "approved": True,
+            "deterministic_findings": [],
+        },
+    )
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "existing", "label": "Existing responsibility"}],
+        "edges": [],
+        "groups": [],
+        "sequence": [],
+        "assumptions": [],
+    }
+
+    result = await graph_critic_node(_critic_state(graph=graph))
+
+    assert [call["telemetry"]["operation"] for call in calls] == [
+        "graph_critic",
+        "graph_critic_protocol_correction",
+    ]
+    correction = calls[1]["messages"][0]["content"][-1]["text"]
+    assert "component additions require connection addition permission" in correction
+    contract = result["graph_review"]["repair_contract"]
+    assert contract["layers"]["components"]["addition_count"] == 1
+    assert contract["layers"]["connections"]["addition_count"] == 1
+    assert result["graph_review"].get("terminal") is not True
 
 
 @pytest.mark.asyncio
