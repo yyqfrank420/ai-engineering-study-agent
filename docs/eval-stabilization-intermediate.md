@@ -2,12 +2,13 @@
 
 Last updated: 2026-08-12
 
-Evidence in this record is current through paid diagnostic `31588931923` on exact head `ca8e3b2`
+Evidence in this record is current through paid diagnostic `31612168038` on exact head `ad82144`
 on 2026-08-12. PRs #37 through #40 merged on 2026-08-07, and PR #44 merged as `77df25e7`. The
 evidence-provenance, graph-review, and latency corrections have passed local review and the full
-offline CI matrix. Nine consecutive recent `graph-expansion` diagnostics have failed; there is no
-protected live success on the current branch. The latest paid run exposed a separate
-internal-reference contract defect. Its intended correction has not yet been proven by a live run.
+offline CI matrix. Ten consecutive recent `graph-expansion` diagnostics have failed; there is no
+protected live success on the current branch. The latest paid run exposed model-authored sequence
+ordering as a third source of topology truth. The current correction makes sequence membership the
+model's only authority and derives order from the graph. It has not yet been proven by a live run.
 The authorized one-case diagnostic has been consumed; no further paid run is authorized. Corpus
 `2026-08-12.v1` remains pending human review.
 
@@ -24,11 +25,11 @@ The authorized one-case diagnostic has been consumed; no further paid run is aut
 
 ## Recent diagnostic failure ledger
 
-This is the canonical chronology for recent `graph-expansion` failures through `ca8e3b2`. Every
-row records a live product failure. A green workflow conclusion for the seven report-only rows means
+This is the canonical chronology for recent `graph-expansion` failures through `ad82144`. Every
+row records a live product failure. A green workflow conclusion for the eight report-only rows means
 the pending-corpus workflow uploaded its evidence and exited without enforcing the failed verdict.
-The first two workflow runs failed; the other seven concluded green under that report-only policy.
-The retained `live-results.json` for every row says `status: fail`. All nine failures ended on turn
+The first two workflow runs failed; the other eight concluded green under that report-only policy.
+The retained `live-results.json` for every row says `status: fail`. All ten failures ended on turn
 1, emitted no visible graph to the user, skipped turn 2, and made no semantic judge call.
 Run links and exact heads come from GitHub Actions metadata. Latency, provider calls, failure codes,
 and cost come from each retained `scheduled-eval-<run>/browser-results.json`, `live-results.json`,
@@ -47,8 +48,9 @@ incomplete usage.
 | 2026-08-12 00:08 | [`31549117335`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31549117335), `1a279b6` | The `low`-effort architect violated a hard plan-list limit. The server returned `architecture_pass_list_limit`; Kimi and Sonnet did not run. Two Opus calls ran; turn latency was 88.836 seconds. | Restored prototype architecture to `medium`, which had produced a valid plan in the preceding diagnostic. | $0.201845 |
 | 2026-08-12 00:16 | [`31549644038`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31549644038), `b64f66f` | A valid architect plan took 78.784 seconds and Kimi took 81.252 seconds. Deterministic topology validation rejected `connections.links[6]` before private render, preview, or Sonnet. Three calls ran; turn latency reached 180.083 seconds. | The topology boundary accepts a uniformly one-based link array only when the entire array is invalid as zero-based and valid as one-based. Retained evidence cannot prove this run used one-based indexes, so this correction still needs live verification. | at least $0.232051 |
 | 2026-08-12 10:46 | [`31588931923`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31588931923), `ca8e3b2` | The architecture boundary rejected `evidence_basis[8].evidence_ref` under the private rule `invalid_engineering_area`. Two calls ran; the turn took 107.735 seconds and the case took 109.568 seconds. No Kimi, private render, critic, turn 2, or fallback ran. | Removed engineering recommendations from model-facing evidence. Checklist guidance now belongs in decisions or assumptions, and legacy model rows are discarded without weakening book, web, or user provenance. The green wrapper was report-only; the correction is not live-proven. | $0.236575 |
+| 2026-08-12 15:24 | [`31612168038`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31612168038), `ad82144` | Kimi low returned a complete topology in 24.530 seconds on one attempt. Deterministic validation rejected `composition.steps[3][0]` because the model's sequence order conflicted with its directed tree. No preview, render, architecture review, semantic review, or turn 2 ran. Fallback synthesis completed after rejection. The case took 61.025 seconds. | Sequence batches now select membership only. The server derives stages by breadth-first traversal from the root across selected tree and runtime edges. Missing-root, duplicate, invalid, and unreachable selections still fail closed. | $0.082805 |
 
-Known application spend across these nine failures is at least **$2.711363**. Several provider
+Known application spend across these ten failures is at least **$2.794168**. Several provider
 calls have incomplete usage; row amounts marked `at least` are lower bounds. Diagnostic
 `31549644038` retained only `connections.links[6]: topology`; it did not retain authored output and
 cannot distinguish an out-of-range endpoint from a self-link.
@@ -91,8 +93,8 @@ The original provider boundary relied on array `maxItems`. Anthropic structured 
 ### Applied graph generation
 
 This subsection records the fixed-slot contract used by the earlier stabilization branch. The current
-runtime supersedes it with variable arrays, model-authored groups and sequence, strict reference and
-cycle validation, and resource-safety ceilings that are absent from model prompts. It never truncates
+runtime supersedes it with variable arrays, model-authored groups and sequence membership, strict
+reference and cycle validation, and resource-safety ceilings that are absent from model prompts. It never truncates
 cross-links, reparents invalid topology, or deletes authored elements to fit a target count.
 
 - Introduced a dedicated structured applied-graph boundary in `backend/agent/applied_graph_spec.py`.
@@ -797,6 +799,12 @@ tests cannot establish provider response time.
   infers parent and link conventions independently. References invalid under the declaration,
   self-links, duplicate links, and links duplicating tree edges fail closed. This removes the
   ambiguous representation class that remained after diagnostic `31549644038`.
+- Composition batches select primary runtime-sequence membership only. The topology prompt requests
+  one batch. The server accepts nested batches for compatibility, but their order and boundaries
+  have no semantic authority. It derives each selected node's stage as its shortest directed distance
+  from the root across selected tree edges and explicit runtime links. Invalid indexes, duplicates,
+  a missing root, and unreachable selected nodes still fail closed. This removes the conflicting
+  model-authored order that caused diagnostic `31612168038`.
 - Passing review layers retain their prior verdict. Component changes reopen components,
   connections, and composition. Edge changes reopen connections and composition. Composition-only
   changes reopen composition. A prototype-to-production transition reopens connections and

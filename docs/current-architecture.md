@@ -1,6 +1,6 @@
 # Current Architecture
 
-Last updated: 2026-08-07
+Last updated: 2026-08-12
 
 This is the current runtime contract for the production-quality demo.
 
@@ -58,11 +58,13 @@ This is the current runtime contract for the production-quality demo.
    render-only failure, global design failure, or failed post-patch review suppresses the diagram.
    The entire turn has a four-call Sonnet critic ceiling and one shared correction token, including
    WebSocket steering restarts.
-   Published user refinements use the same typed patch boundary. The model chooses graph
-   size, groups, and runtime sequence from the design. The topology prompt states node and edge
-   safety ceilings, and provider schemas plus local validation enforce them to protect persistence
-   and rendering. Invalid topology is rejected without deleting authored responsibilities or paths.
-   Browser capture or geometry failure stops publication.
+   Published user refinements use the same typed patch boundary. The model chooses graph size,
+   groups, and primary runtime-sequence membership from the design. The server derives sequence
+   stages as shortest directed distances from the root across selected components using tree edges
+   and explicit runtime links. The topology prompt states node and edge safety ceilings, and provider
+   schemas plus local validation enforce them to protect persistence and rendering. Invalid topology
+   is rejected without deleting authored responsibilities or paths. Browser capture or geometry
+   failure stops publication.
 8. After deterministic graph and browser-render checks pass, the server emits a reversible
    `graph_preview` while semantic review continues. The transport retains the prior durable graph and
    restores it after review failure, rejected repair, steering, stop, timeout, persistence failure,

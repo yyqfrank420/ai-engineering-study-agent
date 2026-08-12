@@ -524,10 +524,9 @@ def test_production_requires_a_primary_sequence_but_prototype_can_omit_it():
     [
         [[1, 2]],
         [[1], [3]],
-        [[1], [0]],
     ],
 )
-def test_sequence_requires_staged_directed_primary_runtime_edges(steps):
+def test_sequence_requires_root_reachable_primary_runtime_membership(steps):
     payload = _draft(4)
     payload["composition"]["steps"] = steps
 
@@ -538,6 +537,33 @@ def test_sequence_requires_staged_directed_primary_runtime_edges(steps):
     assert caught.value.rule == "topology"
 
 
+def test_sequence_batch_order_is_derived_from_primary_topology():
+    payload = _draft(5)
+    payload["composition"]["steps"] = [[0], [1], [2], [4], [3]]
+
+    draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert [node["sequence_step"] for node in draft["nodes"]] == [1, 2, 3, 4, 5]
+
+
+def test_sequence_batch_boundaries_are_not_authoritative():
+    payload = _draft(5)
+    payload["composition"]["steps"] = [[4, 1], [3, 0, 2]]
+
+    draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert [node["sequence_step"] for node in draft["nodes"]] == [1, 2, 3, 4, 5]
+
+
+def test_sequence_root_batch_position_is_not_authoritative():
+    payload = _draft(4)
+    payload["composition"]["steps"] = [[1], [0]]
+
+    draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert [node["sequence_step"] for node in draft["nodes"]] == [1, 2, 0, 0]
+
+
 def test_sequence_accepts_a_runtime_link_from_an_earlier_stage():
     payload = _draft(4)
     payload["components"][1][0] = 0
@@ -546,7 +572,7 @@ def test_sequence_accepts_a_runtime_link_from_an_earlier_stage():
 
     draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
 
-    assert [node["sequence_step"] for node in draft["nodes"]] == [1, 2, 3, 0]
+    assert [node["sequence_step"] for node in draft["nodes"]] == [1, 2, 2, 0]
 
 
 def test_sequence_rejects_a_runtime_link_in_the_reverse_direction():
@@ -991,7 +1017,8 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     assert "index_base is a required top-level integer: 0 or 1" in prompt
     assert "every reference to root equals index_base" in prompt
     assert "server subtracts index_base from every declared reference" in prompt
-    assert "first step must include the declared root index" in prompt
+    assert "Every nonempty sequence includes the declared root index" in prompt
+    assert "put every member index in one inner batch" in prompt
     assert "first step must include root 0" not in prompt
     assert "must be smaller than the component index" in prompt
     assert "Every component must reference exactly one group" in prompt
@@ -1003,15 +1030,17 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     assert "patch placeholders such as $new_node_1" in prompt
     assert "Never mix index bases" in prompt
     assert "member indexes" not in prompt
-    assert "define a staged directed subgraph" in prompt
+    assert "declare membership in the primary runtime sequence" in prompt
     assert (
-        "Each component in every later step must have a directed primary/runtime edge"
+        "server derives stage order from directed primary/runtime edges"
         in prompt
     )
+    assert "boundaries and order have no semantic meaning" in prompt
+    assert "sequence starts with the declared root index" not in prompt
     assert "all material non-tree links" in prompt
     assert "Make the root the primary runtime entry or trigger" in prompt
     assert "Tree-edge direction and its incoming label must agree" in prompt
-    assert "primary sequence one obvious directed path" in prompt
+    assert "primary sequence one directed runtime flow" in prompt
     assert "diagram authoring, rendering" in prompt
     assert "Multiple edges between a component pair" in prompt
     assert "A component earns its own row" in prompt

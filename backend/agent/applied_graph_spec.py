@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 import json
 import logging
@@ -278,10 +279,10 @@ def applied_graph_topology_prompt(
         "runtime entry or trigger. Do not use an internal coordinator as the root when a client, "
         "event source, or scheduled trigger starts the depicted flow. Tree-edge direction and its "
         "incoming label must agree: the parent sends the named data or command to the child. Make "
-        "the primary sequence one obvious directed path from entry through controls to an observable "
-        "outcome. Production depth requires this sequence. Prototype depth may omit it for a non-flow "
-        "diagram. Every nonempty sequence starts with the declared root index. Keep offline and supporting paths outside "
-        "that sequence. Do not add diagram "
+        "the primary sequence one directed runtime flow from entry through controls to observable "
+        "outcomes. Production depth requires this sequence. Prototype depth may omit it for a non-flow "
+        "diagram. Every nonempty sequence includes the declared root index. Keep offline and supporting "
+        "paths outside that sequence. Do not add diagram "
         "authoring, rendering, or graph-generation mechanics as domain components unless the request "
         "requires them. A component earns its own row when ownership, trust, authoritative state, a "
         "decision, an externally meaningful action, or an outcome changes; fold other implementation "
@@ -311,14 +312,15 @@ def applied_graph_topology_prompt(
         "indexes, or an index for a record that is not "
         "defined. Labels and responsibilities are real nonempty authored strings, never placeholder "
         "tokens. "
-        "Composition steps use the same indexes and define a staged directed subgraph. A step lists "
-        "the components entered in that stage, not their parent. The first step must include the "
-        "declared root index, which equals index_base; "
-        "each other first-step component must have no incoming primary/runtime edge from another "
-        "sequenced component. Each component in every later step must have a directed primary/runtime "
-        "edge from a component in an earlier step. Every tree edge and every link with runtime flow is "
-        "a primary/runtime edge. Put independent parallel entries in the same step, keep each component "
-        "in at most one step, and omit supporting paths from steps. Include all material "
+        "Composition steps use the same indexes and declare membership in the primary runtime sequence. "
+        "For a nonempty sequence, put every member index in one inner batch. The server derives stage "
+        "order from directed primary/runtime edges. Nested batches remain accepted for compatibility; "
+        "their boundaries and order have no semantic meaning. The selection must include the declared "
+        "root index, which equals index_base. Every other member must be reachable through sequence "
+        "members along a directed path rooted there. Every tree edge and every link with runtime flow is a "
+        "primary/runtime edge. Keep each component in at most one batch and omit supporting side paths "
+        "from sequence membership. "
+        "Include all material "
         "non-tree links. Every approval decision "
         "needs distinct approved and rejected routes. Edge labels state the visible action or control "
         "contract. External mutations show "
@@ -657,7 +659,7 @@ def _validate_links(
     return edges
 
 
-def _validate_sequence_steps(
+def _derive_sequence_steps(
     raw_steps: list[Any],
     node_count: int,
     tree_edges: list[dict[str, str]],
@@ -668,11 +670,10 @@ def _validate_sequence_steps(
 ) -> list[int]:
     if require_sequence and not raw_steps:
         _raise_topology("composition.steps")
-    sequence_steps = [0] * node_count
     seen_components: set[int] = set()
     component_paths: dict[int, str] = {}
-    for step_index, raw_step in enumerate(raw_steps):
-        path = f"composition.steps[{step_index}]"
+    for batch_index, raw_step in enumerate(raw_steps):
+        path = f"composition.steps[{batch_index}]"
         if not isinstance(raw_step, list):
             raise AppliedGraphSpecError(
                 "graph_design_schema_invalid", path=path, rule="container_type"
@@ -693,13 +694,12 @@ def _validate_sequence_steps(
                     rule="duplicate",
                 )
             seen_components.add(component_index)
-            sequence_steps[component_index] = step_index + 1
             component_paths[component_index] = component_path
 
-    if raw_steps and sequence_steps[0] != 1:
+    if raw_steps and 0 not in seen_components:
         _raise_topology("composition.steps[0]")
 
-    incoming_sources: dict[int, set[int]] = {}
+    outgoing_targets: dict[int, set[int]] = {}
     primary_runtime_edges = [
         *tree_edges,
         *(edge for edge in edges if edge["flow"] == "runtime"),
@@ -707,20 +707,28 @@ def _validate_sequence_steps(
     for edge in primary_runtime_edges:
         source_index = int(edge["source"][1:]) - 1
         target_index = int(edge["target"][1:]) - 1
-        incoming_sources.setdefault(target_index, set()).add(source_index)
+        if source_index in seen_components and target_index in seen_components:
+            outgoing_targets.setdefault(source_index, set()).add(target_index)
 
-    for component_index, step_index in enumerate(sequence_steps):
-        if step_index == 0:
-            continue
-        sources = incoming_sources.get(component_index, set())
-        if step_index == 1:
-            if component_index != 0 and any(
-                sequence_steps[source] > 0 for source in sources
-            ):
-                _raise_topology(component_paths[component_index])
-            continue
-        if not any(0 < sequence_steps[source] < step_index for source in sources):
-            _raise_topology(component_paths[component_index])
+    sequence_steps = [0] * node_count
+    if not seen_components:
+        return sequence_steps
+    sequence_steps[0] = 1
+    frontier = deque([0])
+    while frontier:
+        source_index = frontier.popleft()
+        for target_index in sorted(outgoing_targets.get(source_index, set())):
+            if sequence_steps[target_index] > 0:
+                continue
+            sequence_steps[target_index] = sequence_steps[source_index] + 1
+            frontier.append(target_index)
+
+    reached_components = {
+        index for index, step in enumerate(sequence_steps) if step > 0
+    }
+    unreachable = sorted(seen_components - reached_components)
+    if unreachable:
+        _raise_topology(component_paths[unreachable[0]])
     return sequence_steps
 
 
@@ -797,7 +805,7 @@ def validate_applied_graph_topology(
     edges = _validate_links(
         raw_links, node_count, tree_edges, spec, index_base=index_base
     )
-    sequence_steps = _validate_sequence_steps(
+    sequence_steps = _derive_sequence_steps(
         raw_steps,
         node_count,
         tree_edges,
