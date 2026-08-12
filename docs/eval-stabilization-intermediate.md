@@ -2,17 +2,18 @@
 
 Last updated: 2026-08-12
 
-Evidence in this record is current through paid diagnostic `31614596529` on exact head `5a3b5f1`
+Evidence in this record is current through paid diagnostic `31616927365` on exact head
+`5c9b27589a29aef90d77571f993a37ab089fa6ce`
 on 2026-08-12. PRs #37 through #40 merged on 2026-08-07, and PR #44 merged as `77df25e7`. The
 evidence-provenance, graph-review, and latency corrections have passed local review and the full
-offline CI matrix. Eleven consecutive recent `graph-expansion` diagnostics have failed; there is no
-protected live success on the current branch. The latest paid run proved server-derived sequence
-ordering, private rendering, and reversible preview emission, then exposed inconsistent composition
-permission canonicalization during semantic review. The current correction removes selectors and
-append counts for composition fields the server does not authorize. It has not yet been proven by a
-live run.
-The authorized one-case diagnostic has been consumed; no further paid run is authorized. Corpus
-`2026-08-12.v1` remains pending human review.
+offline CI matrix. Twelve consecutive recent `graph-expansion` diagnostics have failed; there is no
+protected live success on the current branch. The latest paid run retained a valid ten-node,
+thirteen-edge graph and passed private rendering, then failed protocol validation during semantic
+review. Its final authoritative `graph_data` was `null`. The correction adds typed coordinates for
+root scorecard shape errors, preserves nested contract coordinates, and treats failure of the
+server-canonical review as a server invariant without a model retry. It has not yet been proven by a
+live run. One exact `graph-expansion` retry is authorized. Corpus `2026-08-12.v1` remains pending
+human review.
 
 ## Objective and operating rules
 
@@ -27,13 +28,14 @@ The authorized one-case diagnostic has been consumed; no further paid run is aut
 
 ## Recent diagnostic failure ledger
 
-This is the canonical chronology for recent `graph-expansion` failures through `5a3b5f1`. Every
-row records a live product failure. A green workflow conclusion for the nine report-only rows means
-the pending-corpus workflow uploaded its evidence and exited without enforcing the failed verdict.
-The first two workflow runs failed; the other nine concluded green under that report-only policy.
-The retained `live-results.json` for every row says `status: fail`. All eleven failures ended on turn
-1, skipped turn 2, and made no semantic judge call. The latest failure emitted a reversible preview
-but no authoritative graph; the preceding ten emitted no visible graph.
+This is the canonical chronology for recent `graph-expansion` failures through
+`5c9b27589a29aef90d77571f993a37ab089fa6ce`. Every
+row records a live product failure. A green workflow conclusion for a report-only row means the
+pending-corpus workflow uploaded its evidence and exited without enforcing the failed verdict. The
+initial workflow runs failed; later report-only diagnostics concluded green under that policy.
+The retained `live-results.json` for every row says `status: fail`. All twelve failures ended on turn
+1 and skipped turn 2. The latest two emitted a reversible preview but no authoritative graph; the
+preceding ten emitted no visible graph.
 Run links and exact heads come from GitHub Actions metadata. Latency, provider calls, failure codes,
 and cost come from each retained `scheduled-eval-<run>/browser-results.json`, `live-results.json`,
 and `run-context.json` artifact. Model effort comes from source at the exact run head because the
@@ -53,8 +55,9 @@ incomplete usage.
 | 2026-08-12 10:46 | [`31588931923`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31588931923), `ca8e3b2` | The architecture boundary rejected `evidence_basis[8].evidence_ref` under the private rule `invalid_engineering_area`. Two calls ran; the turn took 107.735 seconds and the case took 109.568 seconds. No Kimi, private render, critic, turn 2, or fallback ran. | Removed engineering recommendations from model-facing evidence. Checklist guidance now belongs in decisions or assumptions, and legacy model rows are discarded without weakening book, web, or user provenance. The green wrapper was report-only; the correction is not live-proven. | $0.236575 |
 | 2026-08-12 15:24 | [`31612168038`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31612168038), `ad82144` | Kimi low returned a complete topology in 24.530 seconds on one attempt. Deterministic validation rejected `composition.steps[3][0]` because the model's sequence order conflicted with its directed tree. No preview, render, architecture review, semantic review, or turn 2 ran. Fallback synthesis completed after rejection. The case took 61.025 seconds. | Sequence batches now select membership only. The server derives stages by breadth-first traversal from the root across selected tree and runtime edges. Missing-root, duplicate, invalid, and unreachable selections still fail closed. | $0.082805 |
 | 2026-08-12 15:51 | [`31614596529`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31614596529), `5a3b5f1` | Kimi low produced a valid seven-node graph. Topology validation and private rendering passed, and the reversible preview appeared after 37.228 seconds. Initial Sonnet review and its one protocol correction both returned successfully, but the corrected canonical contract retained `group_ids` without authorized `groups` authority. Review failed at `layers.composition.group_ids: invalid_contract`; the preview was withdrawn, turn 2 was skipped, and the case ended after 289.826 seconds. Five calls ran without provider fallback. | Canonicalization now filters group IDs, sequence indexes, assumption indexes, and their append counts through the server-authorized composition fields as one atomic permission profile. | $0.426546 |
+| 2026-08-12 | [`31616927365`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31616927365), `5c9b27589a29aef90d77571f993a37ab089fa6ce` | The run retained a ten-node, thirteen-edge graph and emitted a reversible preview after 24.116 seconds. Private rendering passed, but semantic review failed with `semantic_review_protocol_invalid` at correction `critic_scorecard: invalid_contract`. Final `graph_data` was `null`; turn 2 was skipped. Five application calls ran without fallback. The turn took 263.485 seconds and the case took 265.625 seconds. | Preflight now checks the exact root scorecard shape and emits `critic_scorecard: invalid_shape`. Nested contract defects retain their leaf coordinates. A failed server-canonical invariant emits `canonical_review: invalid_server_state` and skips model correction. | $0.457343 |
 
-Known application spend across these eleven failures is at least **$3.220714**. Several provider
+Known application spend across these twelve failures is at least **$3.678057**. Several provider
 calls have incomplete usage; row amounts marked `at least` are lower bounds. Diagnostic
 `31549644038` retained only `connections.links[6]: topology`; it did not retain authored output and
 cannot distinguish an out-of-range endpoint from a self-link.

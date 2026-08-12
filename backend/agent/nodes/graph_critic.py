@@ -51,6 +51,7 @@ _PROTOCOL_ERROR_RULES = {
     "missing_evidence",
     "ownership_mismatch",
     "unexpected_context",
+    "invalid_server_state",
 }
 _LOCAL_ADMISSION_RULES = {
     "insufficient_connection_additions",
@@ -945,6 +946,14 @@ def _preflight_review_protocol(
         if coordinate not in failures and len(failures) < 16:
             failures.append(coordinate)
 
+    required_scorecard_fields = {
+        "layers",
+        "topology_proofs",
+        "prior_obligation_dispositions",
+    }
+    if set(payload) != required_scorecard_fields:
+        reject("critic_scorecard", "invalid_shape")
+
     layers = payload.get("layers")
     if not isinstance(layers, dict) or set(layers) != set(_MODEL_LAYER_FIELDS):
         reject("layers", "invalid_shape")
@@ -1037,6 +1046,11 @@ def _preflight_review_protocol(
                     path=f"{row_path}.addition_obligations",
                     nodes=graph.get("nodes") or [],
                     component_addition_count=component_addition_count,
+                )
+            except CriticProtocolError as exc:
+                reject(
+                    exc.path or f"{row_path}.addition_obligations",
+                    exc.rule or "invalid_contract",
                 )
             except ValueError:
                 reject(f"{row_path}.addition_obligations", "invalid_contract")
@@ -1426,12 +1440,18 @@ def _canonicalise_review_protocol(
         "topology_proofs",
         "prior_obligation_dispositions",
     }:
-        raise ValueError("critic scorecard must contain exactly the required fields")
+        raise CriticProtocolError(
+            "critic scorecard must contain exactly the required fields",
+            path="critic_scorecard",
+            rule="invalid_shape",
+        )
 
     model_layers = candidate.get("layers")
     if not isinstance(model_layers, dict) or set(model_layers) != set(_REPAIR_LAYERS):
-        raise ValueError(
-            "scorecard layers must contain every artifact layer exactly once"
+        raise CriticProtocolError(
+            "scorecard layers must contain every artifact layer exactly once",
+            path="layers",
+            rule="invalid_shape",
         )
     nodes = graph.get("nodes") or []
     edges = graph.get("edges") or []
@@ -1448,7 +1468,11 @@ def _canonicalise_review_protocol(
         row = model_layers.get(layer)
         fields = _MODEL_LAYER_FIELDS[layer]
         if not isinstance(row, list) or len(row) != len(fields):
-            raise ValueError(f"{layer} scorecard row must contain {len(fields)} fields")
+            raise CriticProtocolError(
+                f"{layer} scorecard row must contain {len(fields)} fields",
+                path=f"layers.{layer}",
+                rule="invalid_shape",
+            )
         assessment = dict(zip(fields, row, strict=True))
         reported_finding_codes = _unique_model_rubric_codes(
             assessment.get("finding_codes"),
@@ -1475,8 +1499,10 @@ def _canonicalise_review_protocol(
             finding_id = deterministic_findings[deterministic_index]["id"]
             expected_layer = deterministic_owners[finding_id]
             if expected_layer != layer:
-                raise ValueError(
-                    f"{finding_id} belongs to the {expected_layer} layer, not {layer}"
+                raise CriticProtocolError(
+                    f"{finding_id} belongs to the {expected_layer} layer, not {layer}",
+                    path=f"layers.{layer}.deterministic_finding_indexes",
+                    rule="ownership_mismatch",
                 )
         classified_deterministic_indexes.extend(deterministic_indexes)
         context_indexes = _unique_model_indexes(
@@ -1495,7 +1521,11 @@ def _canonicalise_review_protocol(
             and not advisory_codes
             and (context_indexes or context_node_indexes)
         ):
-            raise ValueError(f"passing {layer} layer cannot cite repair context")
+            raise CriticProtocolError(
+                f"passing {layer} layer cannot cite repair context",
+                path=f"layers.{layer}",
+                rule="unexpected_context",
+            )
         score = 1.0 if status == "pass" else 0.0
         context_findings = (
             [
@@ -1728,7 +1758,11 @@ def _canonicalise_review_protocol(
     if sorted(classified_deterministic_indexes) != list(
         range(len(deterministic_findings))
     ):
-        raise ValueError("every deterministic finding must be classified exactly once")
+        raise CriticProtocolError(
+            "every deterministic finding must be classified exactly once",
+            path="deterministic_findings",
+            rule="incomplete_classification",
+        )
 
     dispositions = _model_prior_obligation_dispositions(
         candidate.get("prior_obligation_dispositions"),
@@ -2565,6 +2599,44 @@ def _stop_repeated_repair_class(
     return rejected
 
 
+def _validate_server_canonical_review(
+    payload: dict[str, Any],
+    *,
+    require_topology_proofs: bool,
+    graph: dict[str, Any],
+    deterministic_findings: list[dict[str, str]],
+    prior_open_obligations: list[dict[str, str]] | None,
+) -> None:
+    try:
+        _validate_review_protocol(
+            payload,
+            require_topology_proofs=require_topology_proofs,
+            graph=graph,
+            deterministic_findings=deterministic_findings,
+            prior_open_obligations=prior_open_obligations,
+        )
+    except ValueError as exc:
+        raise CriticProtocolError(
+            "server-canonical critic review failed its own protocol",
+            path="canonical_review",
+            rule="invalid_server_state",
+        ) from exc
+
+
+def _review_protocol_payload(review: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "repair_contract": review["repair_contract"],
+        "strengths": review.get("strengths") or [],
+        "advice": review.get("advice") or [],
+        "topology_proofs": review.get("topology_proofs") or [],
+        "hard_blockers": review.get("hard_blockers") or [],
+        "prior_obligation_dispositions": review.get(
+            "prior_obligation_dispositions"
+        )
+        or [],
+    }
+
+
 def _completed_critic_review(
     response: StructuredLLMResponse,
     *,
@@ -2600,7 +2672,7 @@ def _completed_critic_review(
             resolved_depth=resolved_depth,
             prior_open_obligations=prior_open_obligations,
         )
-        _validate_review_protocol(
+        _validate_server_canonical_review(
             payload,
             require_topology_proofs=require_topology_proofs,
             graph=graph,
@@ -2958,6 +3030,11 @@ async def graph_critic_node(
                 == "semantic_review_output_truncated"
             ):
                 raise
+            if (
+                isinstance(protocol_error, CriticProtocolError)
+                and protocol_error.rule == "invalid_server_state"
+            ):
+                raise
             if protocol_corrected or not review_budget.can_claim_correction:
                 raise
             error_path, error_rule = _protocol_error_coordinates(protocol_error)
@@ -2998,18 +3075,8 @@ async def graph_critic_node(
             previous_review=state.get("graph_review") or {},
             locked_layers=locked_layers,
         )
-        _validate_review_protocol(
-            {
-                "repair_contract": review["repair_contract"],
-                "strengths": review.get("strengths") or [],
-                "advice": review.get("advice") or [],
-                "topology_proofs": review.get("topology_proofs") or [],
-                "hard_blockers": review.get("hard_blockers") or [],
-                "prior_obligation_dispositions": review.get(
-                    "prior_obligation_dispositions"
-                )
-                or [],
-            },
+        _validate_server_canonical_review(
+            _review_protocol_payload(review),
             require_topology_proofs=profile.resolved == "production",
             graph=graph,
             deterministic_findings=deterministic_findings,
@@ -3061,18 +3128,8 @@ async def graph_critic_node(
                 previous_review=state.get("graph_review") or {},
                 locked_layers=locked_layers,
             )
-            _validate_review_protocol(
-                {
-                    "repair_contract": review["repair_contract"],
-                    "strengths": review.get("strengths") or [],
-                    "advice": review.get("advice") or [],
-                    "topology_proofs": review.get("topology_proofs") or [],
-                    "hard_blockers": review.get("hard_blockers") or [],
-                    "prior_obligation_dispositions": review.get(
-                        "prior_obligation_dispositions"
-                    )
-                    or [],
-                },
+            _validate_server_canonical_review(
+                _review_protocol_payload(review),
                 require_topology_proofs=profile.resolved == "production",
                 graph=graph,
                 deterministic_findings=deterministic_findings,

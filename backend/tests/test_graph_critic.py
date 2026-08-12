@@ -975,6 +975,58 @@ def test_scorecard_preflight_reports_independent_row_defects_together():
     assert "layers.connections.edge_indexes:invalid_reference" in str(caught.value)
 
 
+@pytest.mark.parametrize("mutation", ["missing", "extra"])
+def test_scorecard_preflight_reports_exact_root_shape_defect(mutation):
+    payload = _passing_review_payload(topology_proofs={})
+    if mutation == "missing":
+        del payload["prior_obligation_dispositions"]
+    else:
+        payload["unexpected"] = []
+
+    with pytest.raises(CriticProtocolError) as caught:
+        _preflight_review_protocol(
+            payload,
+            graph={"nodes": [], "edges": []},
+            deterministic_findings=[],
+            review_context=[],
+        )
+
+    assert caught.value.path == "critic_scorecard"
+    assert caught.value.rule == "invalid_shape"
+
+
+def test_scorecard_preflight_preserves_exact_nested_contract_defect():
+    payload = _passing_review_payload(topology_proofs={})
+    connection_code = next(
+        index
+        for index, code in enumerate(_RUBRIC_CODES, start=1)
+        if _RUBRIC_CODE_OWNERS[code] == "connections"
+    )
+    _set_model_layer(
+        payload,
+        "connections",
+        finding_codes=[connection_code],
+        addition_obligations=[[0, 1, "x" * 101]],
+    )
+
+    with pytest.raises(CriticProtocolError) as caught:
+        _preflight_review_protocol(
+            payload,
+            graph={
+                "nodes": [{"id": "source"}, {"id": "target"}],
+                "edges": [],
+            },
+            deterministic_findings=[],
+            review_context=[],
+        )
+
+    assert (
+        caught.value.path
+        == "layers.connections.addition_obligations[0].required_contract"
+    )
+    assert caught.value.rule == "invalid_range"
+
+
 def test_scorecard_preflight_reports_independent_proof_defects_together():
     payload = _passing_review_payload()
     guarantees = sorted(_TOPOLOGY_PROOF_GUARANTEES)[:2]
@@ -1030,6 +1082,34 @@ async def test_protocol_correction_receives_all_repair_algebra_defects(monkeypat
     correction = calls[1]["messages"][0]["content"][-1]["text"]
     assert "layers.components:unexpected_context" in correction
     assert "layers.connections.addition_obligations:invalid_contract" in correction
+
+
+@pytest.mark.asyncio
+async def test_protocol_correction_receives_exact_root_shape_coordinate(monkeypatch):
+    invalid = _passing_review_payload(topology_proofs={})
+    invalid["unexpected"] = []
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        payload = (
+            invalid
+            if len(calls) == 1
+            else _passing_review_payload(topology_proofs={})
+        )
+        return _structured_response(payload)
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+
+    result = await graph_critic_node(_critic_state())
+
+    assert result["graph_review"]["approved"] is True
+    assert len(calls) == 2
+    correction = calls[1]["messages"][0]["content"][-1]["text"]
+    assert "critic_scorecard:invalid_shape" in correction
 
 
 def test_critic_schema_keeps_named_layers_without_repeating_rubric_names():
@@ -5049,6 +5129,83 @@ async def test_protocol_correction_logs_safe_coordinates(
         assert review_event["validation_stage"] == "correction"
         assert review_event["validation_path"] == "layers.components.finding_codes"
         assert review_event["validation_rule"] == "invalid_reference"
+
+
+@pytest.mark.asyncio
+async def test_server_canonical_review_failure_is_typed_and_not_retried(monkeypatch):
+    calls = []
+    events = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return _structured_response(_passing_review_payload(topology_proofs={}))
+
+    def reject_canonical_review(*_args, **_kwargs):
+        raise ValueError("PRIVATE_SERVER_INVARIANT")
+
+    async def send(event):
+        events.append(event)
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic._validate_review_protocol",
+        reject_canonical_review,
+    )
+    state = _critic_state()
+    state["send"] = send
+
+    result = await graph_critic_node(state)
+
+    assert len(calls) == 1
+    assert result["graph_review"]["failure_code"] == "semantic_review_protocol_invalid"
+    review_event = events[-1]
+    assert review_event["validation_stage"] == "initial"
+    assert review_event["validation_path"] == "canonical_review"
+    assert review_event["validation_rule"] == "invalid_server_state"
+
+
+@pytest.mark.asyncio
+async def test_post_merge_review_failure_is_typed_and_not_retried(monkeypatch):
+    calls = []
+    validation_calls = []
+    events = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return _structured_response(_passing_review_payload(topology_proofs={}))
+
+    def reject_post_merge_review(*args, **kwargs):
+        validation_calls.append((args, kwargs))
+        if len(validation_calls) == 2:
+            raise ValueError("PRIVATE_POST_MERGE_INVARIANT")
+        return _validate_review_protocol(*args, **kwargs)
+
+    async def send(event):
+        events.append(event)
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic._validate_review_protocol",
+        reject_post_merge_review,
+    )
+    state = _critic_state()
+    state["send"] = send
+
+    result = await graph_critic_node(state)
+
+    assert len(calls) == 1
+    assert len(validation_calls) == 2
+    assert result["graph_review"]["failure_code"] == "semantic_review_protocol_invalid"
+    review_event = events[-1]
+    assert review_event["validation_stage"] == "initial"
+    assert review_event["validation_path"] == "canonical_review"
+    assert review_event["validation_rule"] == "invalid_server_state"
 
 
 @pytest.mark.asyncio
