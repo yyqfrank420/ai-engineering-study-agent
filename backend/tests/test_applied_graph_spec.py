@@ -36,12 +36,14 @@ def _draft(node_count: int = 14) -> dict:
         if group_key not in group_indexes:
             group_indexes[group_key] = len(groups)
             groups.append([group, group_kind])
-        node_records.append([
-            f"Responsibility {index + 1}",
-            108 if index == 3 else 101,
-            f"Owns material responsibility {index + 1}.",
-            group_indexes[group_key],
-        ])
+        node_records.append(
+            [
+                f"Responsibility {index + 1}",
+                108 if index == 3 else 101,
+                f"Owns material responsibility {index + 1}.",
+                group_indexes[group_key],
+            ]
+        )
     components = [
         [
             index - 1,
@@ -53,6 +55,7 @@ def _draft(node_count: int = 14) -> dict:
         for index in range(1, node_count)
     ]
     return {
+        "index_base": 0,
         "root": node_records[0],
         "components": components,
         "connections": {"links": []},
@@ -64,8 +67,30 @@ def _draft(node_count: int = 14) -> dict:
     }
 
 
+def _declared_index_base(payload: dict, index_base: int) -> dict:
+    payload["index_base"] = index_base
+    if index_base == 0:
+        return payload
+
+    payload["root"][3] += 1
+    for component in payload["components"]:
+        component[0] += 1
+        component[4] += 1
+    for link in payload["connections"]["links"]:
+        link[0] += 1
+        link[1] += 1
+    payload["composition"]["steps"] = [
+        [component_index + 1 for component_index in step]
+        for step in payload["composition"]["steps"]
+    ]
+    return payload
+
+
 def _assert_rooted(draft: dict) -> None:
-    parents = {edge["target"]: edge["source"] for edge in draft["edges"][: len(draft["nodes"]) - 1]}
+    parents = {
+        edge["target"]: edge["source"]
+        for edge in draft["edges"][: len(draft["nodes"]) - 1]
+    }
     assert set(parents) == {f"n{index}" for index in range(2, len(draft["nodes"]) + 1)}
     for node_id in parents:
         current = node_id
@@ -103,7 +128,14 @@ def test_topology_schema_uses_compact_positional_records_with_resource_bounds():
     spec = applied_graph_spec("production")
     schema = applied_graph_topology_schema(spec)
     properties = schema["properties"]
-    assert list(properties) == ["root", "components", "connections", "composition"]
+    assert list(properties) == [
+        "index_base",
+        "root",
+        "components",
+        "connections",
+        "composition",
+    ]
+    assert properties["index_base"] == {"type": "integer", "enum": [0, 1]}
     root = properties["root"]
     components = properties["components"]
     connections = properties["connections"]
@@ -157,6 +189,73 @@ def test_validator_accepts_variable_material_topologies(node_count):
     assert len(draft["nodes"]) == node_count
     assert len(draft["edges"]) == node_count - 1
     _assert_rooted(draft)
+
+
+@pytest.mark.parametrize("index_base", [0, 1])
+def test_declared_index_base_normalizes_every_reference_collection(index_base):
+    payload = _draft(6)
+    payload["connections"]["links"] = [[1, 4, "publishes feedback", 402, 501]]
+    payload["composition"]["steps"] = [[0], [1], [2], [3], [4], [5]]
+    payload = _declared_index_base(payload, index_base)
+
+    draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert [node["group"] for node in draft["nodes"]] == [
+        "Product runtime",
+        "Product runtime",
+        "Product runtime",
+        "Product runtime",
+        "Product runtime",
+        "Data and model services",
+    ]
+    assert [(edge["source"], edge["target"]) for edge in draft["edges"][-1:]] == [
+        ("n2", "n5")
+    ]
+    assert [node["sequence_step"] for node in draft["nodes"]] == [1, 2, 3, 4, 5, 6]
+    _assert_rooted(draft)
+
+
+@pytest.mark.parametrize(
+    ("value", "rule"),
+    [(None, "key_set"), (True, "value_type"), ("0", "value_type"), (2, "invalid_enum")],
+)
+def test_index_base_is_required_and_limited_to_integer_zero_or_one(value, rule):
+    payload = _draft(4)
+    if value is None:
+        del payload["index_base"]
+    else:
+        payload["index_base"] = value
+
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert caught.value.rule == rule
+
+
+@pytest.mark.parametrize(
+    "collection",
+    ["parent", "group", "link", "step"],
+)
+def test_mixed_index_conventions_fail_closed(collection):
+    payload = _declared_index_base(_draft(6), 1)
+    if collection == "parent":
+        payload["components"][0][0] = 0
+        expected_path = "components[0][0]"
+    elif collection == "group":
+        payload["root"][3] = 0
+        expected_path = "root[3]"
+    elif collection == "link":
+        payload["connections"]["links"] = [[0, 2, "mixed link", 402, 501]]
+        expected_path = "connections.links[0][0]"
+    else:
+        payload["composition"]["steps"][0] = [0]
+        expected_path = "composition.steps[0][0]"
+
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert caught.value.code == "graph_design_topology_invalid"
+    assert caught.value.path == expected_path
 
 
 @pytest.mark.parametrize(
@@ -517,27 +616,9 @@ def test_invalid_parent_relationships_fail_closed(component_index, parent_index)
     assert caught.value.code == "graph_design_topology_invalid"
 
 
-def test_consistent_one_based_parent_indexes_are_normalized():
-    payload = _draft(6)
-    for component in payload["components"]:
-        component[0] += 1
-
-    draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
-
-    parents = {edge["target"]: edge["source"] for edge in draft["edges"][:5]}
-    assert parents == {
-        "n2": "n1",
-        "n3": "n2",
-        "n4": "n3",
-        "n5": "n4",
-        "n6": "n5",
-    }
-
-
 def test_mixed_parent_index_conventions_fail_closed():
     payload = _draft(4)
     payload["components"][0][0] = 1
-    payload["components"][1][0] = 0
 
     with pytest.raises(AppliedGraphSpecError) as caught:
         validate_applied_graph_topology(payload, applied_graph_spec("production"))
@@ -587,17 +668,14 @@ def test_cross_links_use_indexes_and_preserve_every_material_link():
     ]
 
 
-def test_consistent_one_based_cross_link_indexes_are_normalized(caplog):
-    payload = _draft(6)
+def test_one_based_cross_link_indexes_normalize_only_under_the_declared_base():
+    payload = _declared_index_base(_draft(6), 1)
     payload["connections"]["links"] = [
         [1, 5, "publishes measured feedback", 402, 501],
         [6, 3, "rolls back failed release", 403, 501],
     ]
 
-    with caplog.at_level("INFO", logger="agent.applied_graph_spec"):
-        draft = validate_applied_graph_topology(
-            payload, applied_graph_spec("production")
-        )
+    draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
 
     assert draft["edges"][-2:] == [
         {
@@ -615,29 +693,13 @@ def test_consistent_one_based_cross_link_indexes_are_normalized(caplog):
             "sync": "async",
         },
     ]
-    assert "Normalized one-based applied graph link indexes" in caplog.text
 
 
-def test_ambiguous_cross_link_indexes_remain_zero_based():
-    payload = _draft(6)
+def test_invalid_link_array_fails_under_its_declared_base():
+    payload = _declared_index_base(_draft(6), 1)
     payload["connections"]["links"] = [
-        [1, 4, "publishes measured feedback", 402, 501],
-        [5, 2, "rolls back failed release", 403, 501],
-    ]
-
-    draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
-
-    assert [(edge["source"], edge["target"]) for edge in draft["edges"][-2:]] == [
-        ("n2", "n5"),
-        ("n6", "n3"),
-    ]
-
-
-def test_mixed_cross_link_index_conventions_fail_closed():
-    payload = _draft(6)
-    payload["connections"]["links"] = [
-        [0, 2, "canonical root path", 402, 501],
-        [4, 6, "one-based terminal path", 403, 501],
+        [1, 6, "valid link", 402, 501],
+        [2, 7, "out-of-range link", 403, 501],
     ]
 
     with pytest.raises(AppliedGraphSpecError) as caught:
@@ -645,21 +707,6 @@ def test_mixed_cross_link_index_conventions_fail_closed():
 
     assert caught.value.code == "graph_design_topology_invalid"
     assert caught.value.path == "connections.links[1][1]"
-    assert caught.value.rule == "topology"
-
-
-def test_invalid_link_array_is_not_partially_normalized():
-    payload = _draft(6)
-    payload["connections"]["links"] = [
-        [1, 6, "otherwise one-based link", 402, 501],
-        [2, 7, "endpoint above either range", 403, 501],
-    ]
-
-    with pytest.raises(AppliedGraphSpecError) as caught:
-        validate_applied_graph_topology(payload, applied_graph_spec("production"))
-
-    assert caught.value.code == "graph_design_topology_invalid"
-    assert caught.value.path == "connections.links[0][1]"
     assert caught.value.rule == "topology"
 
 
@@ -678,8 +725,8 @@ def test_invalid_cross_link_fails_instead_of_disappearing(cross_link):
     assert caught.value.code == "graph_design_topology_invalid"
 
 
-def test_one_based_self_link_fails_after_normalization():
-    payload = _draft(6)
+def test_one_based_self_link_fails_after_declared_normalization():
+    payload = _declared_index_base(_draft(6), 1)
     payload["connections"]["links"] = [[6, 6, "loop", 402, 501]]
 
     with pytest.raises(AppliedGraphSpecError) as caught:
@@ -699,8 +746,8 @@ def test_duplicate_cross_link_fails_instead_of_using_array_order():
     assert caught.value.rule == "duplicate"
 
 
-def test_duplicate_one_based_cross_link_fails_after_normalization():
-    payload = _draft(6)
+def test_duplicate_one_based_cross_link_fails_after_declared_normalization():
+    payload = _declared_index_base(_draft(6), 1)
     duplicate = [1, 6, "material control", 401, 500]
     payload["connections"]["links"] = [duplicate, duplicate]
 
@@ -711,8 +758,8 @@ def test_duplicate_one_based_cross_link_fails_after_normalization():
     assert caught.value.rule == "duplicate"
 
 
-def test_one_based_cross_link_duplicate_of_tree_edge_fails_after_normalization():
-    payload = _draft(6)
+def test_one_based_cross_link_duplicate_of_tree_edge_fails_after_declared_normalization():
+    payload = _declared_index_base(_draft(6), 1)
     payload["connections"]["links"] = [
         [1, 2, "passes validated action 2", 400, 500],
         [6, 3, "forces one-based normalization", 402, 501],
@@ -1003,13 +1050,20 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
         for code, token in codebook.items():
             assert f"{code}={token}" in prompt
     assert "components[i] defines component i+1" in prompt
-    assert "components[4] may use parent 0 through 4, never 5" in prompt
+    assert "index_base is a required top-level integer: 0 or 1" in prompt
+    assert "every reference to root equals index_base" in prompt
+    assert "server subtracts index_base from every declared reference" in prompt
+    assert "first step must include the declared root index" in prompt
+    assert "first step must include root 0" not in prompt
     assert "must be smaller than the component index" in prompt
     assert "Every component must reference exactly one group" in prompt
-    assert "Links use component indexes starting with root 0" in prompt
+    assert (
+        "Links and composition steps use the same declared component index base"
+        in prompt
+    )
     assert "Never emit server node IDs such as n1" in prompt
     assert "patch placeholders such as $new_node_1" in prompt
-    assert "one-based indexes" in prompt
+    assert "Never mix index bases" in prompt
     assert "member indexes" not in prompt
     assert "define a staged directed subgraph" in prompt
     assert (
@@ -1025,7 +1079,7 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     assert "A component earns its own row" in prompt
     assert "An edge earns its own record" in prompt
     assert "compact JSON without indentation or line breaks" in prompt
-    assert '"root":["Client",100,"Submits one request.",0]' in prompt
+    assert '"index_base":0,"root":["Client",100,"Submits one request.",0]' in prompt
     assert '"connections":{"links":[]}' in prompt
     assert '"steps":[[0],[1],[2]]' in prompt
     assert "diagram_commitments" not in prompt

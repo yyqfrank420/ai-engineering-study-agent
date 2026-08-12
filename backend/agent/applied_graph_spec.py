@@ -36,21 +36,23 @@ GRAPH_EDGE_LABEL_CHARS = 100
 
 logger = logging.getLogger(__name__)
 
-_ERROR_RULES = frozenset({
-    "blank_required",
-    "bounded_identity_collision",
-    "container_type",
-    "duplicate",
-    "invalid_enum",
-    "invalid_index",
-    "json_decode",
-    "key_set",
-    "provider_finish",
-    "safety_limit",
-    "topology",
-    "tuple_arity",
-    "value_type",
-})
+_ERROR_RULES = frozenset(
+    {
+        "blank_required",
+        "bounded_identity_collision",
+        "container_type",
+        "duplicate",
+        "invalid_enum",
+        "invalid_index",
+        "json_decode",
+        "key_set",
+        "provider_finish",
+        "safety_limit",
+        "topology",
+        "tuple_arity",
+        "value_type",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -137,8 +139,15 @@ def applied_graph_topology_schema(spec: AppliedGraphSpec) -> dict[str, Any]:
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["root", "components", "connections", "composition"],
+        "required": [
+            "index_base",
+            "root",
+            "components",
+            "connections",
+            "composition",
+        ],
         "properties": {
+            "index_base": {"type": "integer", "enum": [0, 1]},
             "root": root_record,
             "components": {
                 "type": "array",
@@ -232,6 +241,7 @@ def applied_graph_topology_prompt(
         "reviewed_plan": _topology_architect_plan(architect_plan),
     }
     valid_example = {
+        "index_base": 0,
         "root": ["Client", 100, "Submits one request.", 0],
         "components": [
             [
@@ -266,7 +276,9 @@ def applied_graph_topology_prompt(
         "Build the complete architecture topology from the supplied design input. Include every "
         "material responsibility, ownership boundary, runtime branch, control path, data store, "
         "delivery path, and failure outcome needed by this specific system. Use these exact tuple "
-        "layouts and scalar types. A root row has exactly 4 fields: "
+        "layouts and scalar types. index_base is a required top-level integer: 0 or 1. "
+        "It declares the sole base for every parent index, link endpoint, group membership "
+        "index, and composition step index in this object. A root row has exactly 4 fields: "
         "[label:string,type:integer,responsibility:string,group_index:integer]. Every remaining "
         "component row has exactly 8 fields: [parent_index:integer,label:string,type:integer,"
         "responsibility:string,group_index:integer,incoming_edge_label:string,flow:integer,"
@@ -293,7 +305,7 @@ def applied_graph_topology_prompt(
         "incoming label must agree: the parent sends the named data or command to the child. Make "
         "the primary sequence one obvious directed path from entry through controls to an observable "
         "outcome. Production depth requires this sequence. Prototype depth may omit it for a non-flow "
-        "diagram. Every nonempty sequence starts with root 0. Keep offline and supporting paths outside "
+        "diagram. Every nonempty sequence starts with the declared root index. Keep offline and supporting paths outside "
         "that sequence. Do not add diagram "
         "authoring, rendering, or graph-generation mechanics as domain components unless the request "
         "requires them. A component earns its own row when ownership, trust, authoritative state, a "
@@ -308,20 +320,25 @@ def applied_graph_topology_prompt(
         f"Therefore components has at most {max(0, spec.safety_max_nodes - 1)} rows. Links alone may "
         f"contain at most {spec.safety_max_edges} rows, and components plus links must not exceed "
         f"{spec.safety_max_edges}. Groups, steps, and each step contain at most "
-        f"{spec.safety_max_nodes} entries. The root is component 0. A row "
-        "at components[i] defines component i+1 and its one incoming tree edge. Parent indexes are "
-        "zero-based and must be smaller than the component index, which makes one rooted acyclic "
-        "topology. For example, components[0] must use parent 0 and components[4] may use parent "
-        "0 through 4, never 5. Choose and enumerate groups before constructing root and component "
+        f"{spec.safety_max_nodes} entries. The canonical server model has root position 0 and node n1. "
+        "In the wire object, every reference to root equals index_base: 0 when index_base is 0 and 1 "
+        "when index_base is 1. The server subtracts index_base from every declared reference before "
+        "validation. A row "
+        "at components[i] defines component i+1 and its one incoming tree edge. With index_base 0, "
+        "parent indexes are zero-based and must be smaller than the component index. With index_base "
+        "1, parent indexes are one-based and must not exceed the component row number. This makes "
+        "one rooted acyclic topology. Choose and enumerate groups before constructing root and component "
         "rows, then emit their definitions in composition.groups. Root and component rows reference "
-        "those zero-based group positions. Every component must reference exactly one group. Links use component "
-        "indexes starting with root 0. Emit only concrete zero-based integer indexes that reference "
-        "records present in this object. Never emit server node IDs such as n1, patch placeholders such "
-        "as $new_node_1, one-based indexes, forward parent indexes, or an index for a record that is not "
+        "those group positions using index_base. Every component must reference exactly one group. "
+        "Links and composition steps use the same declared component index base. Emit only concrete "
+        "integer indexes that reference records present in this object. Never mix index bases. Never "
+        "emit server node IDs such as n1, patch placeholders such as $new_node_1, forward parent "
+        "indexes, or an index for a record that is not "
         "defined. Labels and responsibilities are real nonempty authored strings, never placeholder "
         "tokens. "
         "Composition steps use the same indexes and define a staged directed subgraph. A step lists "
-        "the components entered in that stage, not their parent. The first step must include root 0; "
+        "the components entered in that stage, not their parent. The first step must include the "
+        "declared root index, which equals index_base; "
         "each other first-step component must have no incoming primary/runtime edge from another "
         "sequenced component. Each component in every later step must have a directed primary/runtime "
         "edge from a component in an earlier step. Every tree edge and every link with runtime flow is "
@@ -432,6 +449,19 @@ def _required_index(value: Any, *, path: str) -> int:
     return value
 
 
+def _required_index_base(value: Any) -> int:
+    index_base = _required_index(value, path="index_base")
+    if index_base not in {0, 1}:
+        raise AppliedGraphSpecError(
+            "graph_design_schema_invalid", path="index_base", rule="invalid_enum"
+        )
+    return index_base
+
+
+def _normalise_index(value: Any, *, index_base: int, path: str) -> int:
+    return _required_index(value, path=path) - index_base
+
+
 def _required_tuple(value: Any, size: int, *, path: str) -> list[Any]:
     if not isinstance(value, list):
         raise AppliedGraphSpecError(
@@ -448,30 +478,6 @@ def _raise_topology(path: str) -> None:
     raise AppliedGraphSpecError(
         "graph_design_topology_invalid", path=path, rule="topology"
     )
-
-
-def _normalise_parent_indexes(parent_indexes: list[int]) -> list[int]:
-    zero_based = all(
-        0 <= parent_index < component_index
-        for component_index, parent_index in enumerate(parent_indexes, start=1)
-    )
-    if zero_based:
-        return parent_indexes
-
-    one_based = all(
-        1 <= parent_index <= component_index
-        for component_index, parent_index in enumerate(parent_indexes, start=1)
-    )
-    if one_based:
-        logger.info("Normalized one-based applied graph parent indexes")
-        return [parent_index - 1 for parent_index in parent_indexes]
-
-    invalid_index = next(
-        component_index
-        for component_index, parent_index in enumerate(parent_indexes, start=1)
-        if not 0 <= parent_index < component_index
-    )
-    _raise_topology(f"components[{invalid_index - 1}][0]")
 
 
 def _validate_component(
@@ -506,6 +512,8 @@ def _validate_components(
     raw_root: Any,
     raw_components: list[Any],
     spec: AppliedGraphSpec,
+    *,
+    index_base: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]], list[int]]:
     root = _required_tuple(raw_root, _ROOT_FIELD_COUNT, path="root")
     components = [
@@ -517,7 +525,7 @@ def _validate_components(
             spec=spec,
         )
     ]
-    group_indexes = [_required_index(root[3], path="root[3]")]
+    group_indexes = [_normalise_index(root[3], index_base=index_base, path="root[3]")]
     tree_edges: list[dict[str, str]] = []
     component_rows = [
         _required_tuple(
@@ -527,17 +535,21 @@ def _validate_components(
         )
         for component_index, raw_component in enumerate(raw_components, start=1)
     ]
-    parent_indexes = _normalise_parent_indexes(
-        [
-            _required_index(component[0], path=f"components[{index}][0]")
-            for index, component in enumerate(component_rows)
-        ]
-    )
+    parent_indexes = [
+        _normalise_index(
+            component[0],
+            index_base=index_base,
+            path=f"components[{index}][0]",
+        )
+        for index, component in enumerate(component_rows)
+    ]
     for component_index, (component, parent_index) in enumerate(
         zip(component_rows, parent_indexes, strict=True),
         start=1,
     ):
         path = f"components[{component_index - 1}]"
+        if parent_index < 0 or parent_index >= component_index:
+            _raise_topology(f"{path}[0]")
         components.append(
             _validate_component(
                 component,
@@ -547,7 +559,9 @@ def _validate_components(
                 spec=spec,
             )
         )
-        group_indexes.append(_required_index(component[4], path=f"{path}[4]"))
+        group_indexes.append(
+            _normalise_index(component[4], index_base=index_base, path=f"{path}[4]")
+        )
         tree_edges.append(
             {
                 "source": f"n{parent_index + 1}",
@@ -570,15 +584,9 @@ def _validate_group_memberships(
     for group_index, raw_group in enumerate(raw_groups):
         path = f"composition.groups[{group_index}]"
         group_record = _required_tuple(raw_group, _GROUP_FIELD_COUNT, path=path)
-        full_group = _normalised_required_text(
-            group_record[0], path=f"{path}[0]"
-        )
-        group = _bounded_text(
-            full_group, spec.group_label_chars, path=f"{path}[0]"
-        )
-        group_kind = _coded_token(
-            group_record[1], _GROUP_KIND_CODES, path=f"{path}[1]"
-        )
+        full_group = _normalised_required_text(group_record[0], path=f"{path}[0]")
+        group = _bounded_text(full_group, spec.group_label_chars, path=f"{path}[0]")
+        group_kind = _coded_token(group_record[1], _GROUP_KIND_CODES, path=f"{path}[1]")
         group_key = (group, group_kind)
         prior_group = group_sources.get(group_key)
         if prior_group is not None and prior_group != full_group:
@@ -603,60 +611,13 @@ def _validate_group_memberships(
     return memberships
 
 
-def _normalise_link_indexes(
-    endpoint_rows: list[tuple[int, int]], node_count: int
-) -> list[tuple[int, int]]:
-    zero_based = all(
-        0 <= endpoint < node_count
-        for endpoints in endpoint_rows
-        for endpoint in endpoints
-    )
-    # Values valid under both conventions remain canonical zero-based.
-    if zero_based:
-        return endpoint_rows
-
-    one_based = all(
-        1 <= endpoint <= node_count
-        for endpoints in endpoint_rows
-        for endpoint in endpoints
-    )
-    if one_based:
-        logger.info(
-            "Normalized one-based applied graph link indexes: node_count=%s "
-            "link_count=%s",
-            node_count,
-            len(endpoint_rows),
-        )
-        return [
-            (source_index - 1, target_index - 1)
-            for source_index, target_index in endpoint_rows
-        ]
-
-    for link_index, (source_index, target_index) in enumerate(endpoint_rows):
-        if not 0 <= source_index < node_count:
-            logger.info(
-                "Rejected applied graph link index convention: node_count=%s "
-                "link_count=%s zero_based_valid=false one_based_valid=false",
-                node_count,
-                len(endpoint_rows),
-            )
-            _raise_topology(f"connections.links[{link_index}][0]")
-        if not 0 <= target_index < node_count:
-            logger.info(
-                "Rejected applied graph link index convention: node_count=%s "
-                "link_count=%s zero_based_valid=false one_based_valid=false",
-                node_count,
-                len(endpoint_rows),
-            )
-            _raise_topology(f"connections.links[{link_index}][1]")
-    raise AssertionError("unreachable link index validation")
-
-
 def _validate_links(
     raw_links: list[Any],
     node_count: int,
     tree_edges: list[dict[str, str]],
     spec: AppliedGraphSpec,
+    *,
+    index_base: int,
 ) -> list[dict[str, str]]:
     link_records = [
         _required_tuple(
@@ -668,27 +629,33 @@ def _validate_links(
     ]
     endpoint_rows = [
         (
-            _required_index(
-                edge_record[0], path=f"connections.links[{link_index}][0]"
+            _normalise_index(
+                edge_record[0],
+                index_base=index_base,
+                path=f"connections.links[{link_index}][0]",
             ),
-            _required_index(
-                edge_record[1], path=f"connections.links[{link_index}][1]"
+            _normalise_index(
+                edge_record[1],
+                index_base=index_base,
+                path=f"connections.links[{link_index}][1]",
             ),
         )
         for link_index, edge_record in enumerate(link_records)
     ]
-    normalised_endpoints = _normalise_link_indexes(endpoint_rows, node_count)
 
     edges = list(tree_edges)
     seen_edges = {
-        (edge["source"], edge["target"], edge["label"].lower())
-        for edge in tree_edges
+        (edge["source"], edge["target"], edge["label"].lower()) for edge in tree_edges
     }
     for link_index, (edge_record, endpoints) in enumerate(
-        zip(link_records, normalised_endpoints, strict=True)
+        zip(link_records, endpoint_rows, strict=True)
     ):
         path = f"connections.links[{link_index}]"
         source_index, target_index = endpoints
+        if source_index < 0 or source_index >= node_count:
+            _raise_topology(f"{path}[0]")
+        if target_index < 0 or target_index >= node_count:
+            _raise_topology(f"{path}[1]")
         if source_index == target_index:
             logger.info(
                 "Rejected applied graph self-link: node_count=%s link_count=%s",
@@ -703,9 +670,7 @@ def _validate_links(
                 edge_record[2], spec.edge_label_chars, path=f"{path}[2]"
             ),
             "flow": _coded_token(edge_record[3], _FLOW_CODES, path=f"{path}[3]"),
-            "sync": _coded_token(
-                edge_record[4], _SYNC_CODES, path=f"{path}[4]"
-            ),
+            "sync": _coded_token(edge_record[4], _SYNC_CODES, path=f"{path}[4]"),
         }
         identity = (edge["source"], edge["target"], edge["label"].lower())
         if identity in seen_edges:
@@ -724,11 +689,10 @@ def _validate_sequence_steps(
     edges: list[dict[str, str]],
     *,
     require_sequence: bool,
+    index_base: int,
 ) -> list[int]:
     if require_sequence and not raw_steps:
         _raise_topology("composition.steps")
-    if raw_steps and (not raw_steps[0] or 0 not in raw_steps[0]):
-        _raise_topology("composition.steps[0]")
     sequence_steps = [0] * node_count
     seen_components: set[int] = set()
     component_paths: dict[int, str] = {}
@@ -742,7 +706,9 @@ def _validate_sequence_steps(
             _raise_topology(path)
         for item_index, value in enumerate(raw_step):
             component_path = f"{path}[{item_index}]"
-            component_index = _required_index(value, path=component_path)
+            component_index = _normalise_index(
+                value, index_base=index_base, path=component_path
+            )
             if component_index < 0 or component_index >= node_count:
                 _raise_topology(component_path)
             if component_index in seen_components:
@@ -754,6 +720,9 @@ def _validate_sequence_steps(
             seen_components.add(component_index)
             sequence_steps[component_index] = step_index + 1
             component_paths[component_index] = component_path
+
+    if raw_steps and sequence_steps[0] != 1:
+        _raise_topology("composition.steps[0]")
 
     incoming_sources: dict[int, set[int]] = {}
     primary_runtime_edges = [
@@ -785,6 +754,7 @@ def validate_applied_graph_topology(
     spec: AppliedGraphSpec,
 ) -> dict[str, Any]:
     if not isinstance(payload, dict) or set(payload) != {
+        "index_base",
         "root",
         "components",
         "connections",
@@ -794,6 +764,7 @@ def validate_applied_graph_topology(
             "graph_design_schema_invalid", path="$", rule="key_set"
         )
 
+    index_base = _required_index_base(payload["index_base"])
     raw_root = payload["root"]
     raw_components = payload["components"]
     raw_connections = payload["connections"]
@@ -845,16 +816,19 @@ def validate_applied_graph_topology(
             rule="safety_limit",
         )
     components, tree_edges, group_indexes = _validate_components(
-        raw_root, raw_components, spec
+        raw_root, raw_components, spec, index_base=index_base
     )
     memberships = _validate_group_memberships(raw_groups, group_indexes, spec)
-    edges = _validate_links(raw_links, node_count, tree_edges, spec)
+    edges = _validate_links(
+        raw_links, node_count, tree_edges, spec, index_base=index_base
+    )
     sequence_steps = _validate_sequence_steps(
         raw_steps,
         node_count,
         tree_edges,
         edges,
         require_sequence=spec.depth == "production",
+        index_base=index_base,
     )
     nodes = [
         {
@@ -960,7 +934,9 @@ def enrich_applied_graph_topology(
         for index, (label, kind) in enumerate(group_keys)
     ]
 
-    parent_edges = {edge["target"]: edge for edge in draft["edges"][: max(0, len(nodes) - 1)]}
+    parent_edges = {
+        edge["target"]: edge for edge in draft["edges"][: max(0, len(nodes) - 1)]
+    }
     sequence_by_step: dict[int, dict[str, Any]] = {}
     for node in draft["nodes"]:
         step = node["sequence_step"]
@@ -979,7 +955,9 @@ def enrich_applied_graph_topology(
             "nodes": value["nodes"],
             "description": "; ".join(value["descriptions"]),
         }
-        for index, (_authored_step, value) in enumerate(sorted(sequence_by_step.items()), 1)
+        for index, (_authored_step, value) in enumerate(
+            sorted(sequence_by_step.items()), 1
+        )
     ]
 
     plan = architect_plan if isinstance(architect_plan, dict) else {}
@@ -987,7 +965,9 @@ def enrich_applied_graph_topology(
     assumptions = [
         " ".join(item.split())
         for item in (raw_assumptions if isinstance(raw_assumptions, list) else [])
-        if isinstance(item, str) and item.strip() and len(" ".join(item.split())) <= spec.assumption_chars
+        if isinstance(item, str)
+        and item.strip()
+        and len(" ".join(item.split())) <= spec.assumption_chars
     ]
     return {
         "graph_type": "architecture",

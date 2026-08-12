@@ -258,7 +258,10 @@ def test_connection_addition_contract_label_is_bounded_by_graph_schema():
             component_addition_count=0,
         )
 
-    assert raised.value.path == "layers.connections.addition_obligations[0].required_contract"
+    assert (
+        raised.value.path
+        == "layers.connections.addition_obligations[0].required_contract"
+    )
     assert raised.value.rule == "invalid_range"
 
 
@@ -302,9 +305,7 @@ async def test_critic_adapter_uses_one_provider_attempt_despite_global_retry_bud
 
     monkeypatch.setattr(settings, "llm_max_retries", 2)
     monkeypatch.setattr(settings, "llm_retry_delay_s", 0)
-    monkeypatch.setattr(
-        llm_adapter, "_anthropic_stream_once", failing_anthropic_stream
-    )
+    monkeypatch.setattr(llm_adapter, "_anthropic_stream_once", failing_anthropic_stream)
     monkeypatch.setattr(
         "storage.telemetry_store.record_llm_telemetry", lambda **_kwargs: None
     )
@@ -4181,6 +4182,7 @@ async def test_semantic_critic_reviews_the_private_rendered_image(
 ):
     captured = {}
     timeline = []
+    events = []
     architect_tail = "a" * 10_100 + " architect-tail"
     challenger_tail = "c" * 6_100 + " challenger-tail"
 
@@ -4190,7 +4192,11 @@ async def test_semantic_critic_reviews_the_private_rendered_image(
         return _structured_response(_passing_review_payload())
 
     async def send(event):
-        timeline.append(event["type"])
+        events.append(event)
+        if event["type"] == "workflow_progress":
+            timeline.append(f"{event['phase']}_{event['status']}")
+        else:
+            timeline.append(event["type"])
 
     async def await_diagram(_graph):
         timeline.append("private_render")
@@ -4258,8 +4264,18 @@ async def test_semantic_critic_reviews_the_private_rendered_image(
     )
 
     assert result["graph_review"]["approved"] is True
+    assert timeline.index("render_active") < timeline.index("private_render")
     assert timeline.index("private_render") < timeline.index("graph_preview")
+    assert timeline.index("private_render") < timeline.index("render_complete")
+    assert timeline.index("render_complete") < timeline.index("graph_preview")
     assert timeline.index("graph_preview") < timeline.index("critic_call")
+    assert {
+        "type": "workflow_progress",
+        "phase": "render",
+        "status": "complete",
+        "title": "Private browser rendering passed",
+        "detail": "The browser layout checks passed. The candidate is ready for semantic review.",
+    } in events
     assert captured["effort"] == expected_effort
     assert captured["response_schema"] == _GRAPH_CRITIC_PROTOTYPE_RESPONSE_SCHEMA
     content = captured["messages"][0]["content"]
@@ -4496,16 +4512,19 @@ async def test_hard_render_failure_is_included_in_exhaustive_semantic_review(
     assert result["graph_review"]["terminal"] is True
     assert result["graph_review"]["review_status"] == "completed"
     assert result["graph_review"]["repair_contract"]["repair_scope"] == "global"
-    assert result["graph_review"]["repair_contract"]["layers"]["render"][
-        "status"
-    ] == "fail"
-    blocker_ids = [
-        blocker["id"] for blocker in result["graph_review"]["hard_blockers"]
-    ]
+    assert (
+        result["graph_review"]["repair_contract"]["layers"]["render"]["status"]
+        == "fail"
+    )
+    blocker_ids = [blocker["id"] for blocker in result["graph_review"]["hard_blockers"]]
     assert len(blocker_ids) == 2
     assert len(set(blocker_ids)) == 2
     assert len(calls) == 1
     assert not any(event["type"] == "graph_preview" for event in events)
+    assert not any(
+        event.get("phase") == "render" and event.get("status") == "complete"
+        for event in events
+    )
 
 
 def test_every_render_gate_failure_has_a_distinct_stable_blocker_rule():
@@ -4552,9 +4571,7 @@ async def test_cancelled_critic_keeps_the_claimed_provider_call(monkeypatch):
         blocking_stream_llm,
     )
     budget = GraphReviewBudget()
-    task = asyncio.create_task(
-        graph_critic_node(_critic_state(), review_budget=budget)
-    )
+    task = asyncio.create_task(graph_critic_node(_critic_state(), review_budget=budget))
     await provider_started.wait()
     task.cancel()
 
@@ -4583,8 +4600,10 @@ async def test_missing_browser_evaluation_fails_closed_before_paid_semantic_revi
     async def await_diagram(_graph):
         raise TimeoutError("browser did not respond")
 
-    async def send(_event):
-        return None
+    events = []
+
+    async def send(event):
+        events.append(event)
 
     monkeypatch.setattr(
         "agent.nodes.graph_critic.stream_structured_llm",
@@ -4608,6 +4627,10 @@ async def test_missing_browser_evaluation_fails_closed_before_paid_semantic_revi
     assert result["graph_review"]["approved"] is False
     assert result["graph_review"]["terminal"] is True
     assert result["graph_review"]["failure_code"] == "diagram_evaluation_timeout"
+    assert not any(
+        event.get("phase") == "render" and event.get("status") == "complete"
+        for event in events
+    )
 
 
 @pytest.mark.asyncio

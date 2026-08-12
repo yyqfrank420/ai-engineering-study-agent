@@ -823,6 +823,68 @@ def test_unique_broad_expansion_compiles_one_child_and_one_directed_edge():
     assert permissions["allowed_new_edge_count"] == 1
 
 
+def test_expansion_prefers_an_exact_token_match_over_a_broader_component_name():
+    graph = _domain_graph(5)
+    graph["nodes"][1]["label"] = "Monitoring"
+    graph["nodes"][2]["label"] = "Monitoring Alerts"
+
+    target = graph_worker._scoped_expansion_target(
+        "expand the monitoring component while preserving existing components.",
+        graph["nodes"],
+    )
+
+    assert target == "fulfilment_stage_1"
+
+
+def test_expansion_prefers_a_stemmed_exact_token_match_over_a_broader_match():
+    graph = _domain_graph(5)
+    graph["nodes"][1]["label"] = "Monitor"
+    graph["nodes"][2]["label"] = "Monitor Alerts"
+
+    target = graph_worker._scoped_expansion_target(
+        "expand the monitoring component while preserving existing components.",
+        graph["nodes"],
+    )
+
+    assert target == "fulfilment_stage_1"
+
+
+def test_expansion_rejects_multiple_broader_token_matches_without_an_exact_match():
+    graph = _domain_graph(5)
+    graph["nodes"][1]["label"] = "Model Monitoring Gateway"
+    graph["nodes"][2]["label"] = "Model Monitoring Archive"
+
+    with pytest.raises(ValueError, match="exactly one authored component"):
+        graph_worker._scoped_expansion_target(
+            "expand model monitoring while preserving existing components.",
+            graph["nodes"],
+        )
+
+
+def test_expansion_rejects_duplicate_exact_token_matches():
+    graph = _domain_graph(5)
+    graph["nodes"][1]["label"] = "Monitoring"
+    graph["nodes"][2]["label"] = "Monitoring"
+
+    with pytest.raises(ValueError, match="more than one authored record"):
+        graph_worker._scoped_expansion_target(
+            "expand the monitoring component while preserving existing components.",
+            graph["nodes"],
+        )
+
+
+def test_expansion_token_matching_keeps_stemming_for_broader_component_names():
+    graph = _domain_graph(5)
+    graph["nodes"][2]["label"] = "Drift & Quality Monitor"
+
+    target = graph_worker._scoped_expansion_target(
+        "expand the monitoring component while preserving existing components.",
+        graph["nodes"],
+    )
+
+    assert target == "fulfilment_stage_2"
+
+
 def test_production_expansion_without_groups_authorizes_one_new_group():
     graph = _domain_graph(5)
     graph["nodes"][2]["label"] = "Drift & Quality Monitor"
@@ -2032,9 +2094,7 @@ def test_group_move_requires_both_source_and_destination_permissions():
     replacement[0]["nodeIds"].remove("node_a")
     replacement[1]["nodeIds"].append("node_a")
 
-    with pytest.raises(
-        ValueError, match="locked group: group_2"
-    ) as raised:
+    with pytest.raises(ValueError, match="locked group: group_2") as raised:
         graph_worker._validate_group_replacement_scope(
             existing,
             replacement,
@@ -4169,7 +4229,7 @@ async def test_invalid_patch_preserves_approved_graph_without_duplicate_model_ca
 @pytest.mark.parametrize(
     ("patch_output", "expected_rule"),
     [
-        ("{\"add_edges\": [", "json_decode"),
+        ('{"add_edges": [', "json_decode"),
         ("[]", "invalid_shape"),
     ],
 )

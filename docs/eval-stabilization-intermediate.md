@@ -2,13 +2,14 @@
 
 Last updated: 2026-08-12
 
-Evidence in this record is current through implementation commit `fdd70d1` on 2026-08-12. PRs #37
+Evidence in this record is current through the post-`7d64720` implementation on 2026-08-12. PRs #37
 through #40 merged on 2026-08-07, and PR #44 merged as `77df25e7`. The current
 evidence-provenance, graph-review, and latency corrections have passed local review and the full
 offline CI matrix. Eight consecutive recent `graph-expansion` diagnostics failed before that green
-push. The latest three consumed the three-run authorization. No paid run has executed on
-`fdd70d1`, no further paid run is authorized, and corpus `2026-08-12.v1` remains pending human
-review.
+push. The later pre-mortem corrections described below have also passed the full offline matrix.
+The latest three diagnostics consumed the three-run authorization. No paid run has executed on the
+new topology contract, no further paid run is authorized, and corpus `2026-08-12.v1` remains
+pending human review.
 
 ## Objective and operating rules
 
@@ -735,13 +736,12 @@ below retain implementation detail for the latest convergence and latency correc
   depth. Disconnected paths, missing primary outcomes, and requested missing paths remain blocking
   at every depth. Stored prototype-advisory findings cannot re-enter a later prototype review as
   stale repair obligations.
-- Cross-link indexes use zero-based indexing. The deterministic boundary preserves that canonical
-  reading whenever all endpoints are valid. If the complete link array is invalid as zero-based and
-  valid as one-based, it converts every endpoint together. Mixed conventions, invalid endpoints,
-  self-links, duplicate links, and links duplicating tree edges still fail closed. Safe telemetry
-  records the convention decision without storing authored content. This correction matches a prior
-  observed Kimi parent-index error, but it is not live proof that diagnostic `31549644038` contained
-  one-based links.
+- The topology wire object declares one required `index_base`, either 0 or 1. That declaration owns
+  every parent index, link endpoint, group membership index, and composition step index. The server
+  converts every reference to canonical zero-based indexes before topology validation. It no longer
+  infers parent and link conventions independently. References invalid under the declaration,
+  self-links, duplicate links, and links duplicating tree edges fail closed. This removes the
+  ambiguous representation class that remained after diagnostic `31549644038`.
 - Passing review layers retain their prior verdict. Component changes reopen components,
   connections, and composition. Edge changes reopen connections and composition. Composition-only
   changes reopen composition. A prototype-to-production transition reopens connections and
@@ -754,7 +754,13 @@ below retain implementation detail for the latest convergence and latency correc
   preview while semantic review continues. The transport emits authoritative `graph_data` only after
   review and persistence, and restores the prior graph if the turn does not commit. The
   `graph-expansion` live case records `graph_output_latency_ms` for each turn, actively
-  stops either turn with no visible graph by 180,000 ms, and reports `required_graph_slow`.
+  stops either turn with no visible graph by 180,000 ms, and reports `required_graph_slow`. A safe
+  `render/complete` progress event now separates accepted private rendering from preview transport
+  without exposing authored graph content.
+- Scoped expansion first resolves exact authored IDs and labels. Its stemmed token fallback now
+  prefers one exact token set before considering broader subset matches. A request for Monitoring
+  cannot become ambiguous only because Monitoring Alerts also exists. Duplicate exact matches and
+  multiple broad matches still fail closed.
 - Prototype architect calls omit production-only system rules and do not repeat an identical request
   as design context. Kimi receives every topology-bearing plan field while evidence rationale and UI
   status text stay out of its prompt. The model roles and efforts remain Opus 5 medium for
@@ -763,6 +769,22 @@ below retain implementation detail for the latest convergence and latency correc
 - LLM telemetry records safe character counts and per-attempt time to first reasoning and text
   deltas. The protected eval endpoint exposes those counts without prompts or authored output so a
   future diagnostic can separate prompt ingestion, reasoning, and constrained decoding time.
+
+## Known pre-run risks
+
+- The 180-second visible-graph target still has little measured margin. Diagnostic `31549644038`
+  spent about 79 seconds in architecture and 81 seconds in topology before deterministic validation.
+  A successful 15-second private render would put the preview close to the deadline. There is no
+  hidden local serial stage to remove. Lowering model effort previously reduced architecture quality,
+  so no unverified effort change is included here.
+- Production topology proofs still allow reviewer-owned `not_applicable`. The server has no trusted
+  semantic scope that states which of the five flow classes apply to a request. Deriving that scope
+  from node labels, types, or the reviewer output would make model-authored text an authority. A
+  later protocol may add a server-owned topology scope established before review. This release keeps
+  the existing rule and records the gap.
+- Turn-two patch latency remains live-unverified on the new head. Offline tests prove call ceilings,
+  mutation authority, candidate preservation, and corrected contract behavior with mocked providers.
+  They cannot prove Kimi response time or first-pass acceptance.
 
 ## Evaluation workflow lessons
 
@@ -791,7 +813,8 @@ below retain implementation detail for the latest convergence and latency correc
 
 1. The full offline gate has passed on the current tracked tree.
 2. Obtain fresh authorization before another protected `graph-expansion` diagnostic on the exact
-   PR head containing `fdd70d1`. Require both turns to publish within 180 seconds without fallback
+   PR head containing the new index-base and expansion-target corrections. Require both turns to
+   publish within 180 seconds without fallback
    while preserving the first graph during expansion. Use the safe phase telemetry to identify any
    remaining boundary.
 3. After that diagnostic passes and separate fresh explicit authorization, run one uninterrupted

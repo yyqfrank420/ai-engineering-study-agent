@@ -474,8 +474,7 @@ def _prior_open_obligations(
         for code in _PRODUCTION_ONLY_RUBRIC_CODES
     }
     advisory_findings = {
-        _rubric_finding(_RUBRIC_CODE_OWNERS[code], code)
-        for code in advisory_codes
+        _rubric_finding(_RUBRIC_CODE_OWNERS[code], code) for code in advisory_codes
     }
     obligations: list[dict[str, str]] = []
     for layer in _REPAIR_LAYERS:
@@ -1453,9 +1452,7 @@ def _canonicalise_review_protocol(
         )
         advisory_codes_for_depth = advisory_rubric_codes(resolved_depth)
         advisory_codes = [
-            code
-            for code in reported_finding_codes
-            if code in advisory_codes_for_depth
+            code for code in reported_finding_codes if code in advisory_codes_for_depth
         ]
         finding_codes = [
             code
@@ -2729,6 +2726,15 @@ async def graph_critic_node(
         )
         return _reviewed_state(state, graph=graph, review=review)
     if not deterministic_findings:
+        await state["send"](
+            {
+                "type": "workflow_progress",
+                "phase": "render",
+                "status": "complete",
+                "title": "Private browser rendering passed",
+                "detail": "The browser layout checks passed. The candidate is ready for semantic review.",
+            }
+        )
         # The transport keeps the durable graph and restores it if review,
         # repair, persistence, or the request fails. Authoritative graph_data
         # is still emitted only after the reviewed turn is persisted.
@@ -2782,10 +2788,7 @@ async def graph_critic_node(
                 == "semantic_review_output_truncated"
             ):
                 raise
-            if (
-                protocol_corrected
-                or not review_budget.can_claim_correction
-            ):
+            if protocol_corrected or not review_budget.can_claim_correction:
                 raise
             error_path, error_rule = _protocol_error_coordinates(protocol_error)
             logger.warning(

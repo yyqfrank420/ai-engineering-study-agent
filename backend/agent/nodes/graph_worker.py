@@ -40,7 +40,7 @@ from graph.runtime import select_canonical_graph
 logger = logging.getLogger(__name__)
 
 _APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v34"
-_APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v17"
+_APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v18"
 _APPLIED_GRAPH_TOPOLOGY_EFFORT = "low"
 _APPLIED_GRAPH_PATCH_EFFORT = "high"
 _MAX_GRAPH_PATCH_CHARS = 200_000
@@ -425,19 +425,33 @@ def _scoped_expansion_target(
     }
     if not target_tokens:
         raise ValueError("the expansion does not name an authored component")
-    candidates = []
+    exact_candidates = set()
+    subset_candidates = set()
     for node in nodes:
         record_id = str(node.get("id") or "").strip()
-        authored_tokens = {
-            _expansion_token(token)
+        if not record_id:
+            continue
+        authored_token_sets = [
+            {
+                _expansion_token(token)
+                for token in _reference_text(node.get(field) or "").split()
+            }
             for field in ("id", "label")
-            for token in _reference_text(node.get(field) or "").split()
-        }
-        if record_id and target_tokens.issubset(authored_tokens):
-            candidates.append(record_id)
-    if len(set(candidates)) != 1:
+        ]
+        if any(
+            target_tokens == authored_tokens for authored_tokens in authored_token_sets
+        ):
+            exact_candidates.add(record_id)
+        if any(
+            target_tokens.issubset(authored_tokens)
+            for authored_tokens in authored_token_sets
+        ):
+            subset_candidates.add(record_id)
+    if len(exact_candidates) == 1:
+        return next(iter(exact_candidates))
+    if len(exact_candidates) > 1 or len(subset_candidates) != 1:
         raise ValueError("the expansion must resolve to exactly one authored component")
-    return candidates[0]
+    return next(iter(subset_candidates))
 
 
 def _without_named_record_references(
@@ -674,8 +688,7 @@ def _user_edit_edge_selectors(
             qualified = [
                 item
                 for item in labeled_matches
-                if (item["source"], item["target"], item["label"])
-                in endpoint_keys
+                if (item["source"], item["target"], item["label"]) in endpoint_keys
             ]
             if not qualified:
                 raise ValueError(
@@ -1114,7 +1127,10 @@ def _graph_patch_failure_code(exc: Exception) -> str:
 
 def _patch_validation_coordinates(exc: Exception) -> tuple[str | None, str | None]:
     message = str(exc)
-    if isinstance(exc, json.JSONDecodeError) or "graph patch json could not be decoded" in message.lower():
+    if (
+        isinstance(exc, json.JSONDecodeError)
+        or "graph patch json could not be decoded" in message.lower()
+    ):
         return "patch", "json_decode"
     if "graph patch json must be an object" in message.lower():
         return "patch", "invalid_shape"
@@ -1143,7 +1159,10 @@ def _patch_validation_coordinates(exc: Exception) -> tuple[str | None, str | Non
         return f"groups.{'.'.join(group_ids)}", "locked_record_changed"
     if "added edges do not match the exact connection addition obligations" in message:
         return "patch.add_edges", "addition_obligation_mismatch"
-    if "added edge labels do not match the exact connection addition obligations" in message:
+    if (
+        "added edge labels do not match the exact connection addition obligations"
+        in message
+    ):
         return "patch.add_edges", "addition_obligation_mismatch"
     if "graph patch changed locked edge fields" in message:
         return "patch.update_edges", "unauthorized_field_change"
