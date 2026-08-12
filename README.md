@@ -118,9 +118,9 @@ Protected staging evaluation commands:
 
 The GitHub gate supplies the protected credentials, starts a frontend wired to the
 no-traffic candidate, captures the real WebSocket/browser journey, and then applies
-deterministic invariants plus reviewed semantic rubrics. The protected corpus is
-approved; diagnostic runs can select individual unresolved cases, while the manual
-override fails closed unless its evidence covers every protected PR case exactly once.
+deterministic invariants plus reviewed semantic rubrics. Corpus `2026-08-12.v1` is
+pending human review; diagnostic runs can select individual unresolved cases, while the
+manual override fails closed unless its evidence covers every protected PR case exactly once.
 Evaluation and release provenance binds the content commit, Git tree, and immutable
 image digest across synthetic PR merge refs and later squash merges. Selective semantic
 replay reuses only authenticated, successful graph-free cases; runtime-affected cases

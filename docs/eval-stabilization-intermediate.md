@@ -2,7 +2,13 @@
 
 Last updated: 2026-08-12
 
-This document records the stabilization work through PR #41 (`codex/restore-live-eval-gate`) and the remaining production exit criteria. PRs #37 through #40 merged on 2026-08-07. PR #41 now contains the exact-tree live gate, compact Kimi topology boundary, MECE review contract, bounded repair workflow, fixed publication frame, and bounded label placement. The current evidence-provenance and corpus correction has passed local review and the full offline CI matrix. Three authorized `graph-expansion` diagnostics ran without a passing case. No further paid run is authorized, and the protected corpus remains unauthorized.
+Evidence in this record is current through implementation commit `fdd70d1` on 2026-08-12. PRs #37
+through #40 merged on 2026-08-07, and PR #44 merged as `77df25e7`. The current
+evidence-provenance, graph-review, and latency corrections have passed local review and the full
+offline CI matrix. Eight consecutive recent `graph-expansion` diagnostics failed before that green
+push. The latest three consumed the three-run authorization. No paid run has executed on
+`fdd70d1`, no further paid run is authorized, and corpus `2026-08-12.v1` remains pending human
+review.
 
 ## Objective and operating rules
 
@@ -14,6 +20,49 @@ This document records the stabilization work through PR #41 (`codex/restore-live
 - Publish/consume approval by Git tree identity so squash commits and synthetic PR merge refs cannot invalidate equivalent content.
 - Preserve PR #37's two reviewed commits and merge the focused contract correction.
 - Verify the deployed Cloud Run backend and Vercel frontend after merge.
+
+## Recent diagnostic failure ledger
+
+This is the canonical chronology for recent `graph-expansion` failures through `fdd70d1`. Every
+row records a live product failure. A green workflow conclusion for the six report-only rows means
+the pending-corpus workflow uploaded its evidence and exited without enforcing the failed verdict.
+The first two workflow runs failed; the other six concluded green under that report-only policy.
+The retained `live-results.json` for every row says `status: fail`. All eight failures ended on turn
+1, emitted no visible graph to the user, skipped turn 2, and made no semantic judge call.
+Run links and exact heads come from GitHub Actions metadata. Latency, provider calls, failure codes,
+and cost come from each retained `scheduled-eval-<run>/browser-results.json`, `live-results.json`,
+and `run-context.json` artifact. Model effort comes from source at the exact run head because the
+older telemetry did not store effort. Minimum cost is used whenever an accepted provider call has
+incomplete usage.
+
+| UTC start | Run and exact head | Observed live failure | Correction status through `fdd70d1` | Application cost |
+| --- | --- | --- | --- | ---: |
+| 2026-08-09 19:59 | [`31333075986`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31333075986), `2f88a5a` | Opus produced a plan in 121.554 seconds. An aggregate plan-size rejection returned `architecture_pass_invalid`, entered a two-node fallback, and ended with an unauthorized whole-fallback patch. Five calls ran; turn latency was 265.956 seconds. | Removed the aggregate size cap, added structural failure codes, made a missing plan fail closed, and enforced exact repair scope. | $0.435752 |
+| 2026-08-09 20:53 | [`31335429802`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31335429802), `b2bd76a` | Architecture failed `architecture_pass_evidence_provenance` after a 139.767-second, 9,931-token plan. Human-readable references could not identify one exact source. Two calls ran; turn latency was 168.228 seconds. | Added canonical source identity and exact evidence validation. The corpus now requests the monitoring component in turn 1. | $0.353252 |
+| 2026-08-09 22:40 | [`31340006983`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31340006983), `7ce69b6` | The `xhigh` Opus architect exhausted its 150-second role deadline after 149.813 seconds with no final output. Two calls ran; turn latency was 178.296 seconds. | Reduced architect effort. Later live evidence rejected `low`, so the current prototype architect uses `medium`. | at least $0.067810 |
+| 2026-08-10 08:16 | [`31369358742`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31369358742), `77df25e7` | The architect completed in 111.877 seconds, then evidence validation rejected a model-copied 69-character source hash at `evidence_basis[2].evidence_ref`. Two logical calls used three provider attempts; turn latency was 153.688 seconds. | Models now receive request-scoped slots such as `source_1`; the server resolves them to canonical source IDs. | $0.300365 |
+| 2026-08-11 18:38 | [`31523789373`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31523789373), `9a3dcd2` | A seven-call serial path ran architect, challenger, topology, review, patch, post-patch review, and synthesis. The path withheld the graph after 370.581 seconds. | Removed the challenger from graph publication, bounded review and repair rounds, added dependency-aware layer locks, and added a reversible preview after deterministic render validation. | $0.607108 |
+| 2026-08-11 23:46 | [`31547774792`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31547774792), `67887c3` | Private render passed at 127.374 seconds. Sonnet then emitted an over-broad composition contract, rejected at `layers.composition.group_ids: unbounded_collection`; the 180-second deadline cancelled correction before any visible preview. Four calls ran; turn latency was 180.122 seconds. | Prototype-only subjective findings are advisory, repair authority is record-bounded, invalid contracts receive one typed correction, and deterministic render success emits a reversible preview. | at least $0.276605 |
+| 2026-08-12 00:08 | [`31549117335`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31549117335), `1a279b6` | The `low`-effort architect violated a hard plan-list limit. The server returned `architecture_pass_list_limit`; Kimi and Sonnet did not run. Two Opus calls ran; turn latency was 88.836 seconds. | Restored prototype architecture to `medium`, which had produced a valid plan in the preceding diagnostic. | $0.201845 |
+| 2026-08-12 00:16 | [`31549644038`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31549644038), `b64f66f` | A valid architect plan took 78.784 seconds and Kimi took 81.252 seconds. Deterministic topology validation rejected `connections.links[6]` before private render, preview, or Sonnet. Three calls ran; turn latency reached 180.083 seconds. | The topology boundary accepts a uniformly one-based link array only when the entire array is invalid as zero-based and valid as one-based. Retained evidence cannot prove this run used one-based indexes, so this correction still needs live verification. | at least $0.232051 |
+
+Known application spend across these eight failures is at least **$2.474788**. Several provider
+calls have incomplete usage; row amounts marked `at least` are lower bounds. Diagnostic
+`31549644038` retained only `connections.links[6]: topology`; it did not retain authored output and
+cannot distinguish an out-of-range endpoint from a self-link.
+
+Head `fdd70d1` passed all 11 jobs in [offline CI
+`31552299595`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31552299595).
+Its [live-gate workflow
+`31552299591`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31552299591)
+skipped protected staging and model execution because the corpus is pending review. This proves the
+offline tree and gate policy. It supplies no live graph or latency evidence for `fdd70d1`.
+
+Recent branch CI had no genuine offline failure. Automatic live-gate runs `31333067244` and
+`31335165144` were cancelled before protected browser or model execution while their new heads were
+unverified. Scheduled `main` runs `31354658015` and `31456923829` were also cancelled with no steps
+or logs before manual diagnostics entered the global staging queue. These cancellations are excluded
+from the product-failure ledger.
 
 ## Starting failure state
 
@@ -247,7 +296,10 @@ stabilization path.
 - Every candidate receives deterministic render validation.
 - Publication requires a final merged full-graph pass.
 
-### Failed diagnostic evidence and current status
+### Detailed analysis for runs 31333075986 through 31340006983
+
+The recent diagnostic failure ledger above is the canonical status and chronology. This section
+retains the longer root-cause record for the first three runs in that sequence.
 
 Diagnostic `31340006983` ran only `graph-expansion` on exact head `7ce69b6`. The Opus architect
 exhausted its 150-second role deadline at `xhigh` effort. Its accepted provider attempt ran for
@@ -652,6 +704,9 @@ Historical checkpoint evidence:
 
 ## 2026-08-12 convergence and latency state
 
+The recent diagnostic failure ledger above is the canonical status and chronology. The entries
+below retain implementation detail for the latest convergence and latency corrections.
+
 - Diagnostic `31549644038` on commit `b64f66f` restored medium architect effort and produced a valid
   plan in 78.784 seconds. Kimi returned after 81.252 seconds, but deterministic topology validation
   rejected `connections.links[6]` with rule `topology` before private rendering. No preview or Sonnet
@@ -719,7 +774,9 @@ Historical checkpoint evidence:
 6. Patch selectors and authored values need different representations. A short repair-only ID preserves identity without asking a model to copy mutable prose or assuming endpoint pairs are unique.
 7. Preserve safe telemetry at every boundary: finish reason, response size, validation path/rule, normalization action, operation stage, and match count. Do not log prompts or authored content.
 8. A public `graph_emitted=false` code is insufficient for operations. It hid grammar compilation, truncation, topology, mutation-role, critic, and patch failures behind one predicate.
-9. Diagnostic cases are appropriate for iterative debugging, but they cannot publish an `approved-tree-*` tag. Final approval still requires one canonical complete eight-case run.
+9. Diagnostic cases are appropriate for iterative debugging, but they cannot publish an
+   `approved-tree-*` tag. PR-tree approval still requires one canonical complete eight-case run;
+   corpus approval separately requires the complete 20-case capture and review.
 10. Exact-tree identity is required for safe approval reuse across squash merges; commit SHA equality alone is insufficient.
 11. Keep the model wire schema separate from the domain contract when provider grammar limits would
     force duplicated definitions. Convert once at the provider boundary and validate the canonical
@@ -733,13 +790,17 @@ Historical checkpoint evidence:
 ## Remaining execution order
 
 1. The full offline gate has passed on the current tracked tree.
-2. Fix the invalid Kimi cross-link boundary and obtain fresh authorization before another protected
-   `graph-expansion` diagnostic. Require both turns to publish within 180 seconds without fallback
-   while preserving the first graph during expansion.
-3. After the diagnostic passes and separate fresh explicit authorization, run one uninterrupted canonical eight-case protected evaluation on that tree.
-4. Verify the exact-tree approval tag and required PR checks, then merge with the final-head guard.
-5. Monitor the `main` production workflow through immutable backend deployment, smoke/promotion, and Vercel deployment.
-6. Verify Cloud Run revision, digest, traffic, and the public backend and frontend URLs.
+2. Obtain fresh authorization before another protected `graph-expansion` diagnostic on the exact
+   PR head containing `fdd70d1`. Require both turns to publish within 180 seconds without fallback
+   while preserving the first graph during expansion. Use the safe phase telemetry to identify any
+   remaining boundary.
+3. After that diagnostic passes and separate fresh explicit authorization, run one uninterrupted
+   canonical eight-case PR evaluation on the same tree.
+4. Run a full protected 20-case capture, complete human review and judge recalibration, and publish
+   the approved manifest required for corpus `2026-08-12.v1` to block or promote.
+5. Verify the exact-tree approval tag and required PR checks, then merge with the final-head guard.
+6. Monitor the `main` production workflow through immutable backend deployment, smoke/promotion, and Vercel deployment.
+7. Verify Cloud Run revision, digest, traffic, and the public backend and frontend URLs.
 
 ## Repository and contributor notes
 
@@ -752,8 +813,10 @@ Historical checkpoint evidence:
 This effort is complete only when all of the following are true on authoritative current evidence:
 
 - Exact final PR head has required offline CI success.
-- The final canonical run resolves every previously failing case.
-- One final canonical eight-case protected evaluation passes without manual review or infrastructure failure.
+- A canonical eight-case PR evaluation resolves every previously failing PR-gate case without
+  infrastructure failure.
+- A full protected 20-case capture receives human review, judge recalibration, and an approved
+  manifest for corpus `2026-08-12.v1`.
 - The exact Git tree has a valid protected-evaluation approval.
 - PR #37, PR #38, and PR #39 remain present in `main` history.
 - The Kimi role-routing change is present in `main` and its first-pass acceptance evidence is recorded.
