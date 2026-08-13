@@ -28,10 +28,9 @@ _NODE_TYPE_CODES = {100 + index: token for index, token in enumerate(_NODE_TYPES
 _FLOW_CODES = {400 + index: token for index, token in enumerate(_FLOWS)}
 _SYNC_CODES = {500 + index: token for index, token in enumerate(_SYNC_MODES)}
 _GROUP_KIND_CODES = {600 + index: token for index, token in enumerate(_GROUP_KINDS)}
-_ROOT_FIELD_COUNT = 4
-_COMPONENT_FIELD_COUNT = 8
+_ROOT_FIELD_COUNT = 5
+_COMPONENT_FIELD_COUNT = 9
 _LINK_FIELD_COUNT = 5
-_GROUP_FIELD_COUNT = 2
 GRAPH_EDGE_LABEL_CHARS = 100
 
 logger = logging.getLogger(__name__)
@@ -143,11 +142,6 @@ def applied_graph_topology_schema(spec: AppliedGraphSpec) -> dict[str, Any]:
         "maxItems": _LINK_FIELD_COUNT,
         "items": integer_or_string,
     }
-    group_record = {
-        "type": "array",
-        "maxItems": _GROUP_FIELD_COUNT,
-        "items": integer_or_string,
-    }
     return {
         "type": "object",
         "additionalProperties": False,
@@ -179,14 +173,9 @@ def applied_graph_topology_schema(spec: AppliedGraphSpec) -> dict[str, Any]:
             "composition": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["title", "groups", "steps"],
+                "required": ["title", "steps"],
                 "properties": {
                     "title": {"type": "string"},
-                    "groups": {
-                        "type": "array",
-                        "maxItems": spec.safety_max_nodes,
-                        "items": group_record,
-                    },
                     "steps": {
                         "type": "array",
                         "maxItems": spec.safety_max_nodes,
@@ -222,14 +211,15 @@ def applied_graph_topology_prompt(
         "depth": spec.depth,
     }
     valid_example = {
-        "root": ["Client", 100, "Submits one request.", 0],
+        "root": ["Client", 100, "Submits one request.", "Product runtime", 600],
         "components": [
             [
                 0,
                 "Request gateway",
                 104,
                 "Validates and routes the request.",
-                0,
+                "Product runtime",
+                600,
                 "sends request",
                 400,
                 500,
@@ -239,7 +229,8 @@ def applied_graph_topology_prompt(
                 "Result service",
                 101,
                 "Returns the observable outcome.",
-                0,
+                "Product runtime",
+                600,
                 "returns outcome",
                 400,
                 500,
@@ -248,7 +239,6 @@ def applied_graph_topology_prompt(
         "connections": {"links": []},
         "composition": {
             "title": "Request runtime",
-            "groups": [["Product runtime", 600]],
             "steps": [0, 1, 2],
         },
     }
@@ -258,25 +248,26 @@ def applied_graph_topology_prompt(
         "failure outcome, and delivery boundary.\n"
         "WIRE CONTRACT\n"
         "Every index is zero-based. Use these exact rows:\n"
-        "root: [label:string,type:integer,responsibility:string,group_index:integer]\n"
+        "root: [label:string,type:integer,responsibility:string,group_label:string,"
+        "group_kind:integer]\n"
         "components[i]: [parent_index:integer,label:string,type:integer,responsibility:string,"
-        "group_index:integer,incoming_edge_label:string,flow:integer,sync:integer]\n"
+        "group_label:string,group_kind:integer,incoming_edge_label:string,flow:integer,"
+        "sync:integer]\n"
         "connections.links[i]: [source_index:integer,target_index:integer,label:string,flow:integer,"
         "sync:integer]\n"
-        "composition.groups[i]: [label:string,kind:integer]\n"
         "composition.title is a string. composition.steps is one flat array of integer node indexes. "
         "Do not use null, booleans, objects, omitted tuple values, or placeholder strings inside rows. "
-        f"Use integer category codes, never names. {codebook}\n"
+        f"Use integer codes for type, group_kind, flow, and sync. {codebook}\n"
         "INDEX RULES\n"
         "Root is index 0 and becomes server node n1. components[i] defines node index i+1. Its parent "
         "must be an existing earlier node index from 0 through i. For example, components[5][0] may "
-        "be 0 through 5; value 6 is self-reference and invalid. Group indexes address "
-        "composition.groups. Link endpoints and composition steps address nodes. Never emit server "
+        "be 0 through 5; value 6 is self-reference and invalid. Link endpoints and composition steps "
+        "address nodes. Never emit server "
         "node IDs, $new_node_N placeholders, forward parents, or undefined indexes.\n"
         "TOPOLOGY RULES\n"
-        "Choose the number of components, groups, and links from the design. Choose and enumerate "
-        "groups before constructing root and component rows. Every component must reference exactly "
-        "one group. Make the root the primary runtime entry or trigger. Do not use an internal "
+        "Choose the number of components and links from the design. Every root and component row "
+        "must carry its exact group label and kind. Reuse the same label and kind for nodes in the "
+        "same group. Make the root the primary runtime entry or trigger. Do not use an internal "
         "coordinator when a client, event source, or schedule starts the flow. Tree-edge direction and "
         "its incoming label must agree: the parent sends the named data or command to the child. "
         "Include all material non-tree links. Multiple edges between the same pair need compatible, "
@@ -306,14 +297,14 @@ def applied_graph_topology_prompt(
         "OWNERSHIP AND LIMITS\n"
         "The request owns the objective, domain vocabulary, and stated constraints. The selected depth "
         "and these rules own the initial topology contract. An independent architecture review follows "
-        "this reversible draft. You author title, groups, component semantics, edge semantics, and "
+        "this reversible draft. You author title, node groups, component semantics, edge semantics, and "
         "sequence membership. The server owns stable IDs, technology, transport, edge descriptions, "
         "lanes, tiers, assumptions, positions, selections, and rendering state. The server derives each "
         "lane from its authored group kind. Do not emit server-owned fields.\n"
         f"Use at most {spec.safety_max_nodes} nodes including root and {spec.safety_max_edges} total "
         f"edges including component tree edges and links. components has at most "
         f"{max(0, spec.safety_max_nodes - 1)} rows. components plus links must not exceed "
-        f"{spec.safety_max_edges}. Groups and steps contain at most {spec.safety_max_nodes} entries. "
+        f"{spec.safety_max_edges}. Steps contain at most {spec.safety_max_nodes} entries. "
         "Keep title at most 100 characters, node labels at most 60, group labels at most 80, "
         f"responsibilities at most 220, and edge labels at most {spec.edge_label_chars}.\n"
         "EXAMPLE\n"
@@ -440,7 +431,32 @@ def _validate_component(
     field_offset: int,
     path: str,
     spec: AppliedGraphSpec,
+    group_sources: dict[tuple[str, str], str],
 ) -> dict[str, Any]:
+    group_label_index = field_offset + 3
+    group_kind_index = field_offset + 4
+    full_group = _normalised_required_text(
+        component[group_label_index], path=f"{path}[{group_label_index}]"
+    )
+    group = _bounded_text(
+        full_group,
+        spec.group_label_chars,
+        path=f"{path}[{group_label_index}]",
+    )
+    group_kind = _coded_token(
+        component[group_kind_index],
+        _GROUP_KIND_CODES,
+        path=f"{path}[{group_kind_index}]",
+    )
+    group_key = (group, group_kind)
+    prior_group = group_sources.get(group_key)
+    if prior_group is not None and prior_group != full_group:
+        raise AppliedGraphSpecError(
+            "graph_design_schema_invalid",
+            path=f"{path}[{group_label_index}]",
+            rule="bounded_identity_collision",
+        )
+    group_sources[group_key] = full_group
     return {
         "id": f"n{node_index + 1}",
         "label": _required_text(
@@ -458,6 +474,8 @@ def _validate_component(
             spec.responsibility_chars,
             path=f"{path}[{field_offset + 2}]",
         ),
+        "group": group,
+        "group_kind": group_kind,
     }
 
 
@@ -465,8 +483,9 @@ def _validate_components(
     raw_root: Any,
     raw_components: list[Any],
     spec: AppliedGraphSpec,
-) -> tuple[list[dict[str, Any]], list[dict[str, str]], list[int]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     root = _required_tuple(raw_root, _ROOT_FIELD_COUNT, path="root")
+    group_sources: dict[tuple[str, str], str] = {}
     components = [
         _validate_component(
             root,
@@ -474,9 +493,9 @@ def _validate_components(
             field_offset=0,
             path="root",
             spec=spec,
+            group_sources=group_sources,
         )
     ]
-    group_indexes = [_required_index(root[3], path="root[3]")]
     tree_edges: list[dict[str, str]] = []
     component_rows = [
         _required_tuple(
@@ -508,56 +527,21 @@ def _validate_components(
                 field_offset=1,
                 path=path,
                 spec=spec,
+                group_sources=group_sources,
             )
         )
-        group_indexes.append(_required_index(component[4], path=f"{path}[4]"))
         tree_edges.append(
             {
                 "source": f"n{parent_index + 1}",
                 "target": f"n{component_index + 1}",
                 "label": _required_text(
-                    component[5], spec.edge_label_chars, path=f"{path}[5]"
+                    component[6], spec.edge_label_chars, path=f"{path}[6]"
                 ),
-                "flow": _coded_token(component[6], _FLOW_CODES, path=f"{path}[6]"),
-                "sync": _coded_token(component[7], _SYNC_CODES, path=f"{path}[7]"),
+                "flow": _coded_token(component[7], _FLOW_CODES, path=f"{path}[7]"),
+                "sync": _coded_token(component[8], _SYNC_CODES, path=f"{path}[8]"),
             }
         )
-    return components, tree_edges, group_indexes
-
-
-def _validate_group_memberships(
-    raw_groups: list[Any], group_indexes: list[int], spec: AppliedGraphSpec
-) -> list[tuple[str, str]]:
-    group_sources: dict[tuple[str, str], str] = {}
-    groups: list[tuple[str, str]] = []
-    for group_index, raw_group in enumerate(raw_groups):
-        path = f"composition.groups[{group_index}]"
-        group_record = _required_tuple(raw_group, _GROUP_FIELD_COUNT, path=path)
-        full_group = _normalised_required_text(group_record[0], path=f"{path}[0]")
-        group = _bounded_text(full_group, spec.group_label_chars, path=f"{path}[0]")
-        group_kind = _coded_token(group_record[1], _GROUP_KIND_CODES, path=f"{path}[1]")
-        group_key = (group, group_kind)
-        prior_group = group_sources.get(group_key)
-        if prior_group is not None and prior_group != full_group:
-            raise AppliedGraphSpecError(
-                "graph_design_schema_invalid",
-                path=f"{path}[0]",
-                rule="bounded_identity_collision",
-            )
-        group_sources[group_key] = full_group
-        groups.append(group_key)
-
-    memberships: list[tuple[str, str]] = []
-    for component_index, group_index in enumerate(group_indexes):
-        path = (
-            "root[3]"
-            if component_index == 0
-            else f"components[{component_index - 1}][4]"
-        )
-        if group_index < 0 or group_index >= len(groups):
-            _raise_topology(path)
-        memberships.append(groups[group_index])
-    return memberships
+    return components, tree_edges
 
 
 def _validate_links(
@@ -711,7 +695,6 @@ def validate_applied_graph_topology(
         )
     if not isinstance(raw_composition, dict) or set(raw_composition) != {
         "title",
-        "groups",
         "steps",
     }:
         raise AppliedGraphSpecError(
@@ -730,11 +713,9 @@ def validate_applied_graph_topology(
             rule="safety_limit",
         )
     raw_links = raw_connections["links"]
-    raw_groups = raw_composition["groups"]
     raw_steps = raw_composition["steps"]
     for value, path in (
         (raw_links, "connections.links"),
-        (raw_groups, "composition.groups"),
         (raw_steps, "composition.steps"),
     ):
         if isinstance(value, list):
@@ -751,10 +732,7 @@ def validate_applied_graph_topology(
             path="connections",
             rule="safety_limit",
         )
-    components, tree_edges, group_indexes = _validate_components(
-        raw_root, raw_components, spec
-    )
-    memberships = _validate_group_memberships(raw_groups, group_indexes, spec)
+    components, tree_edges = _validate_components(raw_root, raw_components, spec)
     edges = _validate_links(raw_links, node_count, tree_edges, spec)
     sequence_steps = _derive_sequence_steps(
         raw_steps,
@@ -766,15 +744,13 @@ def validate_applied_graph_topology(
     nodes = [
         {
             **component,
-            "group": group,
-            "group_kind": group_kind,
             "tier": None,
-            "lane": "bottom" if group_kind == "operations" else "main",
+            "lane": (
+                "bottom" if component["group_kind"] == "operations" else "main"
+            ),
             "sequence_step": sequence_step,
         }
-        for component, (group, group_kind), sequence_step in zip(
-            components, memberships, sequence_steps, strict=True
-        )
+        for component, sequence_step in zip(components, sequence_steps, strict=True)
     ]
     title = _required_text(
         raw_composition["title"], spec.title_chars, path="composition.title"
@@ -921,7 +897,8 @@ def worst_case_topology_chars(spec: AppliedGraphSpec) -> int:
         "l" * spec.node_label_chars,
         max(_NODE_TYPE_CODES),
         "r" * spec.responsibility_chars,
-        0,
+        "g" * spec.group_label_chars,
+        max(_GROUP_KIND_CODES),
     ]
     components = [
         [
@@ -929,7 +906,8 @@ def worst_case_topology_chars(spec: AppliedGraphSpec) -> int:
             "l" * spec.node_label_chars,
             max(_NODE_TYPE_CODES),
             "r" * spec.responsibility_chars,
-            index + 1,
+            f"{index:02d}" + "g" * max(0, spec.group_label_chars - 2),
+            max(_GROUP_KIND_CODES),
             "e" * spec.edge_label_chars,
             max(_FLOW_CODES),
             max(_SYNC_CODES),
@@ -955,20 +933,12 @@ def worst_case_topology_chars(spec: AppliedGraphSpec) -> int:
         ]
         for source, target in link_endpoints
     ]
-    groups = [
-        [
-            f"{index:02d}" + "g" * max(0, spec.group_label_chars - 2),
-            max(_GROUP_KIND_CODES),
-        ]
-        for index in range(node_count)
-    ]
     payload = {
         "root": root,
         "components": components,
         "connections": {"links": links},
         "composition": {
             "title": "t" * spec.title_chars,
-            "groups": groups,
             "steps": list(range(1, len(components) + 1)),
         },
     }

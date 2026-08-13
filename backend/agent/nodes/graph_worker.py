@@ -40,8 +40,8 @@ from graph.runtime import select_canonical_graph
 logger = logging.getLogger(__name__)
 
 _APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v34"
-_APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v20"
-_APPLIED_GRAPH_TOPOLOGY_EFFORT = "low"
+_APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v21"
+_APPLIED_GRAPH_TOPOLOGY_EFFORT = "high"
 _APPLIED_GRAPH_PATCH_EFFORT = "high"
 _MAX_GRAPH_PATCH_CHARS = 200_000
 _MAX_EDGE_LABEL_PARTS = 4

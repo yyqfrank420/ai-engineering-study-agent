@@ -27,20 +27,15 @@ def _group(index: int) -> tuple[str, int]:
 
 def _draft(node_count: int = 14) -> dict:
     node_records = []
-    groups: list[list] = []
-    group_indexes: dict[tuple[str, int], int] = {}
     for index in range(node_count):
         group, group_kind = _group(index)
-        group_key = (group, group_kind)
-        if group_key not in group_indexes:
-            group_indexes[group_key] = len(groups)
-            groups.append([group, group_kind])
         node_records.append(
             [
                 f"Responsibility {index + 1}",
                 108 if index == 3 else 101,
                 f"Owns material responsibility {index + 1}.",
-                group_indexes[group_key],
+                group,
+                group_kind,
             ]
         )
     components = [
@@ -59,7 +54,6 @@ def _draft(node_count: int = 14) -> dict:
         "connections": {"links": []},
         "composition": {
             "title": "Complete architecture",
-            "groups": groups,
             "steps": list(range(min(7, node_count))),
         },
     }
@@ -124,23 +118,19 @@ def test_topology_schema_uses_compact_positional_records_with_resource_bounds():
     }
     assert root == {
         "type": "array",
-        "maxItems": 4,
+        "maxItems": 5,
         "items": scalar_items,
     }
     assert components["items"] == {
         "type": "array",
-        "maxItems": 8,
+        "maxItems": 9,
         "items": scalar_items,
     }
     assert connections["properties"]["links"]["maxItems"] == spec.safety_max_edges
     assert connections["properties"]["links"]["items"]["maxItems"] == 5
     assert connections["properties"]["links"]["items"]["items"] == scalar_items
-    assert composition["properties"]["groups"]["maxItems"] == spec.safety_max_nodes
-    assert composition["properties"]["groups"]["items"] == {
-        "type": "array",
-        "maxItems": 2,
-        "items": scalar_items,
-    }
+    assert composition["required"] == ["title", "steps"]
+    assert set(composition["properties"]) == {"title", "steps"}
     steps = composition["properties"]["steps"]
     assert steps["maxItems"] == spec.safety_max_nodes
     assert steps["items"] == {"type": "integer"}
@@ -224,11 +214,14 @@ def test_fixed_record_arity_fails_closed(section, row, rule):
 @pytest.mark.parametrize(
     ("record", "row"),
     [
-        ("root", ["label", 101, "responsibility"]),
-        ("component", [0, "label", 101, "responsibility", "edge", 400, 500]),
+        ("root", ["label", 101, "responsibility", "group"]),
+        (
+            "component",
+            [0, "label", 101, "responsibility", "group", "edge", 400, 500],
+        ),
     ],
 )
-def test_group_index_is_required_in_every_component_record(record, row):
+def test_group_identity_is_required_in_every_component_record(record, row):
     payload = _draft(4)
     if record == "root":
         payload["root"] = row
@@ -278,11 +271,12 @@ def test_wire_codebooks_are_disjoint_and_decode_exhaustively():
     ("section", "field_index", "foreign_code"),
     [
         ("root", 1, 200),
-        ("component", 6, 500),
-        ("component", 7, 600),
+        ("root", 4, 100),
+        ("component", 5, 100),
+        ("component", 7, 500),
+        ("component", 8, 600),
         ("link", 3, 100),
         ("link", 4, 200),
-        ("group", 1, 100),
     ],
 )
 def test_every_categorical_position_rejects_foreign_codes(
@@ -296,8 +290,6 @@ def test_every_categorical_position_rejects_foreign_codes(
     elif section == "link":
         payload["connections"]["links"] = [[0, 2, "material link", 400, 500]]
         payload["connections"]["links"][0][field_index] = foreign_code
-    else:
-        payload["composition"]["groups"][0][field_index] = foreign_code
     with pytest.raises(AppliedGraphSpecError) as caught:
         validate_applied_graph_topology(payload, applied_graph_spec("production"))
     assert caught.value.rule == "invalid_enum"
@@ -325,10 +317,11 @@ def test_wire_codes_reject_invalid_scalar_values(value, rule):
 def test_compatibility_category_representations_are_normalized_in_every_tuple_layout():
     payload = _draft(4)
     payload["root"][1] = "101"
+    payload["root"][4] = "runtime"
     payload["components"][0][2] = "decision"
-    payload["components"][0][6] = "control"
-    payload["components"][0][7] = "async"
-    payload["composition"]["groups"][0][1] = "runtime"
+    payload["components"][0][5] = "runtime"
+    payload["components"][0][7] = "control"
+    payload["components"][0][8] = "async"
     payload["connections"]["links"] = [[0, 2, "reports feedback", "feedback", "sync"]]
 
     graph = validate_applied_graph_topology(payload, applied_graph_spec("production"))
@@ -342,7 +335,7 @@ def test_compatibility_category_representations_are_normalized_in_every_tuple_la
     assert graph["edges"][-1]["sync"] == "sync"
 
 
-@pytest.mark.parametrize("field_index", [0, 2])
+@pytest.mark.parametrize("field_index", [0, 2, 3])
 def test_component_text_positions_reject_integer_codes(field_index):
     payload = _draft(4)
     payload["root"][field_index] = 100
@@ -360,56 +353,39 @@ def test_each_non_root_component_carries_exactly_one_incoming_tree_edge():
 
 
 @pytest.mark.parametrize(
-    ("record", "group_index"),
-    [("root", -1), ("root", 99), ("component", -1), ("component", 99)],
+    ("record", "field_index", "value", "rule"),
+    [
+        ("root", 3, " ", "blank_required"),
+        ("root", 3, 1, "value_type"),
+        ("root", 4, 999, "invalid_enum"),
+        ("component", 4, " ", "blank_required"),
+        ("component", 4, 1, "value_type"),
+        ("component", 5, 999, "invalid_enum"),
+    ],
 )
-def test_every_component_group_index_must_reference_a_definition(record, group_index):
-    payload = _draft(6)
-    if record == "root":
-        payload["root"][3] = group_index
-    else:
-        payload["components"][0][4] = group_index
-    with pytest.raises(AppliedGraphSpecError) as caught:
-        validate_applied_graph_topology(payload, applied_graph_spec("production"))
-    assert caught.value.code == "graph_design_topology_invalid"
-
-
-@pytest.mark.parametrize("group_index", [True, 1.0, "1"])
-def test_group_indexes_require_integers(group_index):
-    payload = _draft(6)
-    payload["components"][0][4] = group_index
-
-    with pytest.raises(AppliedGraphSpecError) as caught:
-        validate_applied_graph_topology(payload, applied_graph_spec("production"))
-
-    assert caught.value.rule == "value_type"
-
-
-def test_unused_and_exact_duplicate_group_definitions_have_no_effect():
-    payload = _draft(6)
-    payload["composition"]["groups"].append(["Unused boundary", 604])
-    payload["composition"]["groups"].append(list(payload["composition"]["groups"][0]))
-
-    draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
-
-    assert {node["group"] for node in draft["nodes"]} == {
-        "Product runtime",
-        "Data and model services",
-    }
-
-
-@pytest.mark.parametrize("group", [["label"], ["label", 600, 0]])
-def test_group_definitions_have_fixed_arity(group):
+def test_inline_group_identity_is_validated(record, field_index, value, rule):
     payload = _draft(4)
-    payload["composition"]["groups"][0] = group
+    row = payload["root"] if record == "root" else payload["components"][0]
+    row[field_index] = value
 
     with pytest.raises(AppliedGraphSpecError) as caught:
         validate_applied_graph_topology(payload, applied_graph_spec("production"))
 
-    assert caught.value.rule == "tuple_arity"
+    assert caught.value.rule == rule
 
 
-def test_group_memberships_are_derived_from_component_rows():
+def test_legacy_group_definition_table_is_rejected():
+    payload = _draft(4)
+    payload["composition"]["groups"] = [["Product runtime", 600]]
+
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert caught.value.path == "composition"
+    assert caught.value.rule == "key_set"
+
+
+def test_group_memberships_are_derived_from_inline_component_identity():
     draft = validate_applied_graph_topology(_draft(6), applied_graph_spec("production"))
 
     assert [node["group"] for node in draft["nodes"]] == [
@@ -420,6 +396,32 @@ def test_group_memberships_are_derived_from_component_rows():
         "Product runtime",
         "Data and model services",
     ]
+
+
+def test_same_group_label_with_different_kinds_stays_distinct():
+    payload = _draft(2)
+    payload["components"][0][4] = payload["root"][3]
+    payload["components"][0][5] = 601
+
+    draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert [
+        (node["group"], node["group_kind"]) for node in draft["nodes"]
+    ] == [
+        ("Product runtime", "runtime"),
+        ("Product runtime", "data"),
+    ]
+
+
+def test_late_component_can_declare_a_new_group_without_a_definition_index():
+    payload = _draft(7)
+    payload["components"][5][4] = "New external boundary"
+    payload["components"][5][5] = 604
+
+    draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
+
+    assert draft["nodes"][6]["group"] == "New external boundary"
+    assert draft["nodes"][6]["group_kind"] == "external"
 
 
 @pytest.mark.parametrize("steps", [[0, 0], [99]])
@@ -689,8 +691,8 @@ def test_presentation_text_is_bounded_without_rejecting_valid_topology(caplog):
     payload["composition"]["title"] = "t" * 101
     payload["components"][0][1] = "l" * 61
     payload["components"][0][3] = "r" * 221
-    payload["composition"]["groups"][0][0] = "g" * 81
-    payload["components"][0][5] = "p" * 101
+    payload["components"][0][4] = "g" * 81
+    payload["components"][0][6] = "p" * 101
     payload["connections"]["links"] = [[0, 2, "e" * 101, 401, 501]]
 
     with caplog.at_level("INFO"):
@@ -712,13 +714,15 @@ def test_presentation_text_is_bounded_without_rejecting_valid_topology(caplog):
 def test_bounded_group_labels_cannot_merge_distinct_ownership_boundaries():
     payload = _draft(6)
     prefix = "g" * 80
-    payload["composition"]["groups"][0][0] = prefix + " first"
-    payload["composition"]["groups"][1][0] = prefix + " second"
-    payload["composition"]["groups"][1][1] = 600
+    payload["root"][3] = prefix + " first"
+    payload["root"][4] = 600
+    payload["components"][0][4] = prefix + " second"
+    payload["components"][0][5] = 600
 
     with pytest.raises(AppliedGraphSpecError) as caught:
         validate_applied_graph_topology(payload, applied_graph_spec("production"))
 
+    assert caught.value.path == "components[0][4]"
     assert caught.value.rule == "bounded_identity_collision"
 
 
@@ -831,9 +835,7 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
         spec=applied_graph_spec("production"),
     )
     assert len(prompt) < 6_000
-    assert (
-        "Choose the number of components, groups, and links from the design" in prompt
-    )
+    assert "Choose the number of components and links from the design" in prompt
     spec = applied_graph_spec("production")
     assert f"at most {spec.safety_max_nodes} nodes including root" in prompt
     assert f"and {spec.safety_max_edges} total edges" in prompt
@@ -843,7 +845,8 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     assert "root: [label:string,type:integer" in prompt
     assert "components[i]: [parent_index:integer" in prompt
     assert "connections.links[i]: [source_index:integer" in prompt
-    assert "composition.groups[i]: [label:string,kind:integer]" in prompt
+    assert "group_label:string,group_kind:integer" in prompt
+    assert "composition.groups" not in prompt
     assert "incoming_edge_label:string" in prompt
     assert "parent_index:integer,label:string,type:integer" in prompt
     assert "source_index:integer,target_index:integer" in prompt
@@ -852,10 +855,7 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     assert "Type: 100=client,101=service" in prompt
     assert "Group kind: 600=runtime,601=data" in prompt
     assert "The server owns stable IDs" in prompt
-    assert (
-        "Choose and enumerate groups before constructing root and component rows"
-        in prompt
-    )
+    assert "Every root and component row must carry its exact group label and kind" in prompt
     assert "At production depth, include every applicable control" in prompt
     assert "At prototype depth, use concrete buildable boundaries" in prompt
     assert "Do not add production hardening at low or prototype depth" in prompt
@@ -865,7 +865,7 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
         in prompt
     )
     assert "distinct canary, promotion, and rollback paths" in prompt
-    assert "Use integer category codes, never names" in prompt
+    assert "Use integer codes for type, group_kind, flow, and sync" in prompt
     assert "The request owns the objective" in prompt
     assert "independent architecture review follows" in prompt
     assert "evidence_ref" not in prompt
@@ -885,7 +885,7 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     assert "an existing earlier node index from 0 through i" in prompt
     assert "components[5][0] may be 0 through 5; value 6 is self-reference" in prompt
     assert "composition.steps is one flat array" in prompt
-    assert "Every component must reference exactly one group" in prompt
+    assert "Reuse the same label and kind for nodes in the same group" in prompt
     assert "Link endpoints and composition steps address nodes" in prompt
     assert "Never emit server node IDs" in prompt
     assert "$new_node_N placeholders" in prompt
@@ -907,7 +907,10 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     assert "A component earns a row" in prompt
     assert "An edge earns a record" in prompt
     assert "Return only compact schema-constrained JSON" in prompt
-    assert '"root":["Client",100,"Submits one request.",0]' in prompt
+    assert (
+        '"root":["Client",100,"Submits one request.","Product runtime",600]'
+        in prompt
+    )
     assert '"connections":{"links":[]}' in prompt
     assert '"steps":[0,1,2]' in prompt
     assert "diagram_commitments" not in prompt
@@ -955,7 +958,7 @@ async def test_dynamic_generator_uses_schema_once(monkeypatch):
     assert len(result["nodes"]) == 14
     assert len(result["groups"]) == 4
     assert len(calls) == 1
-    assert calls[0]["effort"] == "low"
+    assert calls[0]["effort"] == "high"
     assert calls[0]["provider_attempt_limit"] == 1
     response_schema = calls[0]["response_schema"]
     spec = applied_graph_spec("production")

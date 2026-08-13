@@ -13,7 +13,7 @@ def test_applied_graph_prompts_define_record_scoped_repair_boundaries():
     )
 
     assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v34"
-    assert _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION == "applied_topology_v20"
+    assert _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION == "applied_topology_v21"
     assert (
         "Choose graph size from the material design" in _APPLIED_GRAPH_TOPOLOGY_SYSTEM
     )
@@ -551,13 +551,9 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
         "delivery": 603,
         "external": 604,
     }
-    group_definitions = [
-        [group["label"], group_codes[group.get("kind", "runtime")]]
+    node_groups = {
+        node_id: (group["label"], group_codes[group.get("kind", "runtime")])
         for group in payload["groups"]
-    ]
-    node_group_indexes = {
-        node_id: group_index
-        for group_index, group in enumerate(payload["groups"])
         for node_id in group["nodeIds"]
     }
     topology = {
@@ -565,7 +561,7 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
             payload["nodes"][0]["label"],
             type_codes[payload["nodes"][0]["type"]],
             payload["nodes"][0]["description"][:80],
-            node_group_indexes[payload["nodes"][0]["id"]],
+            *node_groups[payload["nodes"][0]["id"]],
         ],
         "components": [
             [
@@ -573,7 +569,7 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
                 node["label"],
                 type_codes[node["type"]],
                 node["description"][:80],
-                node_group_indexes[node["id"]],
+                *node_groups[node["id"]],
                 f"routes validated work to {node['label']}",
                 400,
                 500,
@@ -590,7 +586,6 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
         },
         "composition": {
             "title": payload["title"],
-            "groups": group_definitions,
             "steps": list(range(len(payload["nodes"]))),
         },
     }
@@ -661,7 +656,7 @@ async def test_graph_worker_customises_growth_marketing_architecture(monkeypatch
         "control",
         "deployment",
     }
-    assert captured["effort"] == "low"
+    assert captured["effort"] == "high"
     assert captured["provider_attempt_limit"] == 1
     assert captured["response_schema"]["properties"]["components"]["type"] == "array"
     links = captured["response_schema"]["properties"]["connections"]["properties"][
