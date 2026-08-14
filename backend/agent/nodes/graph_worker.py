@@ -2174,17 +2174,34 @@ def _validate_grouped_node_additions(
     replacement = patch.get("groups")
     if not isinstance(replacement, list):
         raise ValueError("grouped node additions require a complete groups replacement")
-    placed_node_ids = {
-        str(node_id)
-        for group in replacement
-        if isinstance(group, dict)
-        for node_id in (group.get("nodeIds") or [])
+    placement_counts = {
+        node_id: sum(
+            node_id in (group.get("nodeIds") or [])
+            for group in replacement
+            if isinstance(group, dict)
+            and isinstance(group.get("nodeIds"), list)
+        )
+        for node_id in added_node_ids
     }
-    unplaced_node_ids = added_node_ids - placed_node_ids
+    unplaced_node_ids = {
+        node_id
+        for node_id, placement_count in placement_counts.items()
+        if placement_count == 0
+    }
+    multiply_placed_node_ids = {
+        node_id
+        for node_id, placement_count in placement_counts.items()
+        if placement_count > 1
+    }
     if unplaced_node_ids:
         raise ValueError(
             "every added node must be placed in a group: "
             + ", ".join(sorted(unplaced_node_ids))
+        )
+    if multiply_placed_node_ids:
+        raise ValueError(
+            "every added node must be placed in exactly one group: "
+            + ", ".join(sorted(multiply_placed_node_ids))
         )
 
 

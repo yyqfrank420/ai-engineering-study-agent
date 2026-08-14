@@ -44,6 +44,13 @@ class LocalRepairAdmissionError(ValueError):
         self.rule = rule
 
 
+def requires_grouped_component_placement(
+    graph: dict[str, Any], component_additions: int
+) -> bool:
+    """Return whether added components need exact group placement authority."""
+    return component_additions > 0 and bool(graph.get("groups"))
+
+
 def repair_scope_for_layers(layers: dict[str, Any]) -> str:
     """Derive repair scope from the layer ownership that grants mutation authority."""
     failed_layers = {
@@ -596,7 +603,7 @@ def validate_repair_contract(
             failures.append(
                 "component additions require connection addition permission"
             )
-        if graph.get("groups") and not (
+        if requires_grouped_component_placement(graph, component_additions) and not (
             isinstance(composition, dict)
             and composition.get("status") == "fail"
             and "groups" in (composition.get("composition_fields") or [])
@@ -604,7 +611,7 @@ def validate_repair_contract(
             failures.append(
                 "component additions in a grouped graph require editable groups"
             )
-        elif graph.get("groups") and not (
+        elif requires_grouped_component_placement(graph, component_additions) and not (
             composition.get("group_ids")
             or composition_append_counts.get("composition", {}).get("groups", 0)
         ):

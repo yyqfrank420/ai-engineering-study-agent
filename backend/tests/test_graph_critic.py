@@ -1445,6 +1445,239 @@ def test_nonproduction_authored_composition_is_advice_without_mutation_authority
     assert normalized["advice"] == [RUBRIC_CRITERIA["authored_composition"][1]]
 
 
+def _grouped_prototype_graph():
+    return {
+        "design_origin": "applied",
+        "nodes": [{"id": "entry"}, {"id": "outcome"}],
+        "edges": [{"source": "entry", "target": "outcome", "label": "returns"}],
+        "groups": [
+            {
+                "id": "runtime",
+                "label": "Primary runtime",
+                "kind": "runtime",
+                "nodeIds": ["entry", "outcome"],
+            }
+        ],
+        "sequence": [],
+        "assumptions": [],
+    }
+
+
+def _grouped_component_addition_scorecard(*, append_group=False):
+    payload = _passing_review_payload(topology_proofs={})
+    _set_model_layer(
+        payload,
+        "components",
+        finding_codes=[_RUBRIC_CODES.index("brief_coverage") + 1],
+        context_node_indexes=[0],
+        addition_count=1,
+    )
+    _set_model_layer(
+        payload,
+        "connections",
+        finding_codes=[_RUBRIC_CODES.index("runtime_completeness") + 1],
+        addition_obligations=[[0, "$new_node_1", "routes to added responsibility"]],
+    )
+    _set_model_layer(
+        payload,
+        "composition",
+        group_indexes=[] if append_group else [0],
+        composition_fields=["groups"],
+        group_addition_count=1 if append_group else 0,
+    )
+    return payload
+
+
+def test_grouped_prototype_component_addition_derives_exact_group_authority():
+    graph = _grouped_prototype_graph()
+    normalized = _canonicalise_review_protocol(
+        _grouped_component_addition_scorecard(),
+        graph=graph,
+        deterministic_findings=[],
+        review_context=[],
+        require_topology_proofs=False,
+        resolved_depth="prototype",
+    )
+
+    contract = normalized["repair_contract"]
+    composition = contract["layers"]["composition"]
+    assert contract["repair_scope"] == "local"
+    assert composition["status"] == "fail"
+    assert composition["group_ids"] == ["runtime"]
+    assert composition["composition_fields"] == ["groups"]
+    assert composition["composition_append_counts"] == {}
+    assert composition["blocking_findings"] == [
+        "Place every added component in an explicitly authorized group."
+    ]
+    assert [
+        (blocker["kind"], blocker["layer"], blocker["key"])
+        for blocker in normalized["hard_blockers"]
+        if blocker["kind"] == "structural"
+    ] == [
+        (
+            "structural",
+            "composition",
+            {"rule": "grouped_component_placement"},
+        )
+    ]
+    validate_local_repair_admission(contract, graph=graph)
+
+
+def test_grouped_prototype_component_addition_can_append_one_group():
+    graph = _grouped_prototype_graph()
+    normalized = _canonicalise_review_protocol(
+        _grouped_component_addition_scorecard(append_group=True),
+        graph=graph,
+        deterministic_findings=[],
+        review_context=[],
+        require_topology_proofs=False,
+        resolved_depth="prototype",
+    )
+
+    contract = normalized["repair_contract"]
+    composition = contract["layers"]["composition"]
+    assert composition["status"] == "fail"
+    assert composition["group_ids"] == []
+    assert composition["composition_fields"] == ["groups"]
+    assert composition["composition_append_counts"] == {"groups": 1}
+    validate_local_repair_admission(contract, graph=graph)
+
+
+@pytest.mark.parametrize(
+    ("group_indexes", "group_addition_count"),
+    [
+        pytest.param([0, 1], 0, id="two-existing-groups"),
+        pytest.param([0], 1, id="existing-and-appended-group"),
+    ],
+)
+def test_grouped_component_placement_rejects_excess_group_authority(
+    group_indexes,
+    group_addition_count,
+):
+    graph = _grouped_prototype_graph()
+    graph["groups"].append(
+        {
+            "id": "audit",
+            "label": "Audit records",
+            "kind": "data",
+            "nodeIds": [],
+        }
+    )
+    payload = _grouped_component_addition_scorecard()
+    _set_model_layer(
+        payload,
+        "composition",
+        group_indexes=group_indexes,
+        composition_fields=["groups"],
+        group_addition_count=group_addition_count,
+    )
+
+    with pytest.raises(CriticProtocolError) as raised:
+        _preflight_review_protocol(
+            payload,
+            graph=graph,
+            deterministic_findings=[],
+            review_context=[],
+            require_topology_proofs=False,
+            resolved_depth="prototype",
+        )
+
+    assert (
+        "layers.composition.group_indexes:excess_authority" in str(raised.value)
+    )
+
+
+def test_grouped_component_placement_keeps_prototype_authored_composition_advice():
+    graph = _grouped_prototype_graph()
+    graph["sequence"] = [
+        {"step": 1, "nodes": ["entry", "outcome"], "description": "returns"}
+    ]
+    payload = _grouped_component_addition_scorecard()
+    _set_model_layer(
+        payload,
+        "composition",
+        finding_codes=[_RUBRIC_CODES.index("authored_composition") + 1],
+        group_indexes=[0],
+        composition_fields=["groups", "sequence"],
+        sequence_indexes=[0],
+    )
+
+    normalized = _canonicalise_review_protocol(
+        payload,
+        graph=graph,
+        deterministic_findings=[],
+        review_context=[],
+        require_topology_proofs=False,
+        resolved_depth="prototype",
+    )
+
+    composition = normalized["repair_contract"]["layers"]["composition"]
+    assert composition["status"] == "fail"
+    assert composition["composition_fields"] == ["groups"]
+    assert composition["group_ids"] == ["runtime"]
+    assert composition["sequence_indexes"] == []
+    assert normalized["advice"] == [RUBRIC_CRITERIA["authored_composition"][1]]
+    assert [
+        (blocker["kind"], blocker["layer"], blocker["key"])
+        for blocker in normalized["hard_blockers"]
+        if blocker["layer"] == "composition"
+    ] == [
+        ("structural", "composition", {"rule": "grouped_component_placement"})
+    ]
+    assert all(
+        requirement["criterion"] != "authored_composition"
+        for requirement in repair_requirements(
+            normalized["repair_contract"], normalized["topology_proofs"]
+        )
+    )
+
+
+def test_grouped_component_placement_blocker_resolves_after_repair():
+    graph = _grouped_prototype_graph()
+    first_review = _canonicalise_review_protocol(
+        _grouped_component_addition_scorecard(),
+        graph=graph,
+        deterministic_findings=[],
+        review_context=[],
+        require_topology_proofs=False,
+        resolved_depth="prototype",
+    )
+    structural_blocker = next(
+        blocker
+        for blocker in first_review["hard_blockers"]
+        if blocker["kind"] == "structural"
+    )
+    repaired_graph = deepcopy(graph)
+    repaired_graph["nodes"].append({"id": "telemetry"})
+    repaired_graph["edges"].append(
+        {"source": "entry", "target": "telemetry", "label": "reports"}
+    )
+    repaired_graph["groups"][0]["nodeIds"].append("telemetry")
+    passing_scorecard = _passing_review_payload(topology_proofs={})
+    passing_scorecard["prior_obligation_dispositions"] = [
+        [structural_blocker["id"], "resolved"]
+    ]
+
+    second_review = _canonicalise_review_protocol(
+        passing_scorecard,
+        graph=repaired_graph,
+        deterministic_findings=[],
+        review_context=[],
+        require_topology_proofs=False,
+        resolved_depth="prototype",
+        prior_open_obligations=[structural_blocker],
+    )
+
+    assert second_review["hard_blockers"] == []
+    assert second_review["prior_obligation_dispositions"] == [
+        {
+            "prior_obligation_id": structural_blocker["id"],
+            "status": "resolved",
+        }
+    ]
+    assert second_review["repair_contract"]["repair_scope"] == "none"
+
+
 def test_production_flow_and_branch_findings_remain_blocking():
     payload = _passing_review_payload(topology_proofs={})
     codes = [
@@ -3413,6 +3646,58 @@ async def test_production_rerun_with_proofless_prior_review_reopens_connections_
 
 
 @pytest.mark.asyncio
+async def test_production_rerun_with_malformed_complete_prior_proofs_reopens_connections(
+    monkeypatch,
+):
+    reviewed_graph = _domain_graph()
+    node_ids = ("objective", "quality", "optimizer", "approval", "executor", "outcome")
+    for node, node_id in zip(reviewed_graph["nodes"], node_ids, strict=True):
+        node["id"] = node_id
+    reviewed_graph["edges"] = [
+        {"source": source, "target": target, "label": "passes bounded work"}
+        for source, target in zip(node_ids[:-1], node_ids[1:], strict=True)
+    ]
+    candidate = deepcopy(reviewed_graph)
+    candidate["assumptions"] = ["The production composition changed."]
+    malformed_prior_proofs = _valid_protocol_topology_proofs(
+        reviewed_graph["edges"][0]
+    )
+    malformed_prior_proofs[0].pop("reason")
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return _structured_response(
+            _passing_review_payload(
+                topology_proofs=_valid_model_topology_proofs(),
+            )
+        )
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+    state = _critic_state(graph=candidate, complexity="production")
+    state.update(
+        {
+            "reviewed_graph_data": reviewed_graph,
+            "graph_review": {
+                "repair_contract": _repair_contract(),
+                "topology_proofs": malformed_prior_proofs,
+                "resolved_complexity": "production",
+            },
+        }
+    )
+
+    review = (await graph_critic_node(state))["graph_review"]
+
+    assert calls[0]["response_schema"] == _GRAPH_CRITIC_RESPONSE_SCHEMA
+    assert review["approved"] is True
+    assert review["locked_layers"] == ["components"]
+    assert len(review["topology_proofs"]) == len(_TOPOLOGY_PROOF_GUARANTEES)
+
+
+@pytest.mark.asyncio
 async def test_reviewed_graph_data_matches_the_scorecard_candidate(monkeypatch):
     graph = _domain_graph()
     graph["nodes"][0]["technology"] = "Candidate-specific implementation detail"
@@ -5202,7 +5487,7 @@ async def test_model_derived_repair_contract_failure_gets_one_protocol_correctio
     ]
     assert calls[0]["messages"] != calls[1]["messages"]
     correction = calls[1]["messages"][0]["content"][-1]["text"]
-    assert f"failed {layer} layer must cite" in correction
+    assert f"layers.{layer}:missing_evidence" in correction
     assert result["graph_review"]["review_status"] == "completed"
     assert result["graph_review"]["repair_contract"]["layers"][layer][
         "status"
@@ -5267,11 +5552,57 @@ async def test_cross_layer_addition_contract_failure_gets_one_protocol_correctio
         "graph_critic_protocol_correction",
     ]
     correction = calls[1]["messages"][0]["content"][-1]["text"]
-    assert "component additions require connection addition permission" in correction
+    assert "layers.connections.addition_obligations:missing_evidence" in correction
     contract = result["graph_review"]["repair_contract"]
     assert contract["layers"]["components"]["addition_count"] == 1
     assert contract["layers"]["connections"]["addition_count"] == 1
     assert result["graph_review"].get("terminal") is not True
+
+
+@pytest.mark.asyncio
+async def test_grouped_component_addition_correction_receives_missing_group_authority(
+    monkeypatch,
+):
+    invalid = _grouped_component_addition_scorecard()
+    _set_model_layer(
+        invalid,
+        "composition",
+        group_indexes=[],
+        composition_fields=[],
+    )
+    corrected = _grouped_component_addition_scorecard()
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return _structured_response(invalid if len(calls) == 1 else corrected)
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic._deterministic_review",
+        lambda *_args, **_kwargs: {
+            "approved": True,
+            "deterministic_findings": [],
+        },
+    )
+
+    result = await graph_critic_node(
+        _critic_state(graph=_grouped_prototype_graph())
+    )
+
+    assert [call["telemetry"]["operation"] for call in calls] == [
+        "graph_critic",
+        "graph_critic_protocol_correction",
+    ]
+    correction = calls[1]["messages"][0]["content"][-1]["text"]
+    assert "layers.composition.composition_fields:missing_evidence" in correction
+    assert "layers.composition.group_indexes:missing_evidence" in correction
+    composition = result["graph_review"]["repair_contract"]["layers"]["composition"]
+    assert composition["status"] == "fail"
+    assert composition["group_ids"] == ["runtime"]
 
 
 @pytest.mark.asyncio

@@ -27,6 +27,7 @@ from agent.graph_repair_contract import (
     LocalRepairAdmissionError,
     REPAIR_LAYERS as _REPAIR_LAYERS,
     repair_scope_for_layers as _repair_scope_for_layers,
+    requires_grouped_component_placement,
     validate_local_repair_admission as _validate_local_repair_admission,
     validate_repair_contract as _validate_repair_contract,
 )
@@ -163,6 +164,25 @@ _MODEL_PROOF_FIELDS = (
     "repair_obligation_indexes",
     "repair_edge_indexes",
 )
+_GROUPED_COMPONENT_PLACEMENT_FINDING = (
+    "Place every added component in an explicitly authorized group."
+)
+
+
+def _structural_group_targets_exceed_additions(
+    *,
+    component_addition_count: int,
+    group_indexes: list[int],
+    group_addition_count: int,
+    has_independent_group_authority: bool,
+) -> bool:
+    """Return whether structural placement exceeds the added components."""
+    return (
+        not has_independent_group_authority
+        and len(group_indexes) + group_addition_count > component_addition_count
+    )
+
+
 _MODEL_LAYER_OUTPUT_EXAMPLE = ",\n".join(
     "    "
     + json.dumps(layer, ensure_ascii=False)
@@ -392,9 +412,25 @@ def _review_layer_fingerprints(graph: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def _has_complete_topology_proofs(previous_review: dict[str, Any]) -> bool:
-    proofs = previous_review.get("topology_proofs")
-    return isinstance(proofs, list) and len(proofs) == len(_TOPOLOGY_PROOF_GUARANTEES)
+def _has_complete_topology_proofs(
+    previous_review: dict[str, Any],
+    *,
+    graph: dict[str, Any],
+) -> bool:
+    try:
+        _validate_review_protocol(
+            {
+                "repair_contract": previous_review["repair_contract"],
+                "strengths": previous_review.get("strengths") or [],
+                "advice": previous_review.get("advice") or [],
+                "topology_proofs": previous_review.get("topology_proofs") or [],
+            },
+            require_topology_proofs=True,
+            graph=graph,
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+    return True
 
 
 def _locked_review_layers(
@@ -428,7 +464,7 @@ def _locked_review_layers(
         reopened.add("composition")
     if resolved_depth == "production" and (
         previous_review.get("resolved_complexity") != "production"
-        or not _has_complete_topology_proofs(previous_review)
+        or not _has_complete_topology_proofs(previous_review, graph=previous_graph)
     ):
         reopened.update(("connections", "composition"))
     return {
@@ -973,6 +1009,12 @@ def _preflight_review_protocol(
     prior_open_obligations = prior_open_obligations or []
     component_addition_count = 0
     connection_addition_obligation_count = 0
+    component_has_hard_blocker = False
+    connection_has_hard_blocker = False
+    composition_fields: list[str] = []
+    composition_group_indexes: list[int] = []
+    composition_group_addition_count = 0
+    composition_has_independent_group_authority = False
     for layer, fields in _MODEL_LAYER_FIELDS.items():
         row = layers.get(layer)
         row_path = f"layers.{layer}"
@@ -991,15 +1033,18 @@ def _preflight_review_protocol(
             finding_codes = []
         elif len(finding_codes) != len(set(finding_codes)):
             reject(f"{row_path}.finding_codes", "duplicate_reference")
+        hard_finding_codes: list[int] = []
         for code in finding_codes:
             rubric_code = _RUBRIC_CODES[code - 1]
             if _RUBRIC_CODE_OWNERS[rubric_code] != layer:
                 reject(f"{row_path}.finding_codes", "ownership_mismatch")
-            if (
+            elif (
                 resolved_depth != "production"
                 and rubric_code in _PRODUCTION_ONLY_RUBRIC_CODES
             ):
                 reject(f"{row_path}.finding_codes", "invalid_reference")
+            elif rubric_code not in advisory_rubric_codes(resolved_depth):
+                hard_finding_codes.append(code)
 
         valid_indexes: dict[str, list[int]] = {}
         for field in fields:
@@ -1039,6 +1084,8 @@ def _preflight_review_protocol(
                 reject(f"{row_path}.{field}", "invalid_range")
             elif layer == "components" and field == "addition_count":
                 component_addition_count = value
+            elif layer == "composition" and field == "group_addition_count":
+                composition_group_addition_count = value
         if "addition_obligations" in assessment:
             try:
                 obligations = _model_connection_addition_obligations(
@@ -1062,10 +1109,45 @@ def _preflight_review_protocol(
                 isinstance(item, str) and item in _COMPOSITION_FIELDS for item in value
             ):
                 reject(f"{row_path}.composition_fields", "invalid_reference")
+                value = []
             elif len(value) != len(set(value)):
                 reject(f"{row_path}.composition_fields", "duplicate_reference")
+            composition_fields = value
+            composition_group_indexes = valid_indexes.get("group_indexes", [])
+            composition_has_independent_group_authority = bool(
+                deterministic_indexes
+                or "groups"
+                in required_composition_repair_fields(
+                    [_RUBRIC_CODES[code - 1] for code in hard_finding_codes]
+                )
+            )
 
-        has_blocker = bool(finding_codes or deterministic_indexes)
+        has_hard_blocker = bool(hard_finding_codes or deterministic_indexes)
+        if layer == "components":
+            component_has_hard_blocker = has_hard_blocker
+        elif layer == "connections":
+            connection_has_hard_blocker = has_hard_blocker
+        structural_group_placement = bool(
+            layer == "composition"
+            and requires_grouped_component_placement(
+                graph, component_addition_count
+            )
+            and connection_addition_obligation_count > 0
+            and "groups" in composition_fields
+            and (composition_group_indexes or composition_group_addition_count > 0)
+        )
+        has_blocker = bool(
+            finding_codes or deterministic_indexes or structural_group_placement
+        )
+        if (
+            structural_group_placement
+            and not has_hard_blocker
+            and (
+                valid_indexes.get("context_indexes")
+                or valid_indexes.get("context_node_indexes")
+            )
+        ):
+            reject(row_path, "unexpected_context")
         if not has_blocker:
             permission_fields = {
                 "node_indexes",
@@ -1090,6 +1172,40 @@ def _preflight_review_protocol(
                 or has_permission
             ):
                 reject(row_path, "unexpected_context")
+        if (
+            layer == "components"
+            and has_hard_blocker
+            and not valid_indexes.get("node_indexes")
+            and component_addition_count == 0
+        ):
+            reject(row_path, "missing_evidence")
+        if (
+            layer == "connections"
+            and has_hard_blocker
+            and not valid_indexes.get("edge_indexes")
+            and connection_addition_obligation_count == 0
+        ):
+            reject(row_path, "missing_evidence")
+
+    if component_addition_count > 0:
+        if not component_has_hard_blocker:
+            reject("layers.components.addition_count", "unexpected_context")
+        if not connection_has_hard_blocker or connection_addition_obligation_count == 0:
+            reject("layers.connections.addition_obligations", "missing_evidence")
+        if requires_grouped_component_placement(graph, component_addition_count):
+            if "groups" not in composition_fields:
+                reject("layers.composition.composition_fields", "missing_evidence")
+            if not composition_group_indexes and composition_group_addition_count == 0:
+                reject("layers.composition.group_indexes", "missing_evidence")
+            if _structural_group_targets_exceed_additions(
+                component_addition_count=component_addition_count,
+                group_indexes=composition_group_indexes,
+                group_addition_count=composition_group_addition_count,
+                has_independent_group_authority=(
+                    composition_has_independent_group_authority
+                ),
+            ):
+                reject("layers.composition.group_indexes", "excess_authority")
 
     if require_topology_proofs:
         proofs = payload.get("topology_proofs")
@@ -1678,9 +1794,80 @@ def _canonicalise_review_protocol(
             required_composition_fields = required_composition_repair_fields(
                 finding_codes
             )
+            group_addition_count = _model_addition_count(
+                assessment.get("group_addition_count"),
+                path="layers.composition.group_addition_count",
+            )
+            sequence_addition_count = _model_addition_count(
+                assessment.get("sequence_addition_count"),
+                path="layers.composition.sequence_addition_count",
+            )
+            assumption_addition_count = _model_addition_count(
+                assessment.get("assumption_addition_count"),
+                path="layers.composition.assumption_addition_count",
+            )
+            grouped_component_addition = requires_grouped_component_placement(
+                graph, component_addition_count
+            )
+            has_independent_group_authority = bool(
+                deterministic_indexes or "groups" in required_composition_fields
+            )
+            if component_addition_count > 0 and canonical_layers["components"][
+                "status"
+            ] != "fail":
+                raise CriticProtocolError(
+                    "component addition permission requires a blocking component finding",
+                    path="layers.components.addition_count",
+                    rule="unexpected_context",
+                )
+            if component_addition_count > 0 and (
+                canonical_layers["connections"]["status"] != "fail"
+                or not connection_addition_obligations
+            ):
+                raise CriticProtocolError(
+                    "component additions require exact connection obligations",
+                    path="layers.connections.addition_obligations",
+                    rule="missing_evidence",
+                )
+            if grouped_component_addition and "groups" not in selected_composition_fields:
+                raise CriticProtocolError(
+                    "grouped component additions require group placement authority",
+                    path="layers.composition.composition_fields",
+                    rule="missing_evidence",
+                )
+            if grouped_component_addition and not indexes and group_addition_count == 0:
+                raise CriticProtocolError(
+                    "grouped component additions require an exact group target",
+                    path="layers.composition.group_indexes",
+                    rule="missing_evidence",
+                )
+            if grouped_component_addition and _structural_group_targets_exceed_additions(
+                component_addition_count=component_addition_count,
+                group_indexes=indexes,
+                group_addition_count=group_addition_count,
+                has_independent_group_authority=has_independent_group_authority,
+            ):
+                raise CriticProtocolError(
+                    "group placement authority exceeds the added component count",
+                    path="layers.composition.group_indexes",
+                    rule="excess_authority",
+                )
+            if (
+                grouped_component_addition
+                and not finding_codes
+                and not deterministic_indexes
+                and (context_indexes or context_node_indexes)
+            ):
+                raise CriticProtocolError(
+                    "structural group placement cannot cite unrelated review context",
+                    path="layers.composition",
+                    rule="unexpected_context",
+                )
             authoritative_composition_fields = set(required_composition_fields)
-            if deterministic_indexes or not required_composition_fields:
+            if deterministic_indexes or (finding_codes and not required_composition_fields):
                 authoritative_composition_fields.update(selected_composition_fields)
+            if grouped_component_addition:
+                authoritative_composition_fields.add("groups")
             canonical["composition_fields"] = [
                 field
                 for field in _COMPOSITION_FIELDS
@@ -1714,30 +1901,37 @@ def _canonicalise_review_protocol(
             canonical["composition_append_counts"] = {
                 field: count
                 for field, count in (
-                    (
-                        "groups",
-                        _model_addition_count(
-                            assessment.get("group_addition_count"),
-                            path="layers.composition.group_addition_count",
-                        ),
-                    ),
-                    (
-                        "sequence",
-                        _model_addition_count(
-                            assessment.get("sequence_addition_count"),
-                            path="layers.composition.sequence_addition_count",
-                        ),
-                    ),
-                    (
-                        "assumptions",
-                        _model_addition_count(
-                            assessment.get("assumption_addition_count"),
-                            path="layers.composition.assumption_addition_count",
-                        ),
-                    ),
+                    ("groups", group_addition_count),
+                    ("sequence", sequence_addition_count),
+                    ("assumptions", assumption_addition_count),
                 )
                 if count > 0 and field in authoritative_composition_fields
             }
+            if grouped_component_addition:
+                status = "fail"
+                canonical.update(
+                    {
+                        "status": "fail",
+                        "score": 0.0,
+                        "blocking_findings": list(
+                            dict.fromkeys(
+                                [
+                                    *canonical["blocking_findings"],
+                                    _GROUPED_COMPONENT_PLACEMENT_FINDING,
+                                ]
+                            )
+                        ),
+                        "reason": "The added component requires exact group placement.",
+                    }
+                )
+                hard_blocker_specs.append(
+                    {
+                        "kind": "structural",
+                        "layer": "composition",
+                        "key": {"rule": "grouped_component_placement"},
+                        "message": _GROUPED_COMPONENT_PLACEMENT_FINDING,
+                    }
+                )
         if status == "pass" and advisory_codes:
             canonical.update(
                 {
@@ -2179,7 +2373,8 @@ context and never grant permission to mutate a record. Context supplements a fin
 not replace one.
 Each supplied deterministic finding names its authoritative `owner_layer`. Classify every supplied
 finding exactly once under that owner layer.
-A layer with no finding codes or deterministic finding indexes exposes no selectors or context.
+A layer with no finding codes or deterministic finding indexes exposes no selectors or context,
+except the exact group placement required by a valid grouped component addition below.
 All four artifact layers are mandatory for every reviewed candidate.
 Set the component `addition_count` to the exact number of missing nodes required by the cited defect.
 Existing-record defects and every passing layer use zero. Context node indexes are read-only anchors
@@ -2207,10 +2402,15 @@ connected region must use an existing candidate node as one endpoint. Context se
 repair but never attach a new region. Group moves use composition `group_indexes`, with both the
 source and destination group indexes selected.
 Component additions also require connection additions. When the candidate has groups, component
-additions require a failed composition row with `groups` in `composition_fields` and either an
-editable existing group or a declared group addition. Every composition addition count requires its
-matching field in `composition_fields`. These are one repair plan across MECE owners, so fail every
-owner whose records must change.
+additions require `groups` in `composition_fields` and either exact existing `group_indexes` or a
+declared group addition. The server derives the blocking composition status needed for this
+structural placement; do not use an advisory composition criterion solely to create that status.
+This derived authority exists only beside a blocking component addition and its exact connection
+obligations. At prototype depth, leave composition `finding_codes` empty unless a separate hard
+composition criterion fails. The derived blocker authorizes only the cited groups. Every composition
+addition count requires its matching field in `composition_fields`. Without an independent hard
+group defect, the number of cited existing groups plus declared group additions must not exceed the
+component `addition_count`; several added components may share one group.
 
 Copy every deterministic pre-review finding under its owning layer.
 The packet may contain `prior_open_obligations`. Return one
@@ -3435,7 +3635,7 @@ def _validate_review_protocol(
             and isinstance(blocker.get("id"), str)
             and isinstance(blocker.get("kind"), str)
             and blocker.get("kind")
-            in {"rubric", "deterministic", "context", "topology"}
+            in {"rubric", "deterministic", "context", "topology", "structural"}
             and blocker.get("layer") in _REPAIR_LAYERS
             and isinstance(blocker.get("key"), dict)
             and isinstance(blocker.get("message"), str)

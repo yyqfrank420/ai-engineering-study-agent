@@ -3043,6 +3043,124 @@ def test_grouped_repair_requires_group_placement_for_every_added_node():
         )
 
 
+def _grouped_component_addition_repair() -> tuple[dict, dict, dict]:
+    existing = _domain_graph(5)
+    existing["groups"] = [
+        {
+            "id": "runtime",
+            "label": "Runtime",
+            "kind": "runtime",
+            "nodeIds": [node["id"] for node in existing["nodes"][:3]],
+        },
+        {
+            "id": "operations",
+            "label": "Operations",
+            "kind": "operations",
+            "nodeIds": [node["id"] for node in existing["nodes"][3:]],
+        },
+    ]
+    contract = _local_repair_contract(
+        failed_layers={
+            "components": {
+                "addition_count": 1,
+                "context_node_ids": ["fulfilment_stage_1"],
+            },
+            "connections": {
+                "addition_count": 1,
+                "context_node_ids": ["fulfilment_stage_1"],
+                "connection_addition_obligations": [
+                    {
+                        "source": "fulfilment_stage_1",
+                        "target": "$new_node_1",
+                        "required_contract": "routes runtime telemetry",
+                    }
+                ],
+            },
+            "composition": {
+                "composition_fields": ["groups"],
+                "group_ids": ["runtime"],
+            },
+        }
+    )
+    patch = {
+        "add_nodes": [
+            {
+                "id": "runtime_telemetry",
+                "label": "Runtime Telemetry",
+                "type": "service",
+                "technology": "Metrics collector",
+                "description": "Collects bounded runtime telemetry.",
+            }
+        ],
+        "add_edges": [
+            {
+                "source": "fulfilment_stage_1",
+                "target": "runtime_telemetry",
+                "label": "routes runtime telemetry",
+                "technology": "Typed telemetry event",
+                "sync": "async",
+                "flow": "runtime",
+                "description": "Routes telemetry to its bounded owner.",
+            }
+        ],
+        "groups": [
+            {
+                **existing["groups"][0],
+                "nodeIds": [
+                    *existing["groups"][0]["nodeIds"],
+                    "runtime_telemetry",
+                ],
+            },
+            copy.deepcopy(existing["groups"][1]),
+        ],
+    }
+    return existing, contract, patch
+
+
+def test_grouped_component_addition_changes_only_the_selected_existing_group():
+    existing, contract, patch = _grouped_component_addition_repair()
+
+    updated = graph_worker._apply_applied_graph_patch(
+        existing,
+        patch,
+        safety_max_nodes=7,
+        resolved_complexity="prototype",
+        repair_contract=contract,
+    )
+
+    assert updated["groups"][0]["nodeIds"][-1] == "runtime_telemetry"
+    assert updated["groups"][1] == existing["groups"][1]
+
+
+def test_grouped_component_addition_rejects_an_uncited_group_change():
+    existing, contract, patch = _grouped_component_addition_repair()
+    patch["groups"][1]["label"] = "Changed operations"
+
+    with pytest.raises(ValueError, match="changed locked group: operations"):
+        graph_worker._apply_applied_graph_patch(
+            existing,
+            patch,
+            safety_max_nodes=7,
+            resolved_complexity="prototype",
+            repair_contract=contract,
+        )
+
+
+def test_grouped_component_addition_rejects_membership_in_multiple_groups():
+    existing, contract, patch = _grouped_component_addition_repair()
+    contract["layers"]["composition"]["group_ids"].append("operations")
+    patch["groups"][1]["nodeIds"].append("runtime_telemetry")
+
+    with pytest.raises(ValueError, match="placed in exactly one group"):
+        graph_worker._apply_applied_graph_patch(
+            existing,
+            patch,
+            safety_max_nodes=7,
+            resolved_complexity="prototype",
+            repair_contract=contract,
+        )
+
+
 def test_critic_connection_addition_rejects_unrelated_endpoints():
     existing = _domain_graph(5)
     contract = _local_repair_contract(
