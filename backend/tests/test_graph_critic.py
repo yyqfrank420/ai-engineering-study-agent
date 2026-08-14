@@ -1,6 +1,7 @@
 import asyncio
 import json
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 from adapters.llm_adapter import _anthropic_response_schema
@@ -378,22 +379,41 @@ async def test_request_scoped_critic_provider_call_ceiling_fails_closed(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_critic_adapter_uses_one_provider_attempt_despite_global_retry_budget(
+async def test_critic_adapter_retries_once_before_message_start(
     monkeypatch,
 ):
     import adapters.llm_adapter as llm_adapter
 
     attempts = 0
 
-    async def failing_anthropic_stream(_kwargs):
+    async def critic_anthropic_stream(_kwargs):
         nonlocal attempts
         attempts += 1
-        raise RuntimeError("critic provider failed")
-        yield
+        if attempts == 1:
+            raise RuntimeError("critic provider failed before acceptance")
+        yield SimpleNamespace(
+            type="message_start",
+            message=SimpleNamespace(
+                usage=SimpleNamespace(
+                    input_tokens=10,
+                    cache_creation_input_tokens=0,
+                    cache_read_input_tokens=0,
+                )
+            ),
+        )
+        yield SimpleNamespace(
+            type="content_block_delta",
+            delta=SimpleNamespace(type="text_delta", text="{}"),
+        )
+        yield SimpleNamespace(
+            type="message_delta",
+            usage=SimpleNamespace(output_tokens=1),
+            delta=SimpleNamespace(stop_reason="end_turn"),
+        )
 
     monkeypatch.setattr(settings, "llm_max_retries", 2)
     monkeypatch.setattr(settings, "llm_retry_delay_s", 0)
-    monkeypatch.setattr(llm_adapter, "_anthropic_stream_once", failing_anthropic_stream)
+    monkeypatch.setattr(llm_adapter, "_anthropic_stream_once", critic_anthropic_stream)
     monkeypatch.setattr(
         "storage.telemetry_store.record_llm_telemetry", lambda **_kwargs: None
     )
@@ -403,18 +423,18 @@ async def test_critic_adapter_uses_one_provider_attempt_despite_global_retry_bud
     monkeypatch.setattr("observability.current_trace_context", lambda: {})
     monkeypatch.setattr("observability.record_llm_metrics", lambda **_kwargs: None)
 
-    with pytest.raises(RuntimeError, match="critic provider failed"):
-        await _request_critic_scorecard(
-            _critic_state(),
-            review_packet={"candidate": {}},
-            render_result={},
-            resolved_complexity="prototype",
-            revision_count=0,
-            require_topology_proofs=False,
-        )
+    result = await _request_critic_scorecard(
+        _critic_state(),
+        review_packet={"candidate": {}},
+        render_result={},
+        resolved_complexity="prototype",
+        revision_count=0,
+        require_topology_proofs=False,
+    )
 
     assert settings.llm_max_retries == 2
-    assert attempts == 1
+    assert attempts == 2
+    assert result.text == "{}"
 
 
 def test_repair_contract_has_exactly_four_mece_layers_without_duplicate_selectors():
@@ -3104,7 +3124,7 @@ async def test_patch_validation_error_informs_one_contract_correction(monkeypatc
 
     assert len(calls) == 1
     assert calls[0]["telemetry"]["operation"] == "graph_critic_contract_correction"
-    assert calls[0]["provider_attempt_limit"] == 1
+    assert calls[0]["provider_attempt_limit"] == 2
     correction = calls[0]["messages"][0]["content"][-1]["text"]
     assert "previous repair permission contract" in correction
     assert "Validation path: groups.group_1.group_2" in correction

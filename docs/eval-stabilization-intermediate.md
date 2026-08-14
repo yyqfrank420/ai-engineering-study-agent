@@ -1,16 +1,17 @@
 # Live Evaluation Stabilization: Intermediate Record
 
-Last updated: 2026-08-12
+Last updated: 2026-08-13
 
-Evidence in this record is current through paid diagnostic `31637814841` on exact head
-`f15537a3270b4d0e2d011f14fe4cfddf033e389b`
-on 2026-08-12. PRs #37 through #40 merged on 2026-08-07, and PR #44 merged as `77df25e7`. The
+Evidence in this record is current through paid diagnostic `31705887318` on exact head
+`30c8a5418ce5479c9e5cea170a574355a99608a8`
+on 2026-08-13. PRs #37 through #40 merged on 2026-08-07, and PR #44 merged as `77df25e7`. The
 evidence-provenance, graph-review, and latency corrections have passed local review and the full
-offline CI matrix through the last pushed correction. Fifteen consecutive recent `graph-expansion`
+offline CI matrix through the current retry correction. Sixteen consecutive recent `graph-expansion`
 diagnostics have failed; there is no protected live success on the current branch. The latest paid
-run exposed the remaining cross-array group-membership reference before rendering or review. The
-replacement topology wire stores group label and kind in each node row. This working tree passes the
-full offline CI matrix. No further paid run is authorized.
+run proved the self-contained group wire, Kimi high generation, topology validation, private render,
+and preview path. Anthropic then rejected the first Sonnet critic request with `overloaded_error`
+before accepting the stream. The critic transport now permits one bounded pre-acceptance retry. No
+further paid run is authorized.
 Corpus `2026-08-12.v1` remains pending human review.
 
 ## Objective and operating rules
@@ -27,12 +28,12 @@ Corpus `2026-08-12.v1` remains pending human review.
 ## Recent diagnostic failure ledger
 
 This is the canonical chronology for recent `graph-expansion` failures through
-`f15537a3270b4d0e2d011f14fe4cfddf033e389b`. Every
+`30c8a5418ce5479c9e5cea170a574355a99608a8`. Every
 row records a live product failure. A green workflow conclusion for a report-only row means the
 pending-corpus workflow uploaded its evidence and exited without enforcing the failed verdict. The
 initial workflow runs failed; later report-only diagnostics concluded green under that policy.
-The retained `live-results.json` for every row says `status: fail`. All fifteen failures ended on
-turn 1 and skipped turn 2. Three failures emitted a reversible preview but no authoritative graph;
+The retained `live-results.json` for every row says `status: fail`. All sixteen failures ended on
+turn 1 and skipped turn 2. Four failures emitted a reversible preview but no authoritative graph;
 the other twelve emitted no visible graph.
 Run links and exact heads come from GitHub Actions metadata. Latency, provider calls, failure codes,
 and cost come from each retained `scheduled-eval-<run>/browser-results.json`, `live-results.json`,
@@ -57,8 +58,9 @@ incomplete usage.
 | 2026-08-12 | [`31619916923`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31619916923), `ae916b32818ea752e2cd6e46d4bcb31d69b1f025` | Kimi returned complete JSON, then deterministic validation rejected the sixth component parent at `components[5][0]: topology`. No graph, preview, private render, critic, or turn 2 ran. Two application calls ran without fallback. The turn took 52.083 seconds and the case took 54.158 seconds. | Removed the selectable index base and nested sequence batches from the internal topology wire format. Every reference is zero-based, sequence membership is one flat list, the prompt gives the exact late-row bound, and safe logs retain the observed and maximum parent indexes. | $0.074490 |
 | 2026-08-12 | [`31624156649`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31624156649), `7767994733dd222b07c6278a87032b086dcf2326` | Kimi produced a valid nine-node, thirteen-edge zero-based graph. Private rendering passed and a reversible preview appeared after 76.944 seconds. The architecture audit found wrong and duplicated edges plus an incomplete sequence. Sonnet completed one review call, but the server rejected its canonical repair contract at `canonical_review: invalid_server_state`; final `graph_data` was `null` and turn 2 was skipped. Four application calls ran without fallback. The case took 261.184 seconds. | Canonical repair-contract failures derived from untrusted scorecards now enter the existing bounded protocol-correction lane. Server-owned failures introduced after locked-layer merging still fail closed without retry. The prompt requires an exact existing selector or exact addition for every blocking components or connections row. | $0.388656 |
 | 2026-08-12 | [`31637814841`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31637814841), `f15537a3270b4d0e2d011f14fe4cfddf033e389b` | Kimi low returned complete JSON in 28.923 seconds. Deterministic topology validation rejected `components[5][4]` because its group index did not reference a defined `composition.groups` row. No graph, preview, private render, critic, correction, or turn 2 ran. Two application calls cost $0.082446, and the case took 64.963 seconds without retry or fallback. | The model-facing wire now puts `group_label` and `group_kind` in every root and component row. `composition.groups` and all membership indexes are removed. The server derives canonical groups from the inline identity and retains bounded-label collision checks. Initial Kimi effort is `high`; literal `medium` remains unsupported by the adapter. | $0.082446 |
+| 2026-08-13 | [`31705887318`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31705887318), `30c8a5418ce5479c9e5cea170a574355a99608a8` | Kimi high returned a valid 11-node, 21-edge candidate in 131.559 seconds. Topology validation and private rendering passed, and a reversible preview appeared after 134.684 seconds. Opus completed its audit. The first Sonnet critic request then failed before stream acceptance with provider error `overloaded_error`; it had zero tokens and no deltas. Final `graph_data` was `null`, turn 2 was skipped, and no fallback ran. Four application calls cost $0.295396; the case took 250.153 seconds. | Critic calls now allow one retry inside the existing stage deadline. Only retryable failures before `message_start` qualify. The retry waits a bounded jittered delay. Any accepted stream, partial output, non-retryable error, cancellation, or exhausted deadline still fails closed without replay or fallback. | $0.295396 |
 
-Known application spend across these fifteen failures is at least **$4.223649**. Several provider
+Known application spend across these sixteen failures is at least **$4.519045**. Several provider
 calls have incomplete usage; row amounts marked `at least` are lower bounds. Diagnostic
 `31549644038` retained only `connections.links[6]: topology`; it did not retain authored output and
 cannot distinguish an out-of-range endpoint from a self-link.
@@ -714,7 +716,7 @@ Historical checkpoint evidence:
   source-type mismatches, and model-supplied canonical IDs retain the existing fail-closed validator
   and generic public error.
 
-## 2026-08-12 convergence and latency state
+## 2026-08-13 convergence and latency state
 
 The recent diagnostic failure ledger above is the canonical status and chronology. The entries
 below retain implementation detail for the latest convergence and latency corrections.

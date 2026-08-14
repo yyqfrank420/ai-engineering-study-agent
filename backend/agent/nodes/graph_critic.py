@@ -2424,7 +2424,7 @@ async def _request_critic_scorecard(
         ),
         timeout_seconds=critic_timeout_seconds(state),
         max_output_tokens=max_output_tokens,
-        provider_attempt_limit=1,
+        provider_attempt_limit=2,
     )
 
 

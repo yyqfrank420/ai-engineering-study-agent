@@ -24,6 +24,7 @@ import hashlib
 import inspect
 import json
 import logging
+import random
 import time
 
 from config import settings
@@ -622,10 +623,11 @@ async def stream_response(
 
     Retry behaviour:
     - Tries Anthropic up to settings.llm_max_retries times with
-      settings.llm_retry_delay_s seconds between attempts.
-    - Only retries transient failures that occur before any tokens are yielded.
-      Non-retryable request/auth/model 4xx errors fall back immediately.
-      Mid-stream drops are re-raised since partial output can't be safely replayed.
+      a 0.5x to 1.5x jittered settings.llm_retry_delay_s between attempts.
+    - Only retries transient failures that occur before the provider accepts the
+      request with `message_start`.
+      Before acceptance, non-retryable request/auth/model 4xx errors fall back immediately.
+      Accepted-stream drops are re-raised since accepted work can't be safely replayed.
     - On full exhaustion, falls back to OpenAI if configured.
     - Yields ("provider_switch", "openai") before the first OpenAI token
       so callers can surface a "falling back to GPT" UI notice.
@@ -1016,7 +1018,6 @@ async def stream_response(
             provider_attempt_limit,
         )
     for attempt in range(1, anthropic_attempt_limit + 1):
-        tokens_yielded = False
         finish_reason: str | None = None
         _reserve_evaluation_provider_attempt()
         provider_attempts += 1
@@ -1081,7 +1082,6 @@ async def stream_response(
                         finish_reason = stop_reason
                 if event.type == "content_block_delta":
                     attempt_usage["accepted"] = True
-                    tokens_yielded = True
                     delta = event.delta
                     if delta.type == "thinking_delta":
                         _record_first_delta_latency(
@@ -1137,10 +1137,6 @@ async def stream_response(
             attempt_usage["duration_ms"] = max(
                 1, int((time.perf_counter() - attempt_started) * 1000)
             )
-            if tokens_yielded:
-                # Already sent partial output — can't replay safely, surface the error
-                _record("error", error_type=type(exc).__name__)
-                raise
             status, request_id, provider_error, diagnostic = (
                 _anthropic_error_diagnostics(exc)
             )
@@ -1155,10 +1151,22 @@ async def stream_response(
                 provider_error,
                 diagnostic,
             )
+            if attempt_usage["accepted"]:
+                # `message_start` means the provider accepted the request. Never
+                # replay accepted work, even when no visible delta arrived.
+                _record("error", error_type=type(exc).__name__)
+                raise
             if _is_non_retryable_anthropic_error(exc):
                 break
             if attempt < anthropic_attempt_limit:
-                await asyncio.sleep(settings.llm_retry_delay_s)
+                retry_delay_s = max(0.0, settings.llm_retry_delay_s)
+                # Retry jitter is not used for a security decision.
+                await asyncio.sleep(
+                    random.uniform(  # nosec B311
+                        retry_delay_s * 0.5,
+                        retry_delay_s * 1.5,
+                    )
+                )
 
     # All Anthropic attempts exhausted — try OpenAI fallback
     fallback_model = _FALLBACK_MODELS.get(model)
