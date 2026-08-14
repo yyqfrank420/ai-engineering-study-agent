@@ -405,9 +405,7 @@ def test_same_group_label_with_different_kinds_stays_distinct():
 
     draft = validate_applied_graph_topology(payload, applied_graph_spec("production"))
 
-    assert [
-        (node["group"], node["group_kind"]) for node in draft["nodes"]
-    ] == [
+    assert [(node["group"], node["group_kind"]) for node in draft["nodes"]] == [
         ("Product runtime", "runtime"),
         ("Product runtime", "data"),
     ]
@@ -855,7 +853,10 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     assert "Type: 100=client,101=service" in prompt
     assert "Group kind: 600=runtime,601=data" in prompt
     assert "The server owns stable IDs" in prompt
-    assert "Every root and component row must carry its exact group label and kind" in prompt
+    assert (
+        "Every root and component row must carry its exact group label and kind"
+        in prompt
+    )
     assert "At production depth, include every applicable control" in prompt
     assert "At prototype depth, use concrete buildable boundaries" in prompt
     assert "Do not add production hardening at low or prototype depth" in prompt
@@ -890,10 +891,7 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     assert "Never emit server node IDs" in prompt
     assert "$new_node_N placeholders" in prompt
     assert "declares primary runtime-sequence membership" in prompt
-    assert (
-        "server derives stage order from directed primary/runtime edges"
-        in prompt
-    )
+    assert "server derives stage order from directed primary/runtime edges" in prompt
     assert "inner batch" not in prompt
     assert "Nested batches" not in prompt
     assert "index_base" not in prompt
@@ -908,8 +906,7 @@ def test_prompt_delegates_graph_size_and_preserves_material_boundaries():
     assert "An edge earns a record" in prompt
     assert "Return only compact schema-constrained JSON" in prompt
     assert (
-        '"root":["Client",100,"Submits one request.","Product runtime",600]'
-        in prompt
+        '"root":["Client",100,"Submits one request.","Product runtime",600]' in prompt
     )
     assert '"connections":{"links":[]}' in prompt
     assert '"steps":[0,1,2]' in prompt
@@ -976,11 +973,13 @@ async def test_dynamic_generator_uses_schema_once(monkeypatch):
 async def test_dynamic_generator_logs_safe_parent_bounds(monkeypatch, caplog):
     import agent.nodes.graph_worker as graph_worker
 
-    payload = _draft(7)
-    payload["components"][5][0] = 6
-    payload["components"][5][1] = "PRIVATE_SENTINEL"
+    payload = _draft(6)
+    payload["components"][4][0] = 5
+    payload["components"][4][1] = "PRIVATE_SENTINEL"
+    calls = []
 
-    async def fake_stream_structured_llm(**_kwargs):
+    async def fake_stream_structured_llm(**kwargs):
+        calls.append(kwargs)
         return StructuredLLMResponse(
             text=json.dumps(payload),
             finish_reason="end_turn",
@@ -1006,28 +1005,257 @@ async def test_dynamic_generator_logs_safe_parent_bounds(monkeypatch, caplog):
                 SimpleNamespace(resolved="prototype"),
             )
 
-    assert caught.value.path == "components[5][0]"
-    assert caught.value.observed_index == 6
-    assert caught.value.maximum_index == 5
-    assert "path=components[5][0] rule=topology" in caplog.text
-    assert "observed_index=6 maximum_index=5" in caplog.text
+    assert len(calls) == 2
+    assert caught.value.path == "components[4][0]"
+    assert caught.value.observed_index == 5
+    assert caught.value.maximum_index == 4
+    assert "path=components[4][0] rule=topology" in caplog.text
+    assert "observed_index=5 maximum_index=4" in caplog.text
     assert "PRIVATE_SENTINEL" not in caplog.text
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("text", "finish_reason", "code"),
-    [
-        ('{"title":', "max_tokens", "graph_design_output_truncated"),
-        ('{"title":', "end_turn", "graph_design_schema_invalid"),
-    ],
-)
-async def test_dynamic_generator_classifies_provider_truncation(
-    monkeypatch, text, finish_reason, code
+async def test_dynamic_generator_corrects_invalid_initial_topology_once(
+    monkeypatch, caplog
 ):
     import agent.nodes.graph_worker as graph_worker
 
-    async def fake_stream_structured_llm(**_kwargs):
+    rejected_payload = _draft(6)
+    rejected_payload["components"][4][0] = 5
+    rejected_payload["components"][4][1] = "PRIVATE_SENTINEL"
+    responses = [rejected_payload, _draft(6)]
+    calls = []
+    telemetry = []
+
+    def fake_build_telemetry(operation, **kwargs):
+        record = {"operation": operation, **kwargs}
+        telemetry.append(record)
+        return record
+
+    async def fake_stream_structured_llm(**kwargs):
+        calls.append(kwargs)
+        return StructuredLLMResponse(
+            text=json.dumps(responses.pop(0)),
+            finish_reason="end_turn",
+            input_tokens=100,
+            output_tokens=500,
+            provider="moonshot",
+            model="kimi-k3",
+        )
+
+    monkeypatch.setattr(
+        graph_worker, "stream_structured_llm", fake_stream_structured_llm
+    )
+    monkeypatch.setattr(graph_worker, "build_telemetry", fake_build_telemetry)
+
+    with caplog.at_level("WARNING", logger="agent.nodes.graph_worker"):
+        result = await graph_worker._generate_applied_architecture(
+            {
+                "graph_data": None,
+                "approved_graph_data": None,
+                "architecture_ready": True,
+            },
+            "Build a runtime",
+            SimpleNamespace(resolved="prototype"),
+        )
+
+    assert len(result["nodes"]) == 6
+    assert len(calls) == 2
+    assert calls[0] is not calls[1]
+    assert calls[0]["messages"][0]["content"] != calls[1]["messages"][0]["content"]
+    correction_prompt = calls[1]["messages"][0]["content"]
+    assert "components[4][0]" in correction_prompt
+    assert "replace index 5 with an integer from 0 through 4" in correction_prompt
+    assert "PRIVATE_SENTINEL" in correction_prompt
+    assert "PRIVATE_SENTINEL" not in caplog.text
+    assert [call["model"] for call in calls] == ["kimi-k3", "kimi-k3"]
+    assert [call["effort"] for call in calls] == ["high", "high"]
+    assert [call["provider_attempt_limit"] for call in calls] == [1, 1]
+    assert [entry["operation"] for entry in telemetry] == [
+        "graph_worker_applied_design",
+        "graph_worker_applied_design_correction",
+    ]
+    metadata = [entry["metadata"] for entry in telemetry]
+    assert [entry["model_role"] for entry in metadata] == [
+        "structured_topology",
+        "structured_topology_correction",
+    ]
+    assert metadata[0]["prompt_version"] != metadata[1]["prompt_version"]
+    assert "validation_path" not in metadata[0]
+    assert metadata[1]["validation_code"] == "graph_design_topology_invalid"
+    assert metadata[1]["validation_path"] == "components[4][0]"
+    assert metadata[1]["validation_rule"] == "topology"
+    assert metadata[1]["observed_index"] == 5
+    assert metadata[1]["maximum_index"] == 4
+
+
+@pytest.mark.asyncio
+async def test_dynamic_generator_corrects_parsed_schema_error_once(monkeypatch):
+    import agent.nodes.graph_worker as graph_worker
+
+    rejected_payload = _draft(6)
+    rejected_payload["root"][1] = 999
+    responses = [rejected_payload, _draft(6)]
+    calls = []
+
+    async def fake_stream_structured_llm(**kwargs):
+        calls.append(kwargs)
+        return StructuredLLMResponse(
+            text=json.dumps(responses.pop(0)),
+            finish_reason="end_turn",
+            input_tokens=100,
+            output_tokens=500,
+            provider="moonshot",
+            model="kimi-k3",
+        )
+
+    monkeypatch.setattr(
+        graph_worker, "stream_structured_llm", fake_stream_structured_llm
+    )
+
+    result = await graph_worker._generate_applied_architecture(
+        {
+            "graph_data": None,
+            "approved_graph_data": None,
+            "architecture_ready": True,
+        },
+        "Build a runtime",
+        SimpleNamespace(resolved="prototype"),
+    )
+
+    assert len(result["nodes"]) == 6
+    assert len(calls) == 2
+    assert '"rule":"invalid_enum"' in calls[1]["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_dynamic_generator_correction_uses_remaining_stage_deadline(monkeypatch):
+    import agent.nodes.graph_worker as graph_worker
+
+    rejected_payload = _draft(6)
+    rejected_payload["components"][4][0] = 5
+    responses = [rejected_payload, _draft(6)]
+    calls = []
+
+    async def fake_stream_structured_llm(**kwargs):
+        calls.append(kwargs)
+        return StructuredLLMResponse(
+            text=json.dumps(responses.pop(0)),
+            finish_reason="end_turn",
+            input_tokens=100,
+            output_tokens=500,
+            provider="moonshot",
+            model="kimi-k3",
+        )
+
+    monkeypatch.setattr(
+        graph_worker, "stream_structured_llm", fake_stream_structured_llm
+    )
+    monkeypatch.setattr(
+        graph_worker, "_configured_design_timeout_seconds", lambda _state: 30.0
+    )
+
+    await graph_worker._generate_applied_architecture(
+        {
+            "graph_data": None,
+            "approved_graph_data": None,
+            "architecture_ready": True,
+            "_graph_stage_deadline_s": graph_worker.time.monotonic() + 10.0,
+        },
+        "Build a runtime",
+        SimpleNamespace(resolved="prototype"),
+    )
+
+    first_timeout, correction_timeout = [call["timeout_seconds"] for call in calls]
+    assert 0 < correction_timeout < first_timeout < 30.0
+
+
+@pytest.mark.asyncio
+async def test_dynamic_generator_skips_correction_after_stage_deadline(monkeypatch):
+    import agent.nodes.graph_worker as graph_worker
+
+    rejected_payload = _draft(6)
+    rejected_payload["components"][4][0] = 5
+    calls = []
+    state = {
+        "graph_data": None,
+        "approved_graph_data": None,
+        "architecture_ready": True,
+        "_graph_stage_deadline_s": graph_worker.time.monotonic() + 10.0,
+    }
+
+    async def fake_stream_structured_llm(**kwargs):
+        calls.append(kwargs)
+        state["_graph_stage_deadline_s"] = graph_worker.time.monotonic()
+        return StructuredLLMResponse(
+            text=json.dumps(rejected_payload),
+            finish_reason="end_turn",
+            input_tokens=100,
+            output_tokens=500,
+            provider="moonshot",
+            model="kimi-k3",
+        )
+
+    monkeypatch.setattr(
+        graph_worker, "stream_structured_llm", fake_stream_structured_llm
+    )
+
+    with pytest.raises(TimeoutError, match="stage deadline exhausted"):
+        await graph_worker._generate_applied_architecture(
+            state,
+            "Build a runtime",
+            SimpleNamespace(resolved="prototype"),
+        )
+
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_dynamic_generator_does_not_correct_provider_timeout(monkeypatch):
+    import agent.nodes.graph_worker as graph_worker
+
+    calls = []
+
+    async def fake_stream_structured_llm(**kwargs):
+        calls.append(kwargs)
+        raise TimeoutError("provider deadline exhausted")
+
+    monkeypatch.setattr(
+        graph_worker, "stream_structured_llm", fake_stream_structured_llm
+    )
+
+    with pytest.raises(TimeoutError, match="provider deadline exhausted"):
+        await graph_worker._generate_applied_architecture(
+            {
+                "graph_data": None,
+                "approved_graph_data": None,
+                "architecture_ready": True,
+            },
+            "Build a runtime",
+            SimpleNamespace(resolved="prototype"),
+        )
+
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("text", "finish_reason", "code", "call_count"),
+    [
+        ('{"title":', "max_tokens", "graph_design_output_truncated", 1),
+        ('{"title":', "end_turn", "graph_design_schema_invalid", 1),
+        ("{}", "stop", "graph_design_provider_incomplete", 1),
+    ],
+)
+async def test_dynamic_generator_classifies_provider_truncation(
+    monkeypatch, text, finish_reason, code, call_count
+):
+    import agent.nodes.graph_worker as graph_worker
+
+    calls = []
+
+    async def fake_stream_structured_llm(**kwargs):
+        calls.append(kwargs)
         return StructuredLLMResponse(
             text=text,
             finish_reason=finish_reason,
@@ -1053,3 +1281,4 @@ async def test_dynamic_generator_classifies_provider_truncation(
             SimpleNamespace(resolved="prototype"),
         )
     assert caught.value.code == code
+    assert len(calls) == call_count

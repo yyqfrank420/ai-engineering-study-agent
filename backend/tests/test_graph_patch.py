@@ -4246,7 +4246,7 @@ async def test_current_production_profile_can_refine_legacy_nine_node_graph(
 
 
 @pytest.mark.asyncio
-async def test_invalid_initial_design_fails_closed_without_duplicate_model_call(
+async def test_invalid_initial_json_stops_without_correction(
     monkeypatch,
 ):
     calls = []

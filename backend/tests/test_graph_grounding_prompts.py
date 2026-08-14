@@ -13,7 +13,11 @@ def test_applied_graph_prompts_define_record_scoped_repair_boundaries():
     )
 
     assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v34"
-    assert _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION == "applied_topology_v21"
+    assert _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION == "applied_topology_v22"
+    assert "request, selected depth, and server contract" in (
+        _APPLIED_GRAPH_TOPOLOGY_SYSTEM
+    )
+    assert "reviewed architecture plan" not in _APPLIED_GRAPH_TOPOLOGY_SYSTEM
     assert (
         "Choose graph size from the material design" in _APPLIED_GRAPH_TOPOLOGY_SYSTEM
     )

@@ -2,16 +2,15 @@
 
 Last updated: 2026-08-14
 
-Evidence in this record is current through paid diagnostic `31785036626` on exact head
-`4b2b7f261e689322f76611d8654c6a6e7aec4539`
+Evidence in this record is current through paid diagnostic `31796931744` on exact head
+`b098cc59af0c329ec28cb4654faa08b5711d7a8d`
 on 2026-08-14. PRs #37 through #40 merged on 2026-08-07, and PR #44 merged as `77df25e7`. The
 evidence-provenance, graph-review, and latency corrections have passed local review and the full
-offline CI matrix through the retry correction. Seventeen consecutive recent `graph-expansion`
+offline CI matrix through the topology correction. Eighteen consecutive recent `graph-expansion`
 diagnostics have failed; there is no protected live success on the current branch. The latest paid
-run proved the transport retry was no longer the blocker: all provider calls completed on their first
-attempt. It then exposed an impossible grouped-prototype component-addition contract. The current
-working tree derives exact group-placement authority as a server-owned structural blocker and passes
-the full offline CI matrix. No further paid run is authorized.
+run exposed a deterministic self-parent topology rejection before graph publication. The current
+working tree applies one bounded error-informed complete-topology correction and passes the full
+offline CI matrix. No paid verification of that correction has run.
 Corpus `2026-08-12.v1` remains pending human review.
 
 ## Objective and operating rules
@@ -28,13 +27,13 @@ Corpus `2026-08-12.v1` remains pending human review.
 ## Recent diagnostic failure ledger
 
 This is the canonical chronology for recent `graph-expansion` failures through
-`4b2b7f261e689322f76611d8654c6a6e7aec4539`. Every
+`b098cc59af0c329ec28cb4654faa08b5711d7a8d`. Every
 row records a live product failure. A green workflow conclusion for a report-only row means the
 pending-corpus workflow uploaded its evidence and exited without enforcing the failed verdict. The
 initial workflow runs failed; later report-only diagnostics concluded green under that policy.
-The retained `live-results.json` for every row says `status: fail`. All seventeen failures ended on
+The retained `live-results.json` for every row says `status: fail`. All eighteen failures ended on
 turn 1 and skipped turn 2. Five failures emitted a reversible preview but no authoritative graph;
-the other twelve emitted no visible graph.
+the other thirteen emitted no visible graph.
 Run links and exact heads come from GitHub Actions metadata. Latency, provider calls, failure codes,
 and cost come from each retained `scheduled-eval-<run>/browser-results.json`, `live-results.json`,
 and `run-context.json` artifact. Model effort comes from source at the exact run head because the
@@ -60,8 +59,9 @@ incomplete usage.
 | 2026-08-12 | [`31637814841`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31637814841), `f15537a3270b4d0e2d011f14fe4cfddf033e389b` | Kimi low returned complete JSON in 28.923 seconds. Deterministic topology validation rejected `components[5][4]` because its group index did not reference a defined `composition.groups` row. No graph, preview, private render, critic, correction, or turn 2 ran. Two application calls cost $0.082446, and the case took 64.963 seconds without retry or fallback. | The model-facing wire now puts `group_label` and `group_kind` in every root and component row. `composition.groups` and all membership indexes are removed. The server derives canonical groups from the inline identity and retains bounded-label collision checks. Initial Kimi effort is `high`; literal `medium` remains unsupported by the adapter. | $0.082446 |
 | 2026-08-13 | [`31705887318`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31705887318), `30c8a5418ce5479c9e5cea170a574355a99608a8` | Kimi high returned a valid 11-node, 21-edge candidate in 131.559 seconds. Topology validation and private rendering passed, and a reversible preview appeared after 134.684 seconds. Opus completed its audit. The first Sonnet critic request then failed before stream acceptance with provider error `overloaded_error`; it had zero tokens and no deltas. Final `graph_data` was `null`, turn 2 was skipped, and no fallback ran. Four application calls cost $0.295396; the case took 250.153 seconds. | Critic calls now allow one retry inside the existing stage deadline. Only retryable failures before `message_start` qualify. The retry waits a bounded jittered delay. Any accepted stream, partial output, non-retryable error, cancellation, or exhausted deadline still fails closed without replay or fallback. | $0.295396 |
 | 2026-08-14 | [`31785036626`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31785036626), `4b2b7f261e689322f76611d8654c6a6e7aec4539` | Kimi high returned a valid 10-node, 20-edge grouped prototype. Private rendering passed and a reversible preview appeared after 126.216 seconds. The initial Sonnet scorecard and its single correction both completed, then failed at `correction / critic_scorecard / invalid_contract`. Final `graph_data` was `null` and turn 2 was skipped. Five application calls completed on their first provider attempt without fallback. They cost $0.454679; the turn took 342.913 seconds and the browser case took 345.162 seconds. | Grouped prototype component additions required composition group authority, while prototype canonicalization treated the only group-oriented rubric as advice and stripped its selectors. The server now derives a structural composition blocker only beside a blocking component addition and exact connection obligations. It retains only cited existing groups or the declared group append count and returns typed missing-authority coordinates. | $0.454679 |
+| 2026-08-14 | [`31796931744`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31796931744), `b098cc59af0c329ec28cb4654faa08b5711d7a8d` | Kimi K3 high made one provider attempt and returned in 63.017 seconds of telemetry, 62.961 seconds at the provider, costing $0.039297. Deterministic validation rejected `graph_design_topology_invalid` at `components[4][0]`: observed parent index 5 exceeded maximum 4 and self-parented. No preview, graph, fallback, or turn 2 ran. Opus low synthesis completed in 27.946 seconds and cost $0.064554. Total application cost was $0.103851; the turn took 94.212 seconds and the browser case took 96.242 seconds. The report-only workflow succeeded, but the evaluation failed. | One bounded error-informed complete-topology correction now runs within the same stage deadline with the same Kimi high effort, a distinct prompt, and one provider attempt. It then stops for validation. No paid verification has run. | $0.103851 |
 
-Known application spend across these seventeen failures is at least **$4.973724**. Several provider
+Known application spend across these eighteen failures is at least **$5.077575**. Several provider
 calls have incomplete usage; row amounts marked `at least` are lower bounds. Diagnostic
 `31549644038` retained only `connections.links[6]: topology`; it did not retain authored output and
 cannot distinguish an out-of-range endpoint from a self-link.
@@ -727,7 +727,10 @@ below retain implementation detail for the latest convergence and latency correc
 The serial Opus-first path is retired. Initial graph creation now follows this order:
 
 1. Kimi K3 authors one topology candidate at high effort directly from the request, selected depth,
-   and server-owned topology contract. The call has one provider attempt.
+   and server-owned topology contract. The call has one provider attempt. A deterministic schema or
+   topology rejection may trigger one error-informed complete replacement within the same topology
+   deadline. The correction receives the rejected candidate and sanitized validation coordinates,
+   uses a distinct prompt, and has one provider attempt. A second rejection stops generation.
 2. The server validates and normalizes the topology, then asks the browser to render that exact
    candidate privately.
 3. A candidate that passes the deterministic browser gate is emitted as a reversible preview.

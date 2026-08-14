@@ -753,22 +753,22 @@ def test_live_eval_job_allows_setup_around_the_bounded_browser_suite():
     # These are complete per-case path bounds for the current PR corpus. Logical
     # calls assume one provider request. Provider attempts include every adapter
     # retry and the configured Opus fallback. The tagged revision stops before
-    # attempt 65, so the 140-attempt failure envelope cannot be spent.
+    # attempt 65, so the 144-attempt failure envelope cannot be spent.
     call_bounds = {
-        "rag-grounding": (7, 15),
+        "rag-grounding": (8, 16),
         "memory": (4, 12),
         "graph-off": (2, 6),
         "research": (9, 27),
-        "node-followup": (9, 20),
-        "graph-expansion": (17, 37),
-        "applied-domain": (8, 17),
+        "node-followup": (10, 21),
+        "graph-expansion": (18, 38),
+        "applied-domain": (9, 18),
         "prompt-injection": (2, 6),
     }
     assert set(call_bounds) == {case["id"] for case in pr_cases}
     logical_call_bound = sum(bound[0] for bound in call_bounds.values())
     provider_attempt_bound = sum(bound[1] for bound in call_bounds.values())
-    assert logical_call_bound == 58
-    assert provider_attempt_bound == 140
+    assert logical_call_bound == 62
+    assert provider_attempt_bound == 144
     assert logical_call_bound <= budgets["application_calls"] < provider_attempt_bound
     assert budgets["browser_infrastructure_retry_count"] == 0
     assert budgets["browser_suite_max_timeout_seconds"] <= 60 * 60
