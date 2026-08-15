@@ -312,7 +312,6 @@ def _repair_permissions(
             set(layers["components"]["context_node_ids"])
             | set(layers["connections"]["context_node_ids"])
         ),
-        "added_edges_require_new_node": layers["components"]["addition_count"] > 0,
         "allowed_new_node_ids": None,
         "allowed_new_node_count": layers["components"]["addition_count"],
         "allowed_new_edge_count": layers["connections"]["addition_count"],
@@ -1075,7 +1074,6 @@ def _user_edit_scope(
         else []
     )
     permissions["added_edge_anchor_node_ids"] = sorted(node_ids)
-    permissions["added_edges_require_new_node"] = permissions["allow_node_additions"]
     permissions["allowed_new_node_ids"] = (
         None
         if scoped_expansion
@@ -1169,8 +1167,6 @@ def _patch_validation_coordinates(exc: Exception) -> tuple[str | None, str | Non
         in message
     ):
         return "patch.add_edges", "addition_obligation_mismatch"
-    if "added edge is outside the new component scope" in message:
-        return "patch.add_edges", "outside_new_component_scope"
     if "added edge is outside the named connection scope" in message:
         return "patch.add_edges", "outside_named_connection_scope"
     if "graph patch changed locked edge fields" in message:
@@ -2079,12 +2075,6 @@ def _validate_added_record_scope(
         actual_added_edge_endpoints.append((source, target))
         endpoints = {source, target}
         added_edge_node_ids.update(endpoints.intersection(added_node_ids))
-        if (
-            permissions["added_edges_require_new_node"]
-            and added_node_ids
-            and not endpoints.intersection(added_node_ids)
-        ):
-            raise ValueError("added edge is outside the new component scope")
         if not endpoints.issubset(added_node_ids | anchor_node_ids):
             raise ValueError("added edge is outside the named connection scope")
         if (

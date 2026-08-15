@@ -3252,6 +3252,85 @@ def test_critic_connection_additions_require_exact_directed_pairs(added_edges):
         )
 
 
+def test_component_addition_allows_only_authorized_existing_edge_additions():
+    existing = _domain_graph(5)
+    contract = _local_repair_contract(
+        failed_layers={
+            "components": {
+                "context_node_ids": ["fulfilment_stage_0"],
+                "addition_count": 1,
+            },
+            "connections": {
+                "context_node_ids": [
+                    "fulfilment_stage_0",
+                    "fulfilment_stage_1",
+                    "fulfilment_stage_3",
+                ],
+                "addition_count": 2,
+                "connection_addition_obligations": [
+                    {
+                        "source": "fulfilment_stage_0",
+                        "target": "$new_node_1",
+                        "required_contract": "writes cached fulfilment state",
+                    },
+                    {
+                        "source": "fulfilment_stage_1",
+                        "target": "fulfilment_stage_3",
+                        "required_contract": "writes cached fulfilment state",
+                    },
+                ],
+            },
+        }
+    )
+    patch = {
+        "add_nodes": [
+            {
+                "id": "cache_owner",
+                "label": "Cache Owner",
+                "type": "service",
+                "technology": "Bounded cache service",
+                "description": "Owns cached fulfilment state.",
+            }
+        ],
+        "add_edges": [
+            _cache_to_store_edge(
+                source="fulfilment_stage_0",
+                target="cache_owner",
+            ),
+            _cache_to_store_edge(
+                source="fulfilment_stage_1",
+                target="fulfilment_stage_3",
+            ),
+        ],
+    }
+
+    validate_local_repair_admission(contract, graph=existing)
+    updated = graph_worker._apply_applied_graph_patch(
+        existing,
+        patch,
+        safety_max_nodes=7,
+        resolved_complexity="prototype",
+        repair_contract=contract,
+    )
+
+    assert updated["nodes"][-1]["id"] == "cache_owner"
+    assert updated["edges"][-1]["source"] == "fulfilment_stage_1"
+
+    uncited_patch = copy.deepcopy(patch)
+    uncited_patch["add_edges"][1].update(
+        source="fulfilment_stage_3",
+        target="fulfilment_stage_1",
+    )
+    with pytest.raises(ValueError, match="exact connection addition obligations"):
+        graph_worker._apply_applied_graph_patch(
+            existing,
+            uncited_patch,
+            safety_max_nodes=7,
+            resolved_complexity="prototype",
+            repair_contract=contract,
+        )
+
+
 def test_critic_component_addition_rejects_connection_to_uncited_node():
     existing = _domain_graph(5)
     contract = _local_repair_contract(
@@ -4404,10 +4483,6 @@ async def test_invalid_patch_json_provides_contract_correction_coordinates(
 @pytest.mark.parametrize(
     ("message", "expected_rule"),
     [
-        (
-            "added edge is outside the new component scope",
-            "outside_new_component_scope",
-        ),
         (
             "added edge is outside the named connection scope",
             "outside_named_connection_scope",

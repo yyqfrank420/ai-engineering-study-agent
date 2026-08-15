@@ -2,16 +2,17 @@
 
 Last updated: 2026-08-15
 
-Evidence in this record is current through paid diagnostic `31897989519` on exact head
-`f181e855987d286ddf66f04e35c0ea30a86005f0`
+Evidence in this record is current through paid diagnostic `31900871827` on exact head
+`4faf04de329e3d9934a3363ea475c6a8d19dcf94`
 on 2026-08-15. PRs #37 through #40 merged on 2026-08-07, and PR #44 merged as `77df25e7`. The
 evidence-provenance, graph-review, and latency corrections have passed local review and the full
-offline CI matrix through the correction-budget change. Twenty-one consecutive recent `graph-expansion`
+offline CI matrix through the mixed-edge authority change. Twenty-two consecutive recent `graph-expansion`
 diagnostics have failed; there is no protected live success on the current branch. The latest paid
-run produced two turn-1 candidates and passed private rendering for both. The first scorecard needed
-one protocol correction. The repaired candidate's scorecard then misclassified two prior typed
-blockers, and semantic review withheld the graph. The working tree now keeps prior obligation state
-out of the model schema and derives it from server-owned blocker identities.
+run emitted a five-node preview after 68.077 seconds. Its accepted critic contract required both
+new-component edges and exact existing-to-existing edges. Kimi returned one required existing edge,
+then a conflicting global validator rejected it because the same patch added components. The
+error-informed retry received another impossible mixed contract and timed out. The working tree now
+makes exact edge obligations authoritative and removes that redundant global rule.
 Each budgeted critic dispatch now permits one provider attempt, so transport retries cannot repeat
 an identical model prompt outside that ceiling.
 Corpus `2026-08-12.v1` remains pending human review.
@@ -30,7 +31,7 @@ Corpus `2026-08-12.v1` remains pending human review.
 ## Recent diagnostic failure ledger
 
 This is the canonical chronology for recent `graph-expansion` failures through
-`f181e855987d286ddf66f04e35c0ea30a86005f0`. Every
+`4faf04de329e3d9934a3363ea475c6a8d19dcf94`. Every
 row records a live product failure. A green workflow conclusion for a report-only row means the
 pending-corpus workflow uploaded its evidence and exited without enforcing the failed verdict. The
 initial workflow runs failed; later report-only diagnostics concluded green under that policy.
@@ -39,7 +40,8 @@ on turn 1 and skipped turn 2. Five of those failures emitted a reversible previe
 authoritative graph; the other fourteen emitted no visible graph. The twentieth failure published
 turn 1, reached turn 2, previewed a fresh expansion candidate, and then restored the approved turn 1
 graph after repair rejection. The twenty-first failure ended on turn 1 after previewing two fresh
-candidates and withholding both after semantic review.
+candidates and withholding both after semantic review. The twenty-second failure previewed one
+fresh candidate, rejected an impossible patch contract, and timed out during its corrected retry.
 Run links and exact heads come from GitHub Actions metadata. Latency, provider calls, failure codes,
 and cost come from each retained `scheduled-eval-<run>/browser-results.json`, `live-results.json`,
 and `run-context.json` artifact. Model effort comes from source at the exact run head because the
@@ -67,10 +69,11 @@ incomplete usage.
 | 2026-08-14 | [`31785036626`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31785036626), `4b2b7f261e689322f76611d8654c6a6e7aec4539` | Kimi high returned a valid 10-node, 20-edge grouped prototype. Private rendering passed and a reversible preview appeared after 126.216 seconds. The initial Sonnet scorecard and its single correction both completed, then failed at `correction / critic_scorecard / invalid_contract`. Final `graph_data` was `null` and turn 2 was skipped. Five application calls completed on their first provider attempt without fallback. They cost $0.454679; the turn took 342.913 seconds and the browser case took 345.162 seconds. | Grouped prototype component additions required composition group authority, while prototype canonicalization treated the only group-oriented rubric as advice and stripped its selectors. The server now derives a structural composition blocker only beside a blocking component addition and exact connection obligations. It retains only cited existing groups or the declared group append count and returns typed missing-authority coordinates. | $0.454679 |
 | 2026-08-14 | [`31796931744`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31796931744), `b098cc59af0c329ec28cb4654faa08b5711d7a8d` | Kimi K3 high made one provider attempt and returned in 63.017 seconds of telemetry, 62.961 seconds at the provider, costing $0.039297. Deterministic validation rejected `graph_design_topology_invalid` at `components[4][0]`: observed parent index 5 exceeded maximum 4 and self-parented. No preview, graph, fallback, or turn 2 ran. Opus low synthesis completed in 27.946 seconds and cost $0.064554. Total application cost was $0.103851; the turn took 94.212 seconds and the browser case took 96.242 seconds. The report-only workflow succeeded, but the evaluation failed. | One bounded error-informed complete-topology correction now runs within the same stage deadline with the same Kimi high effort, a distinct prompt, and one provider attempt. It then stops for validation. The next paid run produced a valid first candidate, so this correction branch remains live-unexercised. | $0.103851 |
 | 2026-08-14 | [`31825436257`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31825436257), `a2e7766e295590c558145ef2f69a2abfb5bb644b` | Kimi high returned a valid ten-node, fifteen-edge candidate. Initial topology validation passed, so the topology correction was not exercised. Private rendering rejected the candidate with `overlap_count=1` and `minimum_text_px=9.401850585937499`, below the 11-pixel floor; `clipped_nodes=0` and `clipped_edges=0`. No graph preview, semantic critic, repair, fallback, or turn 2 ran. Two application calls cost $0.095151, and the browser case took 86.960 seconds. | The model does not own layout. The renderer now chooses from actual fit scale, sizes bottom lanes by cardinality, and falls back to a rank-ordered compact plan covering the 60-node safety ceiling. The server sends the render criteria. The exact candidate passes local Chromium with zero overlap or clipping and 14.68-pixel titles. Paid verification remains pending. | $0.095151 |
-| 2026-08-15 | [`31881756822`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31881756822), `4c2bae8ff12c3204fb3b492cbf27210cfec9542b` | Turn 1 published a ten-node graph after one repair. Turn 2 produced an eleven-node candidate, passed private render, and failed semantic repair. The initial Sonnet scorecard needed a protocol correction. Kimi then returned an invalid patch with an added edge outside the new-component scope. The consumed shared correction slot prevented the error-informed contract correction, so the workflow restored turn 1's graph and failed `required_graph_version_reused`. Twelve calls ran without fallback. Case latency was 727.200 seconds. | Protocol-format and patch-contract corrections now have separate counters under the four-call critic ceiling. Added-edge scope failures produce `patch.add_edges` correction coordinates. An integration regression covers protocol correction followed by invalid patch, contract correction, corrected patch, and final review. | $1.102968 |
+| 2026-08-15 | [`31881756822`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31881756822), `4c2bae8ff12c3204fb3b492cbf27210cfec9542b` | Turn 1 published a ten-node graph after one repair. Turn 2 produced an eleven-node candidate, passed private render, and failed semantic repair. The initial Sonnet scorecard needed a protocol correction. Kimi then returned an invalid patch with an added edge outside the new-component scope. The consumed shared correction slot prevented the error-informed contract correction, so the workflow restored turn 1's graph and failed `required_graph_version_reused`. Twelve calls ran without fallback. Case latency was 727.200 seconds. | Protocol-format and patch-contract corrections now have separate counters under the four-call critic ceiling. The next run exercised the contract-correction lane and exposed the deeper mixed-edge validator contradiction recorded below. The current fix removes that redundant rule. | $1.102968 |
 | 2026-08-15 | [`31897989519`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31897989519), `f181e855987d286ddf66f04e35c0ea30a86005f0` | Turn 1 produced a nine-node candidate, corrected one scorecard ownership error, repaired it into a fourteen-node candidate, and passed private rendering for both. The post-repair scorecard marked two prior context blocker IDs `still_fail` after their exact identities had changed. Server validation rejected `prior_obligation_dispositions must match server-derived typed blockers`, publication returned `graph_data: null`, and the evaluator failed `required_graph_missing`. Seven one-attempt calls cost $0.611650. Case latency was 497.341 seconds, with the first preview after about 70 seconds. | Prior obligation dispositions are no longer model output. The server compares current typed blocker IDs with prior blockers and derives every resolved or still-failing status. The safe coordinate mapper retains `prior_obligation_dispositions` for any internal invariant failure. | $0.611650 |
+| 2026-08-15 | [`31900871827`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31900871827), `4faf04de329e3d9934a3363ea475c6a8d19dcf94` | A five-node, seven-edge candidate passed private rendering and emitted a preview after 68.077 seconds. Sonnet authorized four new nodes and nine exact edges, including `n3 -> n5` between existing nodes. Kimi completed the patch in 191.651 seconds, then the global new-component edge rule rejected that required edge. The contract correction retained the same contradiction and expanded the repair to seven nodes and fourteen edges. The retry was cancelled after 132.459 seconds, 1.192 seconds after its first text delta. Final `graph_data` was null; the case took 633.072 seconds. Seven calls ran without fallback or judge calls. One accepted Kimi call retained no terminal usage. | Exact connection obligations now own every added edge. Mixed new-component and existing-to-existing additions are permitted only when their source, target, and normalized label are cited. New-node attachment, graph anchoring, locked records, and post-normalization checks remain. | at least $0.440616 |
 
-Known application spend across these twenty-one failures is at least **$6.887344**. Several provider
+Known application spend across these twenty-two failures is at least **$7.327960**. Several provider
 calls have incomplete usage; row amounts marked `at least` are lower bounds. Diagnostic
 `31549644038` retained only `connections.links[6]: topology`; it did not retain authored output and
 cannot distinguish an out-of-range endpoint from a self-link.
@@ -90,8 +93,8 @@ from the product-failure ledger.
 
 ## Repeated-failure root cause
 
-The twenty-one recent failures were six architect/evidence contract failures, five topology-wire
-failures, nine review/repair orchestration failures, and one frontend layout failure. The immediate
+The twenty-two recent failures were six architect/evidence contract failures, five topology-wire
+failures, ten review/repair orchestration failures, and one frontend layout failure. The immediate
 errors differed. The shared engineering defect was contract drift. Graph limits, model schemas,
 repair permissions, review state, browser measurements, and staging measurements had separate
 owners and were tested mainly through mocked boundaries. A candidate could satisfy one boundary and
@@ -306,8 +309,10 @@ review, repair, layer-lock, and publication contracts.
 - Repair patches are record-scoped and may cover non-adjacent records in the same connected
   candidate. Every cited node, edge, group, sequence, assumption, field, removal, and addition has
   its own exact permission; topology proximity grants none. Each required connection addition names
-  its exact directed `source -> destination` obligation. A group move requires permission for both
-  source and destination groups.
+  its exact directed `source -> destination` obligation and normalized label. A mixed repair may
+  include exact existing-to-existing edges beside new-component edges. Every new component still
+  needs an incident edge and every connected new-component region still needs an existing graph
+  anchor. A group move requires permission for both source and destination groups.
 - `authored_composition` uses a server-owned title, groups, and sequence repair profile. The profile
   grants only the selected indexed or append permissions required by the failed contract; critic and
   patch output cannot widen it.
@@ -776,6 +781,12 @@ Initial topology and private rendering use a separate 170-second preview deadlin
 preview finalization. Post-preview review and repair retain the terminal workflow deadline. The
 frontend stores preview and durable graphs separately, never writes preview view state, and promotes
 only an authoritative `graph_data` event.
+
+Prototype first-preview latency has a 90-second product SLO. It does not cancel model work or change
+the production deadline. Production keeps the 170-second preview allowance and the full fail-closed
+review path. Semantic review remains inside the request. A detached continuation would require a
+durable review job, candidate lineage, cancellation generations, and compare-and-set publication so
+an old review cannot overwrite a newer turn.
 
 Kimi does not support medium. Supported values are low, high, and max. Initial topology and repair
 now use high. Diagnostic `31610799035` previously showed that high can exhaust the preview deadline,

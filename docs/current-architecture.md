@@ -54,6 +54,10 @@ This is the current runtime contract for the production-quality demo.
    transition from prototype to production depth reopens connection and composition review and
    requires a fresh complete topology-proof set. An invalid
    patch may receive one error-informed critic-contract correction before the patch is retried.
+   Exact connection-addition obligations are authoritative for added edges. One repair may combine
+   edges incident to new components with exact existing-to-existing edges. Every added edge must
+   match an authorized source, target, and normalized label; every new component remains attached
+   to an existing graph-anchored region.
    Every post-patch review derives prior server obligations as resolved or still failing from the
    current typed blocker identities. The model does not classify server-owned obligation state. A
    still-failing typed blocker with the same exact repair fingerprint cannot consume a second repair
@@ -77,6 +81,10 @@ This is the current runtime contract for the production-quality demo.
    or connection failure. A reviewed turn streams its explanation cards, persists, and then commits
    the accepted graph with authoritative `graph_data`. Pause can still hold card reveal in the
    browser without another model call.
+   Prototype first-preview latency has a 90-second product SLO. This is a measurement target, not a
+   runtime cutoff. Production retains the 170-second preview allowance and the full fail-closed
+   review window. Semantic review stays request-scoped; background replacement is deferred until
+   graph publication has durable job ownership and compare-and-set versioning.
 9. The transport persists the completed turn before emitting `done`.
 
 The model never writes SVG. Its typed graph JSON is an intermediate representation with named

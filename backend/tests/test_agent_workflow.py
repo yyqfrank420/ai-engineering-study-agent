@@ -1491,7 +1491,7 @@ async def test_protocol_correction_does_not_consume_patch_contract_correction_bu
                 },
                 "graph_patch_validation_error": {
                     "path": "patch.add_edges",
-                    "rule": "outside_new_component_scope",
+                    "rule": "addition_obligation_mismatch",
                 },
             }
         return {
@@ -1517,7 +1517,7 @@ async def test_protocol_correction_does_not_consume_patch_contract_correction_bu
         if state.get("graph_contract_correction_pending"):
             assert state["graph_patch_validation_error"] == {
                 "path": "patch.add_edges",
-                "rule": "outside_new_component_scope",
+                "rule": "addition_obligation_mismatch",
             }
             review_budget.claim_provider_call(correction="contract")
             call_order.append("critic-contract-correction")
