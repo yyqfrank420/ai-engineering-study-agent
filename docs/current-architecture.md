@@ -59,8 +59,10 @@ This is the current runtime contract for the production-quality demo.
    and fails closed. A
    graph-caused render failure can share the patch when an editable layer identifies the cause. A
    render-only failure, global design failure, or failed post-patch review suppresses the diagram.
-   The entire turn has a four-call Sonnet critic ceiling and one shared correction token, including
-   WebSocket steering restarts.
+   The entire turn has a four-call Sonnet critic ceiling. Protocol-format and patch-contract
+   corrections have separate one-call counters that survive WebSocket steering restarts. Every
+   critic dispatch makes one provider attempt, so the four-call ceiling also caps outbound Sonnet
+   requests at four.
    Published user refinements use the same typed patch boundary. The model chooses graph size,
    groups, and primary runtime-sequence membership from the design. The server derives sequence
    stages as shortest directed distances from the root across selected components using tree edges

@@ -138,6 +138,7 @@ class AgentState(TypedDict):
     graph_intent: NotRequired[Literal["create", "edit"] | None]
     graph_revision_count: NotRequired[int]
     graph_repair_round_count: NotRequired[int]
+    graph_protocol_correction_count: NotRequired[int]
     graph_contract_correction_count: NotRequired[int]
     graph_contract_correction_pending: NotRequired[bool]
     graph_critic_call_count: NotRequired[int]

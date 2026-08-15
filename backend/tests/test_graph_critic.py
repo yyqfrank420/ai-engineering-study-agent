@@ -379,7 +379,7 @@ async def test_request_scoped_critic_provider_call_ceiling_fails_closed(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_critic_adapter_retries_once_before_message_start(
+async def test_critic_adapter_does_not_repeat_identical_prompt_before_message_start(
     monkeypatch,
 ):
     import adapters.llm_adapter as llm_adapter
@@ -423,18 +423,18 @@ async def test_critic_adapter_retries_once_before_message_start(
     monkeypatch.setattr("observability.current_trace_context", lambda: {})
     monkeypatch.setattr("observability.record_llm_metrics", lambda **_kwargs: None)
 
-    result = await _request_critic_scorecard(
-        _critic_state(),
-        review_packet={"candidate": {}},
-        render_result={},
-        resolved_complexity="prototype",
-        revision_count=0,
-        require_topology_proofs=False,
-    )
+    with pytest.raises(RuntimeError, match="critic provider failed before acceptance"):
+        await _request_critic_scorecard(
+            _critic_state(),
+            review_packet={"candidate": {}},
+            render_result={},
+            resolved_complexity="prototype",
+            revision_count=0,
+            require_topology_proofs=False,
+        )
 
     assert settings.llm_max_retries == 2
-    assert attempts == 2
-    assert result.text == "{}"
+    assert attempts == 1
 
 
 def test_repair_contract_has_exactly_four_mece_layers_without_duplicate_selectors():
@@ -1113,9 +1113,7 @@ async def test_protocol_correction_receives_exact_root_shape_coordinate(monkeypa
     async def fake_stream_llm(**kwargs):
         calls.append(kwargs)
         payload = (
-            invalid
-            if len(calls) == 1
-            else _passing_review_payload(topology_proofs={})
+            invalid if len(calls) == 1 else _passing_review_payload(topology_proofs={})
         )
         return _structured_response(payload)
 
@@ -1582,9 +1580,7 @@ def test_grouped_component_placement_rejects_excess_group_authority(
             resolved_depth="prototype",
         )
 
-    assert (
-        "layers.composition.group_indexes:excess_authority" in str(raised.value)
-    )
+    assert "layers.composition.group_indexes:excess_authority" in str(raised.value)
 
 
 def test_grouped_component_placement_keeps_prototype_authored_composition_advice():
@@ -1621,9 +1617,7 @@ def test_grouped_component_placement_keeps_prototype_authored_composition_advice
         (blocker["kind"], blocker["layer"], blocker["key"])
         for blocker in normalized["hard_blockers"]
         if blocker["layer"] == "composition"
-    ] == [
-        ("structural", "composition", {"rule": "grouped_component_placement"})
-    ]
+    ] == [("structural", "composition", {"rule": "grouped_component_placement"})]
     assert all(
         requirement["criterion"] != "authored_composition"
         for requirement in repair_requirements(
@@ -3215,6 +3209,68 @@ async def test_completed_scorecard_admission_failure_gets_one_contract_correctio
 
 
 @pytest.mark.asyncio
+async def test_protocol_correction_does_not_consume_contract_correction(monkeypatch):
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "existing", "label": "Existing component"}],
+        "edges": [],
+        "groups": [],
+    }
+    invalid_protocol = _passing_review_payload(topology_proofs={})
+    _set_model_layer(invalid_protocol, "components", finding_codes="invalid")
+
+    component_code = next(
+        index
+        for index, code in enumerate(_RUBRIC_CODES, start=1)
+        if _RUBRIC_CODE_OWNERS[code] == "components"
+    )
+    connection_code = next(
+        index
+        for index, code in enumerate(_RUBRIC_CODES, start=1)
+        if _RUBRIC_CODE_OWNERS[code] == "connections"
+    )
+    invalid_admission = _passing_review_payload(topology_proofs={})
+    _set_model_layer(
+        invalid_admission,
+        "components",
+        finding_codes=[component_code],
+        addition_count=2,
+    )
+    _set_model_layer(
+        invalid_admission,
+        "connections",
+        finding_codes=[connection_code],
+        addition_obligations=[
+            ["$new_node_1", "$new_node_2", "connect new responsibilities"],
+            ["$new_node_2", "$new_node_1", "return connection state"],
+        ],
+    )
+    corrected = _passing_review_payload(topology_proofs={})
+    responses = [invalid_protocol, invalid_admission, corrected]
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return _structured_response(responses[len(calls) - 1])
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+
+    result = await graph_critic_node(_critic_state(graph=graph))
+
+    assert [call["telemetry"]["operation"] for call in calls] == [
+        "graph_critic",
+        "graph_critic_protocol_correction",
+        "graph_critic_contract_correction",
+    ]
+    assert result["graph_protocol_correction_count"] == 1
+    assert result["graph_contract_correction_count"] == 1
+    assert result["graph_review"]["approved"] is True
+
+
+@pytest.mark.asyncio
 async def test_completed_scorecard_does_not_retry_after_contract_correction_is_consumed(
     monkeypatch,
 ):
@@ -3357,7 +3413,7 @@ async def test_patch_validation_error_informs_one_contract_correction(monkeypatc
 
     assert len(calls) == 1
     assert calls[0]["telemetry"]["operation"] == "graph_critic_contract_correction"
-    assert calls[0]["provider_attempt_limit"] == 2
+    assert calls[0]["provider_attempt_limit"] == 1
     correction = calls[0]["messages"][0]["content"][-1]["text"]
     assert "previous repair permission contract" in correction
     assert "Validation path: groups.group_1.group_2" in correction
@@ -3659,9 +3715,7 @@ async def test_production_rerun_with_malformed_complete_prior_proofs_reopens_con
     ]
     candidate = deepcopy(reviewed_graph)
     candidate["assumptions"] = ["The production composition changed."]
-    malformed_prior_proofs = _valid_protocol_topology_proofs(
-        reviewed_graph["edges"][0]
-    )
+    malformed_prior_proofs = _valid_protocol_topology_proofs(reviewed_graph["edges"][0])
     malformed_prior_proofs[0].pop("reason")
     calls = []
 
@@ -5489,9 +5543,9 @@ async def test_model_derived_repair_contract_failure_gets_one_protocol_correctio
     correction = calls[1]["messages"][0]["content"][-1]["text"]
     assert f"layers.{layer}:missing_evidence" in correction
     assert result["graph_review"]["review_status"] == "completed"
-    assert result["graph_review"]["repair_contract"]["layers"][layer][
-        "status"
-    ] == "fail"
+    assert (
+        result["graph_review"]["repair_contract"]["layers"][layer]["status"] == "fail"
+    )
     assert result["graph_review"]["repair_contract"]["layers"][layer][
         "node_ids" if layer == "components" else "edge_selectors"
     ]
@@ -5589,9 +5643,7 @@ async def test_grouped_component_addition_correction_receives_missing_group_auth
         },
     )
 
-    result = await graph_critic_node(
-        _critic_state(graph=_grouped_prototype_graph())
-    )
+    result = await graph_critic_node(_critic_state(graph=_grouped_prototype_graph()))
 
     assert [call["telemetry"]["operation"] for call in calls] == [
         "graph_critic",

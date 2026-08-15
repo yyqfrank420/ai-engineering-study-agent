@@ -4401,6 +4401,29 @@ async def test_invalid_patch_json_provides_contract_correction_coordinates(
     assert raised.value.rule == expected_rule
 
 
+@pytest.mark.parametrize(
+    ("message", "expected_rule"),
+    [
+        (
+            "added edge is outside the new component scope",
+            "outside_new_component_scope",
+        ),
+        (
+            "added edge is outside the named connection scope",
+            "outside_named_connection_scope",
+        ),
+    ],
+)
+def test_added_edge_scope_failures_provide_contract_correction_coordinates(
+    message,
+    expected_rule,
+):
+    assert graph_worker._patch_validation_coordinates(ValueError(message)) == (
+        "patch.add_edges",
+        expected_rule,
+    )
+
+
 @pytest.mark.asyncio
 async def test_multi_region_exact_record_repair_preserves_uncited_records(monkeypatch):
     existing = _domain_graph(15, production=True)

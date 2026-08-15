@@ -32,7 +32,7 @@ from agent.graph_repair_contract import (
     validate_local_repair_admission as _validate_local_repair_admission,
     validate_repair_contract as _validate_repair_contract,
 )
-from agent.graph_review_budget import GraphReviewBudget
+from agent.graph_review_budget import CorrectionKind, GraphReviewBudget
 from agent.state import AgentState
 from agent.stream_utils import StructuredLLMResponse, stream_structured_llm
 from config import settings
@@ -1129,9 +1129,7 @@ def _preflight_review_protocol(
             connection_has_hard_blocker = has_hard_blocker
         structural_group_placement = bool(
             layer == "composition"
-            and requires_grouped_component_placement(
-                graph, component_addition_count
-            )
+            and requires_grouped_component_placement(graph, component_addition_count)
             and connection_addition_obligation_count > 0
             and "groups" in composition_fields
             and (composition_group_indexes or composition_group_addition_count > 0)
@@ -1812,9 +1810,10 @@ def _canonicalise_review_protocol(
             has_independent_group_authority = bool(
                 deterministic_indexes or "groups" in required_composition_fields
             )
-            if component_addition_count > 0 and canonical_layers["components"][
-                "status"
-            ] != "fail":
+            if (
+                component_addition_count > 0
+                and canonical_layers["components"]["status"] != "fail"
+            ):
                 raise CriticProtocolError(
                     "component addition permission requires a blocking component finding",
                     path="layers.components.addition_count",
@@ -1829,7 +1828,10 @@ def _canonicalise_review_protocol(
                     path="layers.connections.addition_obligations",
                     rule="missing_evidence",
                 )
-            if grouped_component_addition and "groups" not in selected_composition_fields:
+            if (
+                grouped_component_addition
+                and "groups" not in selected_composition_fields
+            ):
                 raise CriticProtocolError(
                     "grouped component additions require group placement authority",
                     path="layers.composition.composition_fields",
@@ -1841,11 +1843,14 @@ def _canonicalise_review_protocol(
                     path="layers.composition.group_indexes",
                     rule="missing_evidence",
                 )
-            if grouped_component_addition and _structural_group_targets_exceed_additions(
-                component_addition_count=component_addition_count,
-                group_indexes=indexes,
-                group_addition_count=group_addition_count,
-                has_independent_group_authority=has_independent_group_authority,
+            if (
+                grouped_component_addition
+                and _structural_group_targets_exceed_additions(
+                    component_addition_count=component_addition_count,
+                    group_indexes=indexes,
+                    group_addition_count=group_addition_count,
+                    has_independent_group_authority=has_independent_group_authority,
+                )
             ):
                 raise CriticProtocolError(
                     "group placement authority exceeds the added component count",
@@ -1864,7 +1869,9 @@ def _canonicalise_review_protocol(
                     rule="unexpected_context",
                 )
             authoritative_composition_fields = set(required_composition_fields)
-            if deterministic_indexes or (finding_codes and not required_composition_fields):
+            if deterministic_indexes or (
+                finding_codes and not required_composition_fields
+            ):
                 authoritative_composition_fields.update(selected_composition_fields)
             if grouped_component_addition:
                 authoritative_composition_fields.add("groups")
@@ -2624,7 +2631,7 @@ async def _request_critic_scorecard(
         ),
         timeout_seconds=critic_timeout_seconds(state),
         max_output_tokens=max_output_tokens,
-        provider_attempt_limit=2,
+        provider_attempt_limit=1,
     )
 
 
@@ -2832,9 +2839,7 @@ def _review_protocol_payload(review: dict[str, Any]) -> dict[str, Any]:
         "advice": review.get("advice") or [],
         "topology_proofs": review.get("topology_proofs") or [],
         "hard_blockers": review.get("hard_blockers") or [],
-        "prior_obligation_dispositions": review.get(
-            "prior_obligation_dispositions"
-        )
+        "prior_obligation_dispositions": review.get("prior_obligation_dispositions")
         or [],
     }
 
@@ -3025,6 +3030,7 @@ async def graph_critic_node(
 ) -> AgentState:
     review_budget = review_budget or GraphReviewBudget(
         critic_calls=int(state.get("graph_critic_call_count", 0)),
+        protocol_corrections=int(state.get("graph_protocol_correction_count", 0)),
         contract_corrections=int(state.get("graph_contract_correction_count", 0)),
     )
     state = {**state, **review_budget.state_counters()}
@@ -3047,7 +3053,7 @@ async def graph_critic_node(
 
     async def request_scorecard(
         *,
-        correction_claim: bool = False,
+        correction_claim: CorrectionKind | None = None,
         state_override: AgentState | None = None,
         **kwargs,
     ) -> StructuredLLMResponse:
@@ -3201,7 +3207,7 @@ async def graph_critic_node(
         )
         prior_open_obligations = review_packet["prior_open_obligations"]
         response = await request_scorecard(
-            correction_claim=contract_correction is not None,
+            correction_claim=("contract" if contract_correction is not None else None),
             review_packet=review_packet,
             render_result=render_result,
             resolved_complexity=profile.resolved,
@@ -3237,7 +3243,7 @@ async def graph_critic_node(
                 and protocol_error.rule == "invalid_server_state"
             ):
                 raise
-            if protocol_corrected or not review_budget.can_claim_correction:
+            if protocol_corrected or not review_budget.can_claim_protocol_correction:
                 raise
             error_path, error_rule = _protocol_error_coordinates(protocol_error)
             logger.warning(
@@ -3250,7 +3256,7 @@ async def graph_critic_node(
             )
             validation_stage = "correction"
             response = await request_scorecard(
-                correction_claim=True,
+                correction_claim="protocol",
                 review_packet=review_packet,
                 render_result=render_result,
                 resolved_complexity=profile.resolved,
@@ -3291,9 +3297,8 @@ async def graph_critic_node(
         admission_error = _review_admission_error(review)
         if (
             admission_error is not None
-            and not protocol_corrected
             and contract_correction is None
-            and review_budget.can_claim_correction
+            and review_budget.can_claim_contract_correction
         ):
             validation_stage = "admission_correction"
             logger.warning(
@@ -3304,7 +3309,7 @@ async def graph_critic_node(
             )
             correction_state = {**state, "graph_review": review}
             response = await request_scorecard(
-                correction_claim=True,
+                correction_claim="contract",
                 state_override=correction_state,
                 review_packet=review_packet,
                 render_result=render_result,

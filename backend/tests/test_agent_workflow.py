@@ -963,7 +963,7 @@ async def test_outer_review_timeout_returns_the_charged_shared_budget(monkeypatc
         }
 
     async def fake_review(state, *, review_budget):
-        review_budget.claim_provider_call(correction=False)
+        review_budget.claim_provider_call(correction=None)
         await asyncio.sleep(30)
         return state
 
@@ -1393,7 +1393,7 @@ async def test_invalid_patch_feedback_returns_to_critic_before_kimi_retries(
     async def fake_review(state, **_kwargs):
         if state.get("graph_contract_correction_pending"):
             review_budget = _kwargs["review_budget"]
-            review_budget.claim_provider_call(correction=True)
+            review_budget.claim_provider_call(correction="contract")
             call_order.append("critic-contract-correction")
             assert state["graph_patch_validation_error"] == {
                 "path": "layers.composition.group_ids",
@@ -1445,6 +1445,140 @@ async def test_invalid_patch_feedback_returns_to_critic_before_kimi_retries(
     assert result["graph_repair_round_count"] == 1
     assert result["graph_contract_correction_count"] == 1
     assert result["graph_contract_correction_pending"] is False
+    assert result["graph_data"]["title"] == "Corrected repair"
+
+
+@pytest.mark.asyncio
+async def test_protocol_correction_does_not_consume_patch_contract_correction_budget(
+    monkeypatch,
+):
+    import agent.graph as agent_graph
+    from agent.graph_review_budget import GraphReviewBudget
+
+    call_order = []
+
+    async def send(_event):
+        return None
+
+    async def fake_route(state):
+        return {**state, "route": "search"}
+
+    async def fake_search(state, _tools):
+        return state, None
+
+    async def fake_architect(_state):
+        return {"architect_plan": {"interpretation": "bounded repair workflow"}}
+
+    async def fake_expand(state, _tools, _wait_task):
+        return state
+
+    async def fake_apply(state, _tools):
+        revision_count = int(state.get("graph_revision_count", 0))
+        call_order.append(f"kimi-{revision_count}")
+        if call_order == [
+            "kimi-0",
+            "critic-initial",
+            "critic-protocol-correction",
+            "kimi-1",
+        ]:
+            return {
+                **state,
+                "graph_changed": False,
+                "graph_operation": {
+                    "kind": "create",
+                    "status": "failed",
+                    "failure_code": "graph_patch_invalid_preserved_existing_graph",
+                },
+                "graph_patch_validation_error": {
+                    "path": "patch.add_edges",
+                    "rule": "outside_new_component_scope",
+                },
+            }
+        return {
+            **state,
+            "graph_changed": True,
+            "graph_data": {
+                "design_origin": "applied",
+                "title": "Initial candidate"
+                if revision_count == 0
+                else "Corrected repair",
+                "nodes": [],
+                "edges": [],
+                "sequence": [],
+            },
+            "graph_operation": {
+                "kind": "create",
+                "status": "candidate",
+                "failure_code": None,
+            },
+        }
+
+    async def fake_review(state, *, review_budget):
+        if state.get("graph_contract_correction_pending"):
+            assert state["graph_patch_validation_error"] == {
+                "path": "patch.add_edges",
+                "rule": "outside_new_component_scope",
+            }
+            review_budget.claim_provider_call(correction="contract")
+            call_order.append("critic-contract-correction")
+            return {
+                **state,
+                **review_budget.state_counters(),
+                "graph_review": {"approved": False, "terminal": False},
+                "graph_operation": {
+                    "kind": "create",
+                    "status": "candidate",
+                    "failure_code": None,
+                },
+            }
+        if state.get("graph_repair_round_count", 0) == 1:
+            review_budget.claim_provider_call(correction=None)
+            call_order.append("critic-final")
+            return {
+                **state,
+                **review_budget.state_counters(),
+                "graph_review": {"approved": True},
+            }
+
+        review_budget.claim_provider_call(correction=None)
+        call_order.append("critic-initial")
+        review_budget.claim_provider_call(correction="protocol")
+        call_order.append("critic-protocol-correction")
+        return {
+            **state,
+            **review_budget.state_counters(),
+            "graph_review": {"approved": False, "terminal": False},
+        }
+
+    async def fake_synth(state):
+        return {**state, "response_text": "reviewed answer"}
+
+    monkeypatch.setattr(agent_graph, "orchestrator_route", fake_route)
+    monkeypatch.setattr(agent_graph, "run_search_phase", fake_search)
+    monkeypatch.setattr(agent_graph, "architect_node", fake_architect)
+    monkeypatch.setattr(agent_graph, "maybe_expand_with_search_tool", fake_expand)
+    monkeypatch.setattr(agent_graph, "apply_graph_worker", fake_apply)
+    monkeypatch.setattr(agent_graph, "graph_critic_node", fake_review)
+    monkeypatch.setattr(agent_graph, "orchestrator_synthesise", fake_synth)
+
+    budget = GraphReviewBudget()
+    state = _state(send)
+    state["_graph_review_budget"] = budget
+    result = await agent_graph.run_agent(state, [], [], [])
+
+    assert call_order == [
+        "kimi-0",
+        "critic-initial",
+        "critic-protocol-correction",
+        "kimi-1",
+        "critic-contract-correction",
+        "kimi-1",
+        "critic-final",
+    ]
+    assert budget.critic_calls == 4
+    assert result["graph_repair_round_count"] == 1
+    assert result["graph_operation"]["status"] == "applied"
+    assert result["graph_publication"] == "approved"
     assert result["graph_data"]["title"] == "Corrected repair"
 
 
@@ -1548,7 +1682,7 @@ async def test_malformed_patch_correction_and_two_repairs_stay_within_all_ceilin
 
     async def fake_review(state, *, review_budget):
         correction = bool(state.get("graph_contract_correction_pending"))
-        review_budget.claim_provider_call(correction=correction)
+        review_budget.claim_provider_call(correction="contract" if correction else None)
         repair_round = int(state.get("graph_repair_round_count", 0))
         review_rounds.append((repair_round, correction))
         if repair_round == GRAPH_MAX_REPAIR_ROUNDS:

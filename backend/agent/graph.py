@@ -364,7 +364,7 @@ def build_agent_workflow(
                 and isinstance(validation_error, dict)
                 and isinstance(validation_error.get("path"), str)
                 and isinstance(validation_error.get("rule"), str)
-                and review_budget.can_claim_correction
+                and review_budget.can_claim_contract_correction
             )
             return {
                 **revised,
@@ -749,6 +749,7 @@ async def run_agent(
         if isinstance(supplied_budget, GraphReviewBudget)
         else GraphReviewBudget(
             critic_calls=int(state.get("graph_critic_call_count", 0)),
+            protocol_corrections=int(state.get("graph_protocol_correction_count", 0)),
             contract_corrections=int(state.get("graph_contract_correction_count", 0)),
         )
     )

@@ -116,7 +116,9 @@ async def test_diagram_evaluation_uses_one_correlated_wait_and_ignores_mismatche
         assert not channel._waiters[evaluation_id].future.done()
 
         encoded = base64.b64encode(_png()).decode()
-        chunks = [encoded[offset : offset + 8_000] for offset in range(0, len(encoded), 8_000)]
+        chunks = [
+            encoded[offset : offset + 8_000] for offset in range(0, len(encoded), 8_000)
+        ]
         channel.accept(
             {
                 "type": "diagram_evaluation_start",
@@ -319,7 +321,7 @@ def test_websocket_steer_reuses_graph_review_budget_after_cancellation(
         budget = state["_graph_review_budget"]
         budgets.append(budget)
         if len(budgets) == 1:
-            budget.claim_provider_call(correction=True)
+            budget.claim_provider_call(correction="contract")
             await state["send"]({"type": "response_delta", "content": "draft"})
             try:
                 await asyncio.sleep(30)
@@ -329,7 +331,7 @@ def test_websocket_steer_reuses_graph_review_budget_after_cancellation(
 
         assert budget.critic_calls == 1
         assert budget.contract_corrections == 1
-        budget.claim_provider_call(correction=False)
+        budget.claim_provider_call(correction=None)
         await state["send"]({"type": "response_delta", "content": "revised"})
         return {**state, "response_text": "revised", "graph_data": None}
 
@@ -367,6 +369,7 @@ def test_websocket_steer_reuses_graph_review_budget_after_cancellation(
     assert budgets[0] is budgets[1]
     assert budgets[0].state_counters() == {
         "graph_critic_call_count": 2,
+        "graph_protocol_correction_count": 0,
         "graph_contract_correction_count": 1,
     }
 
@@ -563,7 +566,10 @@ def test_websocket_keeps_candidate_private_until_browser_evaluation(
                 "minimum_text_px": 11.0,
             }
             encoded = base64.b64encode(_png()).decode()
-            chunks = [encoded[offset : offset + 8_000] for offset in range(0, len(encoded), 8_000)]
+            chunks = [
+                encoded[offset : offset + 8_000]
+                for offset in range(0, len(encoded), 8_000)
+            ]
             socket.send_json(
                 {
                     "type": "diagram_evaluation_start",
@@ -592,10 +598,14 @@ def test_websocket_keeps_candidate_private_until_browser_evaluation(
             published = _receive_until(socket, "done")
 
     preview_index = next(
-        index for index, event in enumerate(published) if event.get("type") == "graph_preview"
+        index
+        for index, event in enumerate(published)
+        if event.get("type") == "graph_preview"
     )
     graph_data_index = next(
-        index for index, event in enumerate(published) if event.get("type") == "graph_data"
+        index
+        for index, event in enumerate(published)
+        if event.get("type") == "graph_data"
     )
     assert preview_index < graph_data_index < len(published) - 1
     assert published[graph_data_index]["data"] == graph

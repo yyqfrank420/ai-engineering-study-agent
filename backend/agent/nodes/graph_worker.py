@@ -1169,6 +1169,10 @@ def _patch_validation_coordinates(exc: Exception) -> tuple[str | None, str | Non
         in message
     ):
         return "patch.add_edges", "addition_obligation_mismatch"
+    if "added edge is outside the new component scope" in message:
+        return "patch.add_edges", "outside_new_component_scope"
+    if "added edge is outside the named connection scope" in message:
+        return "patch.add_edges", "outside_named_connection_scope"
     if "graph patch changed locked edge fields" in message:
         return "patch.update_edges", "unauthorized_field_change"
     if "produced no semantic change" in message.lower():
