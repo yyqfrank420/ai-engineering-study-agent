@@ -72,7 +72,7 @@ class CriticProtocolError(ValueError):
         self.rule = rule if rule in _PROTOCOL_ERROR_RULES else None
 
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v55"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v56"
 # Sonnet 5 high effort can spend the full output allowance on adaptive thinking
 # before emitting the required scorecard. Medium keeps the review inside one call.
 _GRAPH_CRITIC_EFFORT = "medium"
@@ -98,7 +98,6 @@ Response-size contract:
   indexes.
 - Passing layers have empty finding and selector arrays. Preserve every required layer.
 - `novice_clarity` is advisory. Do not emit code 8 or mutation selectors for it.
-- Classify every server-supplied prior open obligation exactly once as resolved or still_fail.
 """
 
 
@@ -281,13 +280,6 @@ def _critic_response_schema(*, require_topology_proofs: bool) -> dict[str, Any]:
                     }
                 ),
                 "topology_proofs": topology_proofs,
-                "prior_obligation_dispositions": {
-                    "type": "array",
-                    "items": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                },
             }
         ),
         "$defs": definitions,
@@ -691,17 +683,17 @@ def _derived_prior_obligation_dispositions(
     ]
 
 
-def _assert_model_dispositions_match(
-    model_dispositions: list[dict[str, Any]],
+def _assert_canonical_dispositions_match(
+    dispositions: list[dict[str, Any]],
     derived_dispositions: list[dict[str, str]],
 ) -> None:
-    model_by_id = {
-        item["prior_obligation_id"]: item["status"] for item in model_dispositions
+    canonical_by_id = {
+        item["prior_obligation_id"]: item["status"] for item in dispositions
     }
     derived_by_id = {
         item["prior_obligation_id"]: item["status"] for item in derived_dispositions
     }
-    if model_by_id != derived_by_id:
+    if canonical_by_id != derived_by_id:
         raise ValueError(
             "prior_obligation_dispositions must match server-derived typed blockers"
         )
@@ -731,10 +723,6 @@ def _review_packet(
         "review_context": review_context,
         "deterministic_pre_review_findings": list(deterministic_findings or []),
         "locked_pass_layers": sorted(locked_layers or set()),
-        "prior_open_obligations": _prior_open_obligations(
-            state,
-            resolved_depth=resolved_depth,
-        ),
         "candidate": _semantic_graph_projection(graph),
         "render_report": (
             {field: report[field] for field in _RENDER_REPORT_FIELDS if field in report}
@@ -806,6 +794,8 @@ def _critic_protocol_error(exc: ValueError) -> CriticProtocolError:
             path += f".{path_match.group(2)}"
     elif "topology_proofs" in message or "topology proof" in message:
         path = "topology_proofs"
+    elif "prior_obligation" in message:
+        path = "prior_obligation_dispositions"
     elif "repair_scope" in message:
         path = "repair_scope"
     elif "deterministic finding" in message:
@@ -917,53 +907,6 @@ def _model_connection_addition_obligations(
     return obligations
 
 
-def _model_prior_obligation_dispositions(
-    value: Any,
-    *,
-    prior_open_obligations: list[dict[str, Any]],
-    path: str = "prior_obligation_dispositions",
-) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        raise ValueError(f"{path} must be an array")
-    obligations_by_id = {
-        obligation.get("id"): obligation
-        for obligation in prior_open_obligations
-        if isinstance(obligation.get("id"), str)
-        and obligation["id"]
-        and (
-            obligation.get("kind") not in {None, "legacy"}
-            or obligation["id"]
-            == _prior_obligation_id(
-                layer=obligation.get("layer", ""),
-                finding=obligation.get("finding", ""),
-            )
-        )
-    }
-    if len(obligations_by_id) != len(prior_open_obligations):
-        raise ValueError("prior open obligations must have unique stable server IDs")
-    dispositions: list[dict[str, Any]] = []
-    for row_index, row in enumerate(value):
-        if (
-            not isinstance(row, list)
-            or len(row) != 2
-            or not isinstance(row[0], str)
-            or row[0] not in obligations_by_id
-            or row[1] not in {"resolved", "still_fail"}
-        ):
-            raise ValueError(
-                f"{path}[{row_index}] must be [prior_obligation_id, resolved|still_fail]"
-            )
-        dispositions.append({"prior_obligation_id": row[0], "status": row[1]})
-    disposition_ids = [item["prior_obligation_id"] for item in dispositions]
-    if len(disposition_ids) != len(set(disposition_ids)) or set(disposition_ids) != set(
-        obligations_by_id
-    ):
-        raise ValueError(
-            f"{path} must classify every prior open obligation exactly once"
-        )
-    return dispositions
-
-
 def _preflight_review_protocol(
     payload: dict[str, Any],
     *,
@@ -972,7 +915,6 @@ def _preflight_review_protocol(
     review_context: list[str],
     require_topology_proofs: bool = False,
     resolved_depth: str = "production",
-    prior_open_obligations: list[dict[str, str]] | None = None,
 ) -> None:
     """Report independent compact-row defects in one bounded correction."""
     failures: list[tuple[str, str]] = []
@@ -982,11 +924,7 @@ def _preflight_review_protocol(
         if coordinate not in failures and len(failures) < 16:
             failures.append(coordinate)
 
-    required_scorecard_fields = {
-        "layers",
-        "topology_proofs",
-        "prior_obligation_dispositions",
-    }
+    required_scorecard_fields = {"layers", "topology_proofs"}
     if set(payload) != required_scorecard_fields:
         reject("critic_scorecard", "invalid_shape")
 
@@ -1006,7 +944,6 @@ def _preflight_review_protocol(
     }
     classified_deterministic_indexes: list[int] = []
     deterministic_owners = _deterministic_finding_owners(deterministic_findings)
-    prior_open_obligations = prior_open_obligations or []
     component_addition_count = 0
     connection_addition_obligation_count = 0
     component_has_hard_blocker = False
@@ -1302,14 +1239,6 @@ def _preflight_review_protocol(
             ):
                 reject(path, "unexpected_context")
 
-    try:
-        _model_prior_obligation_dispositions(
-            payload.get("prior_obligation_dispositions"),
-            prior_open_obligations=prior_open_obligations,
-        )
-    except ValueError:
-        reject("prior_obligation_dispositions", "incomplete_classification")
-
     if sorted(classified_deterministic_indexes) != list(
         range(len(deterministic_findings))
     ):
@@ -1549,11 +1478,7 @@ def _canonicalise_review_protocol(
     candidate = deepcopy(payload)
     prior_open_obligations = prior_open_obligations or []
     deterministic_owners = _deterministic_finding_owners(deterministic_findings)
-    if set(candidate) != {
-        "layers",
-        "topology_proofs",
-        "prior_obligation_dispositions",
-    }:
+    if set(candidate) != {"layers", "topology_proofs"}:
         raise CriticProtocolError(
             "critic scorecard must contain exactly the required fields",
             path="critic_scorecard",
@@ -1965,11 +1890,6 @@ def _canonicalise_review_protocol(
             rule="incomplete_classification",
         )
 
-    dispositions = _model_prior_obligation_dispositions(
-        candidate.get("prior_obligation_dispositions"),
-        prior_open_obligations=prior_open_obligations,
-    )
-
     if not require_topology_proofs:
         hard_blockers = _hard_blockers(
             canonical_layers=canonical_layers, specs=hard_blocker_specs
@@ -1978,7 +1898,6 @@ def _canonicalise_review_protocol(
             prior_open_obligations=prior_open_obligations,
             hard_blockers=hard_blockers,
         )
-        _assert_model_dispositions_match(dispositions, derived_dispositions)
         scope = _repair_scope_for_layers(canonical_layers)
         return {
             "repair_contract": {"repair_scope": scope, "layers": canonical_layers},
@@ -2163,7 +2082,6 @@ def _canonicalise_review_protocol(
         prior_open_obligations=prior_open_obligations,
         hard_blockers=hard_blockers,
     )
-    _assert_model_dispositions_match(dispositions, derived_dispositions)
     scope = _repair_scope_for_layers(canonical_layers)
     return {
         "repair_contract": {"repair_scope": scope, "layers": canonical_layers},
@@ -2419,12 +2337,8 @@ addition count requires its matching field in `composition_fields`. Without an i
 group defect, the number of cited existing groups plus declared group additions must not exceed the
 component `addition_count`; several added components may share one group.
 
-Copy every deterministic pre-review finding under its owning layer.
-The packet may contain `prior_open_obligations`. Return one
-`[prior_obligation_id,"resolved"|"still_fail"]` disposition for every item, copying its opaque
-server ID exactly. A still-failing item requires a current blocker in its owning layer. The server
-retains its original blocker text even when the current wording changes. A resolved item must be
-absent from the current blockers. This classification is mandatory even when new defects are found.
+Copy every deterministic pre-review finding under its owning layer. Return only current-candidate
+findings; the server owns cross-round blocker identity and disposition.
 </review_contract>
 
 <output_contract>
@@ -2434,7 +2348,6 @@ Return one JSON object and nothing else:
 <layer_output_example>
   },
 <topology_output_contract>
-  ,"prior_obligation_dispositions": []
 }
 Layer row fields, in order:
 <layer_field_legend>
@@ -2868,7 +2781,6 @@ def _completed_critic_review(
             review_context=review_context,
             require_topology_proofs=require_topology_proofs,
             resolved_depth=resolved_depth,
-            prior_open_obligations=prior_open_obligations,
         )
         payload = _canonicalise_review_protocol(
             raw_payload,
@@ -3196,6 +3108,10 @@ async def graph_critic_node(
     error_path: str | None = None
     error_rule: str | None = None
     try:
+        prior_open_obligations = _prior_open_obligations(
+            state,
+            resolved_depth=profile.resolved,
+        )
         review_packet = _review_packet(
             state,
             graph=graph,
@@ -3205,7 +3121,6 @@ async def graph_critic_node(
             deterministic_findings=deterministic_findings,
             locked_layers=locked_layers,
         )
-        prior_open_obligations = review_packet["prior_open_obligations"]
         response = await request_scorecard(
             correction_claim=("contract" if contract_correction is not None else None),
             review_packet=review_packet,
@@ -3958,7 +3873,7 @@ def _validate_review_protocol(
                     prior_open_obligations=prior_open_obligations,
                     hard_blockers=hard_blockers,
                 )
-                _assert_model_dispositions_match(dispositions, derived)
+                _assert_canonical_dispositions_match(dispositions, derived)
             else:
                 layers = (payload.get("repair_contract") or {}).get("layers") or {}
                 _validate_prior_obligation_dispositions(

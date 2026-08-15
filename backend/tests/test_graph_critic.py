@@ -17,6 +17,7 @@ from agent.graph_repair_contract import (
 )
 from agent.graph_review_budget import GraphReviewBudget
 from agent.nodes.graph_critic import (
+    _GRAPH_CRITIC_COMPACT_PROTOCOL,
     _GRAPH_CRITIC_PROMPT_VERSION,
     _GRAPH_CRITIC_PROTOTYPE_RESPONSE_SCHEMA,
     _GRAPH_CRITIC_RESPONSE_SCHEMA,
@@ -27,6 +28,7 @@ from agent.nodes.graph_critic import (
     _TOPOLOGY_PROOF_GUARANTEES,
     CriticProtocolError,
     _canonicalise_review_protocol,
+    _critic_protocol_error,
     _critic_system,
     _deterministic_blocker_rule,
     _deterministic_render_review,
@@ -179,7 +181,6 @@ def _passing_review_payload(*, strengths=None, advice=None, topology_proofs=None
                 for guarantee in sorted(_TOPOLOGY_PROOF_GUARANTEES)
             }
         ),
-        "prior_obligation_dispositions": [],
     }
 
 
@@ -302,7 +303,7 @@ def _critic_state(*, graph=None, complexity="prototype"):
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v55"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v56"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM
@@ -999,9 +1000,9 @@ def test_scorecard_preflight_reports_independent_row_defects_together():
 def test_scorecard_preflight_reports_exact_root_shape_defect(mutation):
     payload = _passing_review_payload(topology_proofs={})
     if mutation == "missing":
-        del payload["prior_obligation_dispositions"]
+        del payload["topology_proofs"]
     else:
-        payload["unexpected"] = []
+        payload["prior_obligation_dispositions"] = []
 
     with pytest.raises(CriticProtocolError) as caught:
         _preflight_review_protocol(
@@ -1252,6 +1253,9 @@ async def test_prototype_depth_rejects_production_only_codes_despite_request_wor
     ]
     assert "selected UI depth is prototype and is authoritative" in calls[0]["system"]
     assert "out of scope" in calls[0]["system"]
+    assert "prior_obligation_dispositions" not in calls[0]["system"]
+    assert "prior_open_obligations" not in calls[0]["system"]
+    assert "server-supplied prior open obligation" not in calls[0]["system"]
 
 
 def test_protocol_errors_expose_only_safe_coordinates():
@@ -1648,9 +1652,6 @@ def test_grouped_component_placement_blocker_resolves_after_repair():
     )
     repaired_graph["groups"][0]["nodeIds"].append("telemetry")
     passing_scorecard = _passing_review_payload(topology_proofs={})
-    passing_scorecard["prior_obligation_dispositions"] = [
-        [structural_blocker["id"], "resolved"]
-    ]
 
     second_review = _canonicalise_review_protocol(
         passing_scorecard,
@@ -2038,7 +2039,7 @@ def test_non_failed_topology_proofs_forbid_existing_edge_repair_references(statu
         )
 
 
-def test_prior_open_obligations_require_explicit_consistent_dispositions():
+def test_prior_open_obligation_dispositions_are_server_derived():
     prior_finding = "Repair edge semantics in the connections layer."
     prior_id = _prior_obligation_id(layer="connections", finding=prior_finding)
     prior = [
@@ -2051,29 +2052,19 @@ def test_prior_open_obligations_require_explicit_consistent_dispositions():
     payload = _passing_review_payload(topology_proofs={})
     _set_model_layer(payload, "connections", finding_codes=[5])
 
-    with pytest.raises(ValueError, match="classify every prior open obligation"):
-        _canonicalise_review_protocol(
-            payload,
-            graph={"nodes": [], "edges": []},
-            deterministic_findings=[],
-            review_context=[],
-            require_topology_proofs=False,
-            prior_open_obligations=prior,
-        )
-
-    payload["prior_obligation_dispositions"] = [[prior_id, "resolved"]]
-    with pytest.raises(ValueError, match="server-derived typed blockers"):
-        _canonicalise_review_protocol(
-            payload,
-            graph={"nodes": [], "edges": []},
-            deterministic_findings=[],
-            review_context=[],
-            require_topology_proofs=False,
-            prior_open_obligations=prior,
-        )
+    still_failing = _canonicalise_review_protocol(
+        payload,
+        graph={"nodes": [], "edges": []},
+        deterministic_findings=[],
+        review_context=[],
+        require_topology_proofs=False,
+        prior_open_obligations=prior,
+    )
+    assert still_failing["prior_obligation_dispositions"] == [
+        {"prior_obligation_id": prior_id, "status": "still_fail"}
+    ]
 
     _set_model_layer(payload, "connections", finding_codes=[3])
-    payload["prior_obligation_dispositions"] = [[prior_id, "resolved"]]
     normalized = _canonicalise_review_protocol(
         payload,
         graph={"nodes": [], "edges": []},
@@ -2091,29 +2082,6 @@ def test_prior_open_obligations_require_explicit_consistent_dispositions():
             "blocking_findings"
         ]
     )
-
-
-def test_prior_obligation_dispositions_reject_unknown_server_ids():
-    prior_finding = "Keep this blocker open."
-    prior = [
-        {
-            "id": _prior_obligation_id(layer="connections", finding=prior_finding),
-            "layer": "connections",
-            "finding": prior_finding,
-        }
-    ]
-    payload = _passing_review_payload(topology_proofs={})
-    payload["prior_obligation_dispositions"] = [["prior_unknown", "resolved"]]
-
-    with pytest.raises(ValueError, match="prior_obligation_id"):
-        _canonicalise_review_protocol(
-            payload,
-            graph={},
-            deterministic_findings=[],
-            review_context=[],
-            require_topology_proofs=False,
-            prior_open_obligations=prior,
-        )
 
 
 def test_still_failing_prior_obligation_stops_an_identical_second_repair_class():
@@ -2165,6 +2133,59 @@ def test_resolved_prior_obligation_allows_a_distinct_second_repair():
 
     assert continued is review
     assert "terminal" not in continued
+
+
+@pytest.mark.asyncio
+async def test_post_repair_review_derives_prior_dispositions_outside_model_wire(
+    monkeypatch,
+):
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "outcome", "label": "Campaign outcome service"}],
+        "edges": [],
+        "groups": [],
+    }
+    prior = {
+        "id": "blocker_v1:context:components:prior",
+        "kind": "context",
+        "layer": "components",
+        "key": {
+            "commitments": ["old"],
+            "anchor_node_ids": ["outcome"],
+        },
+        "message": "Repair context for the components layer.",
+        "repair_fingerprint": "prior-fingerprint",
+    }
+    calls = []
+
+    async def fake_stream_llm(**kwargs):
+        calls.append(kwargs)
+        return _structured_response(_passing_review_payload(topology_proofs={}))
+
+    monkeypatch.setattr(
+        "agent.nodes.graph_critic.stream_structured_llm",
+        fake_stream_llm,
+    )
+    state = _critic_state(graph=graph)
+    state["graph_review"] = {
+        "repair_contract": _repair_contract(
+            scope="local",
+            failed_layer="components",
+            findings=[prior["message"]],
+            layer_selectors={"components": {"node_ids": ["outcome"]}},
+        ),
+        "hard_blockers": [prior],
+        "topology_proofs": [],
+    }
+
+    result = await graph_critic_node(state)
+
+    assert len(calls) == 1
+    assert prior["id"] not in json.dumps(calls[0]["messages"])
+    assert result["graph_review"]["approved"] is True
+    assert result["graph_review"]["prior_obligation_dispositions"] == [
+        {"prior_obligation_id": prior["id"], "status": "resolved"}
+    ]
 
 
 def _typed_blockers_for_test(*, edge_selectors=None, specs):
@@ -2400,7 +2421,7 @@ def test_locked_layer_merge_preserves_hard_blockers():
     assert merged["hard_blockers"] == [component_blocker]
 
 
-def test_review_packet_carries_open_findings_and_prototype_filters_production_only():
+def test_prior_obligations_stay_server_side_and_prototype_filters_production_only():
     state = _critic_state()
     contract = _repair_contract(
         scope="local",
@@ -2421,7 +2442,8 @@ def test_review_packet_carries_open_findings_and_prototype_filters_production_on
         render_result={},
     )
 
-    assert packet["prior_open_obligations"] == [
+    assert "prior_open_obligations" not in packet
+    assert _prior_open_obligations(state, resolved_depth="prototype") == [
         {
             "id": _prior_obligation_id(
                 layer="connections",
@@ -3270,6 +3292,17 @@ async def test_protocol_correction_does_not_consume_contract_correction(monkeypa
     assert result["graph_review"]["approved"] is True
 
 
+def test_prior_obligation_protocol_error_keeps_safe_coordinate():
+    error = _critic_protocol_error(
+        ValueError(
+            "prior_obligation_dispositions must match server-derived typed blockers"
+        )
+    )
+
+    assert error.path == "prior_obligation_dispositions"
+    assert error.rule == "invalid_contract"
+
+
 @pytest.mark.asyncio
 async def test_completed_scorecard_does_not_retry_after_contract_correction_is_consumed(
     monkeypatch,
@@ -3360,15 +3393,6 @@ async def test_patch_validation_error_informs_one_contract_correction(monkeypatc
     async def fake_stream_llm(**kwargs):
         calls.append(kwargs)
         payload = _passing_review_payload()
-        payload["prior_obligation_dispositions"] = [
-            [
-                _prior_obligation_id(
-                    layer="connections",
-                    finding="Repair this layer.",
-                ),
-                "resolved",
-            ]
-        ]
         _set_model_layer(
             payload,
             "connections",
@@ -6058,8 +6082,16 @@ def test_semantic_review_wire_has_only_fixed_scorecard_fields():
     assert set(_GRAPH_CRITIC_RESPONSE_SCHEMA["properties"]) == {
         "layers",
         "topology_proofs",
-        "prior_obligation_dispositions",
     }
+    effective_prompt = (
+        _critic_system(
+            require_topology_proofs=False,
+            resolved_depth="prototype",
+        )
+        + _GRAPH_CRITIC_COMPACT_PROTOCOL
+    )
+    assert "prior_obligation_dispositions" not in effective_prompt
+    assert "prior_open_obligations" not in effective_prompt
     schema_text = json.dumps(_GRAPH_CRITIC_RESPONSE_SCHEMA)
     assert "blocking_findings" not in schema_text
     assert '"reason"' not in schema_text

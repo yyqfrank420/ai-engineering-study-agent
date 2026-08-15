@@ -54,7 +54,8 @@ This is the current runtime contract for the production-quality demo.
    transition from prototype to production depth reopens connection and composition review and
    requires a fresh complete topology-proof set. An invalid
    patch may receive one error-informed critic-contract correction before the patch is retried.
-   Every post-patch review classifies prior server obligations as resolved or still failing. A
+   Every post-patch review derives prior server obligations as resolved or still failing from the
+   current typed blocker identities. The model does not classify server-owned obligation state. A
    still-failing typed blocker with the same exact repair fingerprint cannot consume a second repair
    and fails closed. A
    graph-caused render failure can share the patch when an editable layer identifies the cause. A
