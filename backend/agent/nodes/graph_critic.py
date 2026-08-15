@@ -18,6 +18,7 @@ from agent.architecture_rubric import (
     advisory_rubric_codes,
     required_composition_repair_fields,
 )
+from agent.diagram_contract import MINIMUM_DIAGRAM_NODE_TITLE_PX
 from agent.architecture_playbook import format_evidence_bundle
 from agent.complexity import resolve_complexity
 from agent.deadlines import critic_timeout_seconds as _configured_critic_timeout_seconds
@@ -79,7 +80,6 @@ _GRAPH_CRITIC_CORRECTION_EFFORT = "medium"
 _GRAPH_CRITIC_CORRECTION_MAX_TOKENS = 8192
 _GRAPH_STAGE_DEADLINE_KEY = "_graph_stage_deadline_s"
 _GRAPH_STAGE_FINALIZATION_HEADROOM_S = 1.0
-_MINIMUM_PUBLISHED_TEXT_PX = 11.0
 _TOPOLOGY_PROOF_GUARANTEES = {
     "state_effect_reconciliation",
     "authorization_and_compensation",
@@ -568,7 +568,7 @@ def _deterministic_blocker_rule(finding: dict[str, Any]) -> str:
         "Ensure every declared edge is visible in the rendered diagram.": "rendered_edges",
         "Fit every node fully inside the initial viewport.": "clipped_nodes",
         "Fit every edge fully inside the initial viewport.": "clipped_edges",
-        "Increase the smallest rendered text to a readable size.": "minimum_text_size",
+        "Increase every rendered node title to a readable size.": "minimum_text_size",
         "Show every overview-required edge label in the initial viewport.": "required_edge_labels",
         "Show a group label on every node assigned to a responsibility zone.": "group_labels",
         "Remove overlap between visible responsibility-zone boundaries.": "group_boundary_overlap",
@@ -2303,7 +2303,7 @@ Compare the diagram with the user's exact request. Check all of the following:
     and deduplication ownership, late-data handling, and compatible schema evolution. Do not demand
     stream infrastructure from a finite request/response system.
 
-A deterministic browser gate checks exact render counts, clipping, overlap, and minimum text size.
+A deterministic browser gate checks exact render counts, clipping, overlap, and node-title size.
 You also receive the private candidate screenshot. Use it to verify that the authored entry,
 operational spine, controls, and outcome can be located. When the screenshot exposes confusing node
 content, routes, density, grouping, or sequence, classify the defect under the authored field that
@@ -3537,8 +3537,8 @@ def _deterministic_render_review(
         missing.append("Fit every node fully inside the initial viewport.")
     if int(report.get("clipped_edges") or 0) > 0:
         missing.append("Fit every edge fully inside the initial viewport.")
-    if float(report.get("minimum_text_px") or 0) < _MINIMUM_PUBLISHED_TEXT_PX:
-        missing.append("Increase the smallest rendered text to a readable size.")
+    if float(report.get("minimum_text_px") or 0) < MINIMUM_DIAGRAM_NODE_TITLE_PX:
+        missing.append("Increase every rendered node title to a readable size.")
     if "overview_required_edge_labels" in report:
         required_labels = int(report.get("overview_required_edge_labels") or 0)
         visible_labels = int(report.get("visible_overview_required_edge_labels") or 0)

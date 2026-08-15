@@ -2,15 +2,17 @@
 
 Last updated: 2026-08-14
 
-Evidence in this record is current through paid diagnostic `31796931744` on exact head
-`b098cc59af0c329ec28cb4654faa08b5711d7a8d`
+Evidence in this record is current through paid diagnostic `31825436257` on exact head
+`a2e7766e295590c558145ef2f69a2abfb5bb644b`
 on 2026-08-14. PRs #37 through #40 merged on 2026-08-07, and PR #44 merged as `77df25e7`. The
 evidence-provenance, graph-review, and latency corrections have passed local review and the full
-offline CI matrix through the topology correction. Eighteen consecutive recent `graph-expansion`
+offline CI matrix through the topology correction. Nineteen consecutive recent `graph-expansion`
 diagnostics have failed; there is no protected live success on the current branch. The latest paid
-run exposed a deterministic self-parent topology rejection before graph publication. The current
-working tree applies one bounded error-informed complete-topology correction and passes the full
-offline CI matrix. No paid verification of that correction has run.
+run passed initial topology validation, then rejected the candidate at the private layout gate. The
+topology correction was not exercised because its first candidate was valid. The fixed layout
+threshold, renderer heuristic, and test contract disagreed. The working tree now uses capacity-aware
+layout with server-owned render admission criteria. Offline tests and an exact local Chromium replay
+pass; the correction has not received a paid verification.
 Corpus `2026-08-12.v1` remains pending human review.
 
 ## Objective and operating rules
@@ -27,13 +29,13 @@ Corpus `2026-08-12.v1` remains pending human review.
 ## Recent diagnostic failure ledger
 
 This is the canonical chronology for recent `graph-expansion` failures through
-`b098cc59af0c329ec28cb4654faa08b5711d7a8d`. Every
+`a2e7766e295590c558145ef2f69a2abfb5bb644b`. Every
 row records a live product failure. A green workflow conclusion for a report-only row means the
 pending-corpus workflow uploaded its evidence and exited without enforcing the failed verdict. The
 initial workflow runs failed; later report-only diagnostics concluded green under that policy.
-The retained `live-results.json` for every row says `status: fail`. All eighteen failures ended on
+The retained `live-results.json` for every row says `status: fail`. All nineteen failures ended on
 turn 1 and skipped turn 2. Five failures emitted a reversible preview but no authoritative graph;
-the other thirteen emitted no visible graph.
+the other fourteen emitted no visible graph.
 Run links and exact heads come from GitHub Actions metadata. Latency, provider calls, failure codes,
 and cost come from each retained `scheduled-eval-<run>/browser-results.json`, `live-results.json`,
 and `run-context.json` artifact. Model effort comes from source at the exact run head because the
@@ -59,9 +61,10 @@ incomplete usage.
 | 2026-08-12 | [`31637814841`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31637814841), `f15537a3270b4d0e2d011f14fe4cfddf033e389b` | Kimi low returned complete JSON in 28.923 seconds. Deterministic topology validation rejected `components[5][4]` because its group index did not reference a defined `composition.groups` row. No graph, preview, private render, critic, correction, or turn 2 ran. Two application calls cost $0.082446, and the case took 64.963 seconds without retry or fallback. | The model-facing wire now puts `group_label` and `group_kind` in every root and component row. `composition.groups` and all membership indexes are removed. The server derives canonical groups from the inline identity and retains bounded-label collision checks. Initial Kimi effort is `high`; literal `medium` remains unsupported by the adapter. | $0.082446 |
 | 2026-08-13 | [`31705887318`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31705887318), `30c8a5418ce5479c9e5cea170a574355a99608a8` | Kimi high returned a valid 11-node, 21-edge candidate in 131.559 seconds. Topology validation and private rendering passed, and a reversible preview appeared after 134.684 seconds. Opus completed its audit. The first Sonnet critic request then failed before stream acceptance with provider error `overloaded_error`; it had zero tokens and no deltas. Final `graph_data` was `null`, turn 2 was skipped, and no fallback ran. Four application calls cost $0.295396; the case took 250.153 seconds. | Critic calls now allow one retry inside the existing stage deadline. Only retryable failures before `message_start` qualify. The retry waits a bounded jittered delay. Any accepted stream, partial output, non-retryable error, cancellation, or exhausted deadline still fails closed without replay or fallback. | $0.295396 |
 | 2026-08-14 | [`31785036626`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31785036626), `4b2b7f261e689322f76611d8654c6a6e7aec4539` | Kimi high returned a valid 10-node, 20-edge grouped prototype. Private rendering passed and a reversible preview appeared after 126.216 seconds. The initial Sonnet scorecard and its single correction both completed, then failed at `correction / critic_scorecard / invalid_contract`. Final `graph_data` was `null` and turn 2 was skipped. Five application calls completed on their first provider attempt without fallback. They cost $0.454679; the turn took 342.913 seconds and the browser case took 345.162 seconds. | Grouped prototype component additions required composition group authority, while prototype canonicalization treated the only group-oriented rubric as advice and stripped its selectors. The server now derives a structural composition blocker only beside a blocking component addition and exact connection obligations. It retains only cited existing groups or the declared group append count and returns typed missing-authority coordinates. | $0.454679 |
-| 2026-08-14 | [`31796931744`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31796931744), `b098cc59af0c329ec28cb4654faa08b5711d7a8d` | Kimi K3 high made one provider attempt and returned in 63.017 seconds of telemetry, 62.961 seconds at the provider, costing $0.039297. Deterministic validation rejected `graph_design_topology_invalid` at `components[4][0]`: observed parent index 5 exceeded maximum 4 and self-parented. No preview, graph, fallback, or turn 2 ran. Opus low synthesis completed in 27.946 seconds and cost $0.064554. Total application cost was $0.103851; the turn took 94.212 seconds and the browser case took 96.242 seconds. The report-only workflow succeeded, but the evaluation failed. | One bounded error-informed complete-topology correction now runs within the same stage deadline with the same Kimi high effort, a distinct prompt, and one provider attempt. It then stops for validation. No paid verification has run. | $0.103851 |
+| 2026-08-14 | [`31796931744`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31796931744), `b098cc59af0c329ec28cb4654faa08b5711d7a8d` | Kimi K3 high made one provider attempt and returned in 63.017 seconds of telemetry, 62.961 seconds at the provider, costing $0.039297. Deterministic validation rejected `graph_design_topology_invalid` at `components[4][0]`: observed parent index 5 exceeded maximum 4 and self-parented. No preview, graph, fallback, or turn 2 ran. Opus low synthesis completed in 27.946 seconds and cost $0.064554. Total application cost was $0.103851; the turn took 94.212 seconds and the browser case took 96.242 seconds. The report-only workflow succeeded, but the evaluation failed. | One bounded error-informed complete-topology correction now runs within the same stage deadline with the same Kimi high effort, a distinct prompt, and one provider attempt. It then stops for validation. The next paid run produced a valid first candidate, so this correction branch remains live-unexercised. | $0.103851 |
+| 2026-08-14 | [`31825436257`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31825436257), `a2e7766e295590c558145ef2f69a2abfb5bb644b` | Kimi high returned a valid ten-node, fifteen-edge candidate. Initial topology validation passed, so the topology correction was not exercised. Private rendering rejected the candidate with `overlap_count=1` and `minimum_text_px=9.401850585937499`, below the 11-pixel floor; `clipped_nodes=0` and `clipped_edges=0`. No graph preview, semantic critic, repair, fallback, or turn 2 ran. Two application calls cost $0.095151, and the browser case took 86.960 seconds. | The model does not own layout. The renderer now chooses from actual fit scale, sizes bottom lanes by cardinality, and falls back to a rank-ordered compact plan covering the 60-node safety ceiling. The server sends the render criteria. The exact candidate passes local Chromium with zero overlap or clipping and 14.68-pixel titles. Paid verification remains pending. | $0.095151 |
 
-Known application spend across these eighteen failures is at least **$5.077575**. Several provider
+Known application spend across these nineteen failures is at least **$5.172726**. Several provider
 calls have incomplete usage; row amounts marked `at least` are lower bounds. Diagnostic
 `31549644038` retained only `connections.links[6]: topology`; it did not retain authored output and
 cannot distinguish an out-of-range endpoint from a self-link.
@@ -78,6 +81,25 @@ Recent branch CI had no genuine offline failure. Automatic live-gate runs `31333
 unverified. Scheduled `main` runs `31354658015` and `31456923829` were also cancelled with no steps
 or logs before manual diagnostics entered the global staging queue. These cancellations are excluded
 from the product-failure ledger.
+
+## Repeated-failure root cause
+
+The nineteen recent failures were six architect/evidence contract failures, five topology-wire
+failures, seven review/repair orchestration failures, and one frontend layout failure. The immediate
+errors differed. The shared engineering defect was contract drift. Graph limits, model schemas,
+repair permissions, review state, browser measurements, and staging measurements had separate
+owners and were tested mainly through mocked boundaries. A candidate could satisfy one boundary and
+remain impossible or invalid at the next one.
+
+The convergence work makes each boundary explicit and fail-closed. The backend owns semantic graph
+limits, exact repair authority, review-layer reopening, the evaluation viewport, and the post-fit
+node-title floor. The browser selects a layout from actual fit and has a deterministic fallback for
+the full admitted node count. The staging client consumes the candidate's criteria and has the same
+node-count capacity. Private browser review receives the unchanged server candidate. Regression
+tests now replay the exact latest paid candidate, exercise disconnected repair regions, preserve
+locked records and passed layers, cover the 60-node layout boundary, and test the protocol failure
+paths. These changes remove the known deterministic failure classes. Provider outages and new model
+semantic errors can still fail closed.
 
 ## Starting failure state
 
@@ -566,7 +588,7 @@ Historical checkpoint evidence:
 - Diagnostic `31255655951` retried the same case and exact head. The first Opus architect attempt
   received `overloaded_error`; its second attempt completed. The challenger and Kimi builder also
   completed. Kimi produced a 46-node, 67-edge, 5-group prototype candidate. The private 1440x960
-  render showed all 46 nodes and 67 edges, zero clipping or overlap, 13.44-pixel minimum text, and
+  render showed all 46 nodes and 67 edges, zero clipping or overlap, a 13.44 CSS-pixel minimum node title, and
   all eight required overview labels. Sonnet accepted the critic request, then the local stage
   deadline cancelled it after 102.223 seconds without terminal output or usage. The candidate was
   withheld as `semantic_review_timeout`; no repair or judge call ran. Fully priced calls cost
@@ -586,7 +608,7 @@ Historical checkpoint evidence:
   speculative later stage.
 - Diagnostic `31256929226` ran `graph-expansion` on exact head `e645bf2`. All five logical model
   calls completed without fallback. Kimi produced a 36-node, 58-edge, 5-group prototype candidate.
-  The private render had zero clipping or overlap, 14.68-pixel minimum text, and all eight overview
+  The private render had zero clipping or overlap, a 14.68 CSS-pixel minimum node title, and all eight overview
   labels visible. Sonnet completed the depth-aware review in 64.356 seconds and rejected one
   connections-layer reconciliation defect. The review carried model-owned `repair_scope=global`,
   so routing withheld the candidate without calling the bounded Kimi patch. The run cost $0.771274;

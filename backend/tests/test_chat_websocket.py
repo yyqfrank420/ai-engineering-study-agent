@@ -1,8 +1,10 @@
 import asyncio
 import base64
+from io import BytesIO
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from PIL import Image
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
@@ -18,6 +20,32 @@ from storage import runtime_state_store
 from storage.message_store import get_history
 from storage.profile_store import upsert_profile
 from storage.thread_store import create_thread, persist_turn
+
+
+def _png(width: int = 1440, height: int = 960) -> bytes:
+    output = BytesIO()
+    Image.new("RGB", (width, height), "black").save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
+def _layout_report(**overrides):
+    return {
+        "viewport_width": 1440,
+        "viewport_height": 960,
+        "rendered_nodes": 0,
+        "rendered_edges": 0,
+        "overlap_count": 0,
+        "clipped_nodes": 0,
+        "clipped_edges": 0,
+        "minimum_text_px": 12,
+        "overview_required_edge_labels": 0,
+        "visible_overview_required_edge_labels": 0,
+        "grouped_nodes": 0,
+        "group_labelled_nodes": 0,
+        "visible_group_boundaries": 0,
+        "group_boundary_overlap_count": 0,
+        **overrides,
+    }
 
 
 def _ready_app(temp_data_dir, monkeypatch):
@@ -48,7 +76,7 @@ def _receive_until(socket, event_type: str, *, limit: int = 20) -> list[dict]:
 async def test_diagram_evaluation_uses_one_correlated_wait_and_ignores_mismatched_id():
     channel = _SingleWaitDiagramEvaluationChannel(
         timeout_s=1,
-        max_screenshot_bytes=1_024,
+        max_screenshot_bytes=100_000,
     )
     graph = {"version": "graph-v1", "nodes": [], "edges": []}
     candidate_events = []
@@ -56,6 +84,11 @@ async def test_diagram_evaluation_uses_one_correlated_wait_and_ignores_mismatche
     async def send(event):
         candidate_events.append(event)
         evaluation_id = event["evaluation_id"]
+        assert event["criteria"] == {
+            "viewport_width": 1440,
+            "viewport_height": 960,
+            "minimum_text_px": 11.0,
+        }
         wrong_id = "wrong-evaluation-id"
         channel.accept(
             {
@@ -82,25 +115,27 @@ async def test_diagram_evaluation_uses_one_correlated_wait_and_ignores_mismatche
         )
         assert not channel._waiters[evaluation_id].future.done()
 
-        encoded = base64.b64encode(b"browser-render").decode()
+        encoded = base64.b64encode(_png()).decode()
+        chunks = [encoded[offset : offset + 8_000] for offset in range(0, len(encoded), 8_000)]
         channel.accept(
             {
                 "type": "diagram_evaluation_start",
                 "evaluation_id": evaluation_id,
                 "graph_version": "graph-v1",
-                "media_type": "image/jpeg",
-                "total_chunks": 1,
-                "report": {"overlap_count": 0},
+                "media_type": "image/png",
+                "total_chunks": len(chunks),
+                "report": _layout_report(),
             }
         )
-        channel.accept(
-            {
-                "type": "diagram_evaluation_chunk",
-                "evaluation_id": evaluation_id,
-                "index": 0,
-                "data": encoded,
-            }
-        )
+        for index, data in enumerate(chunks):
+            channel.accept(
+                {
+                    "type": "diagram_evaluation_chunk",
+                    "evaluation_id": evaluation_id,
+                    "index": index,
+                    "data": data,
+                }
+            )
         channel.accept(
             {
                 "type": "diagram_evaluation_complete",
@@ -110,7 +145,7 @@ async def test_diagram_evaluation_uses_one_correlated_wait_and_ignores_mismatche
 
     result = await channel.request(graph, send)
 
-    assert result["report"] == {"overlap_count": 0}
+    assert result["report"] == _layout_report()
     assert len(candidate_events) == 1
     assert channel._waiters == {}
     assert channel._uploads == {}
@@ -522,31 +557,32 @@ def test_websocket_keeps_candidate_private_until_browser_evaluation(
                 event.get("type") == "graph_data" for event in candidate_events
             )
             candidate = candidate_events[-1]
-            encoded = base64.b64encode(b"browser-render").decode()
+            assert candidate["criteria"] == {
+                "viewport_width": 1440,
+                "viewport_height": 960,
+                "minimum_text_px": 11.0,
+            }
+            encoded = base64.b64encode(_png()).decode()
+            chunks = [encoded[offset : offset + 8_000] for offset in range(0, len(encoded), 8_000)]
             socket.send_json(
                 {
                     "type": "diagram_evaluation_start",
                     "evaluation_id": candidate["evaluation_id"],
                     "graph_version": "graph-v1",
-                    "media_type": "image/jpeg",
-                    "total_chunks": 1,
-                    "report": {
-                        "rendered_nodes": 0,
-                        "rendered_edges": 0,
-                        "overlap_count": 0,
-                        "clipped_nodes": 0,
-                        "minimum_text_px": 12,
-                    },
+                    "media_type": "image/png",
+                    "total_chunks": len(chunks),
+                    "report": _layout_report(),
                 }
             )
-            socket.send_json(
-                {
-                    "type": "diagram_evaluation_chunk",
-                    "evaluation_id": candidate["evaluation_id"],
-                    "index": 0,
-                    "data": encoded,
-                }
-            )
+            for index, data in enumerate(chunks):
+                socket.send_json(
+                    {
+                        "type": "diagram_evaluation_chunk",
+                        "evaluation_id": candidate["evaluation_id"],
+                        "index": index,
+                        "data": data,
+                    }
+                )
             socket.send_json(
                 {
                     "type": "diagram_evaluation_complete",

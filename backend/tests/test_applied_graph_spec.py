@@ -97,6 +97,14 @@ def test_node_safety_capacity_cannot_overlap_wire_category_codes(monkeypatch):
         applied_graph_spec("production")
 
 
+def test_node_safety_capacity_cannot_exceed_render_capacity(monkeypatch):
+    from agent import applied_graph_spec as module
+
+    monkeypatch.setattr(module.settings, "graph_safety_max_nodes", 61)
+    with pytest.raises(RuntimeError, match="deterministic render capacity"):
+        applied_graph_spec("production")
+
+
 def test_topology_schema_uses_compact_positional_records_with_resource_bounds():
     spec = applied_graph_spec("production")
     schema = applied_graph_topology_schema(spec)

@@ -18,6 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { isSupportedDiagramEvaluationCriteria } from '../diagramEvaluationContract';
 import { agentTransport, createClientRequestId } from '../services/agentTransport';
 import { trackEvent } from '../services/analytics';
 import type {
@@ -293,10 +294,17 @@ export function useAgentStream(authSession: AuthSession | null, activeThreadId: 
 
       case 'graph_candidate':
         if (meta.kind !== 'chat') break;
+        if (!isSupportedDiagramEvaluationCriteria(event.criteria)) {
+          setGraphCandidate(null);
+          break;
+        }
         setGraphCandidate({
           evaluationId: event.evaluation_id,
           graphVersion: event.graph_version,
-          data: normalizeGraphData(event.data) ?? event.data,
+          criteria: event.criteria,
+          // Private render review must inspect the exact server candidate.
+          // Legacy normalization remains on hydrated and published graphs.
+          data: event.data,
         });
         break;
 

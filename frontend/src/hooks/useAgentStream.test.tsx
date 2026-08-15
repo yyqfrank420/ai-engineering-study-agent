@@ -44,6 +44,12 @@ const session: AuthSession = {
   user: { id: 'user-1', email: 'user@example.com' },
 };
 
+const diagramCriteria = {
+  viewport_width: 1440,
+  viewport_height: 960,
+  minimum_text_px: 11,
+} as const;
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -94,6 +100,8 @@ function Harness({
       <div data-testid="graph-title">{agent.graphData?.title ?? ''}</div>
       <div data-testid="preview-title">{agent.graphPreview?.title ?? ''}</div>
       <div data-testid="candidate-title">{agent.graphCandidate?.data.title ?? ''}</div>
+      <div data-testid="candidate-node-type">{agent.graphCandidate?.data.nodes[0]?.type ?? ''}</div>
+      <div data-testid="candidate-criteria">{JSON.stringify(agent.graphCandidate?.criteria ?? null)}</div>
       <div data-testid="progress">{JSON.stringify(agent.workflowProgress)}</div>
       <div data-testid="paused">{agent.explanationPaused ? 'yes' : 'no'}</div>
       <div data-testid="node-detail">{agent.graphData?.nodes[0]?.detail ?? ''}</div>
@@ -421,6 +429,7 @@ describe('useAgentStream', () => {
         type: 'graph_candidate',
         evaluation_id: 'eval-stop',
         graph_version: 'candidate-stop',
+        criteria: diagramCriteria,
         data: graph('candidate-stop'),
       }, { kind: 'chat', clientRequestId });
     });
@@ -453,6 +462,7 @@ describe('useAgentStream', () => {
         type: 'graph_candidate',
         evaluation_id: 'eval-close',
         graph_version: 'candidate-close',
+        criteria: diagramCriteria,
         data: graph('candidate-close'),
       }, { kind: 'chat', clientRequestId: firstRequestId });
       mocks.eventHandler?.({
@@ -476,6 +486,7 @@ describe('useAgentStream', () => {
         type: 'graph_candidate',
         evaluation_id: 'eval-reject',
         graph_version: 'candidate-reject',
+        criteria: diagramCriteria,
         data: graph('candidate-reject'),
       }, { kind: 'chat', clientRequestId: secondRequestId });
       mocks.eventHandler?.({
@@ -673,11 +684,19 @@ describe('useAgentStream', () => {
         type: 'graph_candidate',
         evaluation_id: 'eval-1',
         graph_version: 'candidate-v1',
+        criteria: {
+          viewport_width: 1440,
+          viewport_height: 960,
+          minimum_text_px: 11,
+        },
         data: graph('candidate-v1'),
       }, { kind: 'chat', clientRequestId });
     });
 
     expect(screen.getByTestId('candidate-title').textContent).toBe('Agent Map');
+    expect(screen.getByTestId('candidate-criteria').textContent).toBe(
+      '{"viewport_width":1440,"viewport_height":960,"minimum_text_px":11}',
+    );
     expect(screen.getByTestId('graph-title').textContent).toBe('');
     expect(screen.getByTestId('progress').textContent).toContain('Primary design ready');
 
@@ -711,6 +730,54 @@ describe('useAgentStream', () => {
     expect(screen.getByTestId('graph-title').textContent).toBe('Agent Map');
     expect(screen.getByTestId('messages').textContent).toContain('A queued explanation.');
     expect(screen.getByTestId('progress').textContent).toBe('[]');
+  });
+
+  it('renders the exact private candidate without legacy node-type normalization', () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByText('send'));
+    const clientRequestId = mocks.sendMessage.mock.calls[0][4] as string;
+    const candidate = graph('candidate-v1');
+    candidate.nodes[0] = {
+      ...candidate.nodes[0],
+      label: 'Access control decision',
+      type: 'decision',
+    };
+
+    act(() => {
+      mocks.eventHandler?.({
+        type: 'graph_candidate',
+        evaluation_id: 'eval-exact',
+        graph_version: 'candidate-v1',
+        criteria: diagramCriteria,
+        data: candidate,
+      }, { kind: 'chat', clientRequestId });
+    });
+
+    expect(screen.getByTestId('candidate-node-type').textContent).toBe('decision');
+  });
+
+  it.each([
+    undefined,
+    { viewport_width: 1440, viewport_height: 960 },
+    { ...diagramCriteria, minimum_text_px: Number.NaN },
+    { ...diagramCriteria, viewport_width: 1280 },
+    { ...diagramCriteria, extra: true },
+  ])('fails closed for unsupported private render criteria: %j', criteria => {
+    render(<Harness />);
+    fireEvent.click(screen.getByText('send'));
+    const clientRequestId = mocks.sendMessage.mock.calls[0][4] as string;
+
+    act(() => {
+      mocks.eventHandler?.({
+        type: 'graph_candidate',
+        evaluation_id: 'eval-missing-criteria',
+        graph_version: 'candidate-v1',
+        criteria,
+        data: graph('candidate-v1'),
+      } as unknown as ServerEvent, { kind: 'chat', clientRequestId });
+    });
+
+    expect(screen.getByTestId('candidate-title').textContent).toBe('');
   });
 
   it('shows an auth/thread error when sending without prerequisites', () => {

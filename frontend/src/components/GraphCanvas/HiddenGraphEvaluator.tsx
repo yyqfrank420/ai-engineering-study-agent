@@ -3,7 +3,6 @@ import type { GraphCandidate } from '../../types';
 import { agentTransport } from '../../services/agentTransport';
 import { D3Graph } from './D3Graph';
 import { measureDiagram } from './diagramMeasurement';
-import { DIAGRAM_EVALUATION_VIEWPORT } from './graphLayout';
 
 
 interface HiddenGraphEvaluatorProps {
@@ -14,6 +13,8 @@ export function HiddenGraphEvaluator({ candidate }: HiddenGraphEvaluatorProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const submittedRef = useRef<string | null>(null);
   const [layoutReadyEvaluationId, setLayoutReadyEvaluationId] = useState<string | null>(null);
+  const viewportWidth = candidate ? candidate.criteria.viewport_width : 0;
+  const viewportHeight = candidate ? candidate.criteria.viewport_height : 0;
 
   useEffect(() => {
     if (
@@ -27,7 +28,10 @@ export function HiddenGraphEvaluator({ candidate }: HiddenGraphEvaluatorProps) {
       if (!svg || cancelled) return;
       const report = measureDiagram(svg);
       try {
-        const screenshot = await rasteriseSvg(svg, DIAGRAM_EVALUATION_VIEWPORT);
+        const screenshot = await rasteriseSvg(svg, {
+          width: viewportWidth,
+          height: viewportHeight,
+        });
         if (cancelled) return;
         await submitWithRetry(
           candidate.evaluationId,
@@ -55,7 +59,7 @@ export function HiddenGraphEvaluator({ candidate }: HiddenGraphEvaluatorProps) {
     return () => {
       cancelled = true;
     };
-  }, [candidate, layoutReadyEvaluationId]);
+  }, [candidate, layoutReadyEvaluationId, viewportHeight, viewportWidth]);
 
   if (!candidate) return null;
   return (
@@ -67,8 +71,8 @@ export function HiddenGraphEvaluator({ candidate }: HiddenGraphEvaluatorProps) {
         position: 'fixed',
         left: '-12000px',
         top: 0,
-        width: DIAGRAM_EVALUATION_VIEWPORT.width,
-        height: DIAGRAM_EVALUATION_VIEWPORT.height,
+        width: viewportWidth,
+        height: viewportHeight,
         opacity: 0,
         pointerEvents: 'none',
         zIndex: -1,
@@ -80,6 +84,7 @@ export function HiddenGraphEvaluator({ candidate }: HiddenGraphEvaluatorProps) {
         currentStep={-1}
         activeNodeIds={new Set<string>()}
         onNodeClick={() => undefined}
+        minimumTitlePx={candidate.criteria.minimum_text_px}
         onLayoutReady={() => setLayoutReadyEvaluationId(candidate.evaluationId)}
       />
     </div>

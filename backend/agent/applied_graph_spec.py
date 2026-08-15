@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from agent.state import GraphData
+from agent.diagram_contract import MAXIMUM_DIAGRAM_NODES
 from config import settings
 
 
@@ -111,6 +112,10 @@ def applied_graph_spec(depth: str) -> AppliedGraphSpec:
     if settings.graph_safety_max_nodes > min(_NODE_TYPE_CODES):
         raise RuntimeError(
             "GRAPH_SAFETY_MAX_NODES must stay below the wire category namespace"
+        )
+    if settings.graph_safety_max_nodes > MAXIMUM_DIAGRAM_NODES:
+        raise RuntimeError(
+            "GRAPH_SAFETY_MAX_NODES exceeds the deterministic render capacity"
         )
     return AppliedGraphSpec(
         depth=depth if depth in {"low", "prototype", "production"} else "production",

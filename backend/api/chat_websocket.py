@@ -63,19 +63,18 @@ class _SingleWaitDiagramEvaluationChannel(DiagramEvaluationChannel):
         future: asyncio.Future[dict[str, Any]] = (
             asyncio.get_running_loop().create_future()
         )
-        self._waiters[evaluation_id] = DiagramWaiter(
+        waiter = DiagramWaiter(
             graph_version=graph_version,
             future=future,
         )
+        self._waiters[evaluation_id] = waiter
         try:
-            await send(
-                {
-                    "type": "graph_candidate",
-                    "evaluation_id": evaluation_id,
-                    "graph_version": graph_version,
-                    "data": graph,
-                }
-            )
+            await send(self.graph_candidate_event(
+                evaluation_id=evaluation_id,
+                graph_version=graph_version,
+                graph=graph,
+                criteria=waiter.criteria,
+            ))
             return await asyncio.wait_for(future, timeout=self._timeout_s)
         finally:
             self._waiters.pop(evaluation_id, None)

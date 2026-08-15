@@ -181,10 +181,17 @@ export interface GraphPreviewEvent {
   data: GraphData;
 }
 
+export interface DiagramEvaluationCriteria {
+  viewport_width: number;
+  viewport_height: number;
+  minimum_text_px: number;
+}
+
 export interface GraphCandidateEvent {
   type: 'graph_candidate';
   evaluation_id: string;
   graph_version?: string | null;
+  criteria: DiagramEvaluationCriteria;
   data: GraphData;
 }
 
@@ -368,6 +375,7 @@ export interface GraphNotice {
 export interface GraphCandidate {
   evaluationId: string;
   graphVersion?: string | null;
+  criteria: DiagramEvaluationCriteria;
   data: GraphData;
 }
 
@@ -387,12 +395,12 @@ export interface DiagramLayoutReport {
   clipped_nodes: number;
   clipped_edges: number;
   minimum_text_px: number;
-  overview_required_edge_labels?: number;
-  visible_overview_required_edge_labels?: number;
-  grouped_nodes?: number;
-  group_labelled_nodes?: number;
-  visible_group_boundaries?: number;
-  group_boundary_overlap_count?: number;
+  overview_required_edge_labels: number;
+  visible_overview_required_edge_labels: number;
+  grouped_nodes: number;
+  group_labelled_nodes: number;
+  visible_group_boundaries: number;
+  group_boundary_overlap_count: number;
   capture_error?: string;
 }
 

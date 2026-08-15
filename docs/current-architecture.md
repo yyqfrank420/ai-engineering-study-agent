@@ -1,6 +1,6 @@
 # Current Architecture
 
-Last updated: 2026-08-12
+Last updated: 2026-08-14
 
 This is the current runtime contract for the production-quality demo.
 
@@ -35,8 +35,9 @@ This is the current runtime contract for the production-quality demo.
    controlled decisions/actions, outputs, measures, assumptions, evidence provenance, and runtime.
    The graph worker integrates that brief into domain responsibilities and directional flows.
 6. Deterministic architecture checks run first. A surviving candidate is sent as `graph_candidate`
-   and rendered off-screen at the user's real graph-pane dimensions. The browser returns a bounded,
-   version-checked screenshot and layout report over idempotent WebSocket chunks.
+   and rendered off-screen at the server's fixed evaluation viewport. The browser returns a bounded,
+   version-checked screenshot and layout report over idempotent WebSocket chunks. The server decides
+   admission from that report. The model never owns layout or render acceptance.
 7. The critic judges four disjoint artifact layers: components, connections, composition, and the
    rendered artifact. Each layer has its own hard pass gate. `novice_clarity` is advisory and cannot
    reject a candidate or grant repair authority. Sonnet returns a fixed scorecard of
@@ -80,6 +81,17 @@ responsibility zones, ordered sequence steps, and runtime/control/feedback/deplo
 The D3 renderer deterministically compiles that structure into responsive branded SVG, preserving
 interaction, accessibility, layout evaluation, and compatibility with previously stored graphs.
 
+The server sends the authoritative 1440 by 960 CSS-pixel evaluation viewport and 11 CSS-pixel
+post-fit node-title floor with each private candidate. The renderer chooses horizontal or ranked vertical placement from the
+resulting fit scale. A rank-ordered compact layout covers the full 60-node backend safety ceiling
+when either ordinary plan would be unreadable. Bottom-lane height is derived from its densest
+column. The browser still measures the real SVG. The server rejects overlapping node cards or
+responsibility-zone boundaries, clipped nodes or edges, missing required labels, and unreadable
+node titles. The non-browser staging client consumes the same criteria from the candidate event,
+and its compact fallback covers the same 60-node ceiling. The browser and staging clients reject a
+candidate that omits or changes the fixed criteria. The capacity correction passes offline tests and a local Chromium replay of
+paid diagnostic `31825436257`; it has no paid verification yet.
+
 FastAPI becomes available after database initialisation, then loads the FAISS artifacts and index in
 a background thread. `GET /api/prepare` reports the current server-owned milestone and completed/total
 units; the frontend renders that exact progress and never advances it with an elapsed-time animation.
@@ -95,7 +107,7 @@ persistence, so Cloud Run scale-out neither resets the limits nor stores raw ema
 limiter table.
 
 The applied-design path gives each active role one explicit owner. Opus 5 medium writes the primary
-architecture brief. Kimi K3 low creates the initial graph topology. Kimi K3 high applies typed
+architecture brief. Kimi K3 high creates the initial graph topology and applies typed
 patches to local critic failures and published user refinements. Sonnet 5 medium reviews every graph
 candidate and revision. The graph workflow does not invoke the challenger worker. Opus 5 low writes
 the explanation stream. Renderer infrastructure failures add no model calls.
@@ -121,7 +133,7 @@ The distinction is orchestration versus concurrency, not framework versus no fra
   runtime context is the prerequisite for a database checkpointer.
 - The live staging harness also uses the WebSocket protocol. It submits a bounded contract render
   so deployment model evaluations cannot bypass the diagram gate; the product browser remains the
-  authoritative evaluator of the actual D3 canvas at the user's viewport size.
+  authoritative evaluator of the actual D3 canvas at the fixed server-contract viewport.
 
 ## Primary Code Paths
 

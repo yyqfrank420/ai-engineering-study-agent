@@ -467,24 +467,37 @@ def test_staging_diagram_upload_uses_bounded_protocol_frames(monkeypatch):
             self.frames.append(json.loads(raw))
 
     encoded = base64.b64encode(b"rendered-jpeg").decode("ascii")
-    monkeypatch.setattr(
-        "eval.staging_runner.render_staging_diagram",
-        lambda graph: (
+    received = {}
+
+    def render(graph, criteria):
+        received["criteria"] = criteria
+        return (
             encoded,
             "image/jpeg",
             {
+                "viewport_width": criteria.viewport_width,
+                "viewport_height": criteria.viewport_height,
                 "rendered_nodes": len(graph["nodes"]),
                 "rendered_edges": len(graph["edges"]),
                 "overlap_count": 0,
                 "clipped_nodes": 0,
-                "minimum_text_px": 11,
+                "minimum_text_px": criteria.minimum_text_px,
             },
-        ),
+        )
+
+    monkeypatch.setattr(
+        "eval.staging_runner.render_staging_diagram",
+        render,
     )
     websocket = FakeWebSocket()
     candidate = {
         "evaluation_id": "eval-1",
         "graph_version": "v1",
+        "criteria": {
+            "viewport_width": 1440,
+            "viewport_height": 960,
+            "minimum_text_px": 11,
+        },
         "data": {"nodes": [{"id": "n1"}], "edges": []},
     }
 
@@ -492,6 +505,9 @@ def test_staging_diagram_upload_uses_bounded_protocol_frames(monkeypatch):
 
     assert websocket.frames[0]["type"] == "diagram_evaluation_start"
     assert websocket.frames[0]["graph_version"] == "v1"
+    assert websocket.frames[0]["report"]["viewport_width"] == 1440
+    assert websocket.frames[0]["report"]["viewport_height"] == 960
+    assert received["criteria"].minimum_text_px == 11
     assert websocket.frames[1] == {
         "type": "diagram_evaluation_chunk",
         "evaluation_id": "eval-1",
@@ -499,6 +515,21 @@ def test_staging_diagram_upload_uses_bounded_protocol_frames(monkeypatch):
         "data": encoded,
     }
     assert websocket.frames[-1]["type"] == "diagram_evaluation_complete"
+
+
+def test_staging_diagram_upload_rejects_missing_render_criteria():
+    class FakeWebSocket:
+        async def send(self, _raw):
+            raise AssertionError("invalid candidate must not upload")
+
+    candidate = {
+        "evaluation_id": "eval-1",
+        "graph_version": "v1",
+        "data": {"nodes": [{"id": "n1"}], "edges": []},
+    }
+
+    with pytest.raises(RuntimeError, match="did not contain render criteria"):
+        asyncio.run(_submit_staging_diagram(FakeWebSocket(), candidate))
 
 
 def test_evaluate_expectation_checks_graph_quality_contract():
