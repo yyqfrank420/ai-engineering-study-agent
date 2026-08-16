@@ -512,7 +512,7 @@ def build_agent_workflow(
                 )
             ),
             "challenger_review": {},
-            "_parallel_initial_review": True,
+            "graph_parallel_initial_review": True,
         }
         if not merged.get("architecture_ready", False) and state.get(
             "is_applied_design"
@@ -527,7 +527,7 @@ def build_agent_workflow(
         return merged
 
     async def parallel_initial_review_gate(state: AgentState) -> AgentState:
-        return {**state, "_parallel_initial_review": False}
+        return {**state, "graph_parallel_initial_review": False}
 
     async def reject_graph(state: AgentState) -> AgentState:
         review = state.get("graph_review") or {}
@@ -777,7 +777,7 @@ def _route_after_early_design_frame(
 ) -> Literal["parallel_initial_review_gate", "review_graph"]:
     return (
         "parallel_initial_review_gate"
-        if state.get("_parallel_initial_review")
+        if state.get("graph_parallel_initial_review")
         else "review_graph"
     )
 

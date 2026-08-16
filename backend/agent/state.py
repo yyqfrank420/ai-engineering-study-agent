@@ -142,6 +142,7 @@ class AgentState(TypedDict):
     graph_contract_correction_count: NotRequired[int]
     graph_contract_correction_pending: NotRequired[bool]
     graph_critic_call_count: NotRequired[int]
+    graph_parallel_initial_review: NotRequired[bool]
     # WebSocket restarts pass this request-scoped owner into run_agent, which
     # removes it before LangGraph state execution.
     _graph_review_budget: NotRequired[Any]

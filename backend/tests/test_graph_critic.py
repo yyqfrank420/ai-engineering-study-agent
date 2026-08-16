@@ -353,6 +353,33 @@ async def test_render_gate_bounds_preview_transport_by_absolute_deadline():
     assert "diagram_evaluation" not in result
 
 
+@pytest.mark.asyncio
+async def test_render_gate_does_not_reuse_initial_preview_deadline_for_repair():
+    graph = _domain_graph()
+    graph["design_origin"] = "applied"
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    result = await graph_render_gate_node(
+        {
+            "graph_data": graph,
+            "graph_changed": True,
+            "graph_repair_round_count": 1,
+            "send": send,
+            "await_diagram_evaluation": _accept_diagram,
+            "graph_preview_deadline_s": asyncio.get_running_loop().time() - 1,
+        }
+    )
+
+    assert result["graph_render_admitted"] is True
+    assert result["diagram_evaluation"]["result"]["screenshot_base64"] == (
+        "private-render"
+    )
+    assert events[-1] == {"type": "graph_preview", "data": graph}
+
+
 def _critic_state(*, graph=None, complexity="prototype"):
     return {
         "graph_data": graph or _domain_graph(),

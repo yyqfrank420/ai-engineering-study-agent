@@ -1,18 +1,18 @@
 # Live Evaluation Stabilization: Intermediate Record
 
-Last updated: 2026-08-15
+Last updated: 2026-08-16
 
-Evidence in this record is current through paid diagnostic `31903086208` on exact head
-`f045abf`
-on 2026-08-15. PRs #37 through #40 merged on 2026-08-07, and PR #44 merged as `77df25e7`. The
+Evidence in this record is current through paid diagnostic `31939496092` on exact head
+`06dac4e2946d6e26b949c396317765a46e798a8d`
+on 2026-08-16. PRs #37 through #40 merged on 2026-08-07, and PR #44 merged as `77df25e7`. The
 evidence-provenance, graph-review, and latency corrections have passed local review and the full
-offline CI matrix through the mixed-edge authority change. Twenty-three consecutive recent `graph-expansion`
-diagnostics have failed; there is no protected live success on the current branch. The latest paid
-run rendered three private candidates and withheld the graph after two semantic repairs. The first
-scorecard carried production-oriented requirements into prototype hard findings, and later edge
-repairs did not declare the exact operation required on an existing edge. The working tree now
-limits architect diagram requirements to production review, and gives each existing-edge repair an
-exact operation contract.
+offline CI matrix through the post-preview deadline correction. Twenty-four consecutive recent
+`graph-expansion` diagnostics have failed; there is no protected live success on the current branch.
+The latest paid run published turn 1, previewed the requested eight-node expansion on turn 2, then
+restored turn 1 after the repaired candidate inherited an expired first-preview deadline. Turn 1
+also called Sonnet twice because its parallel-review routing marker was absent from the LangGraph
+state schema. The working tree now persists that marker and applies the first-preview deadline only
+to repair round zero.
 Each budgeted critic dispatch now permits one provider attempt, so transport retries cannot repeat
 an identical model prompt outside that ceiling.
 Corpus `2026-08-12.v1` remains pending human review.
@@ -31,7 +31,7 @@ Corpus `2026-08-12.v1` remains pending human review.
 ## Recent diagnostic failure ledger
 
 This is the canonical chronology for recent `graph-expansion` failures through
-`4faf04de329e3d9934a3363ea475c6a8d19dcf94`. Every
+`06dac4e2946d6e26b949c396317765a46e798a8d`. Every
 row records a live product failure. A green workflow conclusion for a report-only row means the
 pending-corpus workflow uploaded its evidence and exited without enforcing the failed verdict. The
 initial workflow runs failed; later report-only diagnostics concluded green under that policy.
@@ -43,7 +43,9 @@ graph after repair rejection. The twenty-first failure ended on turn 1 after pre
 candidates and withholding both after semantic review. The twenty-second failure previewed one
 fresh candidate, rejected an impossible patch contract, and timed out during its corrected retry.
 The twenty-third failure rendered three private candidates, consumed two semantic repair rounds,
-and withheld the graph.
+and withheld the graph. The twenty-fourth published turn 1, previewed the requested turn 2
+expansion, and restored turn 1 after a repaired private render inherited the expired initial-preview
+deadline.
 Run links and exact heads come from GitHub Actions metadata. Latency, provider calls, failure codes,
 and cost come from each retained `scheduled-eval-<run>/browser-results.json`, `live-results.json`,
 and `run-context.json` artifact. Model effort comes from source at the exact run head because the
@@ -75,8 +77,9 @@ incomplete usage.
 | 2026-08-15 | [`31897989519`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31897989519), `f181e855987d286ddf66f04e35c0ea30a86005f0` | Turn 1 produced a nine-node candidate, corrected one scorecard ownership error, repaired it into a fourteen-node candidate, and passed private rendering for both. The post-repair scorecard marked two prior context blocker IDs `still_fail` after their exact identities had changed. Server validation rejected `prior_obligation_dispositions must match server-derived typed blockers`, publication returned `graph_data: null`, and the evaluator failed `required_graph_missing`. Seven one-attempt calls cost $0.611650. Case latency was 497.341 seconds, with the first preview after about 70 seconds. | Prior obligation dispositions are no longer model output. The server compares current typed blocker IDs with prior blockers and derives every resolved or still-failing status. The safe coordinate mapper retains `prior_obligation_dispositions` for any internal invariant failure. | $0.611650 |
 | 2026-08-15 | [`31900871827`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31900871827), `4faf04de329e3d9934a3363ea475c6a8d19dcf94` | A five-node, seven-edge candidate passed private rendering and emitted a preview after 68.077 seconds. Sonnet authorized four new nodes and nine exact edges, including `n3 -> n5` between existing nodes. Kimi completed the patch in 191.651 seconds, then the global new-component edge rule rejected that required edge. The contract correction retained the same contradiction and expanded the repair to seven nodes and fourteen edges. The retry was cancelled after 132.459 seconds, 1.192 seconds after its first text delta. Final `graph_data` was null; the case took 633.072 seconds. Seven calls ran without fallback or judge calls. One accepted Kimi call retained no terminal usage. | Exact connection obligations now own every added edge. Mixed new-component and existing-to-existing additions are permitted only when their source, target, and normalized label are cited. New-node attachment, graph anchoring, locked records, and post-normalization checks remain. | at least $0.440616 |
 | 2026-08-15 | [`31903086208`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31903086208), `f045abf` | The workflow wrapper reported success while the product withheld turn 1. Kimi high produced a private preview in 39.982 seconds. Private renders passed for candidates 8/11, 13/20, and 13/22. Sonnet medium rejected components once, then `edge_semantics` twice. The two successful semantic repair rounds were exhausted, so `graph_data` was withheld and turn 2 was skipped. Eight calls ran in 363.588 seconds with no fallback. | Prototype scorecards now exclude architect diagram requirements. Existing-edge repairs must declare exact update, remove, or replace operations. The reviewed graph snapshot remains paired with each scorecard. Safe internal diagnostics record the selected depth, locks, findings, blocker IDs, fingerprints, and correction outcomes. | $0.515946 |
+| 2026-08-16 | [`31939496092`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31939496092), `06dac4e2946d6e26b949c396317765a46e798a8d` | Turn 1 published a seven-node graph in 143.111 seconds and previewed it after 39.179 seconds. Its prototype parallel path called Sonnet twice. Turn 2 previewed the requested eight-node expansion after 25.259 seconds. Production review rejected it, Kimi completed one semantic repair, and the repaired private render failed `diagram_evaluation_timeout` because the 170-second first-preview deadline had already expired. The workflow restored turn 1, so the evaluator reported `graph expansion added 0 nodes; expected 1`. Ten calls ran without fallback or judge calls. The case cost $0.764855. | The parallel-review marker is now declared in `AgentState`, so LangGraph retains it and routes an approved prototype scorecard past a second critic call. Private rendering and preview transport consult the first-preview deadline only during repair round zero. Focused tests and the full offline matrix pass; paid verification remains pending. | $0.764855 |
 
-Known application spend across these twenty-three failures is at least **$7.843906**. Several provider
+Known application spend across these twenty-four failures is at least **$8.608761**. Several provider
 calls have incomplete usage; row amounts marked `at least` are lower bounds. Diagnostic
 `31549644038` retained only `connections.links[6]: topology`; it did not retain authored output and
 cannot distinguish an out-of-range endpoint from a self-link.
@@ -96,7 +99,7 @@ from the product-failure ledger.
 
 ## Repeated-failure root cause
 
-The twenty-three recent failures include architect/evidence contract, topology-wire, review/repair,
+The twenty-four recent failures include architect/evidence contract, topology-wire, review/repair,
 and frontend layout failures. The immediate
 errors differed. The shared engineering defect was contract drift. Graph limits, model schemas,
 repair permissions, review state, browser measurements, and staging measurements had separate
@@ -791,11 +794,12 @@ The serial Opus-first path is retired. Initial graph creation now follows this o
 6. The transport emits authoritative `graph_data` only after turn persistence. Rejection, timeout,
    cancellation, steering, or persistence failure restores the request-start approved graph.
 
-Initial topology and private rendering use a separate 170-second preview deadline. Topology has a
-140-second provider cap, private rendering retains its 15-second cap, and 15 seconds remain for
-preview finalization. Post-preview review and repair retain the terminal workflow deadline. The
-frontend stores preview and durable graphs separately, never writes preview view state, and promotes
-only an authoritative `graph_data` event.
+Initial topology and its first private render use a separate 170-second preview deadline. Topology
+has a 140-second provider cap, private rendering retains its 15-second cap, and 15 seconds remain for
+preview finalization. Post-preview review and repair retain the terminal workflow deadline. A repair
+candidate uses the diagram channel's 15-second render timeout without reusing the expired
+first-preview deadline. The frontend stores preview and durable graphs separately, never writes
+preview view state, and promotes only an authoritative `graph_data` event.
 
 Prototype first-preview latency has a 90-second product SLO. It does not cancel model work or change
 the production deadline. Production keeps the 170-second preview allowance and the full fail-closed

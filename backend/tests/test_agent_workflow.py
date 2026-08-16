@@ -318,7 +318,7 @@ def test_route_after_early_design_frame_and_parallel_review_gate():
     }
 
     assert (
-        _route_after_early_design_frame({"_parallel_initial_review": True})
+        _route_after_early_design_frame({"graph_parallel_initial_review": True})
         == "parallel_initial_review_gate"
     )
     assert _route_after_early_design_frame({}) == "review_graph"
@@ -345,6 +345,7 @@ async def test_parallel_initial_review_starts_architect_and_critic_before_approv
         return state
 
     render_order = []
+    critic_calls = 0
     arch_started = asyncio.Event()
     review_started = asyncio.Event()
     release_review = asyncio.Event()
@@ -371,6 +372,8 @@ async def test_parallel_initial_review_starts_architect_and_critic_before_approv
         return {"architect_plan": {"interpretation": "growth system"}}
 
     async def fake_review(state, **_kwargs):
+        nonlocal critic_calls
+        critic_calls += 1
         render_order.append("critic")
         review_started.set()
         await release_review.wait()
@@ -427,6 +430,7 @@ async def test_parallel_initial_review_starts_architect_and_critic_before_approv
     assert render_order.index("render") == 0
     assert "architect" in render_order
     assert "critic" in render_order
+    assert critic_calls == 1
     assert render_order.index("architect") > render_order.index("render")
     assert render_order.index("critic") > render_order.index("render")
 

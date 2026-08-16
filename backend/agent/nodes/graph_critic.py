@@ -3205,6 +3205,16 @@ def _completed_critic_review(
     return review
 
 
+def _candidate_preview_deadline(state: AgentState) -> float | None:
+    repair_round_count = int(
+        state.get("graph_repair_round_count", state.get("graph_revision_count", 0))
+    )
+    if repair_round_count > 0:
+        return None
+    deadline = state.get("graph_preview_deadline_s")
+    return float(deadline) if isinstance(deadline, (int, float)) else None
+
+
 async def graph_render_gate_node(state: AgentState) -> AgentState:
     """Render one unpublished candidate before exposing a reversible preview."""
     graph = state.get("graph_data")
@@ -3231,7 +3241,7 @@ async def graph_render_gate_node(state: AgentState) -> AgentState:
         unavailable_reason = "transport_unavailable"
     else:
         try:
-            preview_deadline = state.get("graph_preview_deadline_s")
+            preview_deadline = _candidate_preview_deadline(state)
             if isinstance(preview_deadline, (int, float)):
                 remaining_s = float(preview_deadline) - time.monotonic()
                 if remaining_s <= 0:
@@ -3315,7 +3325,7 @@ async def graph_render_gate_node(state: AgentState) -> AgentState:
         }
     )
     try:
-        preview_deadline = state.get("graph_preview_deadline_s")
+        preview_deadline = _candidate_preview_deadline(state)
         if isinstance(preview_deadline, (int, float)):
             remaining_s = float(preview_deadline) - time.monotonic()
             if remaining_s <= 0:
