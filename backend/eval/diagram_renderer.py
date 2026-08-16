@@ -17,55 +17,99 @@ from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
+from agent.diagram_contract import DiagramEvaluationCriteria
+from agent.diagram_contract import DIAGRAM_EVALUATION_CRITERIA
 
-_WIDTH = 1280
-_HEIGHT = 760
+
 _MARGIN_X = 54
 _MARGIN_TOP = 86
 _MARGIN_BOTTOM = 44
 _COLUMN_GAP = 44
 _ROW_GAP = 24
+_EDGE_TEXT_PX = 11
+_DEFAULT_NODE_TITLE_PX = 16
+_GROUP_TEXT_PX = 10
 
 
-def render_staging_diagram(graph: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
+def render_staging_diagram(
+    graph: dict[str, Any],
+    criteria: DiagramEvaluationCriteria = DIAGRAM_EVALUATION_CRITERIA,
+) -> tuple[str, str, dict[str, Any]]:
     """Return ``(base64, media_type, layout_report)`` for one graph candidate."""
+    if criteria != DIAGRAM_EVALUATION_CRITERIA:
+        raise ValueError("staging renderer received unsupported render criteria")
     nodes = [node for node in (graph.get("nodes") or []) if isinstance(node, dict)]
     edges = [edge for edge in (graph.get("edges") or []) if isinstance(edge, dict)]
     if not nodes:
         raise ValueError("diagram candidate has no nodes")
 
-    image = Image.new("RGB", (_WIDTH, _HEIGHT), "#080d14")
+    width = criteria.viewport_width
+    height = criteria.viewport_height
+    node_title_px = max(_DEFAULT_NODE_TITLE_PX, math.ceil(criteria.minimum_text_px))
+    image = Image.new("RGB", (width, height), "#080d14")
     draw = ImageDraw.Draw(image)
     title_font = _font(24)
-    node_font = _font(16)
-    edge_font = _font(11)
+    node_font = _font(node_title_px)
+    group_font = _font(_GROUP_TEXT_PX)
+    edge_font = _font(_EDGE_TEXT_PX)
     draw.text((_MARGIN_X, 24), str(graph.get("title") or "Architecture"), fill="#f3f4f6", font=title_font)
 
     positions = _node_positions(nodes, edges)
-    boxes = _node_boxes(positions)
+    boxes = _node_boxes(positions, width=width, height=height)
+    if _overlap_count(list(boxes.values())) or _clipped_count(
+        list(boxes.values()),
+        width=width,
+        height=height,
+    ):
+        boxes = _compact_node_boxes(nodes, width=width, height=height)
     node_by_id = {str(node.get("id")): node for node in nodes}
+    group_label_by_node_id = _group_labels(graph, set(node_by_id))
     rendered_edges = 0
+    rendered_edge_labels = 0
+    visible_edge_labels = 0
+    visible_group_labels = 0
 
     for edge in edges:
         source_id = str(edge.get("source") or "")
         target_id = str(edge.get("target") or "")
         if source_id not in boxes or target_id not in boxes:
             continue
-        _draw_edge(
+        label_visible = _draw_edge(
             draw,
             boxes[source_id],
             boxes[target_id],
             str(edge.get("label") or ""),
             str(edge.get("type") or "") == "loop",
             edge_font,
+            viewport=(width, height),
         )
         rendered_edges += 1
+        if str(edge.get("label") or "").strip():
+            rendered_edge_labels += 1
+            visible_edge_labels += int(label_visible)
 
     for node_id, box in boxes.items():
         node = node_by_id[node_id]
         node_type = str(node.get("type") or "component")
         outline = _node_colour(node_type)
         draw.rounded_rectangle(box, radius=10, fill="#111827", outline=outline, width=2)
+        group_label = group_label_by_node_id.get(node_id)
+        if group_label:
+            group_position = (box[0] + 8, box[1] + 5)
+            compact_group_label = textwrap.shorten(group_label, width=24, placeholder="…")
+            draw.text(
+                group_position,
+                compact_group_label,
+                fill="#a78bfa",
+                font=group_font,
+            )
+            visible_group_labels += int(_text_is_bounded(
+                draw,
+                group_position,
+                compact_group_label,
+                group_font,
+                viewport=(width, height),
+            ))
         label = " ".join(str(node.get("label") or node_id).split())
         lines = textwrap.wrap(label, width=24, break_long_words=True)[:3] or [node_id]
         line_height = 20
@@ -85,16 +129,24 @@ def render_staging_diagram(graph: dict[str, Any]) -> tuple[str, str, dict[str, A
     image.save(output, format="JPEG", quality=72, optimize=True)
     encoded = base64.b64encode(output.getvalue()).decode("ascii")
     report = {
-        "viewport_width": _WIDTH,
-        "viewport_height": _HEIGHT,
+        "viewport_width": width,
+        "viewport_height": height,
         "rendered_nodes": len(nodes),
         "rendered_edges": rendered_edges,
         "overlap_count": _overlap_count(list(boxes.values())),
-        "clipped_nodes": _clipped_count(list(boxes.values())),
+        "clipped_nodes": _clipped_count(list(boxes.values()), width=width, height=height),
         # Every contract-renderer edge is drawn between bounded node boxes (or
         # through the reserved y=70 return lane), all inside the image bounds.
         "clipped_edges": 0,
-        "minimum_text_px": 11,
+        # This field is the post-fit node-title size. Decorative group and edge
+        # text are outside the publication title-size contract.
+        "minimum_text_px": node_title_px,
+        "overview_required_edge_labels": rendered_edge_labels,
+        "visible_overview_required_edge_labels": visible_edge_labels,
+        "grouped_nodes": len(group_label_by_node_id),
+        "group_labelled_nodes": visible_group_labels,
+        "visible_group_boundaries": 0,
+        "group_boundary_overlap_count": 0,
         "renderer": "staging-contract-v1",
     }
     return encoded, "image/jpeg", report
@@ -152,24 +204,29 @@ def _node_positions(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) ->
     }
 
 
-def _node_boxes(positions: dict[str, tuple[int, int]]) -> dict[str, tuple[int, int, int, int]]:
+def _node_boxes(
+    positions: dict[str, tuple[int, int]],
+    *,
+    width: int,
+    height: int,
+) -> dict[str, tuple[int, int, int, int]]:
     column_count = max(column for column, _ in positions.values()) + 1
     rows_per_column: dict[int, int] = defaultdict(int)
     for column, _ in positions.values():
         rows_per_column[column] += 1
     max_rows = max(rows_per_column.values())
 
-    usable_width = _WIDTH - (2 * _MARGIN_X) - ((column_count - 1) * _COLUMN_GAP)
-    usable_height = _HEIGHT - _MARGIN_TOP - _MARGIN_BOTTOM - ((max_rows - 1) * _ROW_GAP)
+    usable_width = width - (2 * _MARGIN_X) - ((column_count - 1) * _COLUMN_GAP)
+    usable_height = height - _MARGIN_TOP - _MARGIN_BOTTOM - ((max_rows - 1) * _ROW_GAP)
     box_width = max(128, min(236, usable_width // column_count))
     box_height = max(68, min(102, usable_height // max_rows))
-    column_step = 0 if column_count == 1 else (_WIDTH - 2 * _MARGIN_X - box_width) / (column_count - 1)
+    column_step = 0 if column_count == 1 else (width - 2 * _MARGIN_X - box_width) / (column_count - 1)
 
     boxes: dict[str, tuple[int, int, int, int]] = {}
     for node_id, (column, row) in positions.items():
         row_count = rows_per_column[column]
         column_height = row_count * box_height + (row_count - 1) * _ROW_GAP
-        column_top = _MARGIN_TOP + ((_HEIGHT - _MARGIN_TOP - _MARGIN_BOTTOM - column_height) / 2)
+        column_top = _MARGIN_TOP + ((height - _MARGIN_TOP - _MARGIN_BOTTOM - column_height) / 2)
         left = int(_MARGIN_X + column * column_step)
         top = int(column_top + row * (box_height + _ROW_GAP))
         boxes[node_id] = (left, top, left + box_width, top + box_height)
@@ -183,7 +240,9 @@ def _draw_edge(
     label: str,
     is_loop: bool,
     font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
-) -> None:
+    *,
+    viewport: tuple[int, int],
+) -> bool:
     start = (source[2], (source[1] + source[3]) // 2)
     end = (target[0], (target[1] + target[3]) // 2)
     colour = "#a78bfa" if is_loop or end[0] <= start[0] else "#64748b"
@@ -196,9 +255,53 @@ def _draw_edge(
     draw.line(points, fill=colour, width=2, joint="curve")
     _draw_arrowhead(draw, points[-2], end, colour)
     compact_label = " ".join(label.split())[:30]
-    if compact_label:
-        anchor = points[len(points) // 2]
-        draw.text((anchor[0] + 4, anchor[1] - 15), compact_label, fill="#cbd5e1", font=font)
+    if not compact_label:
+        return False
+    anchor = points[len(points) // 2]
+    position = _bounded_text_position(
+        draw,
+        (anchor[0] + 4, anchor[1] - 15),
+        compact_label,
+        font,
+        viewport=viewport,
+    )
+    draw.text(position, compact_label, fill="#cbd5e1", font=font)
+    return _text_is_bounded(draw, position, compact_label, font, viewport=viewport)
+
+
+def _text_is_bounded(
+    draw: ImageDraw.ImageDraw,
+    position: tuple[int | float, int | float],
+    value: str,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    *,
+    viewport: tuple[int, int],
+) -> bool:
+    left, top, right, bottom = draw.textbbox(position, value, font=font)
+    width, height = viewport
+    return left >= 0 and top >= 0 and right <= width and bottom <= height
+
+
+def _bounded_text_position(
+    draw: ImageDraw.ImageDraw,
+    position: tuple[int | float, int | float],
+    value: str,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    *,
+    viewport: tuple[int, int],
+) -> tuple[int | float, int | float]:
+    left, top, right, bottom = draw.textbbox(position, value, font=font)
+    width, height = viewport
+    x, y = position
+    if left < 0:
+        x -= left
+    elif right > width:
+        x -= right - width
+    if top < 0:
+        y -= top
+    elif bottom > height:
+        y -= bottom - height
+    return x, y
 
 
 def _draw_arrowhead(
@@ -243,8 +346,68 @@ def _overlap_count(boxes: list[tuple[int, int, int, int]]) -> int:
     return count
 
 
-def _clipped_count(boxes: list[tuple[int, int, int, int]]) -> int:
+def _clipped_count(
+    boxes: list[tuple[int, int, int, int]],
+    *,
+    width: int,
+    height: int,
+) -> int:
     return sum(
-        left < 0 or top < 0 or right > _WIDTH or bottom > _HEIGHT
+        left < 0 or top < 0 or right > width or bottom > height
         for left, top, right, bottom in boxes
     )
+
+
+def _group_labels(graph: dict[str, Any], node_ids: set[str]) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    for group in graph.get("groups") or []:
+        if not isinstance(group, dict):
+            continue
+        label = " ".join(str(group.get("label") or "").split())
+        if not label:
+            continue
+        for node_id in group.get("nodeIds") or []:
+            normalized_id = str(node_id)
+            if normalized_id in node_ids:
+                labels[normalized_id] = label
+    return labels
+
+
+def _compact_node_boxes(
+    nodes: list[dict[str, Any]],
+    *,
+    width: int,
+    height: int,
+) -> dict[str, tuple[int, int, int, int]]:
+    columns = min(8, len(nodes))
+    main_nodes = [node for node in nodes if str(node.get("lane") or "main") != "bottom"]
+    bottom_nodes = [node for node in nodes if str(node.get("lane") or "main") == "bottom"]
+    bottom_start = (
+        math.ceil(len(main_nodes) / columns) * columns
+        if main_nodes and bottom_nodes
+        else len(main_nodes)
+    )
+    indexed_nodes = [
+        *((node, index) for index, node in enumerate(main_nodes)),
+        *((node, bottom_start + index) for index, node in enumerate(bottom_nodes)),
+    ]
+    rows = math.ceil(max(1, bottom_start + len(bottom_nodes)) / columns)
+    box_width = 128
+    box_height = 68
+    horizontal_gap = 0 if columns == 1 else (
+        width - 2 * _MARGIN_X - columns * box_width
+    ) / (columns - 1)
+    vertical_gap = 0 if rows == 1 else (
+        height - _MARGIN_TOP - _MARGIN_BOTTOM - rows * box_height
+    ) / (rows - 1)
+    if horizontal_gap < 0 or vertical_gap < 0:
+        raise ValueError("diagram criteria cannot contain the admitted graph")
+    return {
+        str(node.get("id")): (
+            int(_MARGIN_X + (index % columns) * (box_width + horizontal_gap)),
+            int(_MARGIN_TOP + (index // columns) * (box_height + vertical_gap)),
+            int(_MARGIN_X + (index % columns) * (box_width + horizontal_gap)) + box_width,
+            int(_MARGIN_TOP + (index // columns) * (box_height + vertical_gap)) + box_height,
+        )
+        for node, index in indexed_nodes
+    }

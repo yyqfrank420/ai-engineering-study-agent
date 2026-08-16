@@ -144,8 +144,7 @@ def extract_response_text(events: list[dict]) -> str:
 
 def extract_graph_data(events: list[dict]) -> dict | None:
     for event in reversed(events):
-        event_type = event.get("type")
-        if event_type == "graph_data" or event_type == "graph_candidate":
+        if event.get("type") == "graph_data":
             data = event.get("data")
             if isinstance(data, dict):
                 return data

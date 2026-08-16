@@ -113,9 +113,12 @@ def test_schema_accepts_supported_architecture_node_types():
     assert result["errors"] == []
 
 
-def test_extract_graph_data_prefers_graph_data_before_falling_back_to_candidate():
+def test_extract_graph_data_ignores_private_graph_candidates():
     graph_data_events = [
-        {"type": "graph_candidate", "data": {"title": "candidate", "nodes": [], "edges": []}},
+        {
+            "type": "graph_candidate",
+            "data": {"title": "candidate", "nodes": [], "edges": []},
+        },
         {"type": "graph_data", "data": {"title": "final", "nodes": [], "edges": []}},
     ]
 
@@ -124,12 +127,37 @@ def test_extract_graph_data_prefers_graph_data_before_falling_back_to_candidate(
     assert result == {"title": "final", "nodes": [], "edges": []}
 
 
-def test_extract_graph_data_ignores_invalid_graph_candidate_payload():
+def test_extract_graph_data_returns_none_when_only_private_candidate_exists():
     graph_data_events = [
-        {"type": "graph_data", "data": {"title": "final", "nodes": [], "edges": []}},
-        {"type": "graph_candidate", "data": 12},
+        {
+            "type": "graph_candidate",
+            "data": {"title": "candidate", "nodes": [], "edges": []},
+        },
     ]
 
     result = extract_graph_data(graph_data_events)
 
-    assert result == {"title": "final", "nodes": [], "edges": []}
+    assert result is None
+
+
+def test_graph_emission_metric_ignores_private_candidates():
+    case = TestCase(
+        id="X4",
+        category="routing_graph_expand",
+        description="private candidate is not a published graph",
+        expected={"graph_emitted": False},
+    )
+    run = {
+        "status_code": 200,
+        "events": [
+            {
+                "type": "graph_candidate",
+                "data": {"title": "candidate", "nodes": [], "edges": []},
+            }
+        ],
+    }
+
+    result = score_test_case(case, run)
+
+    assert result["graph_emitted"] is False
+    assert result["graph_emitted_pass"] is True

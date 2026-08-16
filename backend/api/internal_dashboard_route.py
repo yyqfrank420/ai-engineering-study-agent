@@ -11,7 +11,10 @@ from fastapi import APIRouter, Depends, Query
 from api.internal_access import get_internal_dashboard_user
 from storage.analytics_event_store import list_recent_analytics_events
 from storage.product_analytics_store import list_recent_product_analytics_events
-from storage.telemetry_store import list_recent_http_request_logs, list_recent_llm_telemetry
+from storage.telemetry_store import (
+    list_recent_http_request_logs,
+    list_recent_llm_telemetry,
+)
 
 router = APIRouter(prefix="/api/internal/dashboard", tags=["internal-dashboard"])
 
@@ -74,6 +77,15 @@ def _nonnegative_int(value: Any, *, default: int = 0) -> int:
         return default
 
 
+def _nullable_nonnegative_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return None
+
+
 @router.get("/overview")
 async def dashboard_overview(_user=Depends(get_internal_dashboard_user)):
     now = time.time()
@@ -108,11 +120,23 @@ async def dashboard_overview(_user=Depends(get_internal_dashboard_user)):
             "stop_rate": _safe_rate(stopped, sent),
             "search_tool_request_rate": _safe_rate(search_requested, sent),
             "avg_chat_latency_ms": int(
-                mean([row["latency_ms"] for row in http_1d if row["path"] == "/api/chat"])
-            ) if any(row["path"] == "/api/chat" for row in http_1d) else None,
-            "avg_first_token_latency_ms": int(mean(first_token_latencies)) if first_token_latencies else None,
+                mean(
+                    [row["latency_ms"] for row in http_1d if row["path"] == "/api/chat"]
+                )
+            )
+            if any(row["path"] == "/api/chat" for row in http_1d)
+            else None,
+            "avg_first_token_latency_ms": int(mean(first_token_latencies))
+            if first_token_latencies
+            else None,
             "p95_first_token_latency_ms": _percentile(first_token_latencies, 0.95),
-            "quality_scores": len([row for row in analytics_1d if row["event_category"] == "quality_score"]),
+            "quality_scores": len(
+                [
+                    row
+                    for row in analytics_1d
+                    if row["event_category"] == "quality_score"
+                ]
+            ),
         },
         "providers": dict(Counter(row["provider"] for row in llm_1d)),
     }
@@ -179,7 +203,9 @@ async def dashboard_trends(
         sent = point["chat_sent"]
         point["completion_rate"] = _safe_rate(point["chat_completed"], sent)
         point["avg_chat_latency_ms"] = (
-            int(mean(latency_values[start_epoch])) if latency_values[start_epoch] else None
+            int(mean(latency_values[start_epoch]))
+            if latency_values[start_epoch]
+            else None
         )
         point["provider_usage"] = dict(provider_counts[start_epoch])
         points.append(point)
@@ -205,7 +231,9 @@ async def dashboard_funnel(_user=Depends(get_internal_dashboard_user)):
             {
                 "event_type": step,
                 "actors": actors,
-                "conversion_from_previous": None if previous is None else _safe_rate(actors, previous),
+                "conversion_from_previous": None
+                if previous is None
+                else _safe_rate(actors, previous),
             }
         )
         previous = actors
@@ -225,7 +253,9 @@ async def dashboard_failures(_user=Depends(get_internal_dashboard_user)):
         key=lambda row: row["created_at_epoch"],
         reverse=True,
     )[:10]
-    slow_requests = sorted(http_logs, key=lambda row: row["latency_ms"], reverse=True)[:10]
+    slow_requests = sorted(http_logs, key=lambda row: row["latency_ms"], reverse=True)[
+        :10
+    ]
     mode_counts: Counter[str] = Counter()
     for row in events:
         if row["event_type"] != "chat_sent":
@@ -357,7 +387,9 @@ async def dashboard_eval_telemetry(
                 continue
             attempts.append(
                 {
-                    "attempt": max(1, _nonnegative_int(attempt.get("attempt"), default=1)),
+                    "attempt": max(
+                        1, _nonnegative_int(attempt.get("attempt"), default=1)
+                    ),
                     "provider": str(attempt.get("provider") or "unknown")[:64],
                     "model": str(attempt.get("model") or "unknown")[:128],
                     "status": str(attempt.get("status") or "unknown")[:32],
@@ -371,6 +403,12 @@ async def dashboard_eval_telemetry(
                     "output_tokens": _nonnegative_int(attempt.get("output_tokens")),
                     "queue_wait_ms": _nonnegative_int(attempt.get("queue_wait_ms")),
                     "duration_ms": _nonnegative_int(attempt.get("duration_ms")),
+                    "first_reasoning_delta_ms": _nullable_nonnegative_int(
+                        attempt.get("first_reasoning_delta_ms")
+                    ),
+                    "first_text_delta_ms": _nullable_nonnegative_int(
+                        attempt.get("first_text_delta_ms")
+                    ),
                 }
             )
         calls.append(
@@ -380,6 +418,11 @@ async def dashboard_eval_telemetry(
                 "provider": row["provider"],
                 "model": row["model"],
                 "status": row["status"],
+                "effort": (
+                    metadata.get("effort")
+                    if metadata.get("effort") in {"low", "medium", "high", "max"}
+                    else None
+                ),
                 "latency_ms": row["duration_ms"],
                 "fallback": row["used_fallback"],
                 "input_tokens": _nonnegative_int(metadata.get("input_tokens")),
@@ -390,6 +433,9 @@ async def dashboard_eval_telemetry(
                     metadata.get("cache_read_input_tokens")
                 ),
                 "output_tokens": _nonnegative_int(metadata.get("output_tokens")),
+                "system_chars": _nonnegative_int(metadata.get("system_chars")),
+                "message_chars": _nonnegative_int(metadata.get("message_chars")),
+                "schema_chars": _nonnegative_int(metadata.get("schema_chars")),
                 "provider_attempts": max(
                     1,
                     _nonnegative_int(metadata.get("provider_attempts"), default=1),
@@ -412,7 +458,8 @@ async def dashboard_self_improvement(_user=Depends(get_internal_dashboard_user))
     rows = list_recent_analytics_events(since_epoch=now - 7 * 86400)
 
     first_token_latencies = [
-        row for row in rows
+        row
+        for row in rows
         if row["event_category"] == "stream"
         and row["event_name"] == "stream_first_token"
         and row.get("numeric_value") is not None
@@ -424,7 +471,8 @@ async def dashboard_self_improvement(_user=Depends(get_internal_dashboard_user))
     )[:10]
 
     quality_scores = [
-        row for row in rows
+        row
+        for row in rows
         if row["event_category"] == "quality_score"
         and row.get("numeric_value") is not None
     ]
@@ -446,8 +494,10 @@ async def dashboard_self_improvement(_user=Depends(get_internal_dashboard_user))
         output_shapes[label] += 1
 
     error_events = [
-        row for row in rows
-        if row["event_name"] in {"stream_failed", "stream_timeout", "stream_cancelled", "request_rejected"}
+        row
+        for row in rows
+        if row["event_name"]
+        in {"stream_failed", "stream_timeout", "stream_cancelled", "request_rejected"}
     ]
 
     return {
@@ -484,7 +534,11 @@ async def dashboard_self_improvement(_user=Depends(get_internal_dashboard_user))
                     "properties": row.get("properties", {}),
                     "created_at_epoch": row["created_at_epoch"],
                 }
-                for row in sorted(error_events, key=lambda item: item["created_at_epoch"], reverse=True)[:10]
+                for row in sorted(
+                    error_events,
+                    key=lambda item: item["created_at_epoch"],
+                    reverse=True,
+                )[:10]
             ],
         },
         "output_shapes": [

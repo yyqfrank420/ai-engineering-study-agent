@@ -185,11 +185,31 @@ def test_cloud_run_config_rejects_an_impossible_architecture_deadline():
         configured.validate_for_cloud_run()
 
 
+def test_cloud_run_config_deadline_boundary_includes_contract_correction():
+    values = {
+        "_env_file": None,
+        "supabase_db_url": "postgresql://example",
+        "anthropic_api_key": "anthropic-key",
+        "moonshot_api_key": "moonshot-key",
+        "graph_builder_model": "kimi-k3",
+        "supabase_url": "https://project.supabase.co",
+        "supabase_anon_key": "anon-key",
+        "supabase_jwt_issuer": "https://project.supabase.co/auth/v1",
+        "turnstile_secret_key": "turnstile-key",
+        "frontend_origin": "https://example.com",
+    }
+
+    with pytest.raises(RuntimeError, match="complete architecture repair path"):
+        Settings(**values, agent_timeout_s=932).validate_for_cloud_run()
+
+    Settings(**values, agent_timeout_s=933).validate_for_cloud_run()
+
+
 @pytest.mark.parametrize(
     "timeout_override",
     [
         {"graph_builder_max_timeout_s": 149},
-        {"graph_critic_max_timeout_s": 89},
+        {"graph_critic_max_timeout_s": 59},
     ],
 )
 def test_cloud_run_config_rejects_a_stage_max_below_its_reserved_time(
@@ -210,6 +230,25 @@ def test_cloud_run_config_rejects_a_stage_max_below_its_reserved_time(
     )
 
     with pytest.raises(RuntimeError, match="cannot be below the reserved"):
+        configured.validate_for_cloud_run()
+
+
+def test_cloud_run_config_rejects_an_impossible_preview_deadline():
+    configured = Settings(
+        _env_file=None,
+        supabase_db_url="postgresql://example",
+        anthropic_api_key="anthropic-key",
+        moonshot_api_key="moonshot-key",
+        graph_builder_model="kimi-k3",
+        supabase_url="https://project.supabase.co",
+        supabase_anon_key="anon-key",
+        supabase_jwt_issuer="https://project.supabase.co/auth/v1",
+        turnstile_secret_key="turnstile-key",
+        frontend_origin="https://example.com",
+        graph_preview_timeout_s=169,
+    )
+
+    with pytest.raises(RuntimeError, match="cannot fit topology generation"):
         configured.validate_for_cloud_run()
 
 
@@ -610,6 +649,52 @@ def test_chat_replays_completed_idempotent_turn_before_admission_checks(temp_dat
 
     assert _parse_sse_events(response.text) == [
         {"type": "response_delta", "content": "Canonical stored answer"},
+        {"type": "graph_data", "data": None},
+        {"type": "done"},
+    ]
+
+
+def test_chat_replays_completed_idempotent_turn_with_graph_before_admission_checks(
+    temp_data_dir, monkeypatch
+):
+    init_db()
+    upsert_profile("user-1", "friend@example.com")
+    thread = create_thread("user-1")
+    graph = {
+        "version": "graph-v1",
+        "nodes": [{"id": "n1", "title": "Start"}],
+        "edges": [],
+    }
+    persist_turn(
+        "user-1",
+        thread["id"],
+        title="Stored",
+        user_content="Explain RAG",
+        assistant_content="Canonical stored answer",
+        graph_data=graph,
+        client_request_id="client-replay-2",
+    )
+
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("an idempotent replay must not call the model")
+
+    monkeypatch.setattr("api.sse_handler.run_agent", fail_if_called)
+    monkeypatch.setattr(settings, "rate_limit_per_minute", 0)
+    app = _authed_app(with_resources=False)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/chat",
+            json={
+                "thread_id": thread["id"],
+                "content": "Explain RAG",
+                "client_request_id": "client-replay-2",
+            },
+        )
+
+    assert _parse_sse_events(response.text) == [
+        {"type": "response_delta", "content": "Canonical stored answer"},
+        {"type": "graph_data", "data": graph},
         {"type": "done"},
     ]
 

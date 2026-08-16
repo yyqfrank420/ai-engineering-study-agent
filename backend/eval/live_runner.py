@@ -34,6 +34,169 @@ PROVIDER_FAILURE = re.compile(
     r"(?:rate.?limit|429|provider.*unavailable|timed?\s*out|connection.*failed)", re.I
 )
 ManualReviewPolicy = Literal["blocking", "report-only"]
+_FAILURE_KINDS = frozenset({"infrastructure", "quality"})
+_GRAPH_REVIEW_DIAGNOSTIC_FIELDS = frozenset(
+    {
+        "schema_version",
+        "repair_round",
+        "critic_call_count",
+        "protocol_correction_count",
+        "contract_correction_count",
+        "depth",
+        "locked_layers",
+        "reopened_layers",
+        "finding_codes",
+        "blocker_ids",
+        "selector_fingerprints",
+        "prior_blocker_dispositions",
+        "review_disposition",
+        "validation_rule",
+        "validation_path_fingerprint",
+    }
+)
+_GRAPH_REVIEW_COUNTER_FIELDS = (
+    "repair_round",
+    "critic_call_count",
+    "protocol_correction_count",
+    "contract_correction_count",
+)
+_GRAPH_REVIEW_LAYERS = frozenset({"components", "connections", "composition", "render"})
+_GRAPH_REVIEW_DEPTHS = frozenset({"low", "prototype", "production"})
+_GRAPH_REVIEW_DISPOSITIONS = frozenset({"approved", "rejected", "unavailable"})
+_GRAPH_REVIEW_PRIOR_STATUSES = frozenset({"resolved", "still_fail"})
+_SAFE_GRAPH_REVIEW_TEXT = re.compile(r"[A-Za-z0-9_.:-]{1,160}")
+_SAFE_GRAPH_REVIEW_RULE = re.compile(r"[a-z][a-z0-9_]{0,95}")
+_SHA256_FINGERPRINT = re.compile(r"[0-9a-f]{64}")
+
+
+def _is_nonnegative_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _safe_graph_review_texts(value: object) -> list[str] | None:
+    if not isinstance(value, list) or len(value) > 64:
+        return None
+    if not all(
+        isinstance(item, str) and _SAFE_GRAPH_REVIEW_TEXT.fullmatch(item)
+        for item in value
+    ):
+        return None
+    if len(value) != len(set(value)):
+        return None
+    return sorted(value)
+
+
+def _safe_graph_review_dispositions(value: object) -> list[dict[str, str]] | None:
+    if not isinstance(value, list) or len(value) > 64:
+        return None
+    dispositions: list[dict[str, str]] = []
+    prior_ids: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"prior_obligation_id", "status"}:
+            return None
+        prior_id = item.get("prior_obligation_id")
+        status = item.get("status")
+        if (
+            not isinstance(prior_id, str)
+            or not _SAFE_GRAPH_REVIEW_TEXT.fullmatch(prior_id)
+            or status not in _GRAPH_REVIEW_PRIOR_STATUSES
+            or prior_id in prior_ids
+        ):
+            return None
+        prior_ids.add(prior_id)
+        dispositions.append({"prior_obligation_id": prior_id, "status": status})
+    return sorted(dispositions, key=lambda item: item["prior_obligation_id"])
+
+
+def _project_graph_review_diagnostic(value: object) -> dict[str, Any] | None:
+    """Copy only fixed-shape review metadata from internal evaluation events."""
+    if not isinstance(value, dict) or set(value) - _GRAPH_REVIEW_DIAGNOSTIC_FIELDS:
+        return None
+    required_fields = _GRAPH_REVIEW_DIAGNOSTIC_FIELDS - {
+        "validation_rule",
+        "validation_path_fingerprint",
+    }
+    if not required_fields.issubset(value) or value.get("schema_version") != 1:
+        return None
+    if not all(
+        _is_nonnegative_int(value.get(field)) for field in _GRAPH_REVIEW_COUNTER_FIELDS
+    ):
+        return None
+    if value.get("depth") not in _GRAPH_REVIEW_DEPTHS:
+        return None
+    if value.get("review_disposition") not in _GRAPH_REVIEW_DISPOSITIONS:
+        return None
+
+    layers = {}
+    for field in ("locked_layers", "reopened_layers"):
+        layer_values = _safe_graph_review_texts(value.get(field))
+        if layer_values is None or not set(layer_values).issubset(_GRAPH_REVIEW_LAYERS):
+            return None
+        layers[field] = layer_values
+    if set(layers["locked_layers"]) & set(layers["reopened_layers"]):
+        return None
+
+    lists = {}
+    for field in ("finding_codes", "blocker_ids"):
+        field_values = _safe_graph_review_texts(value.get(field))
+        if field_values is None:
+            return None
+        lists[field] = field_values
+    fingerprints = value.get("selector_fingerprints")
+    if (
+        not isinstance(fingerprints, list)
+        or len(fingerprints) > 64
+        or not all(
+            isinstance(item, str) and _SHA256_FINGERPRINT.fullmatch(item)
+            for item in fingerprints
+        )
+        or len(fingerprints) != len(set(fingerprints))
+    ):
+        return None
+    dispositions = _safe_graph_review_dispositions(
+        value.get("prior_blocker_dispositions")
+    )
+    if dispositions is None:
+        return None
+
+    projected = {
+        "schema_version": 1,
+        **{field: value[field] for field in _GRAPH_REVIEW_COUNTER_FIELDS},
+        "depth": value["depth"],
+        **layers,
+        **lists,
+        "selector_fingerprints": sorted(fingerprints),
+        "prior_blocker_dispositions": dispositions,
+        "review_disposition": value["review_disposition"],
+    }
+    validation_rule = value.get("validation_rule")
+    if validation_rule is not None:
+        if not isinstance(
+            validation_rule, str
+        ) or not _SAFE_GRAPH_REVIEW_RULE.fullmatch(validation_rule):
+            return None
+        projected["validation_rule"] = validation_rule
+    validation_path_fingerprint = value.get("validation_path_fingerprint")
+    if validation_path_fingerprint is not None:
+        if not isinstance(
+            validation_path_fingerprint, str
+        ) or not _SHA256_FINGERPRINT.fullmatch(validation_path_fingerprint):
+            return None
+        projected["validation_path_fingerprint"] = validation_path_fingerprint
+    return projected
+
+
+def _graph_review_diagnostics_from_events(events: object) -> list[dict[str, Any]]:
+    if not isinstance(events, list):
+        return []
+    diagnostics = []
+    for event in events:
+        if not isinstance(event, dict) or event.get("type") != "workflow_progress":
+            continue
+        diagnostic = _project_graph_review_diagnostic(event.get("diagnostic"))
+        if diagnostic is not None:
+            diagnostics.append(diagnostic)
+    return diagnostics
 
 
 def _assert_approved_judge_identity(corpus: Any, judge: Any) -> None:
@@ -358,7 +521,27 @@ def _result_to_json(result) -> dict[str, Any]:
     }
 
 
-def _classify_deterministic(failures: list[str]) -> str:
+def _classify_deterministic(
+    failures: list[str],
+    failure_details: object = None,
+) -> str:
+    if failure_details is not None:
+        if not isinstance(failure_details, list) or not failure_details:
+            raise RuntimeError(
+                "browser capture failure_details must be a non-empty list"
+            )
+        failure_kinds = []
+        for detail in failure_details:
+            if not isinstance(detail, dict) or detail.get("kind") not in _FAILURE_KINDS:
+                raise RuntimeError(
+                    "browser capture failure_details contains an invalid kind"
+                )
+            failure_kinds.append(detail["kind"])
+        return (
+            "infrastructure"
+            if all(kind == "infrastructure" for kind in failure_kinds)
+            else "quality"
+        )
     return (
         "infrastructure"
         if any(PROVIDER_FAILURE.search(failure) for failure in failures)
@@ -461,17 +644,25 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
 
     for browser_result in capture["results"]:
         case = corpus.by_id[browser_result["id"]]
+        graph_review_diagnostics = _graph_review_diagnostics_from_events(
+            browser_result.get("events")
+        )
         resumed = resume_evaluations.get(case.id)
         if resumed is not None:
             for _judgment in resumed["judgments"]:
                 budget.record_judge_call()
-            evaluations.append(resumed)
+            evaluations.append(
+                {**resumed, "graph_review_diagnostics": graph_review_diagnostics}
+            )
             continue
         deterministic_failures = tuple(
             browser_result.get("deterministic_failures") or []
         )
         if deterministic_failures:
-            classification = _classify_deterministic(list(deterministic_failures))
+            classification = _classify_deterministic(
+                list(deterministic_failures),
+                browser_result.get("failure_details"),
+            )
             decision = GateDecision(
                 "infrastructure" if classification == "infrastructure" else "fail",
                 "; ".join(deterministic_failures),
@@ -483,6 +674,7 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
                     "reason": decision.reason,
                     "deterministic_failures": list(deterministic_failures),
                     "judgments": [],
+                    "graph_review_diagnostics": graph_review_diagnostics,
                 }
             )
             continue
@@ -524,6 +716,7 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
                 "reason": decision.reason,
                 "deterministic_failures": [],
                 "judgments": [_result_to_json(item) for item in judgments],
+                "graph_review_diagnostics": graph_review_diagnostics,
             }
         )
 

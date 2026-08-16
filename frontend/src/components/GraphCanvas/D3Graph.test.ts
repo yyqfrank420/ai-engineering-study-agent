@@ -2,13 +2,20 @@ import { describe, expect, it } from 'vitest';
 import type { GraphEdge } from '../../types';
 import {
   boundLabelCenter,
+  COMPACT_LAYOUT_COLUMNS,
+  COMPACT_LAYOUT_ROWS,
   filterRenderableEdges,
   initialFitScale,
+  isPublishedLayoutScale,
+  MAX_PUBLISHED_GRAPH_NODES,
+  MIN_PUBLISHED_TITLE_PX,
+  NODE_TITLE_PX,
   overviewEdgeLabelOpacity,
   partitionVerticalLevels,
+  planCompactLayout,
   planVerticalLayout,
+  selectGraphLayout,
   selectOverviewEdgeIndices,
-  selectGraphOrientation,
   VERTICAL_LEVEL_H,
   VERTICAL_PAD,
   wrapNodeLabel,
@@ -17,12 +24,30 @@ import {
 
 
 describe('graph layout policy', () => {
-  it('uses vertical flow when a deep graph would make labels unreadable', () => {
-    expect(selectGraphOrientation(720, 7)).toBe('vertical');
-    expect(selectGraphOrientation(720, 6)).toBe('vertical');
-    expect(selectGraphOrientation(1200, 3)).toBe('horizontal');
-    expect(selectGraphOrientation(1200, 6)).toBe('horizontal');
-    expect(selectGraphOrientation(1200, 3, 8)).toBe('vertical');
+  it('selects the first layout that meets the title-size contract', () => {
+    expect(selectGraphLayout(0.75, 0.8)).toBe('horizontal');
+    expect(selectGraphLayout(0.7, 0.75)).toBe('vertical');
+    expect(selectGraphLayout(0.7, 0.7)).toBe('compact');
+  });
+
+  it('falls back to the rank-ordered compact grid when a 60-node vertical plan misses the title gate', () => {
+    const levelSizes = Array.from({ length: 10 }, () => [1, 5]).flat();
+    const verticalPlan = planVerticalLayout(1440, 960, levelSizes);
+    const compactPlan = planCompactLayout(1440, 960, levelSizes.reduce((sum, size) => sum + size, 0));
+
+    expect(levelSizes.reduce((sum, size) => sum + size, 0)).toBe(MAX_PUBLISHED_GRAPH_NODES);
+    expect(NODE_TITLE_PX * verticalPlan.scale).toBeLessThan(MIN_PUBLISHED_TITLE_PX);
+    expect(compactPlan.columns).toBe(COMPACT_LAYOUT_COLUMNS);
+    expect(compactPlan.rows).toBe(COMPACT_LAYOUT_ROWS);
+    expect(isPublishedLayoutScale(compactPlan.scale)).toBe(true);
+    expect(selectGraphLayout(0.7, verticalPlan.scale)).toBe('compact');
+  });
+
+  it('proves compact capacity at the published schema boundary', () => {
+    const compactPlan = planCompactLayout(1440, 960, MAX_PUBLISHED_GRAPH_NODES);
+
+    expect(COMPACT_LAYOUT_COLUMNS * COMPACT_LAYOUT_ROWS).toBeGreaterThanOrEqual(MAX_PUBLISHED_GRAPH_NODES);
+    expect(NODE_TITLE_PX * compactPlan.scale).toBeGreaterThanOrEqual(MIN_PUBLISHED_TITLE_PX);
   });
 
   it('keeps the maximum supported deep graph readable in the evaluation viewport', () => {

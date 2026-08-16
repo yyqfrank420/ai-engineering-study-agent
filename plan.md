@@ -1,6 +1,6 @@
 # Architecture generation recovery and staged redesign plan
 
-Last updated: 2026-08-09
+Last updated: 2026-08-10
 
 ## Decision
 
@@ -20,7 +20,7 @@ The redesign stays outside the release-critical path. It begins after the curren
 4. Record safe validation paths and rule codes when critic output is rejected.
 5. Add paired prototype and production tests.
 6. Give the active critic verdict priority over speculative repair time while preserving synthesis and finalization.
-7. Keep whole-graph generation, private render, MECE review layers, dependency-aware retention and reopening, at most two semantic repairs, and one error-informed critic-contract correction.
+7. Keep whole-graph generation, private render, MECE review layers, dependency-aware retention and reopening, at most two semantic repairs, and one error-informed critic-contract correction. Treat `novice_clarity` as advisory at every depth. Treat `logical_flow`, `authored_composition`, and `branch_completion` as advisory outside production. Fail closed when a repeated still-failing obligation would consume an identical repair class.
 8. Complete the first exhaustive editable review before spending the repair budget.
 
 ### Current status
@@ -29,13 +29,15 @@ The redesign stays outside the release-critical path. It begins after the curren
 - Prototype review sends an empty proof object and production review keeps the full proof contract.
 - The initial review returns one exhaustive scorecard. One bounded protocol correction can repair a malformed scorecard. A rejected patch can receive one separate error-informed contract correction with a safe validation path and rule.
 - The shared initial critic stage may borrow up to 195 seconds. The measured timing replay preserves 98 seconds for patching and 101 seconds for final review.
-- Repair scope is derived from failed layer ownership. It grants exact permissions for cited non-adjacent records in one connected candidate and exact directed connection obligations. Every added component region must connect to an existing node. Group moves require both source and destination group authority. Editable defects enter at most two successful bounded repair rounds and render-only defects fail closed.
+- Repair scope is derived from failed layer ownership. It grants exact permissions for cited non-adjacent records in one connected candidate and exact directed connection obligations. `authored_composition` uses a server-owned title, groups, and sequence repair profile. Every added component region must connect to an existing node. Group moves require both source and destination group authority. Editable defects enter at most two successful bounded repair rounds and one contract correction; a repeated still-failing prior obligation cannot consume an identical repair class. Render-only defects fail closed.
 - Diagnostic `31333075986` exposed a local architect response-limit conflict and an invalid fallback path before the intended graph review could complete. The current recovery removes that conflict and fails closed when architecture input is unavailable.
 - Diagnostic `31335429802` failed at `architecture_pass_evidence_provenance` before graph construction. It made two application calls, no judge calls, and cost $0.353252. The architect took 139.767 seconds and emitted 9,931 output tokens; synthesis took 25.602 seconds. The turn took 168.228 seconds and the case took 170.265 seconds. No graph, private render, fallback, Kimi, Sonnet, repair, or second turn ran.
 - Diagnostic `31340006983` reached the corrected evidence contract but the Opus architect exhausted its 150-second role deadline at `xhigh` effort. The accepted provider attempt ran for 149.813 seconds with zero final output and no queue wait. The turn failed closed before Kimi, Sonnet, rendering, repair, or turn two. Architect effort is now `high`; the model, response contract, independent review, and deadline stay unchanged.
-- The root cause was ambiguous book and web evidence identity at the architecture boundary, plus a `graph-expansion` corpus precondition that did not explicitly request the monitoring component before asking to expand it. The current correction uses opaque hashed book and web evidence IDs, returns safe provenance path and rule coordinates, explicitly requests monitoring in the first prompt, and limits the second prompt to one directly connected child.
-- Corpus `2026-08-09.v1` is pending a fresh full protected capture, human review, judge calibration, and approved manifest hash. No live success is recorded. No further paid run is authorized.
-- The current offline matrix passes 1,216 backend tests and 217 frontend tests.
+- Diagnostic `31369358742` ran only `graph-expansion` on merged head `77df25e7`. The Opus architect completed at `high` effort in 111.877 seconds, then provenance validation rejected `evidence_basis[2].evidence_ref` with the private rule `unknown_evidence_id`. The turn took 153.688 seconds and cost $0.300365. No graph, private render, Kimi, Sonnet, repair, or second turn ran. The pending corpus made the workflow report-only; it was not an AI-eval pass.
+- Canonical book and web evidence IDs remain hashed server-owned records. The architect and challenger receive short request-scoped slots such as `source_1`. The server accepts only those slots at each model boundary and resolves them to canonical IDs before validation and storage. Later graph and synthesis prompts retain evidence claims but omit canonical coordinates. Unknown slots, source-type mismatches, display citations, URLs, and model-supplied canonical IDs fail closed with generic public coordinates.
+- The graph-expansion corpus explicitly requests monitoring in the first prompt and limits the second prompt to one directly connected child.
+- Corpus `2026-08-12.v1` is pending a fresh full protected capture, human review, judge calibration, and approved manifest hash. No live success is recorded. Up to three graph-expansion diagnostic runs are authorized for the latency and convergence fix.
+- The current offline matrix passes 1,224 backend tests and 217 frontend tests.
 
 ### Tests
 
@@ -45,6 +47,7 @@ The redesign stays outside the release-critical path. It begins after the curren
 - An initial editable rejection receives exactly one completion pass before repair.
 - A completion may add defects and selectors. Omitted prior repair evidence remains in the server-owned merged contract. The reviewed graph snapshot and scorecard remain paired by graph version.
 - Post-patch reviews do not start another completion pass.
+- `novice_clarity` produces advice only. At prototype depth, `logical_flow`, `authored_composition`, and `branch_completion` also produce advice without mutation authority. Post-patch reviews classify every prior server obligation as resolved or still failing, and repeated still-failing obligations fail closed before a second repair in the same server-tracked class.
 - Safe error telemetry identifies the rejected field and rule without storing raw prompts or model output.
 - Existing graph critic, repair, workflow, API, and browser tests remain green.
 - Backend and frontend coverage stay at or above their current 90% thresholds.

@@ -1,8 +1,6 @@
 import json
 
 import pytest
-
-from config import settings
 from agent.architecture_playbook import build_evidence_bundle
 from agent.nodes.architecture_workers import (
     _ARCHITECT_PROMPT_VERSION,
@@ -12,6 +10,7 @@ from agent.nodes.architecture_workers import (
     _CHALLENGER_SYSTEM,
     _REVIEW_PLAN_LIST_LIMITS,
     _apply_source_backed_plan_locks,
+    _architect_system_for_depth,
     _is_complete_architect_plan,
     _normalise_architect,
     _normalise_challenger,
@@ -23,6 +22,7 @@ from agent.nodes.architecture_workers import (
     format_diagram_commitments,
 )
 from agent.stream_utils import StructuredLLMResponse
+from config import settings
 
 
 def _structured_response(
@@ -90,8 +90,43 @@ def _evidence_id(bundle: dict, basis: str) -> str:
     )
 
 
+def test_architect_context_audits_the_exact_provisional_candidate():
+    context = _worker_context(
+        {
+            "user_message": "Design a serving runtime.",
+            "design_query": "Design a serving runtime.",
+            "graph_changed": True,
+            "graph_data": {
+                "design_origin": "applied",
+                "title": "Serving draft",
+                "nodes": [
+                    {
+                        "id": "n1",
+                        "label": "Request gateway",
+                        "type": "service",
+                        "description": "Routes inference requests.",
+                        "technology": "internal-only presentation metadata",
+                    }
+                ],
+                "edges": [],
+                "groups": [],
+                "sequence": [],
+                "assumptions": [],
+                "version": "private-version",
+            },
+            "evidence_bundle": {},
+        },
+        "prototype",
+    )
+
+    assert "Candidate architecture under review" in context
+    assert "Request gateway" in context
+    assert "internal-only presentation metadata" not in context
+    assert "private-version" not in context
+
+
 def test_architecture_roles_reason_about_enforced_control_paths():
-    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v21"
+    assert _ARCHITECT_PROMPT_VERSION == "architecture_roles_v25"
     for production_requirement in (
         "At selected production depth only, keep risky customer writes",
         "At selected production depth only, treat production guarantees",
@@ -144,7 +179,33 @@ def test_architecture_roles_reason_about_enforced_control_paths():
         "Hard accepted_plan string limits are inclusive characters"
         in _CHALLENGER_SYSTEM
     )
-    assert "exact opaque source ID" in _CHALLENGER_SYSTEM
+    assert "exact short source slot" in _ARCHITECT_SYSTEM
+    assert "exact short source slot" in _CHALLENGER_SYSTEM
+    assert "State checklist-guided recommendations in decisions or" in _ARCHITECT_SYSTEM
+    assert "State checklist-guided recommendations in" in _CHALLENGER_SYSTEM
+    assert "engineering_recommendation" not in _ARCHITECT_SYSTEM
+    assert "engineering_recommendation" not in _CHALLENGER_SYSTEM
+
+
+@pytest.mark.parametrize("depth", ["low", "prototype"])
+def test_nonproduction_architect_prompt_omits_production_only_rules(depth):
+    prototype_system = _architect_system_for_depth(depth)
+    flattened_system = " ".join(prototype_system.split())
+
+    assert "At selected production depth only" not in prototype_system
+    assert "production depth" not in flattened_system
+    assert "production controls as explicit routes" not in flattened_system
+    for production_directive in (
+        "durable atomic deduplication",
+        "stable operation identity",
+        "typed deterministic validation",
+        "bounded backpressure",
+    ):
+        assert production_directive not in flattened_system
+    assert "At prototype depth, use only prototype criteria" in prototype_system
+    assert "Prefer reusable platform boundaries" in prototype_system
+    assert "<output_contract>" in prototype_system
+    assert _architect_system_for_depth("production") == _ARCHITECT_SYSTEM
 
 
 def test_architecture_worker_schemas_require_every_declared_object_field():
@@ -182,6 +243,13 @@ def test_architecture_worker_schemas_require_every_declared_object_field():
         ]
         == 500
     )
+    assert (
+        architect_properties["evidence_basis"]["items"]["properties"]["basis"]["maxLength"]
+        == 40
+    )
+    assert "enum" not in architect_properties["evidence_basis"]["items"]["properties"][
+        "basis"
+    ]
     assert (
         architect_properties["decisions"]["items"]["properties"]["why"]["maxLength"]
         == 300
@@ -286,13 +354,7 @@ def test_architect_output_becomes_a_bounded_canonical_design_brief():
         "Let analytics-only requests bypass the channel write gate",
     ]
     assert brief["assumptions"] == ["Channel APIs support idempotent writes"]
-    assert brief["evidence_basis"] == [
-        {
-            "claim": "Use an approval gate for large spend changes",
-            "basis": "engineering_recommendation",
-            "evidence_ref": "write_boundary",
-        }
-    ]
+    assert brief["evidence_basis"] == []
 
 
 @pytest.mark.parametrize(
@@ -390,6 +452,34 @@ def test_challenger_context_ignores_a_stale_architect_brief():
     assert "Channel write APIs are available" not in context
 
 
+def test_architect_context_does_not_repeat_identical_design_context():
+    context = _worker_context(
+        {
+            "user_message": "customer support chatbot",
+            "design_query": "customer support chatbot",
+            "evidence_bundle": {},
+        },
+        "Prototype depth",
+    )
+
+    assert context.count("customer support chatbot") == 1
+    assert "Design context" not in context
+
+
+def test_architect_context_does_not_repeat_whitespace_equivalent_design_context():
+    context = _worker_context(
+        {
+            "user_message": "customer support chatbot",
+            "design_query": "  customer   support chatbot\n",
+            "evidence_bundle": {},
+        },
+        "Prototype depth",
+    )
+
+    assert context.count("customer support chatbot") == 1
+    assert "Design context" not in context
+
+
 def test_challenger_context_includes_the_primary_plan_for_the_second_pass():
     context = _worker_context(
         {
@@ -402,6 +492,30 @@ def test_challenger_context_includes_the_primary_plan_for_the_second_pass():
 
     assert "Primary architect candidate" in context
     assert "Bounded growth optimisation loop" in context
+
+
+def test_challenger_context_uses_source_slots_instead_of_canonical_ids():
+    bundle = _evidence_bundle()
+    canonical_id = _evidence_id(bundle, "book")
+    context = _worker_context(
+        {
+            "design_query": "evaluation service",
+            "evidence_bundle": bundle,
+        },
+        "Prototype depth",
+        primary_plan=_complete_plan(
+            evidence_basis=[
+                {
+                    "claim": "Evaluation should be measured.",
+                    "basis": "book",
+                    "evidence_ref": canonical_id,
+                }
+            ]
+        ),
+    )
+
+    assert "source_1" in context
+    assert canonical_id not in context
 
 
 @pytest.mark.asyncio
@@ -455,18 +569,20 @@ async def test_architect_empty_success_stops_graph_input(monkeypatch):
             "is_applied_design": True,
             "design_query": "growth marketing multi-agent system",
             "user_message": "growth marketing multi-agent system",
-            "complexity": "auto",
+            "complexity": "prototype",
             "evidence_bundle": {},
             "send": send,
         }
     )
 
     assert result == {"architect_plan": {}, "architecture_ready": False}
-    assert captured["effort"] == "high"
+    assert captured["effort"] == "medium"
     assert captured["model"] == settings.architecture_model
     assert captured["timeout_seconds"] == settings.architecture_role_timeout_s
     assert captured["max_output_tokens"] == settings.architecture_max_completion_tokens
+    assert captured["max_output_tokens"] == 12000
     assert captured["response_schema"] is _ARCHITECT_RESPONSE_SCHEMA
+    assert "At selected production depth only" not in captured["system"]
 
 
 @pytest.mark.asyncio
@@ -593,6 +709,102 @@ async def test_architect_accepts_schema_bounded_plan_over_legacy_aggregate_limit
     assert result["architect_plan"]["diagram_requirements"] == [
         "d" * 240 for _ in range(24)
     ]
+
+
+@pytest.mark.asyncio
+async def test_architect_resolves_short_source_slots_before_validation_and_storage(
+    monkeypatch,
+    caplog,
+):
+    bundle = build_evidence_bundle(
+        {
+            "rag_chunks": [
+                {
+                    "book": "AI Engineering",
+                    "chapter": chapter,
+                    "page_number": page,
+                    "section": "Evaluation",
+                    "parent_chunk_id": f"ai-eng:p{page}:pc0",
+                    "text": text,
+                }
+                for chapter, page, text in (
+                    (10, 473, "Measure the system before release."),
+                    (10, 474, "Monitor the released system."),
+                    (10, 475, "Evaluate representative inputs."),
+                    (10, 476, "Track regressions."),
+                    (10, 477, "Review outcomes after release."),
+                )
+            ],
+            "research_context": (
+                "- [Current source](https://example.com/current): "
+                "Keep evidence attached to decisions.\n"
+                "- [Second source](https://example.com/second): "
+                "Measure quality continuously.\n"
+                "- [Third source](https://example.com/third): "
+                "Review supported changes."
+            ),
+        }
+    )
+    captured = {}
+    events = []
+    invalid_engineering_area = "invalid_engineering_area"
+    plan = _complete_plan(
+        evidence_basis=[
+            {
+                "claim": f"Supported claim {index}.",
+                "basis": basis,
+                "evidence_ref": f"source_{index}",
+            }
+            for index, basis in enumerate(
+                ("book", "book", "book", "book", "book", "web", "web", "web"),
+                start=1,
+            )
+        ]
+        + [
+            {
+                "claim": "Use a checklist recommendation.",
+                "basis": "engineering_recommendation",
+                "evidence_ref": invalid_engineering_area,
+            }
+        ],
+    )
+
+    async def model(**kwargs):
+        captured.update(kwargs)
+        return _structured_response(plan)
+
+    async def send(event):
+        events.append(event)
+
+    monkeypatch.setattr(
+        "agent.nodes.architecture_workers.stream_structured_llm",
+        model,
+    )
+    caplog.set_level("INFO", logger="agent.nodes.architecture_workers")
+    result = await architect_node(
+        {
+            "is_applied_design": True,
+            "design_query": "Expand the existing graph.",
+            "user_message": "Expand the existing graph.",
+            "complexity": "prototype",
+            "evidence_bundle": bundle,
+            "send": send,
+        }
+    )
+
+    assert result["architecture_ready"] is True
+    assert [
+        item["evidence_ref"] for item in result["architect_plan"]["evidence_basis"]
+    ] == [item["id"] for item in bundle["evidence_records"]]
+    assert len(result["architect_plan"]["evidence_basis"]) == 8
+    assert invalid_engineering_area not in json.dumps(result)
+    assert invalid_engineering_area not in json.dumps(events)
+    assert "Discarded legacy model evidence entries: count=1" in caplog.text
+    assert invalid_engineering_area not in caplog.text
+    assert "Use a checklist recommendation." not in caplog.text
+    prompt = captured["messages"][0]["content"]
+    assert "[source_8] web" in prompt
+    assert all(item["id"] not in prompt for item in bundle["evidence_records"])
 
 
 @pytest.mark.asyncio
@@ -750,6 +962,100 @@ async def test_challenger_replaces_the_candidate_with_one_reviewed_plan(monkeypa
     assert result["challenger_review"]["risks"][0]["area"] == "scope"
     assert "accepted_plan" not in result["challenger_review"]
     assert "Primary architect candidate" in captured["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_challenger_resolves_source_slots_and_keeps_canonical_storage(
+    monkeypatch,
+):
+    bundle = _evidence_bundle()
+    canonical_ids = [
+        _evidence_id(bundle, "book"),
+        _evidence_id(bundle, "web"),
+    ]
+    legacy_checklist_reference = "legacy_checklist_reference"
+    accepted_plan = _complete_plan(
+        evidence_basis=[
+            {
+                "claim": "Evaluation should be measured.",
+                "basis": "book",
+                "evidence_ref": "source_1",
+            },
+            {
+                "claim": "Current guidance describes evaluation.",
+                "basis": "web",
+                "evidence_ref": "source_2",
+            },
+            {
+                "claim": "Use a checklist recommendation.",
+                "basis": "engineering_recommendation",
+                "evidence_ref": "invalid_engineering_area",
+            },
+        ]
+    )
+    captured = {}
+
+    async def model(**kwargs):
+        captured.update(kwargs)
+        return _structured_response(
+            {
+                "accepted_plan": accepted_plan,
+                "risks": [],
+                "missing_requirements": [],
+                "tradeoffs": [],
+                "status_update": "Reviewed.",
+            }
+        )
+
+    async def send(_event):
+        return None
+
+    monkeypatch.setattr(
+        "agent.nodes.architecture_workers.stream_structured_llm",
+        model,
+    )
+    result = await challenger_node(
+        {
+            "is_applied_design": True,
+            "design_query": "Design an evaluation service.",
+            "user_message": "Design an evaluation service.",
+            "complexity": "prototype",
+            "evidence_bundle": bundle,
+            "architecture_ready": True,
+            "architect_plan": _complete_plan(
+                evidence_basis=[
+                    {
+                        "claim": "Evaluation should be measured.",
+                        "basis": "book",
+                        "evidence_ref": canonical_ids[0],
+                    },
+                    {
+                        "claim": "Current guidance describes evaluation.",
+                        "basis": "web",
+                        "evidence_ref": canonical_ids[1],
+                    },
+                    {
+                        "claim": "Legacy checklist guidance.",
+                        "basis": "engineering_recommendation",
+                        "evidence_ref": legacy_checklist_reference,
+                    },
+                ]
+            ),
+            "send": send,
+        }
+    )
+
+    assert result["architecture_ready"] is True
+    assert [
+        item["evidence_ref"] for item in result["architect_plan"]["evidence_basis"]
+    ] == canonical_ids
+    assert "invalid_engineering_area" not in json.dumps(result)
+    prompt = captured["messages"][0]["content"]
+    assert "source_1" in prompt
+    assert "source_2" in prompt
+    assert legacy_checklist_reference not in prompt
+    assert "Legacy checklist guidance." not in prompt
+    assert all(canonical_id not in prompt for canonical_id in canonical_ids)
 
 
 @pytest.mark.asyncio
@@ -954,7 +1260,7 @@ def test_reviewed_plan_validation_has_specific_provenance_codes(accepted, code):
     assert exc_info.value.code == code
 
 
-def test_reviewed_plan_accepts_only_server_listed_book_and_web_evidence_ids():
+def test_reviewed_plan_accepts_only_user_book_and_web_evidence():
     bundle = _evidence_bundle()
     accepted = _complete_plan(
         evidence_basis=[
@@ -968,11 +1274,6 @@ def test_reviewed_plan_accepts_only_server_listed_book_and_web_evidence_ids():
                 "basis": "web",
                 "evidence_ref": _evidence_id(bundle, "web"),
             },
-            {
-                "claim": "Costly writes need an explicit confirmation path.",
-                "basis": "engineering_recommendation",
-                "evidence_ref": "write_boundary",
-            },
         ]
     )
 
@@ -981,6 +1282,27 @@ def test_reviewed_plan_accepts_only_server_listed_book_and_web_evidence_ids():
         source_request="Design an evaluation service.",
         evidence_bundle=bundle,
     )
+
+
+def test_reviewed_plan_rejects_engineering_recommendation_as_evidence():
+    with pytest.raises(ValueError) as exc_info:
+        _validate_reviewed_plan_transition(
+            _complete_plan(
+                evidence_basis=[
+                    {
+                        "claim": "Costly writes need an explicit confirmation path.",
+                        "basis": "engineering_recommendation",
+                        "evidence_ref": "write_boundary",
+                    }
+                ]
+            ),
+            source_request="Design an evaluation service.",
+            evidence_bundle=_evidence_bundle(),
+        )
+
+    assert exc_info.value.code == "architecture_review_evidence_provenance"
+    assert exc_info.value.failure_path == "evidence_basis[0].basis"
+    assert exc_info.value.failure_rule == "invalid_basis"
 
 
 @pytest.mark.parametrize(
@@ -1038,12 +1360,21 @@ def test_reviewed_plan_rejects_an_evidence_id_with_the_wrong_basis():
 
 
 @pytest.mark.asyncio
-async def test_architect_rejects_invented_book_evidence_with_safe_coordinates(
+@pytest.mark.parametrize(
+    "private_id",
+    [
+        "book:PRIVATE_SENTINEL",
+        "source_99",
+        "source_2",
+        _evidence_id(_evidence_bundle(), "book"),
+    ],
+)
+async def test_architect_rejects_invalid_model_book_refs_with_safe_coordinates(
     monkeypatch,
     caplog,
+    private_id,
 ):
     events = []
-    private_id = "book:PRIVATE_SENTINEL"
     private_claim = "PRIVATE_CLAIM"
 
     async def model(**_kwargs):
@@ -1089,8 +1420,14 @@ async def test_architect_rejects_invented_book_evidence_with_safe_coordinates(
 
 
 @pytest.mark.asyncio
-async def test_challenger_rejects_evidence_basis_mismatch_with_safe_coordinates(
+@pytest.mark.parametrize(
+    ("response_basis", "record_basis"),
+    [("book", "web"), ("book", "book")],
+)
+async def test_challenger_rejects_canonical_model_refs_with_safe_coordinates(
     monkeypatch,
+    response_basis,
+    record_basis,
 ):
     events = []
 
@@ -1101,8 +1438,10 @@ async def test_challenger_rejects_evidence_basis_mismatch_with_safe_coordinates(
                     evidence_basis=[
                         {
                             "claim": "The current source mandates this design.",
-                            "basis": "book",
-                            "evidence_ref": _evidence_id(_evidence_bundle(), "web"),
+                            "basis": response_basis,
+                            "evidence_ref": _evidence_id(
+                                _evidence_bundle(), record_basis
+                            ),
                         }
                     ]
                 ),
@@ -1150,6 +1489,7 @@ async def test_early_design_frame_uses_only_reviewed_plan_fields():
         {
             "is_applied_design": True,
             "architecture_ready": True,
+            "graph_review": {"approved": False},
             "architect_plan": {
                 "interpretation": "A tenant-safe model serving platform.",
                 "assumptions": ["Vendor APIs support idempotency keys."],
@@ -1179,6 +1519,32 @@ async def test_early_design_frame_uses_only_reviewed_plan_fields():
     assert "same-key read-back" in text
     assert "PRIVATE GRAPH REQUIREMENT" not in text
     assert "PRIVATE NODE" not in text
+    assert events == [{"type": "response_delta", "content": text}]
+
+
+@pytest.mark.asyncio
+async def test_early_design_frame_shows_review_passed_when_graph_review_passed():
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    result = await early_design_frame_node(
+        {
+            "is_applied_design": True,
+            "architecture_ready": True,
+            "graph_review": {"approved": True},
+            "architect_plan": {
+                "interpretation": "A tenant-safe model serving platform.",
+                "assumptions": ["Vendor APIs support idempotency keys."],
+            },
+            "send": send,
+        }
+    )
+
+    text = result["early_response_text"]
+    assert "diagram review passed" in text
+    assert "tenant-safe model serving" in text
     assert events == [{"type": "response_delta", "content": text}]
 
 

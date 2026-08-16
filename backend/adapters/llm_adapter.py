@@ -24,6 +24,7 @@ import hashlib
 import inspect
 import json
 import logging
+import random
 import time
 
 from config import settings
@@ -252,6 +253,20 @@ def _aggregate_attempt_token_usage(
     )
 
 
+def _record_first_delta_latency(
+    attempt_usage: dict[str, object],
+    *,
+    field: str,
+    attempt_started: float,
+) -> None:
+    """Record the first provider phase delta without retaining its content."""
+    if attempt_usage[field] is None:
+        attempt_usage[field] = max(
+            1,
+            int((time.perf_counter() - attempt_started) * 1000),
+        )
+
+
 def build_telemetry(
     operation: str,
     *,
@@ -337,6 +352,7 @@ def stream_response_compat(streamer, **kwargs):
         "max_output_tokens": kwargs.pop("max_output_tokens", None),
         "response_schema": kwargs.pop("response_schema", None),
         "allow_fallback": kwargs.pop("allow_fallback", None),
+        "provider_attempt_limit": kwargs.pop("provider_attempt_limit", None),
     }
     try:
         params = inspect.signature(streamer).parameters.values()
@@ -600,16 +616,18 @@ async def stream_response(
     max_output_tokens: int | None = None,
     response_schema: dict | None = None,
     allow_fallback: bool = True,
+    provider_attempt_limit: int | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
     """
     Stream a response with automatic retry + OpenAI fallback.
 
     Retry behaviour:
     - Tries Anthropic up to settings.llm_max_retries times with
-      settings.llm_retry_delay_s seconds between attempts.
-    - Only retries transient failures that occur before any tokens are yielded.
-      Non-retryable request/auth/model 4xx errors fall back immediately.
-      Mid-stream drops are re-raised since partial output can't be safely replayed.
+      a 0.5x to 1.5x jittered settings.llm_retry_delay_s between attempts.
+    - Only retries transient failures that occur before the provider accepts the
+      request with `message_start`.
+      Before acceptance, non-retryable request/auth/model 4xx errors fall back immediately.
+      Accepted-stream drops are re-raised since accepted work can't be safely replayed.
     - On full exhaustion, falls back to OpenAI if configured.
     - Yields ("provider_switch", "openai") before the first OpenAI token
       so callers can surface a "falling back to GPT" UI notice.
@@ -623,6 +641,8 @@ async def stream_response(
     """
     if max_output_tokens is not None and max_output_tokens <= 0:
         raise ValueError("max_output_tokens must be positive")
+    if provider_attempt_limit is not None and provider_attempt_limit <= 0:
+        raise ValueError("provider_attempt_limit must be positive")
     effective_max_output_tokens = min(
         (
             max_output_tokens
@@ -630,6 +650,14 @@ async def stream_response(
             else settings.llm_default_max_tokens
         ),
         settings.llm_max_tokens,
+    )
+    message_chars = len(
+        json.dumps(messages, ensure_ascii=False, separators=(",", ":"))
+    )
+    schema_chars = (
+        len(json.dumps(response_schema, separators=(",", ":")))
+        if response_schema is not None
+        else 0
     )
     prompt_sha256 = hashlib.sha256(system.encode("utf-8")).hexdigest()
     system_block: dict[str, object] = {
@@ -723,6 +751,9 @@ async def stream_response(
         metadata = {
             **details_metadata,
             "message_count": len(messages),
+            "system_chars": len(system),
+            "message_chars": message_chars,
+            "schema_chars": schema_chars,
             "thinking_budget": thinking_budget,
             "temperature": temperature,
             "top_p": top_p,
@@ -847,6 +878,8 @@ async def stream_response(
             if provider == "kimi" and not is_fallback
             else 1
         )
+        if provider_attempt_limit is not None:
+            attempt_limit = min(attempt_limit, provider_attempt_limit)
         for route_attempt in range(1, attempt_limit + 1):
             _reserve_evaluation_provider_attempt()
             provider_attempts += 1
@@ -861,6 +894,8 @@ async def stream_response(
                 "cache_read_input_tokens": 0,
                 "output_tokens": 0,
                 "queue_wait_ms": 0,
+                "first_reasoning_delta_ms": None,
+                "first_text_delta_ms": None,
                 "accepted": False,
                 "usage_complete": False,
             }
@@ -888,9 +923,19 @@ async def stream_response(
                 async for event in response:
                     if event[0] == "text":
                         attempt_usage["accepted"] = True
+                        _record_first_delta_latency(
+                            attempt_usage,
+                            field="first_text_delta_ms",
+                            attempt_started=attempt_started,
+                        )
                         output_chars += len(event[1])
                     elif event[0] == "thinking":
                         attempt_usage["accepted"] = True
+                        _record_first_delta_latency(
+                            attempt_usage,
+                            field="first_reasoning_delta_ms",
+                            attempt_started=attempt_started,
+                        )
                     elif event[0] == "usage":
                         attempt_usage["accepted"] = True
                         attempt_usage["usage_complete"] = True
@@ -966,8 +1011,13 @@ async def stream_response(
             yield event
         return
 
-    for attempt in range(1, settings.llm_max_retries + 1):
-        tokens_yielded = False
+    anthropic_attempt_limit = settings.llm_max_retries
+    if provider_attempt_limit is not None:
+        anthropic_attempt_limit = min(
+            anthropic_attempt_limit,
+            provider_attempt_limit,
+        )
+    for attempt in range(1, anthropic_attempt_limit + 1):
         finish_reason: str | None = None
         _reserve_evaluation_provider_attempt()
         provider_attempts += 1
@@ -982,6 +1032,8 @@ async def stream_response(
             "cache_read_input_tokens": 0,
             "output_tokens": 0,
             "queue_wait_ms": 0,
+            "first_reasoning_delta_ms": None,
+            "first_text_delta_ms": None,
             "accepted": False,
             "usage_complete": False,
         }
@@ -1030,11 +1082,20 @@ async def stream_response(
                         finish_reason = stop_reason
                 if event.type == "content_block_delta":
                     attempt_usage["accepted"] = True
-                    tokens_yielded = True
                     delta = event.delta
                     if delta.type == "thinking_delta":
+                        _record_first_delta_latency(
+                            attempt_usage,
+                            field="first_reasoning_delta_ms",
+                            attempt_started=attempt_started,
+                        )
                         yield ("thinking", delta.thinking)
                     elif delta.type == "text_delta":
+                        _record_first_delta_latency(
+                            attempt_usage,
+                            field="first_text_delta_ms",
+                            attempt_started=attempt_started,
+                        )
                         output_chars += len(delta.text)
                         yield ("text", delta.text)
             attempt_usage["status"] = (
@@ -1076,10 +1137,6 @@ async def stream_response(
             attempt_usage["duration_ms"] = max(
                 1, int((time.perf_counter() - attempt_started) * 1000)
             )
-            if tokens_yielded:
-                # Already sent partial output — can't replay safely, surface the error
-                _record("error", error_type=type(exc).__name__)
-                raise
             status, request_id, provider_error, diagnostic = (
                 _anthropic_error_diagnostics(exc)
             )
@@ -1087,17 +1144,29 @@ async def stream_response(
                 "[llm] Anthropic attempt %s/%s failed: %s status=%s "
                 "request_id=%s provider_error=%s diagnostic=%s",
                 attempt,
-                settings.llm_max_retries,
+                anthropic_attempt_limit,
                 type(exc).__name__,
                 status,
                 request_id,
                 provider_error,
                 diagnostic,
             )
+            if attempt_usage["accepted"]:
+                # `message_start` means the provider accepted the request. Never
+                # replay accepted work, even when no visible delta arrived.
+                _record("error", error_type=type(exc).__name__)
+                raise
             if _is_non_retryable_anthropic_error(exc):
                 break
-            if attempt < settings.llm_max_retries:
-                await asyncio.sleep(settings.llm_retry_delay_s)
+            if attempt < anthropic_attempt_limit:
+                retry_delay_s = max(0.0, settings.llm_retry_delay_s)
+                # Retry jitter is not used for a security decision.
+                await asyncio.sleep(
+                    random.uniform(  # nosec B311
+                        retry_delay_s * 0.5,
+                        retry_delay_s * 1.5,
+                    )
+                )
 
     # All Anthropic attempts exhausted — try OpenAI fallback
     fallback_model = _FALLBACK_MODELS.get(model)

@@ -15,6 +15,12 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+GRAPH_MAX_REPAIR_ROUNDS = 2
+GRAPH_MAX_PROTOCOL_CORRECTIONS = 1
+GRAPH_MAX_CONTRACT_CORRECTIONS = 1
+GRAPH_MAX_CRITIC_CALLS = 1 + GRAPH_MAX_REPAIR_ROUNDS + GRAPH_MAX_CONTRACT_CORRECTIONS
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -65,7 +71,7 @@ class Settings(BaseSettings):
     # more room up to the hard cap without changing their visible output contract.
     llm_default_max_tokens: int = 12000
     llm_max_tokens: int = 131072
-    architecture_max_completion_tokens: int = 16000
+    architecture_max_completion_tokens: int = 12000
     graph_builder_max_completion_tokens: int = 65536
     graph_qa_max_completion_tokens: int = 16384
     # Hard timeout on the whole agent run (seconds); yields a timeout error event
@@ -74,15 +80,21 @@ class Settings(BaseSettings):
     agent_terminal_headroom_s: float = 30.0
     # Stage admission keeps this time inside the terminal window for orchestration.
     agent_orchestration_reserve_s: float = 30.0
-    # Bound the initial Kimi topology build and one typed repair while preserving
-    # independent review inside the terminal window.
+    # Bound the graph stages while preserving two reviewed repairs and one
+    # failed-patch contract correction inside the terminal window.
     graph_design_timeout_s: float = 150.0
+    # Initial topology and the private browser gate have their own user-visible
+    # deadline. Review, repair, synthesis, and persistence retain the terminal
+    # workflow deadline after a reversible preview is visible.
+    graph_preview_timeout_s: float = 170.0
+    graph_preview_design_timeout_s: float = 140.0
+    graph_preview_finalization_reserve_s: float = 15.0
     architecture_role_timeout_s: float = 150.0
-    graph_critic_timeout_s: float = 90.0
-    # Initial editable rejections receive one local repair pass before edit.
-    # Both reviews share this stage ceiling and may borrow saved upstream time.
+    graph_critic_timeout_s: float = 60.0
+    # A stage may borrow saved upstream time up to the hard cap. Admission still
+    # reserves every remaining review, repair, and correction attempt.
     graph_critic_max_timeout_s: float = 195.0
-    graph_patch_timeout_s: float = 180.0
+    graph_patch_timeout_s: float = 90.0
     # Kimi may use time saved by earlier stages up to this per-call ceiling.
     # Deadline admission still preserves the complete downstream review path.
     graph_builder_max_timeout_s: float = 240.0
@@ -241,7 +253,7 @@ class Settings(BaseSettings):
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
     # ── RAG ───────────────────────────────────────────────────────────────────
-    rag_top_k: int = 5          # child chunks retrieved from FAISS
+    rag_top_k: int = 5  # child chunks retrieved from FAISS
     # Malformed-output guards for rendering and persistence. These values never
     # appear in design prompts and do not define a preferred diagram size.
     graph_safety_max_nodes: int = 60
@@ -258,8 +270,14 @@ class Settings(BaseSettings):
     research_results_per_query: int = 2
     # Domains whose results are filtered out as low-quality noise
     research_noise_domains: list[str] = [
-        "pinterest.com", "quora.com", "reddit.com", "youtube.com",
-        "twitter.com", "facebook.com", "instagram.com", "tiktok.com",
+        "pinterest.com",
+        "quora.com",
+        "reddit.com",
+        "youtube.com",
+        "twitter.com",
+        "facebook.com",
+        "instagram.com",
+        "tiktok.com",
     ]
 
     @model_validator(mode="after")
@@ -270,7 +288,9 @@ class Settings(BaseSettings):
             "GRAPH_CRITIC_INITIAL_TIMEOUT_S": self.graph_critic_initial_timeout_s,
             "GRAPH_CRITIC_REVISION_TIMEOUT_S": self.graph_critic_revision_timeout_s,
         }
-        configured = sorted(name for name, value in removed.items() if value is not None)
+        configured = sorted(
+            name for name, value in removed.items() if value is not None
+        )
         if configured:
             raise ValueError(
                 "Removed timeout settings are configured: "
@@ -345,7 +365,9 @@ class Settings(BaseSettings):
     def validate_for_cloud_run(self) -> None:
         """Fail closed when production starts with unsafe or unusable config."""
         if not self.use_postgres:
-            raise RuntimeError("SUPABASE_DB_URL must be configured in Cloud Run; refusing SQLite fallback.")
+            raise RuntimeError(
+                "SUPABASE_DB_URL must be configured in Cloud Run; refusing SQLite fallback."
+            )
         if self.dev_bypass_auth:
             raise RuntimeError("DEV_BYPASS_AUTH must be false in Cloud Run.")
 
@@ -359,9 +381,13 @@ class Settings(BaseSettings):
         }
         if self.graph_builder_model.startswith("kimi-"):
             required_strings["MOONSHOT_API_KEY"] = self.moonshot_api_key
-        missing = sorted(name for name, value in required_strings.items() if not value.strip())
+        missing = sorted(
+            name for name, value in required_strings.items() if not value.strip()
+        )
         if missing:
-            raise RuntimeError(f"Cloud Run configuration is incomplete: {', '.join(missing)}")
+            raise RuntimeError(
+                f"Cloud Run configuration is incomplete: {', '.join(missing)}"
+            )
         values_with_surrounding_whitespace = sorted(
             name for name, value in required_strings.items() if value != value.strip()
         )
@@ -376,7 +402,9 @@ class Settings(BaseSettings):
         if not self.supabase_url.startswith("https://"):
             raise RuntimeError("SUPABASE_URL must use HTTPS in Cloud Run.")
         if self.internal_test_password and len(self.internal_test_password) < 16:
-            raise RuntimeError("INTERNAL_TEST_PASSWORD must be at least 16 characters when enabled.")
+            raise RuntimeError(
+                "INTERNAL_TEST_PASSWORD must be at least 16 characters when enabled."
+            )
 
         positive_limits = {
             "AGENT_TIMEOUT_S": self.agent_timeout_s,
@@ -387,6 +415,11 @@ class Settings(BaseSettings):
                 self.architecture_max_completion_tokens
             ),
             "GRAPH_DESIGN_TIMEOUT_S": self.graph_design_timeout_s,
+            "GRAPH_PREVIEW_TIMEOUT_S": self.graph_preview_timeout_s,
+            "GRAPH_PREVIEW_DESIGN_TIMEOUT_S": self.graph_preview_design_timeout_s,
+            "GRAPH_PREVIEW_FINALIZATION_RESERVE_S": (
+                self.graph_preview_finalization_reserve_s
+            ),
             "GRAPH_BUILDER_MAX_TIMEOUT_S": self.graph_builder_max_timeout_s,
             "GRAPH_BUILDER_MAX_COMPLETION_TOKENS": (
                 self.graph_builder_max_completion_tokens
@@ -431,26 +464,41 @@ class Settings(BaseSettings):
         }
         invalid = sorted(name for name, value in positive_limits.items() if value <= 0)
         if invalid:
-            raise RuntimeError(f"Cloud Run limits must be positive: {', '.join(invalid)}")
+            raise RuntimeError(
+                f"Cloud Run limits must be positive: {', '.join(invalid)}"
+            )
         if self.agent_terminal_headroom_s >= self.agent_timeout_s:
-            raise RuntimeError("AGENT_TERMINAL_HEADROOM_S must be below AGENT_TIMEOUT_S.")
+            raise RuntimeError(
+                "AGENT_TERMINAL_HEADROOM_S must be below AGENT_TIMEOUT_S."
+            )
         if self.graph_builder_max_timeout_s < max(
             self.graph_design_timeout_s,
+            self.graph_preview_design_timeout_s,
             self.graph_patch_timeout_s,
         ):
             raise RuntimeError(
                 "GRAPH_BUILDER_MAX_TIMEOUT_S cannot be below the reserved design or patch timeout."
+            )
+        if (
+            self.graph_preview_design_timeout_s
+            + self.diagram_evaluation_timeout_s
+            + self.graph_preview_finalization_reserve_s
+            > self.graph_preview_timeout_s
+        ):
+            raise RuntimeError(
+                "GRAPH_PREVIEW_TIMEOUT_S cannot fit topology generation, private rendering, "
+                "and preview finalization."
             )
         if self.graph_critic_max_timeout_s < self.graph_critic_timeout_s:
             raise RuntimeError(
                 "GRAPH_CRITIC_MAX_TIMEOUT_S cannot be below the reserved critic timeout."
             )
         complete_architecture_path_s = (
-            2 * self.architecture_role_timeout_s
+            self.architecture_role_timeout_s
             + self.graph_design_timeout_s
             + self.graph_critic_timeout_s
-            + self.graph_patch_timeout_s
-            + self.graph_critic_timeout_s
+            + (GRAPH_MAX_REPAIR_ROUNDS + GRAPH_MAX_CONTRACT_CORRECTIONS)
+            * (self.graph_patch_timeout_s + self.graph_critic_timeout_s)
             + self.graph_synthesis_timeout_s
             + self.graph_finalization_reserve_s
         )
@@ -477,7 +525,9 @@ class Settings(BaseSettings):
             "GRAPH_QA_MAX_COMPLETION_TOKENS": self.graph_qa_max_completion_tokens,
         }
         above_hard_cap = sorted(
-            name for name, value in role_token_limits.items() if value > self.llm_max_tokens
+            name
+            for name, value in role_token_limits.items()
+            if value > self.llm_max_tokens
         )
         if above_hard_cap:
             raise RuntimeError(

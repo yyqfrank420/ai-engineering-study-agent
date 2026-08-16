@@ -138,14 +138,21 @@ class AgentState(TypedDict):
     graph_intent: NotRequired[Literal["create", "edit"] | None]
     graph_revision_count: NotRequired[int]
     graph_repair_round_count: NotRequired[int]
+    graph_protocol_correction_count: NotRequired[int]
     graph_contract_correction_count: NotRequired[int]
     graph_contract_correction_pending: NotRequired[bool]
     graph_critic_call_count: NotRequired[int]
+    graph_parallel_initial_review: NotRequired[bool]
+    # WebSocket restarts pass this request-scoped owner into run_agent, which
+    # removes it before LangGraph state execution.
+    _graph_review_budget: NotRequired[Any]
     graph_patch_validation_error: NotRequired[dict[str, str]]
     reviewed_graph_data: NotRequired[GraphData | None]
     approved_graph_data: NotRequired[GraphData | None]
+    graph_review_diagnostics: NotRequired[list[dict[str, Any]]]
     workflow_started_at_s: NotRequired[float]
     terminal_deadline_s: NotRequired[float]
+    graph_preview_deadline_s: NotRequired[float]
     search_tool_wait_task: NotRequired[Any]
     # Web search results from research_worker (empty string if not run)
     research_context: str
@@ -159,6 +166,7 @@ class AgentState(TypedDict):
     challenger_review: NotRequired[dict[str, Any]]
     early_response_text: NotRequired[str]
     diagram_evaluation: NotRequired[dict[str, Any]]
+    graph_render_admitted: NotRequired[bool]
 
     # ── Final outputs ─────────────────────────────────────────────────────────
     response_text: str  # synthesised response (Phase 2)

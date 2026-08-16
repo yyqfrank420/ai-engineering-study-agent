@@ -1,4 +1,5 @@
 import type { GraphEdge, GraphStep } from '../../types';
+import { DIAGRAM_EVALUATION_CRITERIA } from '../../diagramEvaluationContract';
 
 
 export const NODE_W = 186;
@@ -12,27 +13,91 @@ export const VERTICAL_LEVEL_H = NODE_H + 12;
 export const VERTICAL_NODE_GAP = 24;
 export const VERTICAL_TRACK_GAP = 72;
 export const INITIAL_FIT_PADDING = 32;
-export const GRAPH_LAYOUT_VERSION = 9;
-export const DIAGRAM_EVALUATION_VIEWPORT = { width: 1440, height: 960 } as const;
+export const NODE_TITLE_PX = 15.36;
+export const MIN_PUBLISHED_TITLE_PX: number = DIAGRAM_EVALUATION_CRITERIA.minimum_text_px;
+export const MIN_PUBLISHED_LAYOUT_SCALE = MIN_PUBLISHED_TITLE_PX / NODE_TITLE_PX;
+export const BOTTOM_NODE_GAP = 24;
+export const COMPACT_LAYOUT_COLUMNS = 8;
+export const COMPACT_LAYOUT_ROWS = 8;
+export const COMPACT_NODE_GAP = 24;
+export const COMPACT_NODE_PITCH = NODE_H + BOTTOM_NODE_GAP;
+export const MAX_PUBLISHED_GRAPH_NODES = 60;
+export const GRAPH_LAYOUT_VERSION = 11;
+export const DIAGRAM_EVALUATION_VIEWPORT = {
+  width: DIAGRAM_EVALUATION_CRITERIA.viewport_width,
+  height: DIAGRAM_EVALUATION_CRITERIA.viewport_height,
+} as const;
 
-export type GraphOrientation = 'horizontal' | 'vertical';
+export type GraphOrientation = 'horizontal' | 'vertical' | 'compact';
 
-export function selectGraphOrientation(
+export interface CompactLayoutPlan {
+  columns: number;
+  rows: number;
+  bottomStartIndex: number;
+  layoutWidth: number;
+  layoutHeight: number;
+  scale: number;
+}
+
+export function isPublishedLayoutScale(
+  scale: number,
+  minimumTitlePx = MIN_PUBLISHED_TITLE_PX,
+): boolean {
+  return NODE_TITLE_PX * scale >= minimumTitlePx;
+}
+
+/**
+ * The compact layout has enough cells for every backend-accepted graph. The
+ * 8-column boundary is deliberate: at 1440 by 960 its 60-node case still
+ * exceeds the 11px title gate after fitting. A bottom lane may reserve one
+ * extra partial row so those nodes never share a row with main-lane nodes.
+ */
+export function planCompactLayout(
   viewportWidth: number,
-  depthCount: number,
-  widestLevel = 1,
+  viewportHeight: number,
+  nodeCount: number,
+  bottomNodeCount = 0,
+): CompactLayoutPlan {
+  const safeNodeCount = Math.max(1, Math.floor(nodeCount));
+  const safeBottomNodeCount = Math.min(
+    safeNodeCount,
+    Math.max(0, Math.floor(bottomNodeCount)),
+  );
+  const mainNodeCount = safeNodeCount - safeBottomNodeCount;
+  const columns = Math.min(
+    COMPACT_LAYOUT_COLUMNS,
+    Math.max(1, Math.ceil(safeNodeCount / COMPACT_LAYOUT_ROWS)),
+  );
+  const bottomStartIndex = safeBottomNodeCount > 0 && mainNodeCount > 0
+    ? Math.ceil(mainNodeCount / columns) * columns
+    : mainNodeCount;
+  const occupiedSlots = bottomStartIndex + safeBottomNodeCount;
+  const rows = Math.ceil(Math.max(1, occupiedSlots) / columns);
+  const layoutWidth = 2 * H_PAD
+    + columns * NODE_W
+    + Math.max(0, columns - 1) * COMPACT_NODE_GAP;
+  const layoutHeight = 2 * V_PAD
+    + NODE_H
+    + Math.max(0, rows - 1) * COMPACT_NODE_PITCH;
+
+  return {
+    columns,
+    rows,
+    bottomStartIndex,
+    layoutWidth,
+    layoutHeight,
+    scale: initialFitScale(viewportWidth, viewportHeight, layoutWidth, layoutHeight),
+  };
+}
+
+export function selectGraphLayout(
+  horizontalFitScale: number,
+  verticalFitScale: number,
+  minimumTitlePx = MIN_PUBLISHED_TITLE_PX,
 ): GraphOrientation {
-  const horizontalWidth = Math.max(1, depthCount) * MIN_COL_W + 2 * H_PAD;
-  const initialScale = (viewportWidth - 64) / horizontalWidth;
-  // The prior depth>=7 guard left six-level graphs in a ~0.38-scale horizontal
-  // strip on the evaluation viewport. Use the predicted readable scale once a
-  // graph is deep enough to have a meaningful vertical flow.
-  // A shallow graph can still be unreadable when one stage fans out to many
-  // parallel responsibilities. Vertical flow can wrap that stage into bounded
-  // rows; horizontal flow would instead expand its height and shrink every card.
-  return (depthCount >= 4 && initialScale < 0.55) || widestLevel >= 4
-    ? 'vertical'
-    : 'horizontal';
+  if (isPublishedLayoutScale(horizontalFitScale, minimumTitlePx)) return 'horizontal';
+  if (isPublishedLayoutScale(verticalFitScale, minimumTitlePx)) return 'vertical';
+  return 'compact';
 }
 
 export function initialFitScale(

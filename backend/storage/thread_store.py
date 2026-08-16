@@ -261,6 +261,19 @@ def save_graph(user_id: str, thread_id: str, graph_data: dict) -> bool:
                 byte_size, settings.max_graph_data_bytes, thread_id,
             )
             return False
+
+        submitted_version = graph_data.get("version")
+        current_version = current_graph.get("version")
+        if (
+            not isinstance(submitted_version, str)
+            or not isinstance(current_version, str)
+            or submitted_version != current_version
+        ):
+            logger.info(
+                "thread_store: stale graph layout ignored for thread %s",
+                thread_id,
+            )
+            return True
         conn.execute(
             _adapt_query(
                 """

@@ -184,7 +184,7 @@ async def maybe_expand_with_search_tool(
         "research_context": research_state.get("research_context", ""),
         "research_status": research_state.get("research_status", "unavailable"),
     }
-    # The workflow consumes this evidence before architect/challenger/graph.
+    # The workflow consumes this evidence before the architect and graph stages.
     # Keeping one canonical bundle prevents the critic from auditing a stale
     # book-only allowlist after web evidence changes the design.
     return {

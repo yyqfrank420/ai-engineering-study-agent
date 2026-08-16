@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -9,8 +10,11 @@ import pytest
 from config import Settings
 from eval.browser_runner import _execute_browser, _run_browser_attempt
 from scripts.ci_runner import (
+    _command_environment,
     classify_paths,
+    TEST_ENV_DEFAULTS,
     load_manifest,
+    run_offline,
     select_offline_groups,
     trust_for_event,
     validate_manifest,
@@ -18,6 +22,51 @@ from scripts.ci_runner import (
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_ci_environment_defaults_include_frontend_supabase_client_config(monkeypatch):
+    monkeypatch.delenv("VITE_SUPABASE_URL", raising=False)
+    monkeypatch.delenv("VITE_SUPABASE_ANON_KEY", raising=False)
+
+    environment = _command_environment()
+
+    assert environment["VITE_SUPABASE_URL"] == "http://127.0.0.1:54321"
+    assert environment["VITE_SUPABASE_ANON_KEY"] == "ci-test-anon-key"
+
+
+def test_ci_environment_preserves_explicit_frontend_supabase_config(monkeypatch):
+    monkeypatch.setenv("VITE_SUPABASE_URL", "http://localhost:6543")
+    monkeypatch.setenv("VITE_SUPABASE_ANON_KEY", "explicit-test-key")
+
+    environment = _command_environment()
+
+    assert environment["VITE_SUPABASE_URL"] == "http://localhost:6543"
+    assert environment["VITE_SUPABASE_ANON_KEY"] == "explicit-test-key"
+
+
+def test_run_offline_frontend_commands_receive_vite_supabase_defaults(monkeypatch):
+    manifest = load_manifest()
+    captured = []
+
+    def fake_run(argv, *, cwd=None, env=None, check=False, **kwargs):
+        captured.append(env)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.delenv("VITE_SUPABASE_URL", raising=False)
+    monkeypatch.delenv("VITE_SUPABASE_ANON_KEY", raising=False)
+    monkeypatch.setattr("scripts.ci_runner.subprocess.run", fake_run)
+
+    run_offline(manifest, "frontend")
+
+    assert len(captured) == 4
+    for environment in captured:
+        assert (
+            environment["VITE_SUPABASE_URL"] == TEST_ENV_DEFAULTS["VITE_SUPABASE_URL"]
+        )
+        assert (
+            environment["VITE_SUPABASE_ANON_KEY"]
+            == TEST_ENV_DEFAULTS["VITE_SUPABASE_ANON_KEY"]
+        )
 
 
 def test_manifest_tracks_every_backend_test():
@@ -226,16 +275,14 @@ def test_gcp_federation_separates_staging_and_production_credentials():
 
 def test_staging_allows_control_traffic_without_parallel_schema_mutation():
     cloud_run = (ROOT / "infra/terraform/gcp/cloud_run.tf").read_text(encoding="utf-8")
-    variables = (ROOT / "infra/terraform/gcp/variables.tf").read_text(
-        encoding="utf-8"
-    )
+    variables = (ROOT / "infra/terraform/gcp/variables.tf").read_text(encoding="utf-8")
     staging = cloud_run.split(
         'resource "google_cloud_run_v2_service" "backend_staging"', 1
     )[1]
     staging_template = staging.split("containers {", 1)[0]
-    container_concurrency = variables.split(
-        'variable "container_concurrency"', 1
-    )[1].split("}", 1)[0]
+    container_concurrency = variables.split('variable "container_concurrency"', 1)[
+        1
+    ].split("}", 1)[0]
 
     assert (
         "max_instance_request_concurrency = var.container_concurrency"
@@ -278,7 +325,9 @@ def test_live_eval_override_compares_release_content_by_tree_snapshot():
     assert "def tree_files(commit_sha):" in verification
     assert "git/trees/{commit['tree']['sha']}?recursive=1" in verification
     assert 'if entry_type not in {"blob", "commit"}:' in verification
-    assert 'files[item["path"]] = (item["mode"], entry_type, item["sha"])' in verification
+    assert (
+        'files[item["path"]] = (item["mode"], entry_type, item["sha"])' in verification
+    )
     assert "applied_files = tree_files(applied_commit)" in verification
     assert "current_files = tree_files(current_commit)" in verification
     assert "applied_files.keys() | current_files.keys()" in verification
@@ -309,16 +358,15 @@ def test_live_eval_override_binds_pr_merge_evidence_to_parent_and_recorded_tree(
     assert "len(set(tested_parent_shas)) != 2" in verification
     assert "if set(tested_parent_shas) != expected_pr_parents:" in verification
     assert 'recorded_tree = context.get("tree_sha")' in verification
-    assert (
-        'not re.fullmatch(r"[0-9a-f]{40}", recorded_tree)'
-        in verification
-    )
+    assert 'not re.fullmatch(r"[0-9a-f]{40}", recorded_tree)' in verification
     assert 'if recorded_tree != tested["tree"]["sha"]:' in verification
     assert (
         'if run.get("event") == "pull_request" and not deployment_commits:'
         in verification
     )
-    assert "tested_commit = next(iter(deployment_commits), source_commit)" in verification
+    assert (
+        "tested_commit = next(iter(deployment_commits), source_commit)" in verification
+    )
     assert "source_cases = case_map(tested_commit)" in verification
     assert 'context.get("commit_sha") != source_commit' not in verification
 
@@ -357,9 +405,9 @@ def test_live_eval_override_supports_exact_pr_check_and_production_scopes():
         encoding="utf-8"
     )
     inputs = workflow.split("workflow_dispatch:", 1)[1].split("\npermissions:", 1)[0]
-    validation = workflow.split(
-        "name: Validate authenticated evidence request", 1
-    )[1].split("name: Download explicit evidence and source metadata", 1)[0]
+    validation = workflow.split("name: Validate authenticated evidence request", 1)[
+        1
+    ].split("name: Download explicit evidence and source metadata", 1)[0]
     verification = workflow.split(
         "name: Verify complete per-case evidence and exact release identity", 1
     )[1].split("- uses: google-github-actions/auth@v2", 1)[0]
@@ -376,7 +424,7 @@ def test_live_eval_override_supports_exact_pr_check_and_production_scopes():
     assert '[ "$GITHUB_REF" = refs/heads/main ]' in validation
     assert 'if approval_scope == "pr-check":' in verification
     assert 'api_json(f"repos/{repository}/pulls/{pr_number}")' in verification
-    assert 'head_sha != current_commit' in verification
+    assert "head_sha != current_commit" in verification
     assert 'base.get("ref") != "main"' in verification
     assert 'os.environ["GITHUB_REF"] != f"refs/heads/{head_ref}"' in verification
     assert 'os.environ["GITHUB_SHA"] != head_sha' in verification
@@ -410,7 +458,10 @@ def test_live_eval_override_authenticates_replay_and_diagnostic_composition():
     assert 'replay_context.get("source_run_id")' in verification
     assert 'replay_context.get("source_commit_sha")' in verification
     assert 'replay_context.get("judge_commit_sha")' in verification
-    assert 'replay_run.get("path") != ".github/workflows/semantic-review-replay.yml"' in verification
+    assert (
+        'replay_run.get("path") != ".github/workflows/semantic-review-replay.yml"'
+        in verification
+    )
     assert 'run.get("path") != ".github/workflows/live-eval.yml"' in verification
     assert 'run.get("path") != ".github/workflows/scheduled-eval.yml"' in verification
     assert 'browser.get("suite") != "pr"' in verification
@@ -440,7 +491,10 @@ def test_live_eval_override_replay_source_is_the_bounded_failed_pr_lane():
     assert 'job.get("name") == "Live eval required"' in verification
     assert 'required_jobs[0].get("conclusion") != "failure"' in verification
     assert "set(selected) != replay_expected_cases" in verification
-    assert 'replay_expected_cases = {"memory", "graph-off", "prompt-injection"}' in verification
+    assert (
+        'replay_expected_cases = {"memory", "graph-off", "prompt-injection"}'
+        in verification
+    )
     assert "source_commit != evidence_commit" in verification
     assert "head_sha != applied_commit" in verification
     assert 'base_sha != pr_identity["base_sha"]' in verification
@@ -457,13 +511,17 @@ def test_live_eval_override_replay_selection_has_no_graph_operation_provenance()
         "name: Verify complete per-case evidence and exact release identity", 1
     )[1].split("- uses: google-github-actions/auth@v2", 1)[0]
 
-    assert 'application_telemetry = browser.get("application_telemetry")' in verification
+    assert (
+        'application_telemetry = browser.get("application_telemetry")' in verification
+    )
     assert 'thread_ids = browser_case.get("thread_ids")' in verification
     assert 'item.get("thread_id") in set(thread_ids)' in verification
     assert 'operation.startswith("graph_")' in verification
     assert "if graph_operations:" in verification
     assert 'replay_provenance["selection"] = selected' in verification
-    assert 'replay_provenance["case_operations"] = replay_case_operations' in verification
+    assert (
+        'replay_provenance["case_operations"] = replay_case_operations' in verification
+    )
     assert '"graph_operations": graph_operations' in verification
 
 
@@ -496,8 +554,13 @@ def test_live_eval_override_tree_equality_has_one_bounded_legacy_replay_exceptio
     assert "if tested_tree_sha != applied_tree_sha:" in verification
     assert "if replay is None or not legacy:" in verification
     assert "replay_case_operations is None or any(" in verification
-    assert 'item["graph_operations"] for item in replay_case_operations.values()' in verification
-    assert "if not replay_tree_changes <= legacy_replay_allowed_changes:" in verification
+    assert (
+        'item["graph_operations"] for item in replay_case_operations.values()'
+        in verification
+    )
+    assert (
+        "if not replay_tree_changes <= legacy_replay_allowed_changes:" in verification
+    )
     assert "replay_tree_changes - legacy_replay_allowed_changes" in verification
     assert verification.index("if graph_operations:") < verification.index(
         "if tested_tree_sha != applied_tree_sha:"
@@ -515,16 +578,18 @@ def test_scheduled_eval_missing_approval_fails_closed_before_expensive_setup():
 
     assert "id: approved_image" in workflow
     assert 'commit_sha="$(git rev-parse HEAD)"' in preflight
-    assert 'tree_sha="$(git rev-parse \'HEAD^{tree}\')"' in preflight
+    assert "tree_sha=\"$(git rev-parse 'HEAD^{tree}')\"" in preflight
     assert 'approval_tag="approved-tree-$tree_sha"' in preflight
     assert '2>"$lookup_error_file"' in preflight
-    assert 'lookup_status=$?' in preflight
+    assert "lookup_status=$?" in preflight
     classifier_pattern = (
         r"^(ERROR: \(gcloud\.artifacts\.docker\.images\.describe\) "
         r"(Docker image .+ not found\.?|Image not found\.)|Image not found\.)$"
     )
     assert f"grep -Eiq '{classifier_pattern}' \"$lookup_error_file\"" in preflight
-    classifier = __import__("re").compile(classifier_pattern, __import__("re").IGNORECASE)
+    classifier = __import__("re").compile(
+        classifier_pattern, __import__("re").IGNORECASE
+    )
     assert classifier.fullmatch(
         "ERROR: (gcloud.artifacts.docker.images.describe) "
         "Docker image [europe-west2-docker.pkg.dev/p/r/i:approved-tree-deadbeef] not found."
@@ -549,14 +614,13 @@ def test_scheduled_eval_missing_approval_fails_closed_before_expensive_setup():
     assert "2>/dev/null || true" not in preflight
     assert (
         'if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] '
-        '&& [ "$EVAL_SUITE" = diagnostic ]; then'
-        in preflight
+        '&& [ "$EVAL_SUITE" = diagnostic ]; then' in preflight
     )
     assert "Missing exact-tree evaluation approval:" in preflight
-    assert "commit=$commit_sha tree=$tree_sha image_tag=$IMAGE:$approval_tag" in preflight
     assert (
-        "The protected live evaluation must publish this exact-tree tag" in preflight
+        "commit=$commit_sha tree=$tree_sha image_tag=$IMAGE:$approval_tag" in preflight
     )
+    assert "The protected live evaluation must publish this exact-tree tag" in preflight
     assert preflight.rstrip().endswith("exit 1")
 
     dependency_setup = workflow.index("uses: actions/setup-python@v5")
@@ -582,8 +646,7 @@ def test_scheduled_eval_preserves_approval_and_diagnostic_build_boundaries():
     assert "Missing exact-tree evaluation approval:" in workflow
     assert (
         'if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || '
-        '[ "$EVAL_SUITE" != diagnostic ]; then'
-        in workflow
+        '[ "$EVAL_SUITE" != diagnostic ]; then' in workflow
     )
     assert (
         "A pending corpus can be bootstrapped only by a manually dispatched full or diagnostic run."
@@ -598,8 +661,7 @@ def test_scheduled_eval_preserves_approval_and_diagnostic_build_boundaries():
         'gcloud artifacts docker tags delete "$IMAGE:$BOOTSTRAP_IMAGE_TAG"' in workflow
     )
     assert (
-        'gcloud artifacts docker tags delete "$IMAGE:$DIAGNOSTIC_IMAGE_TAG"'
-        in workflow
+        'gcloud artifacts docker tags delete "$IMAGE:$DIAGNOSTIC_IMAGE_TAG"' in workflow
     )
     assert "docker tags add" not in workflow
     assert 'EVAL_EMAIL="$email" python scripts/staging_database.py reset' in workflow
@@ -732,22 +794,22 @@ def test_live_eval_job_allows_setup_around_the_bounded_browser_suite():
     # These are complete per-case path bounds for the current PR corpus. Logical
     # calls assume one provider request. Provider attempts include every adapter
     # retry and the configured Opus fallback. The tagged revision stops before
-    # attempt 65, so the 140-attempt failure envelope cannot be spent.
+    # attempt 65, so the 144-attempt failure envelope cannot be spent.
     call_bounds = {
-        "rag-grounding": (7, 15),
+        "rag-grounding": (8, 16),
         "memory": (4, 12),
         "graph-off": (2, 6),
         "research": (9, 27),
-        "node-followup": (9, 20),
-        "graph-expansion": (17, 37),
-        "applied-domain": (8, 17),
+        "node-followup": (10, 21),
+        "graph-expansion": (18, 38),
+        "applied-domain": (9, 18),
         "prompt-injection": (2, 6),
     }
     assert set(call_bounds) == {case["id"] for case in pr_cases}
     logical_call_bound = sum(bound[0] for bound in call_bounds.values())
     provider_attempt_bound = sum(bound[1] for bound in call_bounds.values())
-    assert logical_call_bound == 58
-    assert provider_attempt_bound == 140
+    assert logical_call_bound == 62
+    assert provider_attempt_bound == 144
     assert logical_call_bound <= budgets["application_calls"] < provider_attempt_bound
     assert budgets["browser_infrastructure_retry_count"] == 0
     assert budgets["browser_suite_max_timeout_seconds"] <= 60 * 60
@@ -765,8 +827,13 @@ def test_live_eval_job_allows_setup_around_the_bounded_browser_suite():
         encoding="utf-8"
     )
     assert "timeout-minutes: 150" in scheduled
-    assert "- id: browser\n        name: Start frontend and capture journeys" in scheduled
-    assert "if: always() && hashFiles('artifacts/live-eval/browser-results.json') != ''" in scheduled
+    assert (
+        "- id: browser\n        name: Start frontend and capture journeys" in scheduled
+    )
+    assert (
+        "if: always() && hashFiles('artifacts/live-eval/browser-results.json') != ''"
+        in scheduled
+    )
     assert "BROWSER_OUTCOME: ${{ steps.browser.outcome }}" in scheduled
     assert (
         'if [ "$BROWSER_OUTCOME" != success ] || [ "$SEMANTIC_OUTCOME" != success ]; then'
@@ -799,16 +866,16 @@ def test_live_eval_job_allows_setup_around_the_bounded_browser_suite():
     )
     assert (
         f"EVALUATION_FULL_PROVIDER_ATTEMPT_LIMIT: "
-        f"{budgets['application_full_calls']}"
-        in deploy_workflows
+        f"{budgets['application_full_calls']}" in deploy_workflows
     )
-    assert deploy_workflows.count(
-        "EVALUATION_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}"
-    ) == 2
     assert (
         deploy_workflows.count(
-            "--update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4"
+            "EVALUATION_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}"
         )
+        == 2
+    )
+    assert (
+        deploy_workflows.count("--update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4")
         == 3
     )
     terraform_locals = (ROOT / "infra/terraform/gcp/locals.tf").read_text(
@@ -816,7 +883,10 @@ def test_live_eval_job_allows_setup_around_the_bounded_browser_suite():
     )
     assert 'ANTHROPIC_MAX_CONCURRENT_STREAMS = "4"' in terraform_locals
     assert 'POSTHOG_API_KEY                   = "posthog-api-key"' in terraform_locals
-    assert 'POSTHOG_HOST                     = "https://eu.i.posthog.com"' in terraform_locals
+    assert (
+        'POSTHOG_HOST                     = "https://eu.i.posthog.com"'
+        in terraform_locals
+    )
     env_example = (ROOT / "backend/.env.example").read_text(encoding="utf-8")
     assert "ANTHROPIC_MAX_CONCURRENT_STREAMS=4" in env_example
     assert "POSTHOG_API_KEY=" in env_example

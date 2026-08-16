@@ -12,6 +12,7 @@ import uuid
 
 from websockets.asyncio.client import connect
 
+from agent.diagram_contract import DiagramEvaluationCriteria
 from eval.diagram_renderer import render_staging_diagram
 from eval.response_capture import extract_response_text
 from eval.runtime_budget import application_turn_timeout_seconds
@@ -240,8 +241,7 @@ def extract_worker_statuses(events: list[dict], worker: str | None = None) -> li
 
 def extract_graph_data(events: list[dict]) -> dict | None:
     for event in reversed(events):
-        event_type = event.get("type")
-        if event_type == "graph_data" or event_type == "graph_candidate":
+        if event.get("type") == "graph_data":
             data = event.get("data")
             if isinstance(data, dict):
                 return data
@@ -371,7 +371,11 @@ async def _submit_staging_diagram(websocket, candidate: dict) -> None:
     graph = candidate.get("data")
     if not isinstance(graph, dict):
         raise RuntimeError("graph_candidate did not contain graph data")
-    encoded, media_type, report = render_staging_diagram(graph)
+    try:
+        criteria = DiagramEvaluationCriteria.from_event_data(candidate.get("criteria"))
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    encoded, media_type, report = render_staging_diagram(graph, criteria)
     evaluation_id = str(candidate.get("evaluation_id") or "")
     graph_version = candidate.get("graph_version")
     chunk_size = 8_000

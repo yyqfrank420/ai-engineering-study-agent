@@ -191,6 +191,15 @@ describe('GraphCanvas behavior', () => {
     expect(updateThreadGraph).not.toHaveBeenCalled();
   });
 
+  it('does not persist view changes while rendering a preview', async () => {
+    render(<GraphCanvas {...baseProps} graphData={graph} isPreview={true} />);
+
+    fireEvent.click(screen.getByText('Save view'));
+    await act(async () => vi.advanceTimersByTime(400));
+
+    expect(updateThreadGraph).not.toHaveBeenCalled();
+  });
+
   it('renders plain and active empty-graph states with workflow detail', () => {
     const view = render(<GraphCanvas {...baseProps} graphData={null} authSession={null} />);
     expect(screen.getByText('Graph will appear here')).toBeTruthy();
