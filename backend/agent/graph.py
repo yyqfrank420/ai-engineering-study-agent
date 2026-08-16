@@ -18,6 +18,7 @@ from langgraph.graph import END, START, StateGraph
 
 from agent.architecture_playbook import build_evidence_bundle
 from agent.complexity import (
+    resolve_complexity,
     resolve_graph_operation,
     resolve_design_query,
 )
@@ -34,7 +35,12 @@ from agent.nodes.architecture_workers import (
     architect_node,
     early_design_frame_node,
 )
-from agent.nodes.graph_critic import graph_critic_node, graph_render_gate_node
+from agent.nodes.graph_worker import _attach_graph_version
+from agent.nodes.graph_critic import (
+    graph_critic_node,
+    graph_render_gate_node,
+    record_graph_review_diagnostic,
+)
 from agent.graph_repair_contract import validate_local_repair_admission
 from agent.graph_review_budget import GraphReviewBudget
 from agent.nodes.orchestrator_node import (
@@ -89,9 +95,16 @@ def _restore_approved_graph_state(
     publication: GraphPublicationDisposition | None = None,
 ) -> AgentState:
     approved_graph = state.get("approved_graph_data")
+    restored_graph = copy.deepcopy(approved_graph)
+    restored_approved = (
+        _attach_graph_version(restored_graph)
+        if isinstance(restored_graph, dict)
+        else None
+    )
     return {
         **state,
-        "graph_data": copy.deepcopy(approved_graph),
+        "graph_data": restored_approved,
+        "approved_graph_data": copy.deepcopy(restored_approved),
         "graph_changed": False,
         "graph_publication": publication
         or ("preserved" if approved_graph is not None else "none"),
@@ -117,6 +130,18 @@ def _failed_graph_operation(
 
 def _should_send_graph_notice(state: AgentState) -> bool:
     return state.get("graph_mode", "auto") != "on"
+
+
+def _architecture_review_unavailable() -> dict[str, object]:
+    return {
+        "approved": False,
+        "terminal": True,
+        "review_status": "unavailable",
+        "failure_code": "architecture_pass_unavailable",
+        "revision_instruction": (
+            "Withdraw the provisional graph because its architecture review did not complete."
+        ),
+    }
 
 
 def _draft_graph_publication(state: AgentState) -> GraphPublicationDisposition:
@@ -219,15 +244,7 @@ def build_agent_workflow(
         if state.get("is_applied_design") and not architecture_ready:
             return {
                 **combined,
-                "graph_review": {
-                    "approved": False,
-                    "terminal": True,
-                    "review_status": "unavailable",
-                    "failure_code": "architecture_pass_unavailable",
-                    "revision_instruction": (
-                        "Withdraw the provisional graph because its architecture review did not complete."
-                    ),
-                },
+                "graph_review": _architecture_review_unavailable(),
             }
         return combined  # type: ignore[return-value]
 
@@ -399,7 +416,7 @@ def build_agent_workflow(
         )
         return {**expanded, "search_tool_wait_task": None}
 
-    async def review_graph(state: AgentState) -> AgentState:
+    async def run_graph_review(state: AgentState) -> AgentState:
         if not state.get("graph_changed"):
             reviewed = await graph_critic_node(state, review_budget=review_budget)
             return {
@@ -440,20 +457,77 @@ def build_agent_workflow(
                     reviewed = {**reviewed, "graph_publication": "withheld"}
                 return reviewed
         except (TimeoutError, StageAdmissionDenied):
+            review = {
+                "approved": False,
+                "terminal": True,
+                "review_status": "unavailable",
+                "failure_code": "semantic_review_timeout",
+                "revision_instruction": "Keep the prior approved diagram unchanged.",
+            }
+            recorded_state, event_diagnostic = record_graph_review_diagnostic(
+                state,
+                review=review,
+                review_budget=review_budget,
+            )
+            progress_event: dict[str, object] = {
+                "type": "workflow_progress",
+                "phase": "review",
+                "status": "rejected",
+                "failure_code": "semantic_review_timeout",
+                "title": "Independent review did not complete",
+                "detail": "The candidate will stay unpublished because semantic review exceeded its bounded deadline.",
+            }
+            if event_diagnostic is not None:
+                progress_event["diagnostic"] = event_diagnostic
+            await recorded_state["send"](progress_event)
             return {
-                **state,
-                **review_budget.state_counters(),
+                **recorded_state,
                 "graph_publication": (
                     "withheld" if state.get("graph_changed") else "none"
                 ),
-                "graph_review": {
-                    "approved": False,
-                    "terminal": True,
-                    "review_status": "unavailable",
-                    "failure_code": "semantic_review_timeout",
-                    "revision_instruction": "Keep the prior approved diagram unchanged.",
-                },
+                "graph_review": review,
             }
+
+    async def review_graph(state: AgentState) -> AgentState:
+        return await run_graph_review(state)
+
+    async def parallel_initial_review(state: AgentState) -> AgentState:
+        review_input = {
+            **state,
+            "architect_plan": {},
+            "challenger_review": {},
+        }
+        async with asyncio.TaskGroup() as task_group:
+            architect_task = task_group.create_task(architecture_plan(review_input))
+            review_task = task_group.create_task(run_graph_review(review_input))
+        architect_plan_or_error = architect_task.result()
+        reviewed = review_task.result()
+        merged = {
+            **reviewed,
+            "architect_plan": architect_plan_or_error.get("architect_plan", {}),
+            "architecture_ready": bool(
+                architect_plan_or_error.get(
+                    "architecture_ready",
+                    bool(architect_plan_or_error.get("architect_plan")),
+                )
+            ),
+            "challenger_review": {},
+            "_parallel_initial_review": True,
+        }
+        if not merged.get("architecture_ready", False) and state.get(
+            "is_applied_design"
+        ):
+            merged = {
+                **merged,
+                "graph_review": _architecture_review_unavailable(),
+                "graph_publication": "withheld"
+                if merged.get("graph_changed")
+                else "none",
+            }
+        return merged
+
+    async def parallel_initial_review_gate(state: AgentState) -> AgentState:
+        return {**state, "_parallel_initial_review": False}
 
     async def reject_graph(state: AgentState) -> AgentState:
         review = state.get("graph_review") or {}
@@ -564,6 +638,14 @@ def build_agent_workflow(
         _traced("agent.early_design_frame", show_early_design_frame),
     )
     workflow.add_node(
+        "parallel_initial_review",
+        _traced("agent.parallel_initial_review", parallel_initial_review),
+    )
+    workflow.add_node(
+        "parallel_initial_review_gate",
+        _traced("agent.parallel_initial_review_gate", parallel_initial_review_gate),
+    )
+    workflow.add_node(
         "expand_context", _traced("agent.search_tool_wait", expand_context)
     )
     workflow.add_node("review_graph", _traced("agent.graph_review", review_graph))
@@ -598,14 +680,41 @@ def build_agent_workflow(
     workflow.add_conditional_edges(
         "render_candidate",
         _route_after_render,
-        {"architect": "architect", "reject": "reject_graph"},
+        {
+            "architect": "architect",
+            "parallel_initial_review": "parallel_initial_review",
+            "review": "review_graph",
+            "reject": "reject_graph",
+        },
     )
     workflow.add_conditional_edges(
         "architect",
         _route_after_architect,
         {"frame": "early_design_frame", "reject": "reject_graph"},
     )
-    workflow.add_edge("early_design_frame", "review_graph")
+    workflow.add_conditional_edges(
+        "early_design_frame",
+        _route_after_early_design_frame,
+        {
+            "parallel_initial_review_gate": "parallel_initial_review_gate",
+            "review_graph": "review_graph",
+        },
+    )
+    workflow.add_conditional_edges(
+        "parallel_initial_review",
+        _route_after_parallel_initial_review,
+        {
+            "frame": "early_design_frame",
+            "accept": "synthesise",
+            "revise": "revise_graph",
+            "reject": "reject_graph",
+        },
+    )
+    workflow.add_conditional_edges(
+        "parallel_initial_review_gate",
+        _route_after_review,
+        {"accept": "synthesise", "revise": "revise_graph", "reject": "reject_graph"},
+    )
     workflow.add_conditional_edges(
         "review_graph",
         _route_after_review,
@@ -615,7 +724,7 @@ def build_agent_workflow(
         "revise_graph",
         _route_after_revision,
         {
-            "review": "review_graph",
+            "render": "render_candidate",
             "correct": "review_graph",
             "reject": "reject_graph",
         },
@@ -636,8 +745,41 @@ def _route_after_draft(state: AgentState) -> Literal["render", "reject"]:
     return "render"
 
 
-def _route_after_render(state: AgentState) -> Literal["architect", "reject"]:
-    return "architect" if state.get("graph_render_admitted", False) else "reject"
+def _route_after_render(
+    state: AgentState,
+) -> Literal["architect", "parallel_initial_review", "review", "reject"]:
+    if not state.get("graph_render_admitted", False):
+        return "reject"
+    repair_round_count = int(
+        state.get("graph_repair_round_count", state.get("graph_revision_count", 0))
+    )
+    if repair_round_count > 0:
+        return "review"
+    profile = resolve_complexity(
+        str(state.get("complexity") or "auto"),
+        str(state.get("design_query") or state.get("user_message") or ""),
+    )
+    if profile.resolved == "prototype":
+        return "parallel_initial_review"
+    return "architect"
+
+
+def _route_after_parallel_initial_review(
+    state: AgentState,
+) -> Literal["frame", "accept", "revise", "reject"]:
+    if (state.get("graph_review") or {}).get("approved"):
+        return "frame"
+    return _route_after_review(state)
+
+
+def _route_after_early_design_frame(
+    state: AgentState,
+) -> Literal["parallel_initial_review_gate", "review_graph"]:
+    return (
+        "parallel_initial_review_gate"
+        if state.get("_parallel_initial_review")
+        else "review_graph"
+    )
 
 
 def _route_after_architect(state: AgentState) -> Literal["frame", "reject"]:
@@ -705,7 +847,7 @@ def _route_after_review(state: AgentState) -> Literal["accept", "revise", "rejec
     return "reject"
 
 
-def _route_after_revision(state: AgentState) -> Literal["review", "correct", "reject"]:
+def _route_after_revision(state: AgentState) -> Literal["render", "correct", "reject"]:
     repair_round_count = int(
         state.get("graph_repair_round_count", state.get("graph_revision_count", 0))
     )
@@ -716,7 +858,7 @@ def _route_after_revision(state: AgentState) -> Literal["review", "correct", "re
         if state.get("graph_contract_correction_pending"):
             return "correct"
         return "reject"
-    return "review" if 0 < repair_round_count <= _MAX_GRAPH_REPAIR_ROUNDS else "reject"
+    return "render" if 0 < repair_round_count <= _MAX_GRAPH_REPAIR_ROUNDS else "reject"
 
 
 async def run_agent(

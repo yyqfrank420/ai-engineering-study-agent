@@ -12,7 +12,7 @@ def test_applied_graph_prompts_define_record_scoped_repair_boundaries():
         _APPLIED_GRAPH_TOPOLOGY_SYSTEM,
     )
 
-    assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v34"
+    assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v36"
     assert _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION == "applied_topology_v22"
     assert "request, selected depth, and server contract" in (
         _APPLIED_GRAPH_TOPOLOGY_SYSTEM
@@ -37,6 +37,12 @@ def test_applied_graph_prompts_define_record_scoped_repair_boundaries():
     )
     assert "Every update must" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "repair-only edge_id values" in _APPLIED_GRAPH_PATCH_SYSTEM
+    assert "Every `required_edge_operations` entry is mandatory" in (
+        _APPLIED_GRAPH_PATCH_SYSTEM
+    )
+    assert "Every `required_node_operations` entry is mandatory" in (
+        _APPLIED_GRAPH_PATCH_SYSTEM
+    )
     assert "non-adjacent records" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "source and destination group IDs" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "complete source, target, and label triple" in _APPLIED_GRAPH_PATCH_SYSTEM

@@ -243,9 +243,13 @@ def test_architecture_worker_schemas_require_every_declared_object_field():
         ]
         == 500
     )
-    assert architect_properties["evidence_basis"]["items"]["properties"]["basis"][
-        "enum"
-    ] == ["user", "book", "web"]
+    assert (
+        architect_properties["evidence_basis"]["items"]["properties"]["basis"]["maxLength"]
+        == 40
+    )
+    assert "enum" not in architect_properties["evidence_basis"]["items"]["properties"][
+        "basis"
+    ]
     assert (
         architect_properties["decisions"]["items"]["properties"]["why"]["maxLength"]
         == 300
@@ -1485,6 +1489,7 @@ async def test_early_design_frame_uses_only_reviewed_plan_fields():
         {
             "is_applied_design": True,
             "architecture_ready": True,
+            "graph_review": {"approved": False},
             "architect_plan": {
                 "interpretation": "A tenant-safe model serving platform.",
                 "assumptions": ["Vendor APIs support idempotency keys."],
@@ -1514,6 +1519,32 @@ async def test_early_design_frame_uses_only_reviewed_plan_fields():
     assert "same-key read-back" in text
     assert "PRIVATE GRAPH REQUIREMENT" not in text
     assert "PRIVATE NODE" not in text
+    assert events == [{"type": "response_delta", "content": text}]
+
+
+@pytest.mark.asyncio
+async def test_early_design_frame_shows_review_passed_when_graph_review_passed():
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    result = await early_design_frame_node(
+        {
+            "is_applied_design": True,
+            "architecture_ready": True,
+            "graph_review": {"approved": True},
+            "architect_plan": {
+                "interpretation": "A tenant-safe model serving platform.",
+                "assumptions": ["Vendor APIs support idempotency keys."],
+            },
+            "send": send,
+        }
+    )
+
+    text = result["early_response_text"]
+    assert "diagram review passed" in text
+    assert "tenant-safe model serving" in text
     assert events == [{"type": "response_delta", "content": text}]
 
 

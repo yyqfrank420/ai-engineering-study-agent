@@ -145,11 +145,6 @@ _ARCHITECT_RESPONSE_SCHEMA = _strict_object_schema(
                     "basis": {
                         "type": "string",
                         "maxLength": 40,
-                        "enum": [
-                            "user",
-                            "book",
-                            "web",
-                        ],
                     },
                     "evidence_ref": _bounded_string_schema(500),
                 }
@@ -692,7 +687,14 @@ async def early_design_frame_node(state: AgentState) -> dict[str, Any]:
         if risk:
             risks.append(f"{risk}" + (f" Response: {mitigation}" if mitigation else ""))
 
-    sections = ["### Proposed direction (diagram review pending)"]
+    graph_review = state.get("graph_review") or {}
+    review_passed = bool(graph_review.get("approved"))
+    header = (
+        "### Proposed direction (diagram review passed)"
+        if review_passed
+        else "### Proposed direction (diagram review pending)"
+    )
+    sections = [header]
     if interpretation:
         sections.append(interpretation)
     for title, items in (

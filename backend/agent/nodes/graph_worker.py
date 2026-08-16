@@ -10,6 +10,7 @@ from adapters.llm_adapter import build_telemetry
 from agent.architecture_rubric import repair_requirements
 from agent.complexity import resolve_complexity, resolve_graph_operation
 from agent.deadlines import (
+    StageAdmissionDenied,
     design_timeout_seconds as _configured_design_timeout_seconds,
     optional_gateway_args,
     patch_timeout_seconds as _configured_patch_timeout_seconds,
@@ -38,8 +39,9 @@ from graph.runtime import select_canonical_graph
 
 
 logger = logging.getLogger(__name__)
+_monotonic = time.monotonic
 
-_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v34"
+_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v36"
 _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v22"
 _APPLIED_GRAPH_TOPOLOGY_CORRECTION_PROMPT_VERSION = "applied_topology_correction_v1"
 _APPLIED_GRAPH_TOPOLOGY_EFFORT = "high"
@@ -259,6 +261,30 @@ def _validated_local_repair_contract(
     if not isinstance(contract, dict):
         raise ValueError("critic repair requires a repair_contract")
     validate_local_repair_admission(contract, graph=graph)
+    connections = contract["layers"]["connections"]
+    selected_edges = {
+        tuple(selector[field] for field in ("source", "target", "label"))
+        for selector in connections["edge_selectors"]
+    }
+    operation_edges = {
+        tuple(
+            operation["edge_selector"][field] for field in ("source", "target", "label")
+        )
+        for operation in connections["existing_edge_operations"]
+    }
+    if selected_edges != operation_edges:
+        raise ValueError(
+            "critic repair edge selectors require exact existing-edge operations"
+        )
+    components = contract["layers"]["components"]
+    selected_node_ids = set(components["node_ids"])
+    operation_node_ids = {
+        operation["node_id"] for operation in components["existing_node_operations"]
+    }
+    if selected_node_ids != operation_node_ids:
+        raise ValueError(
+            "critic repair node selectors require exact existing-node operations"
+        )
     return contract
 
 
@@ -289,19 +315,74 @@ def _repair_permissions(
             )
     if len(editable_edges) != len(selected_edges):
         raise ValueError("repair contract edge selector mapping is incomplete")
+    edge_id_by_selector = {
+        (edge["source"], edge["target"], edge["label"]): edge["edge_id"]
+        for edge in editable_edges
+    }
+    required_edge_operations = [
+        {
+            **copy.deepcopy(operation),
+            "edge_id": edge_id_by_selector[
+                tuple(
+                    operation["edge_selector"][field]
+                    for field in ("source", "target", "label")
+                )
+            ],
+        }
+        for operation in layers["connections"]["existing_edge_operations"]
+    ]
+    required_edge_ids = {operation["edge_id"] for operation in required_edge_operations}
+    exact_update_fields = {
+        operation["edge_id"]: list(operation["set"])
+        for operation in required_edge_operations
+        if operation["kind"] == "update"
+    }
+    exact_removal_ids = {
+        operation["edge_id"]
+        for operation in required_edge_operations
+        if operation["kind"] in {"remove", "replace"}
+    }
+    required_node_operations = [
+        copy.deepcopy(operation)
+        for operation in layers["components"]["existing_node_operations"]
+    ]
+    required_node_ids = {operation["node_id"] for operation in required_node_operations}
+    exact_node_update_fields = {
+        operation["node_id"]: list(operation["set"])
+        for operation in required_node_operations
+    }
     return {
         "editable_node_ids": layers["components"]["node_ids"],
         "editable_node_fields": {
-            node_id: list(_PATCH_NODE_MUTABLE_FIELDS)
+            node_id: (
+                exact_node_update_fields.get(node_id, [])
+                if node_id in required_node_ids
+                else list(_PATCH_NODE_MUTABLE_FIELDS)
+            )
             for node_id in layers["components"]["node_ids"]
         },
-        "removable_node_ids": layers["components"]["node_ids"],
+        "removable_node_ids": [
+            node_id
+            for node_id in layers["components"]["node_ids"]
+            if node_id not in required_node_ids
+        ],
+        "required_node_operations": required_node_operations,
         "editable_edges": editable_edges,
         "editable_edge_fields": {
-            edge["edge_id"]: list(_CRITIC_PATCH_EDGE_MUTABLE_FIELDS)
+            edge["edge_id"]: (
+                exact_update_fields.get(edge["edge_id"], [])
+                if edge["edge_id"] in required_edge_ids
+                else list(_CRITIC_PATCH_EDGE_MUTABLE_FIELDS)
+            )
             for edge in editable_edges
         },
-        "removable_edge_ids": [edge["edge_id"] for edge in editable_edges],
+        "removable_edge_ids": [
+            edge["edge_id"]
+            for edge in editable_edges
+            if edge["edge_id"] not in required_edge_ids
+            or edge["edge_id"] in exact_removal_ids
+        ],
+        "required_edge_operations": required_edge_operations,
         "editable_composition_fields": layers["composition"]["composition_fields"],
         "editable_group_ids": layers["composition"]["group_ids"],
         "editable_sequence_indexes": layers["composition"]["sequence_indexes"],
@@ -516,6 +597,8 @@ def _user_edit_layer(
         "connection_addition_obligations": copy.deepcopy(
             connection_addition_obligations or []
         ),
+        "existing_edge_operations": [],
+        "existing_node_operations": [],
         "composition_append_counts": dict(composition_append_counts or {}),
     }
 
@@ -1130,12 +1213,13 @@ def _graph_patch_failure_code(exc: Exception) -> str:
 
 def _patch_validation_coordinates(exc: Exception) -> tuple[str | None, str | None]:
     message = str(exc)
+    message_lc = message.lower()
     if (
         isinstance(exc, json.JSONDecodeError)
-        or "graph patch json could not be decoded" in message.lower()
+        or "graph patch json could not be decoded" in message_lc
     ):
         return "patch", "json_decode"
-    if "graph patch json must be an object" in message.lower():
+    if "graph patch json must be an object" in message_lc:
         return "patch", "invalid_shape"
     locked_record = re.search(
         r"(?:graph patch|normalization) (?:changed|removed) locked "
@@ -1160,6 +1244,16 @@ def _patch_validation_coordinates(exc: Exception) -> tuple[str | None, str | Non
     if locked_group_move:
         group_ids = locked_group_move.group("ids").split(",")
         return f"groups.{'.'.join(group_ids)}", "locked_record_changed"
+    if "normalization changed locked composition field: title" in message_lc:
+        return "composition.title", "locked_record_changed"
+    if "normalization changed locked composition field: sequence" in message_lc:
+        return "composition.sequence", "locked_record_changed"
+    if "normalization changed locked composition field: assumptions" in message_lc:
+        return "composition.assumptions", "locked_record_changed"
+    if "normalization changed locked composition field: groups" in message_lc:
+        return "composition.groups", "locked_record_changed"
+    if "normalization changed locked render view state" in message_lc:
+        return "render.view_state", "locked_record_changed"
     if "added edges do not match the exact connection addition obligations" in message:
         return "patch.add_edges", "addition_obligation_mismatch"
     if (
@@ -1167,11 +1261,15 @@ def _patch_validation_coordinates(exc: Exception) -> tuple[str | None, str | Non
         in message
     ):
         return "patch.add_edges", "addition_obligation_mismatch"
+    if "did not apply the exact existing edge operation" in message:
+        return "patch.edge_operations", "edge_operation_mismatch"
+    if "did not apply the exact existing node operation" in message:
+        return "patch.node_operations", "node_operation_mismatch"
     if "added edge is outside the named connection scope" in message:
         return "patch.add_edges", "outside_named_connection_scope"
     if "graph patch changed locked edge fields" in message:
         return "patch.update_edges", "unauthorized_field_change"
-    if "produced no semantic change" in message.lower():
+    if "produced no semantic change" in message_lc:
         return "patch", "no_effect"
     return None, None
 
@@ -1204,6 +1302,34 @@ def _can_correct_initial_topology(error: AppliedGraphSpecError) -> bool:
         error.code in _CORRECTABLE_INITIAL_TOPOLOGY_CODES
         and error.rule != "json_decode"
     )
+
+
+def _initial_topology_correction_timeout(
+    state: AgentState,
+    *,
+    initial_attempt_elapsed_s: float,
+) -> float | None:
+    try:
+        remaining_timeout_s = design_timeout_seconds(state)
+    except (TimeoutError, StageAdmissionDenied):
+        logger.info(
+            "Initial topology correction admission: initial_attempt_elapsed_s=%.3f "
+            "remaining_design_timeout_s=0.000 admitted=false",
+            initial_attempt_elapsed_s,
+        )
+        return None
+    preview_deadline = state.get("graph_preview_deadline_s")
+    admitted = not isinstance(preview_deadline, (int, float)) or (
+        remaining_timeout_s >= initial_attempt_elapsed_s
+    )
+    logger.info(
+        "Initial topology correction admission: initial_attempt_elapsed_s=%.3f "
+        "remaining_design_timeout_s=%.3f admitted=%s",
+        initial_attempt_elapsed_s,
+        remaining_timeout_s,
+        str(admitted).lower(),
+    )
+    return remaining_timeout_s if admitted else None
 
 
 def _initial_topology_correction_prompt(
@@ -1316,6 +1442,14 @@ It does not cap the number of independently authorized records, edges, groups, o
 Apply every cited blocker in this patch. Do not replace a required expansion with consolidation,
 removal, or a simpler substitute. Use consolidation only when the cited finding is duplicate density
 or redundant responsibility.
+
+Every `required_node_operations` entry is mandatory. Emit the exact node ID and its complete exact
+field set in `update_nodes`. Do not remove a required node or add unrelated node fields.
+
+Every `required_edge_operations` entry is mandatory. For `update`, emit the exact edge ID and exact
+label in `update_edges`. For `remove`, emit the exact edge ID in `remove_edges`. For `replace`,
+remove the exact edge ID and emit every referenced exact connection addition obligation. A split is
+one removal plus all declared replacement edges. Do not update a remove or replace target.
 
 One record-scoped contract may authorize independent repairs at non-adjacent records in the same
 connected candidate graph. This does not permit a disconnected candidate or mutation of an uncited
@@ -1606,6 +1740,8 @@ async def _generate_applied_architecture(
         spec=spec,
     )
     attempt_prompt = prompt
+    attempt_timeout_s: float | None = None
+    initial_attempt_started_s = _monotonic()
     correction_error: AppliedGraphSpecError | None = None
     for correction_attempt in range(_MAX_INITIAL_TOPOLOGY_CORRECTIONS + 1):
         response = None
@@ -1659,7 +1795,11 @@ async def _generate_applied_architecture(
                         "client_request_id": state.get("client_request_id"),
                     },
                 ),
-                timeout_seconds=design_timeout_seconds(state),
+                timeout_seconds=(
+                    attempt_timeout_s
+                    if attempt_timeout_s is not None
+                    else design_timeout_seconds(state)
+                ),
                 max_output_tokens=settings.graph_builder_max_completion_tokens,
                 provider_attempt_limit=1,
             )
@@ -1695,6 +1835,13 @@ async def _generate_applied_architecture(
                 and _can_correct_initial_topology(exc)
                 and response is not None
             ):
+                initial_attempt_elapsed_s = _monotonic() - initial_attempt_started_s
+                attempt_timeout_s = _initial_topology_correction_timeout(
+                    state,
+                    initial_attempt_elapsed_s=initial_attempt_elapsed_s,
+                )
+                if attempt_timeout_s is None:
+                    raise
                 attempt_prompt = _initial_topology_correction_prompt(
                     original_prompt=prompt,
                     rejected_response=response.text,
@@ -2014,6 +2161,17 @@ def _validate_node_patch_scope(
         node_id = _patch_reference(value, "remove_nodes entry")
         if node_id not in removable_node_ids:
             raise ValueError(f"graph patch removed locked node: {node_id}")
+    updates_by_id = {
+        _patch_reference(operation.get("id"), "node update id"): operation.get("set")
+        for operation in _patch_list(patch, "update_nodes")
+        if isinstance(operation, dict)
+    }
+    for operation in permissions.get("required_node_operations", []):
+        node_id = operation["node_id"]
+        if updates_by_id.get(node_id) != operation["set"]:
+            raise ValueError(
+                f"graph patch did not apply the exact existing node operation: {node_id}"
+            )
 
 
 def _validate_edge_patch_scope(
@@ -2043,6 +2201,29 @@ def _validate_edge_patch_scope(
         edge_id = _patch_reference(value, "remove_edges entry")
         if edge_id not in removable_edge_ids:
             raise ValueError(f"graph patch removed locked edge: {edge_id}")
+    updates_by_id = {
+        _patch_reference(operation.get("edge_id"), "edge update ID"): operation.get(
+            "set"
+        )
+        for operation in _patch_list(patch, "update_edges")
+        if isinstance(operation, dict)
+    }
+    removed_edge_ids = {
+        _patch_reference(value, "remove_edges entry")
+        for value in _patch_list(patch, "remove_edges")
+    }
+    for operation in permissions.get("required_edge_operations", []):
+        edge_id = operation["edge_id"]
+        kind = operation["kind"]
+        if kind == "update":
+            if updates_by_id.get(edge_id) != operation["set"]:
+                raise ValueError(
+                    f"graph patch did not apply the exact existing edge operation: {edge_id}"
+                )
+        elif edge_id not in removed_edge_ids:
+            raise ValueError(
+                f"graph patch did not apply the exact existing edge operation: {edge_id}"
+            )
 
 
 def _validate_added_record_scope(

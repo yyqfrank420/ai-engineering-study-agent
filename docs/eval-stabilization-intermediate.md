@@ -2,17 +2,17 @@
 
 Last updated: 2026-08-15
 
-Evidence in this record is current through paid diagnostic `31900871827` on exact head
-`4faf04de329e3d9934a3363ea475c6a8d19dcf94`
+Evidence in this record is current through paid diagnostic `31903086208` on exact head
+`f045abf`
 on 2026-08-15. PRs #37 through #40 merged on 2026-08-07, and PR #44 merged as `77df25e7`. The
 evidence-provenance, graph-review, and latency corrections have passed local review and the full
-offline CI matrix through the mixed-edge authority change. Twenty-two consecutive recent `graph-expansion`
+offline CI matrix through the mixed-edge authority change. Twenty-three consecutive recent `graph-expansion`
 diagnostics have failed; there is no protected live success on the current branch. The latest paid
-run emitted a five-node preview after 68.077 seconds. Its accepted critic contract required both
-new-component edges and exact existing-to-existing edges. Kimi returned one required existing edge,
-then a conflicting global validator rejected it because the same patch added components. The
-error-informed retry received another impossible mixed contract and timed out. The working tree now
-makes exact edge obligations authoritative and removes that redundant global rule.
+run rendered three private candidates and withheld the graph after two semantic repairs. The first
+scorecard carried production-oriented requirements into prototype hard findings, and later edge
+repairs did not declare the exact operation required on an existing edge. The working tree now
+limits architect diagram requirements to production review, and gives each existing-edge repair an
+exact operation contract.
 Each budgeted critic dispatch now permits one provider attempt, so transport retries cannot repeat
 an identical model prompt outside that ceiling.
 Corpus `2026-08-12.v1` remains pending human review.
@@ -42,6 +42,8 @@ turn 1, reached turn 2, previewed a fresh expansion candidate, and then restored
 graph after repair rejection. The twenty-first failure ended on turn 1 after previewing two fresh
 candidates and withholding both after semantic review. The twenty-second failure previewed one
 fresh candidate, rejected an impossible patch contract, and timed out during its corrected retry.
+The twenty-third failure rendered three private candidates, consumed two semantic repair rounds,
+and withheld the graph.
 Run links and exact heads come from GitHub Actions metadata. Latency, provider calls, failure codes,
 and cost come from each retained `scheduled-eval-<run>/browser-results.json`, `live-results.json`,
 and `run-context.json` artifact. Model effort comes from source at the exact run head because the
@@ -72,8 +74,9 @@ incomplete usage.
 | 2026-08-15 | [`31881756822`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31881756822), `4c2bae8ff12c3204fb3b492cbf27210cfec9542b` | Turn 1 published a ten-node graph after one repair. Turn 2 produced an eleven-node candidate, passed private render, and failed semantic repair. The initial Sonnet scorecard needed a protocol correction. Kimi then returned an invalid patch with an added edge outside the new-component scope. The consumed shared correction slot prevented the error-informed contract correction, so the workflow restored turn 1's graph and failed `required_graph_version_reused`. Twelve calls ran without fallback. Case latency was 727.200 seconds. | Protocol-format and patch-contract corrections now have separate counters under the four-call critic ceiling. The next run exercised the contract-correction lane and exposed the deeper mixed-edge validator contradiction recorded below. The current fix removes that redundant rule. | $1.102968 |
 | 2026-08-15 | [`31897989519`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31897989519), `f181e855987d286ddf66f04e35c0ea30a86005f0` | Turn 1 produced a nine-node candidate, corrected one scorecard ownership error, repaired it into a fourteen-node candidate, and passed private rendering for both. The post-repair scorecard marked two prior context blocker IDs `still_fail` after their exact identities had changed. Server validation rejected `prior_obligation_dispositions must match server-derived typed blockers`, publication returned `graph_data: null`, and the evaluator failed `required_graph_missing`. Seven one-attempt calls cost $0.611650. Case latency was 497.341 seconds, with the first preview after about 70 seconds. | Prior obligation dispositions are no longer model output. The server compares current typed blocker IDs with prior blockers and derives every resolved or still-failing status. The safe coordinate mapper retains `prior_obligation_dispositions` for any internal invariant failure. | $0.611650 |
 | 2026-08-15 | [`31900871827`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31900871827), `4faf04de329e3d9934a3363ea475c6a8d19dcf94` | A five-node, seven-edge candidate passed private rendering and emitted a preview after 68.077 seconds. Sonnet authorized four new nodes and nine exact edges, including `n3 -> n5` between existing nodes. Kimi completed the patch in 191.651 seconds, then the global new-component edge rule rejected that required edge. The contract correction retained the same contradiction and expanded the repair to seven nodes and fourteen edges. The retry was cancelled after 132.459 seconds, 1.192 seconds after its first text delta. Final `graph_data` was null; the case took 633.072 seconds. Seven calls ran without fallback or judge calls. One accepted Kimi call retained no terminal usage. | Exact connection obligations now own every added edge. Mixed new-component and existing-to-existing additions are permitted only when their source, target, and normalized label are cited. New-node attachment, graph anchoring, locked records, and post-normalization checks remain. | at least $0.440616 |
+| 2026-08-15 | [`31903086208`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31903086208), `f045abf` | The workflow wrapper reported success while the product withheld turn 1. Kimi high produced a private preview in 39.982 seconds. Private renders passed for candidates 8/11, 13/20, and 13/22. Sonnet medium rejected components once, then `edge_semantics` twice. The two successful semantic repair rounds were exhausted, so `graph_data` was withheld and turn 2 was skipped. Eight calls ran in 363.588 seconds with no fallback. | Prototype scorecards now exclude architect diagram requirements. Existing-edge repairs must declare exact update, remove, or replace operations. The reviewed graph snapshot remains paired with each scorecard. Safe internal diagnostics record the selected depth, locks, findings, blocker IDs, fingerprints, and correction outcomes. | $0.515946 |
 
-Known application spend across these twenty-two failures is at least **$7.327960**. Several provider
+Known application spend across these twenty-three failures is at least **$7.843906**. Several provider
 calls have incomplete usage; row amounts marked `at least` are lower bounds. Diagnostic
 `31549644038` retained only `connections.links[6]: topology`; it did not retain authored output and
 cannot distinguish an out-of-range endpoint from a self-link.
@@ -93,8 +96,8 @@ from the product-failure ledger.
 
 ## Repeated-failure root cause
 
-The twenty-two recent failures were six architect/evidence contract failures, five topology-wire
-failures, ten review/repair orchestration failures, and one frontend layout failure. The immediate
+The twenty-three recent failures include architect/evidence contract, topology-wire, review/repair,
+and frontend layout failures. The immediate
 errors differed. The shared engineering defect was contract drift. Graph limits, model schemas,
 repair permissions, review state, browser measurements, and staging measurements had separate
 owners and were tested mainly through mocked boundaries. A candidate could satisfy one boundary and
@@ -166,9 +169,19 @@ cross-links, reparents invalid topology, or deletes authored elements to fit a t
 - Recovered a missing add-edge label only from an already-authored nonblank description.
 - Added deterministic hard bounds for unbroken authored labels.
 - Replaced prose-based edge selectors with immutable repair-only IDs assigned to the current graph for one patch call. Updates and removals now select `edge_1`, `edge_2`, and so on, including when several edges share endpoints. These IDs never enter published graph data.
+- Existing-edge findings now carry one exact operation: update with an exact replacement label,
+  remove, or replace with one or more declared addition obligations. A replacement cannot reuse an
+  addition obligation claimed by another existing edge.
 - Applied one omission rule to blank/null update fields; an otherwise empty update still fails.
 - Enriched added node and edge presentation fields through the same defaults as initial topology generation.
 - Preserved the existing graph on invalid patches and retained critic/publication validation after every repair.
+- Stored the reviewed graph snapshot with the scorecard. Fingerprints and repair authority compare
+  the scorecard against that exact candidate.
+- Kept two successful semantic repair rounds and one separate contract-correction round. An invalid
+  patch preserves the candidate and gives the next critic call a safe validation coordinate and rule.
+- Added internal-test diagnostics with counters, selected depth, reopened and locked layers, finding
+  codes, blocker IDs, opaque fingerprints, and correction outcomes. They omit prompts, model text,
+  and graph records.
 
 ### One-shot architecture product and model roles
 
@@ -305,7 +318,8 @@ review, repair, layer-lock, and publication contracts.
   scorecard. Every deterministic finding is classified exactly once. `novice_clarity` is advisory:
   it may guide presentation improvements but cannot reject a candidate or create repair authority.
 - The selected review depth is authoritative. Prototype review rejects production-only findings even
-  when request text describes a production system. Production review retains all topology proofs.
+  when request text describes a production system. Architect diagram requirements are blocking critic
+  context only at production depth. Production review retains all topology proofs.
 - Repair patches are record-scoped and may cover non-adjacent records in the same connected
   candidate. Every cited node, edge, group, sequence, assumption, field, removal, and addition has
   its own exact permission; topology proximity grants none. Each required connection addition names
@@ -318,7 +332,8 @@ review, repair, layer-lock, and publication contracts.
   patch output cannot widen it.
 - Retained pass verdicts follow dependency invalidation. Component changes reopen components,
   connections, and composition. Edge changes reopen connections and composition. Composition-only
-  changes reopen composition.
+  changes reopen composition. Unchanged passed layers retain their prior verdict. Every candidate
+  still reruns deterministic render validation.
 - The workflow retains the reviewed graph snapshot beside its scorecard as the repair baseline; a
   later scorecard cannot be paired with a different graph version.
 - It permits at most two successful semantic repair rounds and one error-informed critic-contract
@@ -865,6 +880,12 @@ remain medium. Offline tests cannot establish provider response time.
   named in the repair contract. Moving a node requires authority for both its source and destination
   groups. Invalid patches preserve the candidate and receive at most one error-informed contract
   correction. The workflow permits at most two successful semantic repair rounds.
+- Critic component repairs declare exact existing-node field and value updates. They cannot delete a
+  node. Initial prototype Architect and Sonnet reviews run concurrently after private render. Low
+  and production review remain serial, and repairs do not rerun Architect.
+- One initial complete-topology correction is admitted only when the remaining preview capacity is
+  at least the observed first-attempt duration. A rejected correction admission preserves the
+  original topology validation error and does not spend another Kimi call.
 - A graph that passes deterministic graph and browser-render checks is emitted as a reversible
   preview while semantic review continues. The transport emits authoritative `graph_data` only after
   review and persistence, and restores the prior graph if the turn does not commit. The
@@ -895,7 +916,9 @@ remain medium. Offline tests cannot establish provider response time.
 - Production topology proofs still allow reviewer-owned `not_applicable`. The server has no trusted
   semantic scope that states which of the five flow classes apply to a request. Deriving that scope
   from node labels, types, or the reviewer output would make model-authored text an authority. A
-  later protocol may add a server-owned topology scope established before review. This release keeps
+  later protocol may add a server-owned topology scope established before review. Current results
+  are semantic attestations with structurally validated directed witnesses. Typed node roles and
+  edge relations are required before the server can prove the five guarantees. This release keeps
   the existing rule and records the gap.
 - Turn-two patch latency remains live-unverified on the new head. Offline tests prove call ceilings,
   mutation authority, candidate preservation, and corrected contract behavior with mocked providers.

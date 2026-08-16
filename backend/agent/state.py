@@ -148,6 +148,7 @@ class AgentState(TypedDict):
     graph_patch_validation_error: NotRequired[dict[str, str]]
     reviewed_graph_data: NotRequired[GraphData | None]
     approved_graph_data: NotRequired[GraphData | None]
+    graph_review_diagnostics: NotRequired[list[dict[str, Any]]]
     workflow_started_at_s: NotRequired[float]
     terminal_deadline_s: NotRequired[float]
     graph_preview_deadline_s: NotRequired[float]

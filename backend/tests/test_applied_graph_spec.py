@@ -1179,6 +1179,100 @@ async def test_dynamic_generator_correction_uses_remaining_stage_deadline(monkey
 
 
 @pytest.mark.asyncio
+async def test_dynamic_generator_skips_correction_without_one_attempt_of_preview_capacity(
+    monkeypatch,
+):
+    import agent.nodes.graph_worker as graph_worker
+
+    rejected_payload = _draft(6)
+    rejected_payload["components"][4][0] = 5
+    calls = []
+    timeouts = iter((100.0, 40.0))
+    monotonic_values = iter((0.0, 80.0))
+
+    async def fake_stream_structured_llm(**kwargs):
+        calls.append(kwargs)
+        return StructuredLLMResponse(
+            text=json.dumps(rejected_payload),
+            finish_reason="end_turn",
+            input_tokens=100,
+            output_tokens=500,
+            provider="moonshot",
+            model="kimi-k3",
+        )
+
+    monkeypatch.setattr(
+        graph_worker, "stream_structured_llm", fake_stream_structured_llm
+    )
+    monkeypatch.setattr(
+        graph_worker, "design_timeout_seconds", lambda _state: next(timeouts)
+    )
+    monkeypatch.setattr(graph_worker, "_monotonic", lambda: next(monotonic_values))
+
+    with pytest.raises(AppliedGraphSpecError) as caught:
+        await graph_worker._generate_applied_architecture(
+            {
+                "graph_data": None,
+                "approved_graph_data": None,
+                "architecture_ready": True,
+                "graph_preview_deadline_s": 200.0,
+            },
+            "Build a runtime",
+            SimpleNamespace(resolved="prototype"),
+        )
+
+    assert caught.value.code == "graph_design_topology_invalid"
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_dynamic_generator_corrects_when_preview_capacity_covers_first_attempt(
+    monkeypatch,
+):
+    import agent.nodes.graph_worker as graph_worker
+
+    rejected_payload = _draft(6)
+    rejected_payload["components"][4][0] = 5
+    responses = [rejected_payload, _draft(6)]
+    calls = []
+    timeouts = iter((100.0, 80.0))
+    monotonic_values = iter((0.0, 40.0))
+
+    async def fake_stream_structured_llm(**kwargs):
+        calls.append(kwargs)
+        return StructuredLLMResponse(
+            text=json.dumps(responses.pop(0)),
+            finish_reason="end_turn",
+            input_tokens=100,
+            output_tokens=500,
+            provider="moonshot",
+            model="kimi-k3",
+        )
+
+    monkeypatch.setattr(
+        graph_worker, "stream_structured_llm", fake_stream_structured_llm
+    )
+    monkeypatch.setattr(
+        graph_worker, "design_timeout_seconds", lambda _state: next(timeouts)
+    )
+    monkeypatch.setattr(graph_worker, "_monotonic", lambda: next(monotonic_values))
+
+    result = await graph_worker._generate_applied_architecture(
+        {
+            "graph_data": None,
+            "approved_graph_data": None,
+            "architecture_ready": True,
+            "graph_preview_deadline_s": 200.0,
+        },
+        "Build a runtime",
+        SimpleNamespace(resolved="prototype"),
+    )
+
+    assert len(result["nodes"]) == 6
+    assert [call["timeout_seconds"] for call in calls] == [100.0, 80.0]
+
+
+@pytest.mark.asyncio
 async def test_dynamic_generator_skips_correction_after_stage_deadline(monkeypatch):
     import agent.nodes.graph_worker as graph_worker
 
@@ -1208,13 +1302,14 @@ async def test_dynamic_generator_skips_correction_after_stage_deadline(monkeypat
         graph_worker, "stream_structured_llm", fake_stream_structured_llm
     )
 
-    with pytest.raises(TimeoutError, match="stage deadline exhausted"):
+    with pytest.raises(AppliedGraphSpecError) as caught:
         await graph_worker._generate_applied_architecture(
             state,
             "Build a runtime",
             SimpleNamespace(resolved="prototype"),
         )
 
+    assert caught.value.code == "graph_design_topology_invalid"
     assert len(calls) == 1
 
 

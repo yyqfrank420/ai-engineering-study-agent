@@ -329,6 +329,12 @@ def _layer(status="pass", *, findings=None, **selectors):
         "connection_addition_obligations": list(
             selectors.get("connection_addition_obligations") or []
         ),
+        "existing_node_operations": list(
+            selectors.get("existing_node_operations") or []
+        ),
+        "existing_edge_operations": list(
+            selectors.get("existing_edge_operations") or []
+        ),
         "composition_append_counts": dict(
             selectors.get("composition_append_counts") or {}
         ),
@@ -669,6 +675,330 @@ def test_critic_can_replace_a_selected_edge_only_through_an_exact_obligation():
     assert any(
         edge["label"] == "replaces the intake route" for edge in updated["edges"]
     )
+
+
+def _aggregate_response_split_repair():
+    existing = _domain_graph(9, production=True)
+    aggregate_edge = existing["edges"][0]
+    aggregate_edge.update(
+        label="returns aggregate inference response",
+        description="Combines successful, failed, and degraded inference outcomes.",
+    )
+    selector = {field: aggregate_edge[field] for field in ("source", "target", "label")}
+    obligations = [
+        {
+            "source": "fulfilment_stage_0",
+            "target": "fulfilment_stage_1",
+            "required_contract": "returns scored inference response",
+        },
+        {
+            "source": "fulfilment_stage_0",
+            "target": "fulfilment_stage_2",
+            "required_contract": "returns inference scoring error",
+        },
+        {
+            "source": "fulfilment_stage_0",
+            "target": "fulfilment_stage_3",
+            "required_contract": "returns degraded inference fallback",
+        },
+    ]
+    contract = _local_repair_contract(
+        failed_layers={
+            "connections": {
+                "edge_selectors": [selector],
+                "context_node_ids": [
+                    "fulfilment_stage_0",
+                    "fulfilment_stage_1",
+                    "fulfilment_stage_2",
+                    "fulfilment_stage_3",
+                ],
+                "addition_count": len(obligations),
+                "connection_addition_obligations": obligations,
+                "existing_edge_operations": [
+                    {
+                        "kind": "replace",
+                        "edge_selector": selector,
+                        "set": {},
+                        "replacement_obligations": obligations,
+                    }
+                ],
+            }
+        }
+    )
+    return existing, contract, selector, obligations
+
+
+def _obligation_edge(obligation):
+    return {
+        "source": obligation["source"],
+        "target": obligation["target"],
+        "label": obligation["required_contract"],
+        "technology": "Typed inference response",
+        "sync": "async",
+        "flow": "runtime",
+        "description": obligation["required_contract"],
+    }
+
+
+def test_aggregate_response_split_replaces_only_the_cited_edge():
+    existing, contract, selector, obligations = _aggregate_response_split_repair()
+    before = copy.deepcopy(existing)
+
+    updated = graph_worker._apply_applied_graph_patch(
+        existing,
+        {
+            "remove_edges": ["edge_1"],
+            "add_edges": [_obligation_edge(obligation) for obligation in obligations],
+        },
+        safety_max_nodes=12,
+        resolved_complexity="production",
+        repair_contract=contract,
+    )
+
+    assert existing == before
+    assert not any(
+        (edge["source"], edge["target"], edge["label"])
+        == (selector["source"], selector["target"], selector["label"])
+        for edge in updated["edges"]
+    )
+    assert {
+        (edge["source"], edge["target"], edge["label"])
+        for edge in updated["edges"]
+        if edge["source"] == "fulfilment_stage_0"
+        and edge["target"]
+        in {"fulfilment_stage_1", "fulfilment_stage_2", "fulfilment_stage_3"}
+    } == {
+        (item["source"], item["target"], item["required_contract"])
+        for item in obligations
+    }
+    for uncited_edge in before["edges"][1:]:
+        retained = next(
+            edge
+            for edge in updated["edges"]
+            if (edge["source"], edge["target"], edge["label"])
+            == (
+                uncited_edge["source"],
+                uncited_edge["target"],
+                uncited_edge["label"],
+            )
+        )
+        assert {
+            field: retained[field]
+            for field in ("technology", "sync", "flow", "description")
+        } == {
+            field: uncited_edge[field]
+            for field in ("technology", "sync", "flow", "description")
+        }
+    assert updated["groups"] == before["groups"]
+
+
+@pytest.mark.parametrize(
+    ("patch", "message"),
+    [
+        (
+            {
+                "remove_edges": ["edge_1"],
+                "add_edges": [
+                    _obligation_edge(
+                        {
+                            "source": "fulfilment_stage_0",
+                            "target": "fulfilment_stage_1",
+                            "required_contract": "returns scored inference response",
+                        }
+                    ),
+                    _obligation_edge(
+                        {
+                            "source": "fulfilment_stage_0",
+                            "target": "fulfilment_stage_2",
+                            "required_contract": "returns inference scoring error",
+                        }
+                    ),
+                ],
+            },
+            "wrong number of edges",
+        ),
+        (
+            {
+                "remove_edges": ["edge_1"],
+                "add_edges": [
+                    _obligation_edge(
+                        {
+                            "source": "fulfilment_stage_0",
+                            "target": "fulfilment_stage_1",
+                            "required_contract": "returns scored inference response",
+                        }
+                    ),
+                    _obligation_edge(
+                        {
+                            "source": "fulfilment_stage_0",
+                            "target": "fulfilment_stage_2",
+                            "required_contract": "returns inference scoring error",
+                        }
+                    ),
+                    _obligation_edge(
+                        {
+                            "source": "fulfilment_stage_0",
+                            "target": "fulfilment_stage_3",
+                            "required_contract": "returns degraded inference fallback",
+                        }
+                    ),
+                    _obligation_edge(
+                        {
+                            "source": "fulfilment_stage_1",
+                            "target": "fulfilment_stage_4",
+                            "required_contract": "returns uncited branch",
+                        }
+                    ),
+                ],
+            },
+            "wrong number of edges",
+        ),
+        (
+            {
+                "remove_edges": ["edge_1"],
+                "add_edges": [
+                    _obligation_edge(
+                        {
+                            "source": "fulfilment_stage_0",
+                            "target": "fulfilment_stage_1",
+                            "required_contract": "returns scored inference response",
+                        }
+                    ),
+                    _obligation_edge(
+                        {
+                            "source": "fulfilment_stage_0",
+                            "target": "fulfilment_stage_2",
+                            "required_contract": "returns wrong inference error",
+                        }
+                    ),
+                    _obligation_edge(
+                        {
+                            "source": "fulfilment_stage_0",
+                            "target": "fulfilment_stage_3",
+                            "required_contract": "returns degraded inference fallback",
+                        }
+                    ),
+                ],
+            },
+            "exact connection addition obligations",
+        ),
+    ],
+)
+def test_aggregate_response_split_rejects_incomplete_or_uncited_branches(
+    patch,
+    message,
+):
+    existing, contract, _selector, _obligations = _aggregate_response_split_repair()
+
+    with pytest.raises(ValueError, match=message):
+        graph_worker._apply_applied_graph_patch(
+            existing,
+            patch,
+            safety_max_nodes=12,
+            resolved_complexity="production",
+            repair_contract=contract,
+        )
+
+
+def test_aggregate_response_split_rejects_an_uncited_edge_mutation():
+    existing, contract, _selector, obligations = _aggregate_response_split_repair()
+
+    with pytest.raises(ValueError, match="changed locked edge: edge_2"):
+        graph_worker._apply_applied_graph_patch(
+            existing,
+            {
+                "remove_edges": ["edge_1"],
+                "add_edges": [
+                    _obligation_edge(obligation) for obligation in obligations
+                ],
+                "update_edges": [
+                    {
+                        "edge_id": "edge_2",
+                        "set": {"description": "Changes an uncited record."},
+                    }
+                ],
+            },
+            safety_max_nodes=12,
+            resolved_complexity="production",
+            repair_contract=contract,
+        )
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {},
+        {"update_edges": [{"edge_id": "edge_1", "set": {"label": "wrong label"}}]},
+    ],
+)
+def test_existing_edge_update_requires_its_exact_declared_label(patch):
+    existing = _domain_graph(5)
+    selector = {
+        field: existing["edges"][0][field] for field in ("source", "target", "label")
+    }
+    contract = _local_repair_contract(
+        failed_layers={
+            "connections": {
+                "edge_selectors": [selector],
+                "existing_edge_operations": [
+                    {
+                        "kind": "update",
+                        "edge_selector": selector,
+                        "set": {"label": "returns verified parcel state"},
+                        "replacement_obligations": [],
+                    }
+                ],
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="exact existing edge operation: edge_1"):
+        graph_worker._apply_applied_graph_patch(
+            existing,
+            patch,
+            safety_max_nodes=7,
+            resolved_complexity="prototype",
+            repair_contract=contract,
+        )
+
+
+def test_existing_edge_update_applies_its_exact_declared_label():
+    existing = _domain_graph(5)
+    selector = {
+        field: existing["edges"][0][field] for field in ("source", "target", "label")
+    }
+    contract = _local_repair_contract(
+        failed_layers={
+            "connections": {
+                "edge_selectors": [selector],
+                "existing_edge_operations": [
+                    {
+                        "kind": "update",
+                        "edge_selector": selector,
+                        "set": {"label": "returns verified parcel state"},
+                        "replacement_obligations": [],
+                    }
+                ],
+            }
+        }
+    )
+
+    updated = graph_worker._apply_applied_graph_patch(
+        existing,
+        {
+            "update_edges": [
+                {
+                    "edge_id": "edge_1",
+                    "set": {"label": "returns verified parcel state"},
+                }
+            ]
+        },
+        safety_max_nodes=7,
+        resolved_complexity="prototype",
+        repair_contract=contract,
+    )
+
+    assert updated["edges"][0]["label"] == "returns verified parcel state"
 
 
 def test_critic_added_edge_label_matches_the_normalized_exact_obligation():
@@ -1635,11 +1965,124 @@ def test_exact_contract_can_update_every_cited_node_in_small_graph():
     )
 
 
+def test_exact_node_operation_requires_its_complete_update():
+    existing = _domain_graph(3)
+    contract = _local_repair_contract(
+        failed_layers={
+            "components": {
+                "node_ids": ["fulfilment_stage_0"],
+                "existing_node_operations": [
+                    {
+                        "kind": "update",
+                        "node_id": "fulfilment_stage_0",
+                        "set": {
+                            "label": "Validated intake",
+                            "description": "Owns validated request intake.",
+                        },
+                    }
+                ],
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="exact existing node operation"):
+        graph_worker._apply_applied_graph_patch(
+            existing,
+            {
+                "update_nodes": [
+                    {
+                        "id": "fulfilment_stage_0",
+                        "set": {"label": "Validated intake"},
+                    }
+                ]
+            },
+            safety_max_nodes=7,
+            resolved_complexity="prototype",
+            repair_contract=contract,
+        )
+
+    updated = graph_worker._apply_applied_graph_patch(
+        existing,
+        {
+            "update_nodes": [
+                {
+                    "id": "fulfilment_stage_0",
+                    "set": {
+                        "label": "Validated intake",
+                        "description": "Owns validated request intake.",
+                    },
+                }
+            ]
+        },
+        safety_max_nodes=7,
+        resolved_complexity="prototype",
+        repair_contract=contract,
+    )
+
+    assert updated["nodes"][0]["label"] == "Validated intake"
+
+
+def test_contract_rejects_uncited_or_noncanonical_node_operations():
+    graph = _domain_graph(3)
+    contract = _local_repair_contract(
+        failed_layers={
+            "components": {
+                "node_ids": ["fulfilment_stage_0"],
+                "existing_node_operations": [
+                    {
+                        "kind": "update",
+                        "node_id": "fulfilment_stage_1",
+                        "set": {"label": "Uncited component"},
+                    }
+                ],
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="matching component node selectors"):
+        validate_local_repair_admission(contract, graph=graph)
+
+    contract["layers"]["components"]["existing_node_operations"] = [
+        {
+            "kind": "update",
+            "node_id": "fulfilment_stage_0",
+            "set": {"label": " Unnormalized intake"},
+        }
+    ]
+    with pytest.raises(ValueError, match="set is invalid"):
+        validate_local_repair_admission(contract, graph=graph)
+
+
+def test_user_node_removal_keeps_scoped_removal_authority():
+    graph = _domain_graph(5)
+    graph["nodes"][1]["label"] = "Cache Link"
+
+    contract, permissions = graph_worker._user_edit_scope(
+        "Remove Cache Link",
+        graph,
+        resolved_complexity="prototype",
+    )
+
+    assert contract["layers"]["components"]["existing_node_operations"] == []
+    assert permissions["removable_node_ids"] == ["fulfilment_stage_1"]
+
+
 def test_repair_contract_rejects_out_of_scope_node_mutation_before_normalization():
     existing = _domain_graph(5)
     before = copy.deepcopy(existing)
     contract = _local_repair_contract(
-        failed_layers={"components": {"node_ids": ["fulfilment_stage_0"]}}
+        failed_layers={
+            "components": {
+                "node_ids": ["fulfilment_stage_0"],
+                "existing_node_operations": [
+                    {
+                        "kind": "update",
+                        "node_id": "fulfilment_stage_0",
+                        "set": {"label": "Repaired intake"},
+                    }
+                ],
+            }
+        }
     )
 
     with pytest.raises(ValueError, match="changed locked node"):
@@ -2134,9 +2577,33 @@ def test_group_move_requires_both_source_and_destination_permissions():
             "graph patch changed locked edge fields: source",
             ("patch.update_edges", "unauthorized_field_change"),
         ),
+        (
+            "graph patch did not apply the exact existing node operation",
+            ("patch.node_operations", "node_operation_mismatch"),
+        ),
+        (
+            "normalization changed locked composition field: title",
+            ("composition.title", "locked_record_changed"),
+        ),
+        (
+            "normalization changed locked composition field: sequence",
+            ("composition.sequence", "locked_record_changed"),
+        ),
+        (
+            "normalization changed locked composition field: assumptions",
+            ("composition.assumptions", "locked_record_changed"),
+        ),
+        (
+            "normalization changed locked composition field: groups",
+            ("composition.groups", "locked_record_changed"),
+        ),
+        (
+            "normalization changed locked render view state",
+            ("render.view_state", "locked_record_changed"),
+        ),
     ],
 )
-def test_patch_validation_coordinates_cover_exact_edge_contract_failures(
+def test_patch_validation_coordinates_cover_contract_failures(
     message,
     expected,
 ):
@@ -2149,7 +2616,18 @@ async def test_contract_corrected_patch_prompt_cannot_repeat_the_invalid_prompt(
 ):
     existing = _domain_graph(4)
     contract = _local_repair_contract(
-        failed_layers={"components": {"node_ids": ["fulfilment_stage_0"]}}
+        failed_layers={
+            "components": {
+                "node_ids": ["fulfilment_stage_0"],
+                "existing_node_operations": [
+                    {
+                        "kind": "update",
+                        "node_id": "fulfilment_stage_0",
+                        "set": {"label": "Repaired intake"},
+                    }
+                ],
+            }
+        }
     )
     prompts = []
 
@@ -4106,7 +4584,20 @@ async def test_first_unpublished_critic_revision_uses_incremental_patch_lane(
             "graph_review": {
                 "approved": False,
                 "repair_contract": _local_repair_contract(
-                    failed_layers={"components": {"node_ids": [target_id]}}
+                    failed_layers={
+                        "components": {
+                            "node_ids": [target_id],
+                            "existing_node_operations": [
+                                {
+                                    "kind": "update",
+                                    "node_id": target_id,
+                                    "set": {
+                                        "description": "Validates the request before the existing handoff."
+                                    },
+                                }
+                            ],
+                        }
+                    }
                 ),
             },
             "send": None,
@@ -4390,7 +4881,16 @@ async def test_invalid_patch_preserves_approved_graph_without_duplicate_model_ca
                     "approved": False,
                     "repair_contract": _local_repair_contract(
                         failed_layers={
-                            "components": {"node_ids": ["fulfilment_stage_2"]},
+                            "components": {
+                                "node_ids": ["fulfilment_stage_2"],
+                                "existing_node_operations": [
+                                    {
+                                        "kind": "update",
+                                        "node_id": "fulfilment_stage_2",
+                                        "set": {"label": "Corrected component"},
+                                    }
+                                ],
+                            },
                         }
                     ),
                 },
@@ -4462,7 +4962,16 @@ async def test_invalid_patch_json_provides_contract_correction_coordinates(
                     "approved": False,
                     "repair_contract": _local_repair_contract(
                         failed_layers={
-                            "components": {"node_ids": ["fulfilment_stage_2"]},
+                            "components": {
+                                "node_ids": ["fulfilment_stage_2"],
+                                "existing_node_operations": [
+                                    {
+                                        "kind": "update",
+                                        "node_id": "fulfilment_stage_2",
+                                        "set": {"label": "Corrected component"},
+                                    }
+                                ],
+                            },
                         }
                     ),
                 },
@@ -4511,6 +5020,10 @@ async def test_multi_region_exact_record_repair_preserves_uncited_records(monkey
         }
         for edge in (existing["edges"][0], existing["edges"][8])
     ]
+    replacement_labels = [
+        "carries the corrected intake contract",
+        "carries the corrected outcome contract",
+    ]
     calls = []
 
     async def patch_disconnected_edges(**kwargs):
@@ -4520,15 +5033,11 @@ async def test_multi_region_exact_record_repair_preserves_uncited_records(monkey
                 "update_edges": [
                     {
                         "edge_id": "edge_1",
-                        "set": {
-                            "description": "Carries the corrected intake contract."
-                        },
+                        "set": {"label": replacement_labels[0]},
                     },
                     {
                         "edge_id": "edge_9",
-                        "set": {
-                            "description": "Carries the corrected outcome contract."
-                        },
+                        "set": {"label": replacement_labels[1]},
                     },
                 ]
             }
@@ -4543,7 +5052,24 @@ async def test_multi_region_exact_record_repair_preserves_uncited_records(monkey
             "graph_review": {
                 "approved": False,
                 "repair_contract": _local_repair_contract(
-                    failed_layers={"connections": {"edge_selectors": edge_selectors}}
+                    failed_layers={
+                        "connections": {
+                            "edge_selectors": edge_selectors,
+                            "existing_edge_operations": [
+                                {
+                                    "kind": "update",
+                                    "edge_selector": selector,
+                                    "set": {"label": replacement_label},
+                                    "replacement_obligations": [],
+                                }
+                                for selector, replacement_label in zip(
+                                    edge_selectors,
+                                    replacement_labels,
+                                    strict=True,
+                                )
+                            ],
+                        }
+                    }
                 ),
             },
             "complexity": "prototype",
@@ -4557,17 +5083,113 @@ async def test_multi_region_exact_record_repair_preserves_uncited_records(monkey
 
     assert len(calls) == 1
     assert existing == before
-    assert (
-        updated["edges"][0]["description"] == "Carries the corrected intake contract."
-    )
-    assert (
-        updated["edges"][8]["description"] == "Carries the corrected outcome contract."
-    )
+    assert updated["edges"][0]["label"] == replacement_labels[0]
+    assert updated["edges"][8]["label"] == replacement_labels[1]
     assert updated["edges"][1:8] == before["edges"][1:8]
     assert updated["edges"][9:] == before["edges"][9:]
     assert updated["nodes"] == before["nodes"]
     assert updated["groups"] == before["groups"]
     assert updated["sequence"] == before["sequence"]
+
+
+@pytest.mark.asyncio
+async def test_critic_repair_rejects_bare_edge_selectors_before_model_call(
+    monkeypatch,
+):
+    existing = _domain_graph(5)
+    selected_edge = {
+        field: existing["edges"][0][field] for field in ("source", "target", "label")
+    }
+    calls = []
+
+    async def fail_if_called(**kwargs):
+        calls.append(kwargs)
+        raise AssertionError(
+            "an invalid critic contract must not reach the patch model"
+        )
+
+    monkeypatch.setattr(graph_worker, "stream_llm", fail_if_called)
+
+    with pytest.raises(graph_worker.GraphPatchRejected) as raised:
+        await graph_worker._generate_applied_architecture_patch(
+            {
+                "send": None,
+                "user_message": "Repair the selected connection",
+                "graph_revision_count": 1,
+                "graph_review": {
+                    "approved": False,
+                    "repair_contract": _local_repair_contract(
+                        failed_layers={
+                            "connections": {"edge_selectors": [selected_edge]}
+                        }
+                    ),
+                },
+                "complexity": "prototype",
+                "user_id": "user-1",
+                "session_id": "thread-1",
+            },
+            "Repair the selected connection",
+            SimpleNamespace(resolved="prototype"),
+            existing,
+        )
+
+    assert raised.value.code == "graph_patch_contract_invalid"
+    assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replacement_label", ["x" * 101, "not  normalized"])
+async def test_critic_repair_rejects_noncanonical_exact_edge_labels_before_model_call(
+    monkeypatch,
+    replacement_label,
+):
+    existing = _domain_graph(5)
+    selected_edge = {
+        field: existing["edges"][0][field] for field in ("source", "target", "label")
+    }
+    calls = []
+
+    async def fail_if_called(**kwargs):
+        calls.append(kwargs)
+        raise AssertionError("an invalid exact label must not reach the patch model")
+
+    monkeypatch.setattr(graph_worker, "stream_llm", fail_if_called)
+
+    with pytest.raises(graph_worker.GraphPatchRejected) as raised:
+        await graph_worker._generate_applied_architecture_patch(
+            {
+                "send": None,
+                "user_message": "Repair the selected connection",
+                "graph_revision_count": 1,
+                "graph_review": {
+                    "approved": False,
+                    "repair_contract": _local_repair_contract(
+                        failed_layers={
+                            "connections": {
+                                "edge_selectors": [selected_edge],
+                                "existing_edge_operations": [
+                                    {
+                                        "kind": "update",
+                                        "edge_selector": selected_edge,
+                                        "set": {"label": replacement_label},
+                                        "replacement_obligations": [],
+                                    }
+                                ],
+                            }
+                        }
+                    ),
+                },
+                "complexity": "prototype",
+                "user_id": "user-1",
+                "session_id": "thread-1",
+            },
+            "Repair the selected connection",
+            SimpleNamespace(resolved="prototype"),
+            existing,
+        )
+
+    assert raised.value.code == "graph_patch_contract_invalid"
+    assert calls == []
 
 
 @pytest.mark.asyncio

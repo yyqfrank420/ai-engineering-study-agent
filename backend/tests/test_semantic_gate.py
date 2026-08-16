@@ -10,6 +10,7 @@ from anthropic import (
 import httpx
 import pytest
 
+import eval.live_runner as live_runner
 from eval.calibration import calculate_calibration
 from eval.judge_adapter import (
     DEFAULT_ANTHROPIC_JUDGE_MODEL,
@@ -28,6 +29,7 @@ from eval.live_runner import (
     _assert_approved_judge_identity,
     _classify_deterministic,
     _exit_code_for_statuses,
+    _graph_review_diagnostics_from_events,
     _judge_payload,
     _load_resume_evaluations,
     _write_outputs,
@@ -119,6 +121,186 @@ def test_legacy_deterministic_failure_without_details_uses_text_classification()
 def test_invalid_typed_browser_failure_details_are_rejected():
     with pytest.raises(RuntimeError, match="invalid kind"):
         _classify_deterministic(["provider timed out"], [{"kind": "unknown"}])
+
+
+def test_graph_review_diagnostics_project_only_allowlisted_metadata():
+    fingerprint = "a" * 64
+    events = [
+        {
+            "type": "workflow_progress",
+            "diagnostic": {
+                "schema_version": 1,
+                "repair_round": 1,
+                "critic_call_count": 2,
+                "protocol_correction_count": 0,
+                "contract_correction_count": 1,
+                "depth": "prototype",
+                "locked_layers": ["render"],
+                "reopened_layers": ["composition", "connections"],
+                "finding_codes": ["edge_semantics"],
+                "blocker_ids": ["rubric:connections:edge_semantics"],
+                "selector_fingerprints": [fingerprint],
+                "prior_blocker_dispositions": [
+                    {"prior_obligation_id": "blocker-1", "status": "resolved"}
+                ],
+                "review_disposition": "rejected",
+                "validation_rule": "locked_record_changed",
+                "validation_path_fingerprint": fingerprint,
+                "raw_prompt": "discard this",
+            },
+        },
+        {
+            "type": "workflow_progress",
+            "diagnostic": {
+                "schema_version": 1,
+                "repair_round": 1,
+                "critic_call_count": 2,
+                "protocol_correction_count": 0,
+                "contract_correction_count": 1,
+                "depth": "prototype",
+                "locked_layers": ["render"],
+                "reopened_layers": ["composition", "connections"],
+                "finding_codes": ["edge_semantics"],
+                "blocker_ids": ["rubric:connections:edge_semantics"],
+                "selector_fingerprints": [fingerprint],
+                "prior_blocker_dispositions": [
+                    {"prior_obligation_id": "blocker-1", "status": "resolved"}
+                ],
+                "review_disposition": "rejected",
+                "validation_rule": "locked_record_changed",
+                "validation_path_fingerprint": fingerprint,
+            },
+        },
+    ]
+
+    assert _graph_review_diagnostics_from_events(events) == [
+        {
+            "schema_version": 1,
+            "repair_round": 1,
+            "critic_call_count": 2,
+            "protocol_correction_count": 0,
+            "contract_correction_count": 1,
+            "depth": "prototype",
+            "locked_layers": ["render"],
+            "reopened_layers": ["composition", "connections"],
+            "finding_codes": ["edge_semantics"],
+            "blocker_ids": ["rubric:connections:edge_semantics"],
+            "selector_fingerprints": [fingerprint],
+            "prior_blocker_dispositions": [
+                {"prior_obligation_id": "blocker-1", "status": "resolved"}
+            ],
+            "review_disposition": "rejected",
+            "validation_rule": "locked_record_changed",
+            "validation_path_fingerprint": fingerprint,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_live_evaluation_records_projected_graph_review_diagnostics(monkeypatch):
+    case = load_corpus().cases[0]
+    fingerprint = "b" * 64
+    capture = {
+        "results": [
+            {
+                "id": case.id,
+                "deterministic_failures": ["graph was withheld"],
+                "failure_details": [{"kind": "quality"}],
+                "events": [
+                    {
+                        "type": "workflow_progress",
+                        "diagnostic": {
+                            "schema_version": 1,
+                            "repair_round": 0,
+                            "critic_call_count": 1,
+                            "protocol_correction_count": 0,
+                            "contract_correction_count": 0,
+                            "depth": "prototype",
+                            "locked_layers": [],
+                            "reopened_layers": [
+                                "components",
+                                "connections",
+                                "composition",
+                            ],
+                            "finding_codes": ["edge_semantics"],
+                            "blocker_ids": ["rubric:connections:edge_semantics"],
+                            "selector_fingerprints": [fingerprint],
+                            "prior_blocker_dispositions": [],
+                            "review_disposition": "rejected",
+                        },
+                    }
+                ],
+            }
+        ],
+        "application_telemetry": [{"provider_attempts": 1}],
+    }
+    monkeypatch.setattr(live_runner, "_load_capture", lambda _args: capture)
+    monkeypatch.setattr(
+        live_runner,
+        "_manifest",
+        lambda: {
+            "live": {
+                "budgets": {
+                    "application_calls": 2,
+                    "application_full_calls": 2,
+                    "judge_calls": 2,
+                    "pr_cases": 2,
+                },
+                "cost_policy": {},
+                "suites": {},
+            }
+        },
+    )
+    monkeypatch.setattr(
+        live_runner,
+        "account_application_cost",
+        lambda *_args: {"total": {"estimated_usd": 0}, "price_release": "test"},
+    )
+    monkeypatch.setattr(
+        live_runner,
+        "evaluate_cost_policy",
+        lambda *_args: {
+            "status": "pass",
+            "blocking_status": "pass",
+            "reason": "within budget",
+        },
+    )
+    monkeypatch.setattr(
+        live_runner,
+        "SemanticJudge",
+        lambda: SimpleNamespace(provider="anthropic", model="claude-sonnet-5"),
+    )
+
+    report, exit_code = await evaluate(
+        SimpleNamespace(
+            manual_review_policy="blocking",
+            require_approved_corpus=False,
+            capture_replay=False,
+            suite="diagnostic",
+            case=[case.id],
+            target="https://candidate.example",
+            resume_input=None,
+        )
+    )
+
+    assert exit_code == 1
+    assert report["evaluations"][0]["graph_review_diagnostics"] == [
+        {
+            "schema_version": 1,
+            "repair_round": 0,
+            "critic_call_count": 1,
+            "protocol_correction_count": 0,
+            "contract_correction_count": 0,
+            "depth": "prototype",
+            "locked_layers": [],
+            "reopened_layers": ["components", "composition", "connections"],
+            "finding_codes": ["edge_semantics"],
+            "blocker_ids": ["rubric:connections:edge_semantics"],
+            "selector_fingerprints": [fingerprint],
+            "prior_blocker_dispositions": [],
+            "review_disposition": "rejected",
+        }
+    ]
 
 
 @pytest.mark.asyncio

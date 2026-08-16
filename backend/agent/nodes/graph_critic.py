@@ -72,7 +72,24 @@ class CriticProtocolError(ValueError):
         self.rule = rule if rule in _PROTOCOL_ERROR_RULES else None
 
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v56"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v58"
+_NODE_LABEL_CHARS = 60
+_NODE_TECHNOLOGY_CHARS = 60
+_NODE_DESCRIPTION_CHARS = 220
+_NODE_TYPES = frozenset(
+    {
+        "client",
+        "service",
+        "datastore",
+        "queue",
+        "gateway",
+        "network",
+        "external",
+        "control",
+        "decision",
+    }
+)
+_NODE_OPERATION_FIELDS = frozenset({"label", "type", "technology", "description"})
 # Sonnet 5 high effort can spend the full output allowance on adaptive thinking
 # before emitting the required scorecard. Medium keeps the review inside one call.
 _GRAPH_CRITIC_EFFORT = "medium"
@@ -125,7 +142,7 @@ _MODEL_LAYER_FIELDS = {
         "deterministic_finding_indexes",
         "context_indexes",
         "context_node_indexes",
-        "node_indexes",
+        "node_operations",
         "addition_count",
     ),
     "connections": (
@@ -133,7 +150,7 @@ _MODEL_LAYER_FIELDS = {
         "deterministic_finding_indexes",
         "context_indexes",
         "context_node_indexes",
-        "edge_indexes",
+        "edge_operations",
         "addition_obligations",
     ),
     "composition": (
@@ -351,6 +368,128 @@ def _content_fingerprint(value: Any) -> str:
         value, ensure_ascii=False, separators=(",", ":"), sort_keys=True
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _may_emit_graph_review_diagnostics(state: AgentState) -> bool:
+    email = str(state.get("user_email") or "").strip().lower()
+    return email in settings.internal_test_email_allowlist
+
+
+def _graph_review_diagnostic(
+    *,
+    review: dict[str, Any],
+    review_budget: GraphReviewBudget,
+    resolved_depth: str,
+    repair_round_count: int,
+    locked_layers: set[str],
+    validation_path: str | None,
+    validation_rule: str | None,
+) -> dict[str, Any]:
+    blockers = [
+        blocker
+        for blocker in (review.get("hard_blockers") or [])
+        if isinstance(blocker, dict)
+    ]
+    finding_codes = sorted(
+        {
+            str(blocker["key"]["code"])
+            for blocker in blockers
+            if blocker.get("kind") == "rubric"
+            and isinstance(blocker.get("key"), dict)
+            and isinstance(blocker["key"].get("code"), str)
+        }
+    )
+    diagnostic = {
+        "schema_version": 1,
+        "repair_round": repair_round_count,
+        "critic_call_count": review_budget.critic_calls,
+        "protocol_correction_count": review_budget.protocol_corrections,
+        "contract_correction_count": review_budget.contract_corrections,
+        "depth": resolved_depth,
+        "locked_layers": sorted(locked_layers),
+        "reopened_layers": sorted(
+            {"components", "connections", "composition"} - locked_layers
+        ),
+        "finding_codes": finding_codes,
+        "blocker_ids": sorted(
+            str(blocker["id"])
+            for blocker in blockers
+            if isinstance(blocker.get("id"), str)
+        ),
+        "selector_fingerprints": sorted(
+            str(blocker["repair_fingerprint"])
+            for blocker in blockers
+            if isinstance(blocker.get("repair_fingerprint"), str)
+        ),
+        "prior_blocker_dispositions": deepcopy(
+            review.get("prior_obligation_dispositions") or []
+        ),
+        "review_disposition": (
+            "approved"
+            if review.get("approved")
+            else "unavailable"
+            if review.get("review_status") == "unavailable"
+            else "rejected"
+        ),
+    }
+    if validation_rule:
+        diagnostic["validation_rule"] = validation_rule
+    if validation_path:
+        diagnostic["validation_path_fingerprint"] = _content_fingerprint(
+            validation_path
+        )
+    return diagnostic
+
+
+def record_graph_review_diagnostic(
+    state: AgentState,
+    *,
+    review: dict[str, Any],
+    review_budget: GraphReviewBudget | None = None,
+    validation_path: str | None = None,
+    validation_rule: str | None = None,
+) -> tuple[AgentState, dict[str, Any] | None]:
+    budget = review_budget or GraphReviewBudget(
+        critic_calls=int(state.get("graph_critic_call_count", 0)),
+        protocol_corrections=int(state.get("graph_protocol_correction_count", 0)),
+        contract_corrections=int(state.get("graph_contract_correction_count", 0)),
+    )
+    query = str(state.get("design_query") or state.get("user_message") or "")
+    resolved_depth = resolve_complexity(
+        str(state.get("complexity") or "auto"), query
+    ).resolved
+    graph = state.get("graph_data")
+    locked_layers = (
+        _locked_review_layers(state, graph, resolved_depth=resolved_depth)
+        if isinstance(graph, dict) and graph.get("design_origin") == "applied"
+        else set()
+    )
+    repair_round_count = int(
+        state.get("graph_repair_round_count", state.get("graph_revision_count", 0))
+    )
+    diagnostic = _graph_review_diagnostic(
+        review=review,
+        review_budget=budget,
+        resolved_depth=resolved_depth,
+        repair_round_count=repair_round_count,
+        locked_layers=locked_layers,
+        validation_path=validation_path,
+        validation_rule=validation_rule,
+    )
+    prior_diagnostics = [
+        deepcopy(item)
+        for item in (state.get("graph_review_diagnostics") or [])
+        if isinstance(item, dict)
+    ]
+    recorded_state: AgentState = {
+        **state,
+        **budget.state_counters(),
+        "graph_review_diagnostics": [*prior_diagnostics, diagnostic],
+    }
+    event_diagnostic = (
+        deepcopy(diagnostic) if _may_emit_graph_review_diagnostics(state) else None
+    )
+    return recorded_state, event_diagnostic
 
 
 def _owned_layer_fingerprints(graph: dict[str, Any]) -> dict[str, str]:
@@ -576,9 +715,15 @@ def _deterministic_blocker_rule(finding: dict[str, Any]) -> str:
 
 def _layer_mutation_authority(layer: str, assessment: dict[str, Any]) -> dict[str, Any]:
     fields = {
-        "components": ("node_ids", "context_node_ids", "addition_count"),
+        "components": (
+            "node_ids",
+            "existing_node_operations",
+            "context_node_ids",
+            "addition_count",
+        ),
         "connections": (
             "edge_selectors",
+            "existing_edge_operations",
             "context_node_ids",
             "addition_count",
             "connection_addition_obligations",
@@ -604,7 +749,12 @@ def _layer_mutation_authority(layer: str, assessment: dict[str, Any]) -> dict[st
     ):
         if isinstance(authority.get(field), list):
             authority[field] = sorted(authority[field])
-    for field in ("edge_selectors", "connection_addition_obligations"):
+    for field in (
+        "existing_node_operations",
+        "edge_selectors",
+        "existing_edge_operations",
+        "connection_addition_obligations",
+    ):
         if isinstance(authority.get(field), list):
             authority[field] = sorted(
                 authority[field],
@@ -710,7 +860,11 @@ def _review_packet(
     locked_layers: set[str] | None = None,
 ) -> dict[str, Any]:
     plan = state.get("architect_plan") or {}
-    requirements = plan.get("diagram_requirements") if isinstance(plan, dict) else []
+    requirements = (
+        plan.get("diagram_requirements")
+        if resolved_depth == "production" and isinstance(plan, dict)
+        else []
+    )
     commitments = [item for item in (requirements or []) if isinstance(item, str)]
     review_context = [f"Architect commitment: {item}" for item in commitments]
     report = render_result.get("report")
@@ -841,6 +995,28 @@ def _model_addition_count(value: Any, *, path: str) -> int:
     return value
 
 
+def _model_connection_endpoint(
+    reference: Any,
+    *,
+    path: str,
+    nodes: list[dict[str, Any]],
+    component_addition_count: int,
+) -> str:
+    if isinstance(reference, int) and not isinstance(reference, bool):
+        if 0 <= reference < len(nodes):
+            node_id = str(nodes[reference].get("id") or "")
+            if node_id:
+                return node_id
+        raise ValueError(f"{path} is not a valid node index")
+    if isinstance(reference, str) and re.fullmatch(
+        r"\$new_node_[1-9][0-9]*", reference
+    ):
+        position = int(reference.rsplit("_", 1)[1])
+        if position <= component_addition_count:
+            return reference
+    raise ValueError(f"{path} must identify an existing node or declared new-node slot")
+
+
 def _model_connection_addition_obligations(
     value: Any,
     *,
@@ -852,31 +1028,24 @@ def _model_connection_addition_obligations(
         raise ValueError(f"{path} must be an array of exact connection obligations")
     obligations: list[dict[str, str]] = []
 
-    def endpoint(reference: Any, *, endpoint_path: str) -> str:
-        if isinstance(reference, int) and not isinstance(reference, bool):
-            if 0 <= reference < len(nodes):
-                node_id = str(nodes[reference].get("id") or "")
-                if node_id:
-                    return node_id
-            raise ValueError(f"{endpoint_path} is not a valid node index")
-        if isinstance(reference, str) and re.fullmatch(
-            r"\$new_node_[1-9][0-9]*", reference
-        ):
-            position = int(reference.rsplit("_", 1)[1])
-            if position <= component_addition_count:
-                return reference
-        raise ValueError(
-            f"{endpoint_path} must identify an existing node or declared new-node slot"
-        )
-
     for index, row in enumerate(value):
         obligation_path = f"{path}[{index}]"
         if not isinstance(row, list) or len(row) != 3:
             raise ValueError(
                 f"{obligation_path} must be [source, target, required_contract]"
             )
-        source = endpoint(row[0], endpoint_path=f"{obligation_path}.source")
-        target = endpoint(row[1], endpoint_path=f"{obligation_path}.target")
+        source = _model_connection_endpoint(
+            row[0],
+            path=f"{obligation_path}.source",
+            nodes=nodes,
+            component_addition_count=component_addition_count,
+        )
+        target = _model_connection_endpoint(
+            row[1],
+            path=f"{obligation_path}.target",
+            nodes=nodes,
+            component_addition_count=component_addition_count,
+        )
         required_contract = row[2]
         if source == target:
             raise ValueError(f"{obligation_path} must use distinct endpoints")
@@ -905,6 +1074,164 @@ def _model_connection_addition_obligations(
     if len(keys) != len(set(keys)):
         raise ValueError(f"{path} must not contain duplicates")
     return obligations
+
+
+def _model_existing_edge_operations(
+    value: Any,
+    *,
+    path: str,
+    edges: list[dict[str, Any]],
+    addition_obligations: list[dict[str, str]],
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError(f"{path} must be an array of exact existing-edge operations")
+    operations: list[dict[str, Any]] = []
+    used_edge_indexes: set[int] = set()
+    used_obligation_indexes: set[int] = set()
+    for operation_index, row in enumerate(value):
+        operation_path = f"{path}[{operation_index}]"
+        if not isinstance(row, list) or len(row) < 2:
+            raise ValueError(
+                f"{operation_path} must name an operation and existing edge index"
+            )
+        kind = row[0]
+        edge_index = row[1]
+        if kind not in {"update", "remove", "replace"}:
+            raise ValueError(f"{operation_path}.kind is invalid")
+        if (
+            not isinstance(edge_index, int)
+            or isinstance(edge_index, bool)
+            or not 0 <= edge_index < len(edges)
+        ):
+            raise ValueError(f"{operation_path}.edge_index is invalid")
+        if edge_index in used_edge_indexes:
+            raise ValueError(f"{path} must contain one operation per existing edge")
+        used_edge_indexes.add(edge_index)
+        edge = edges[edge_index]
+        selector = {
+            "source": str(edge.get("source") or ""),
+            "target": str(edge.get("target") or ""),
+            "label": str(edge.get("label") or ""),
+        }
+        changes: dict[str, str] = {}
+        replacements: list[dict[str, str]] = []
+        if kind == "update":
+            if len(row) != 3 or not isinstance(row[2], str):
+                raise ValueError(
+                    f"{operation_path} update must include one exact replacement label"
+                )
+            label = " ".join(row[2].split())
+            if (
+                not label
+                or len(label) > GRAPH_EDGE_LABEL_CHARS
+                or label == selector["label"]
+            ):
+                raise ValueError(f"{operation_path} update label is invalid")
+            changes = {"label": label}
+        elif kind == "remove":
+            if len(row) != 2:
+                raise ValueError(f"{operation_path} remove cannot contain operands")
+        else:
+            if len(row) < 3 or any(
+                not isinstance(index, int)
+                or isinstance(index, bool)
+                or not 0 <= index < len(addition_obligations)
+                for index in row[2:]
+            ):
+                raise ValueError(
+                    f"{operation_path} replace must reference exact addition obligations"
+                )
+            obligation_indexes = row[2:]
+            if len(obligation_indexes) != len(set(obligation_indexes)):
+                raise ValueError(
+                    f"{operation_path} replacement references must not contain duplicates"
+                )
+            reused = set(obligation_indexes).intersection(used_obligation_indexes)
+            if reused:
+                raise ValueError(
+                    f"{path} replacement obligations must have one existing-edge owner"
+                )
+            used_obligation_indexes.update(obligation_indexes)
+            replacements = [
+                deepcopy(addition_obligations[index]) for index in obligation_indexes
+            ]
+        operations.append(
+            {
+                "kind": kind,
+                "edge_selector": selector,
+                "set": changes,
+                "replacement_obligations": replacements,
+            }
+        )
+    return operations
+
+
+def _model_existing_node_operations(
+    value: Any,
+    *,
+    path: str,
+    nodes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError(f"{path} must be an array of exact existing-node operations")
+    operations: list[dict[str, Any]] = []
+    used_node_indexes: set[int] = set()
+    for operation_index, row in enumerate(value):
+        operation_path = f"{path}[{operation_index}]"
+        if not isinstance(row, list) or len(row) < 3 or row[0] != "update":
+            raise ValueError(
+                f"{operation_path} must update one existing node with exact field values"
+            )
+        node_index = row[1]
+        if (
+            not isinstance(node_index, int)
+            or isinstance(node_index, bool)
+            or not 0 <= node_index < len(nodes)
+        ):
+            raise ValueError(f"{operation_path}.node_index is invalid")
+        if node_index in used_node_indexes:
+            raise ValueError(f"{path} must contain one operation per existing node")
+        used_node_indexes.add(node_index)
+        node = nodes[node_index]
+        changes: dict[str, str] = {}
+        for field_index, field_row in enumerate(row[2:], start=2):
+            if (
+                not isinstance(field_row, list)
+                or len(field_row) != 2
+                or not isinstance(field_row[0], str)
+                or field_row[0] not in _NODE_OPERATION_FIELDS
+                or not isinstance(field_row[1], str)
+            ):
+                raise ValueError(
+                    f"{operation_path}[{field_index}] must contain an allowed field and value"
+                )
+            field, value = field_row
+            if field in changes:
+                raise ValueError(f"{operation_path} must not repeat a field")
+            normalized = " ".join(value.split())
+            limit = {
+                "label": _NODE_LABEL_CHARS,
+                "technology": _NODE_TECHNOLOGY_CHARS,
+                "description": _NODE_DESCRIPTION_CHARS,
+            }.get(field)
+            if (
+                not normalized
+                or value != normalized
+                or (limit is not None and len(value) > limit)
+                or (field == "type" and value not in _NODE_TYPES)
+                or (field == "technology" and value.lower().startswith("book "))
+                or node.get(field) == value
+            ):
+                raise ValueError(f"{operation_path}.{field} is invalid")
+            changes[field] = value
+        operations.append(
+            {
+                "kind": "update",
+                "node_id": str(node.get("id") or ""),
+                "set": changes,
+            }
+        )
+    return operations
 
 
 def _preflight_review_protocol(
@@ -936,8 +1263,6 @@ def _preflight_review_protocol(
         "deterministic_finding_indexes": len(deterministic_findings),
         "context_indexes": len(review_context),
         "context_node_indexes": len(graph.get("nodes") or []),
-        "node_indexes": len(graph.get("nodes") or []),
-        "edge_indexes": len(graph.get("edges") or []),
         "group_indexes": len(graph.get("groups") or []),
         "sequence_indexes": len(graph.get("sequence") or []),
         "assumption_indexes": len(graph.get("assumptions") or []),
@@ -946,6 +1271,8 @@ def _preflight_review_protocol(
     deterministic_owners = _deterministic_finding_owners(deterministic_findings)
     component_addition_count = 0
     connection_addition_obligation_count = 0
+    connection_edge_operation_indexes: set[int] = set()
+    component_node_operation_indexes: set[int] = set()
     component_has_hard_blocker = False
     connection_has_hard_blocker = False
     composition_fields: list[str] = []
@@ -1023,6 +1350,7 @@ def _preflight_review_protocol(
                 component_addition_count = value
             elif layer == "composition" and field == "group_addition_count":
                 composition_group_addition_count = value
+        obligations: list[dict[str, str]] = []
         if "addition_obligations" in assessment:
             try:
                 obligations = _model_connection_addition_obligations(
@@ -1040,6 +1368,47 @@ def _preflight_review_protocol(
                 reject(f"{row_path}.addition_obligations", "invalid_contract")
             else:
                 connection_addition_obligation_count = len(obligations)
+        if "edge_operations" in assessment:
+            try:
+                operations = _model_existing_edge_operations(
+                    assessment["edge_operations"],
+                    path=f"{row_path}.edge_operations",
+                    edges=graph.get("edges") or [],
+                    addition_obligations=obligations,
+                )
+            except ValueError:
+                reject(f"{row_path}.edge_operations", "invalid_contract")
+            else:
+                connection_edge_operation_indexes = {
+                    next(
+                        index
+                        for index, edge in enumerate(graph.get("edges") or [])
+                        if all(
+                            str(edge.get(field) or "")
+                            == operation["edge_selector"][field]
+                            for field in ("source", "target", "label")
+                        )
+                    )
+                    for operation in operations
+                }
+        if "node_operations" in assessment:
+            try:
+                operations = _model_existing_node_operations(
+                    assessment["node_operations"],
+                    path=f"{row_path}.node_operations",
+                    nodes=graph.get("nodes") or [],
+                )
+            except ValueError:
+                reject(f"{row_path}.node_operations", "invalid_contract")
+            else:
+                component_node_operation_indexes = {
+                    next(
+                        index
+                        for index, node in enumerate(graph.get("nodes") or [])
+                        if str(node.get("id") or "") == operation["node_id"]
+                    )
+                    for operation in operations
+                }
         if "composition_fields" in assessment:
             value = assessment["composition_fields"]
             if not isinstance(value, list) or not all(
@@ -1085,12 +1454,13 @@ def _preflight_review_protocol(
             reject(row_path, "unexpected_context")
         if not has_blocker:
             permission_fields = {
-                "node_indexes",
+                "node_operations",
                 "edge_indexes",
                 "group_indexes",
                 "sequence_indexes",
                 "assumption_indexes",
                 "composition_fields",
+                "edge_operations",
                 "addition_obligations",
             }
             has_permission = any(
@@ -1110,14 +1480,14 @@ def _preflight_review_protocol(
         if (
             layer == "components"
             and has_hard_blocker
-            and not valid_indexes.get("node_indexes")
+            and not component_node_operation_indexes
             and component_addition_count == 0
         ):
             reject(row_path, "missing_evidence")
         if (
             layer == "connections"
             and has_hard_blocker
-            and not valid_indexes.get("edge_indexes")
+            and not connection_edge_operation_indexes
             and connection_addition_obligation_count == 0
         ):
             reject(row_path, "missing_evidence")
@@ -1198,6 +1568,8 @@ def _preflight_review_protocol(
             except ValueError:
                 reject(f"{path}.repair_edge_indexes", "invalid_reference")
                 repair_edge_indexes = []
+            if not set(repair_edge_indexes).issubset(connection_edge_operation_indexes):
+                reject(f"{path}.repair_edge_indexes", "missing_evidence")
             if normalized_status == "pass":
                 evidence_edges = [
                     (
@@ -1503,6 +1875,8 @@ def _canonicalise_review_protocol(
     classified_deterministic_indexes: list[int] = []
     component_addition_count = 0
     connection_addition_obligations: list[dict[str, str]] = []
+    existing_node_operations: list[dict[str, Any]] = []
+    existing_edge_operations: list[dict[str, Any]] = []
     for layer in _REPAIR_LAYERS:
         row = model_layers.get(layer)
         fields = _MODEL_LAYER_FIELDS[layer]
@@ -1642,6 +2016,8 @@ def _canonicalise_review_protocol(
             ],
             "addition_count": 0,
             "connection_addition_obligations": [],
+            "existing_node_operations": [],
+            "existing_edge_operations": [],
             "composition_append_counts": {},
             "reason": (
                 "The artifact layer passed the rubric."
@@ -1650,13 +2026,14 @@ def _canonicalise_review_protocol(
             ),
         }
         if layer == "components":
-            indexes = _unique_model_indexes(
-                assessment.get("node_indexes"),
-                path="layers.components.node_indexes",
-                size=len(nodes),
+            existing_node_operations = _model_existing_node_operations(
+                assessment.get("node_operations"),
+                path="layers.components.node_operations",
+                nodes=nodes,
             )
+            canonical["existing_node_operations"] = existing_node_operations
             canonical["node_ids"] = [
-                str(nodes[index].get("id") or "") for index in indexes
+                operation["node_id"] for operation in existing_node_operations
             ]
             canonical["addition_count"] = _model_addition_count(
                 assessment.get("addition_count"),
@@ -1664,19 +2041,6 @@ def _canonicalise_review_protocol(
             )
             component_addition_count = canonical["addition_count"]
         elif layer == "connections":
-            indexes = _unique_model_indexes(
-                assessment.get("edge_indexes"),
-                path="layers.connections.edge_indexes",
-                size=len(edges),
-            )
-            canonical["edge_selectors"] = [
-                {
-                    "source": str(edges[index].get("source") or ""),
-                    "target": str(edges[index].get("target") or ""),
-                    "label": str(edges[index].get("label") or ""),
-                }
-                for index in indexes
-            ]
             connection_addition_obligations = _model_connection_addition_obligations(
                 assessment.get("addition_obligations"),
                 path="layers.connections.addition_obligations",
@@ -1686,6 +2050,17 @@ def _canonicalise_review_protocol(
             canonical["connection_addition_obligations"] = deepcopy(
                 connection_addition_obligations
             )
+            existing_edge_operations = _model_existing_edge_operations(
+                assessment.get("edge_operations"),
+                path="layers.connections.edge_operations",
+                edges=edges,
+                addition_obligations=connection_addition_obligations,
+            )
+            canonical["existing_edge_operations"] = existing_edge_operations
+            canonical["edge_selectors"] = [
+                deepcopy(operation["edge_selector"])
+                for operation in existing_edge_operations
+            ]
             canonical["addition_count"] = len(connection_addition_obligations)
             canonical["context_node_ids"] = list(
                 dict.fromkeys(
@@ -1877,6 +2252,8 @@ def _canonicalise_review_protocol(
                     "context_node_ids": [],
                     "addition_count": 0,
                     "connection_addition_obligations": [],
+                    "existing_node_operations": [],
+                    "existing_edge_operations": [],
                     "composition_append_counts": {},
                 }
             )
@@ -2013,29 +2390,26 @@ def _canonicalise_review_protocol(
             canonical_layers["connections"]["blocking_findings"].append(
                 _topology_proof_finding(guarantee)
             )
-            repair_edge_selectors = [
-                {
-                    "source": str(edges[index].get("source") or ""),
-                    "target": str(edges[index].get("target") or ""),
-                    "label": str(edges[index].get("label") or ""),
-                }
-                for index in repair_edge_indexes
+            repair_edge_operations = [
+                deepcopy(operation)
+                for operation in existing_edge_operations
+                if any(
+                    all(
+                        str(edges[index].get(field) or "")
+                        == operation["edge_selector"][field]
+                        for field in ("source", "target", "label")
+                    )
+                    for index in repair_edge_indexes
+                )
             ]
-            canonical_layers["connections"]["edge_selectors"] = list(
-                {
-                    (
-                        selector["source"],
-                        selector["target"],
-                        selector["label"],
-                    ): selector
-                    for selector in [
-                        *canonical_layers["connections"]["edge_selectors"],
-                        *repair_edge_selectors,
-                    ]
-                }.values()
-            )
+            if len(repair_edge_operations) != len(repair_edge_indexes):
+                raise CriticProtocolError(
+                    f"topology_proofs.{guarantee} repair edges require exact operations",
+                    path=f"topology_proofs.{guarantee}.repair_edge_indexes",
+                    rule="missing_evidence",
+                )
         else:
-            repair_edge_selectors = []
+            repair_edge_operations = []
         canonical_proofs.append(
             {
                 "guarantee": guarantee,
@@ -2059,7 +2433,7 @@ def _canonicalise_review_protocol(
                     deepcopy(connection_addition_obligations[index])
                     for index in repair_obligation_indexes
                 ],
-                "repair_edge_selectors": repair_edge_selectors,
+                "repair_edge_operations": repair_edge_operations,
                 "reason": (
                     _topology_proof_finding(guarantee)
                     if status == "fail"
@@ -2284,12 +2658,12 @@ descriptions are expected.
 Review the architecture artifact only: prose answers, suggested follow-up questions, and other
 interaction elements are delivered downstream and do not belong in the diagram.
 
-For an existing record defect, cite only the zero-based record indexes that may change. Use
-`node_indexes` only in components, `edge_indexes` only in connections, and `group_indexes`,
+For an existing record defect, cite only the zero-based record indexes that must change. Use
+`node_operations` only in components, `edge_operations` only in connections, and `group_indexes`,
 `sequence_indexes`, `assumption_indexes`, plus `composition_fields` only in composition. A missing
 node uses a positive component `addition_count`. A missing edge uses a nonempty connection
 `addition_obligations` array. A blocking components or connections row with neither an existing
-record selector nor an exact addition is invalid.
+record operation nor an exact addition is invalid.
 Moving a node between groups changes two existing records. Cite both the source and destination
 group indexes. A destination-only group selector is an invalid permission contract.
 Use `context_indexes` for exact items in the packet's `review_context` and
@@ -2318,6 +2692,19 @@ count from this list and grants only these exact source, target, and label tripl
 `required_contract` is the normalized label for that added edge and must be at most 100 characters.
 Phrase it as one concise, visible directed contract. The mandatory post-patch full-graph review
 verifies the completed repair.
+Every existing component repair uses one exact `node_operations` row. Use
+`["update",node_index,[field,value],...]`, where each field is exactly one of `label`, `type`,
+`technology`, or `description`. Each value must already be normalized, stay within the graph field
+limit, and differ from the current value. A node has at most one operation. Node deletion is not a
+critic repair operation.
+Every existing connection repair uses one exact `edge_operations` row. Use
+`["update",edge_index,"required replacement label"]` for an exact label update,
+`["remove",edge_index]` for deletion, or
+`["replace",edge_index,addition_obligation_index,...]` to remove the old edge and add every cited
+exact obligation. A split is one replace operation with several obligation indexes. Each existing
+edge has at most one operation. Each replacement obligation belongs to at most one operation.
+The server requires the declared update, removal, or complete replacement set; the row is not
+optional edit permission.
 For a candidate with two existing nodes, `[0,1,"returns the approved outcome"]` adds an
 existing-to-existing edge with that exact label.
 `[0,"$new_node_1","routes the rejected request"]` connects the first existing node to the first added
@@ -2352,9 +2739,10 @@ Return one JSON object and nothing else:
 Layer row fields, in order:
 <layer_field_legend>
 Finding codes are 1-based. Every index contains a zero-based position. Keep every row at its exact
-documented length. Nonempty connections example: `[[14],[],[],[0,1],[],[[0,1,"returns the
-observable outcome"]]]`. Its six values are finding codes, deterministic finding indexes, context
-indexes, context node indexes, existing edge indexes, and exact connection addition obligations.
+documented length. Nonempty connections example: `[[14],[],[],[0,1],
+[["replace",7,0,1]],[[0,1,"returns success"],[0,1,"returns failure"]]]`. Its six values are finding
+codes, deterministic finding indexes, context indexes, context node indexes, exact existing-edge
+operations, and exact connection addition obligations.
 Use the numbered rubric code matching checklist items 1 through 27: <rubric_codebook>.
 <topology_review_contract>
 </output_contract>"""
@@ -2428,7 +2816,7 @@ subgraph. Every cited edge must participate in at least one claimed route. A sam
 nonempty directed cycle. Passing proofs require edges and route pairs. Failed and not-applicable
 proofs use empty evidence arrays. Passing and not-applicable proofs use no repair references. A
 failed proof cites one or more exact repair paths using connection addition obligations or existing
-edge indexes. Existing-edge repair indexes are projected into the connections repair selectors.
+edge indexes. Every cited existing edge must also have an exact connections `edge_operations` row.
 A passing proof cites the complete actual witness subgraph. Use
 not_applicable only when that entire class of flow is absent. A failed proof also requires finding
 code 17 in connections. Finish all five proofs and trace every normal and alternate branch to its
@@ -2615,11 +3003,22 @@ def _contract_correction_layer(
     path = contract_correction.get("path")
     if not isinstance(path, str):
         return None
-    if path.startswith("nodes."):
+    if path.startswith(("nodes.", "patch.node_operations")):
         return "components"
-    if path.startswith(("edges.", "patch.add_edges", "patch.update_edges")):
+    if path.startswith(
+        ("edges.", "patch.add_edges", "patch.update_edges", "patch.edge_operations")
+    ):
         return "connections"
-    if path.startswith(("groups.", "sequence.", "assumptions.")):
+    if path.startswith(
+        (
+            "groups",
+            "sequence",
+            "assumptions",
+            "composition",
+            "title",
+            "render.view_state",
+        )
+    ):
         return "composition"
     return None
 
@@ -2859,16 +3258,21 @@ async def graph_render_gate_node(state: AgentState) -> AgentState:
             failure_code=failure_code,
             reason="The private browser render did not complete.",
         )
-        await state["send"](
-            {
-                "type": "workflow_progress",
-                "phase": "review",
-                "status": "rejected",
-                "failure_code": failure_code,
-                "title": "Private render did not complete",
-                "detail": "The diagram will stay unpublished until browser rendering and visual QA complete.",
-            }
+        state, event_diagnostic = record_graph_review_diagnostic(
+            state,
+            review=review,
         )
+        progress_event: dict[str, Any] = {
+            "type": "workflow_progress",
+            "phase": "review",
+            "status": "rejected",
+            "failure_code": failure_code,
+            "title": "Private render did not complete",
+            "detail": "The diagram will stay unpublished until browser rendering and visual QA complete.",
+        }
+        if event_diagnostic is not None:
+            progress_event["diagnostic"] = event_diagnostic
+        await state["send"](progress_event)
         return {
             **_reviewed_state(state, graph=graph, review=review),
             "graph_render_admitted": False,
@@ -2881,16 +3285,21 @@ async def graph_render_gate_node(state: AgentState) -> AgentState:
             "review_status": "completed",
             "topology_proofs": [],
         }
-        await state["send"](
-            {
-                "type": "workflow_progress",
-                "phase": "render",
-                "status": "rejected",
-                "failure_code": review.get("failure_code"),
-                "title": "Private browser rendering failed",
-                "detail": "The candidate did not meet the deterministic layout contract.",
-            }
+        state, event_diagnostic = record_graph_review_diagnostic(
+            state,
+            review=review,
         )
+        progress_event: dict[str, Any] = {
+            "type": "workflow_progress",
+            "phase": "render",
+            "status": "rejected",
+            "failure_code": review.get("failure_code"),
+            "title": "Private browser rendering failed",
+            "detail": "The candidate did not meet the deterministic layout contract.",
+        }
+        if event_diagnostic is not None:
+            progress_event["diagnostic"] = event_diagnostic
+        await state["send"](progress_event)
         return {
             **_reviewed_state(state, graph=graph, review=review),
             "graph_render_admitted": False,
@@ -2920,6 +3329,21 @@ async def graph_render_gate_node(state: AgentState) -> AgentState:
             failure_code="graph_preview_timeout",
             reason="The reversible preview did not reach the transport deadline.",
         )
+        state, event_diagnostic = record_graph_review_diagnostic(
+            state,
+            review=review,
+        )
+        progress_event: dict[str, Any] = {
+            "type": "workflow_progress",
+            "phase": "review",
+            "status": "rejected",
+            "failure_code": "graph_preview_timeout",
+            "title": "Diagram preview did not complete",
+            "detail": "The candidate will stay unpublished because its preview missed the transport deadline.",
+        }
+        if event_diagnostic is not None:
+            progress_event["diagnostic"] = event_diagnostic
+        await state["send"](progress_event)
         return {
             **_reviewed_state(state, graph=graph, review=review),
             "graph_render_admitted": False,
@@ -3073,16 +3497,22 @@ async def graph_critic_node(
             failure_code=failure_code,
             reason="The private browser render did not complete.",
         )
-        await state["send"](
-            {
-                "type": "workflow_progress",
-                "phase": "review",
-                "status": "rejected",
-                "failure_code": failure_code,
-                "title": "Private render did not complete",
-                "detail": "The diagram will stay unpublished until browser rendering and visual QA complete.",
-            }
+        state, event_diagnostic = record_graph_review_diagnostic(
+            state,
+            review=review,
+            review_budget=review_budget,
         )
+        progress_event: dict[str, Any] = {
+            "type": "workflow_progress",
+            "phase": "review",
+            "status": "rejected",
+            "failure_code": failure_code,
+            "title": "Private render did not complete",
+            "detail": "The diagram will stay unpublished until browser rendering and visual QA complete.",
+        }
+        if event_diagnostic is not None:
+            progress_event["diagnostic"] = event_diagnostic
+        await state["send"](progress_event)
         return _reviewed_state(state, graph=graph, review=review)
     render_approved = bool(render_result) and _deterministic_render_review(
         graph, render_result
@@ -3323,6 +3753,15 @@ async def graph_critic_node(
                 "validation_rule": error_rule,
             }
         )
+    state, event_diagnostic = record_graph_review_diagnostic(
+        state,
+        review=review,
+        review_budget=review_budget,
+        validation_path=error_path,
+        validation_rule=error_rule,
+    )
+    if event_diagnostic is not None:
+        progress_event["diagnostic"] = event_diagnostic
     await state["send"](progress_event)
     reviewed_state = _reviewed_state(
         {**state, **review_budget.state_counters()},
@@ -3621,7 +4060,7 @@ def _validate_review_protocol(
                 }
                 optional_repair_fields = {
                     "repair_obligations",
-                    "repair_edge_selectors",
+                    "repair_edge_operations",
                 }
                 if not required_proof_fields.issubset(proof) or (
                     set(proof) - required_proof_fields - optional_repair_fields
@@ -3749,31 +4188,25 @@ def _validate_review_protocol(
                     failures.append(
                         f"topology_proofs[{index}].repair_obligations must reference declared connection additions"
                     )
-                repair_edge_selectors = proof.get("repair_edge_selectors", [])
-                if not isinstance(repair_edge_selectors, list) or not all(
-                    isinstance(selector, dict)
-                    and set(selector) == {"source", "target", "label"}
-                    and all(
-                        isinstance(selector.get(field), str) and selector[field].strip()
-                        for field in ("source", "target", "label")
-                    )
-                    for selector in repair_edge_selectors
+                repair_edge_operations = proof.get("repair_edge_operations", [])
+                if not isinstance(repair_edge_operations, list) or not all(
+                    isinstance(operation, dict) for operation in repair_edge_operations
                 ):
                     failures.append(
-                        f"topology_proofs[{index}].repair_edge_selectors must contain exact existing edges"
+                        f"topology_proofs[{index}].repair_edge_operations must contain exact existing-edge operations"
                     )
-                    repair_edge_selectors = []
-                connection_edge_selectors = (
+                    repair_edge_operations = []
+                connection_edge_operations = (
                     ((payload.get("repair_contract") or {}).get("layers") or {})
                     .get("connections", {})
-                    .get("edge_selectors", [])
+                    .get("existing_edge_operations", [])
                 )
                 if any(
-                    selector not in connection_edge_selectors
-                    for selector in repair_edge_selectors
+                    operation not in connection_edge_operations
+                    for operation in repair_edge_operations
                 ):
                     failures.append(
-                        f"topology_proofs[{index}].repair_edge_selectors must reference declared connection edge repairs"
+                        f"topology_proofs[{index}].repair_edge_operations must reference declared existing-edge operations"
                     )
                 if (
                     status == "pass"
@@ -3800,13 +4233,13 @@ def _validate_review_protocol(
                 if (
                     status == "fail"
                     and not repair_obligations
-                    and not repair_edge_selectors
+                    and not repair_edge_operations
                 ):
                     failures.append(
                         f"topology_proofs[{index}] fail requires an exact repair path"
                     )
                 if status in {"pass", "not_applicable"} and (
-                    repair_obligations or repair_edge_selectors
+                    repair_obligations or repair_edge_operations
                 ):
                     failures.append(
                         f"topology_proofs[{index}] {status} cannot cite repair references"

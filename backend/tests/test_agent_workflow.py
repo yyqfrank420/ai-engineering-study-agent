@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 import pytest
@@ -136,13 +137,13 @@ def test_failed_review_gets_two_semantic_repair_rounds():
         _route_after_revision(
             {**failed, "graph_repair_round_count": 1, "graph_changed": True}
         )
-        == "review"
+        == "render"
     )
     assert (
         _route_after_revision(
             {**failed, "graph_repair_round_count": 2, "graph_changed": True}
         )
-        == "review"
+        == "render"
     )
     assert (
         _route_after_revision(
@@ -242,6 +243,274 @@ def test_repair_round_and_contract_correction_counters_are_separate():
         )
         == "reject"
     )
+
+
+def test_route_after_render_selects_initial_parallel_review_for_prototype():
+    from agent.graph import _route_after_render
+
+    assert (
+        _route_after_render(
+            {
+                "graph_render_admitted": True,
+                "complexity": "prototype",
+                "graph_revision_count": 0,
+            }
+        )
+        == "parallel_initial_review"
+    )
+    assert (
+        _route_after_render(
+            {
+                "graph_render_admitted": True,
+                "complexity": "low",
+                "graph_revision_count": 0,
+            }
+        )
+        == "architect"
+    )
+    assert (
+        _route_after_render(
+            {
+                "graph_render_admitted": True,
+                "complexity": "auto",
+                "user_message": (
+                    "Explain retrieval-augmented generation and draw the runtime flow."
+                ),
+                "graph_revision_count": 0,
+            }
+        )
+        == "parallel_initial_review"
+    )
+    assert (
+        _route_after_render(
+            {
+                "graph_render_admitted": True,
+                "complexity": "production",
+                "graph_revision_count": 0,
+            }
+        )
+        == "architect"
+    )
+    assert (
+        _route_after_render(
+            {
+                "graph_render_admitted": True,
+                "complexity": "prototype",
+                "graph_repair_round_count": 1,
+            }
+        )
+        == "review"
+    )
+    assert _route_after_render({"graph_render_admitted": False}) == "reject"
+
+
+def test_route_after_early_design_frame_and_parallel_review_gate():
+    from agent.graph import (
+        _route_after_early_design_frame,
+        _route_after_parallel_initial_review,
+    )
+
+    approved_review = {"graph_review": {"approved": True}, "graph_changed": True}
+    failed_review = {
+        "graph_repair_round_count": 0,
+        "graph_changed": True,
+        "graph_review": {"approved": False},
+    }
+
+    assert (
+        _route_after_early_design_frame({"_parallel_initial_review": True})
+        == "parallel_initial_review_gate"
+    )
+    assert _route_after_early_design_frame({}) == "review_graph"
+    assert _route_after_parallel_initial_review(approved_review) == "frame"
+    assert _route_after_parallel_initial_review(failed_review) == "revise"
+
+
+@pytest.mark.asyncio
+async def test_parallel_initial_review_starts_architect_and_critic_before_approval(
+    monkeypatch,
+):
+    import agent.graph as agent_graph
+
+    async def send(_event):
+        return None
+
+    async def fake_route(state):
+        return {**state, "route": "search"}
+
+    async def fake_search(state, _tools):
+        return state, None
+
+    async def fake_expand(state, _tools, _wait_task):
+        return state
+
+    render_order = []
+    arch_started = asyncio.Event()
+    review_started = asyncio.Event()
+    release_review = asyncio.Event()
+    rendered_gate = asyncio.Event()
+
+    async def fake_apply(state, _tools):
+        return {
+            **state,
+            "graph_changed": True,
+            "graph_data": {
+                "design_origin": "applied",
+                "title": "Parallel prototype draft",
+                "nodes": [],
+                "edges": [],
+                "sequence": [],
+            },
+            "graph_operation": {"kind": "create", "status": "candidate"},
+        }
+
+    async def fake_architect(_state):
+        render_order.append("architect")
+        arch_started.set()
+        await release_review.wait()
+        return {"architect_plan": {"interpretation": "growth system"}}
+
+    async def fake_review(state, **_kwargs):
+        render_order.append("critic")
+        review_started.set()
+        await release_review.wait()
+        return {
+            **state,
+            "graph_review": {
+                "approved": True,
+                "review_status": "completed",
+            },
+        }
+
+    async def fake_render(graph):
+        return {
+            "screenshot_base64": "private-render",
+            "report": {
+                "rendered_nodes": len(graph.get("nodes", [])),
+                "rendered_edges": len(graph.get("edges", [])),
+                "overlap_count": 0,
+                "clipped_nodes": 0,
+                "clipped_edges": 0,
+                "minimum_text_px": 12,
+            },
+        }
+
+    async def fake_synth(state):
+        return {**state, "response_text": "ready"}
+
+    async def fake_render_gate(state):
+        render_order.append("render")
+        rendered_gate.set()
+        return {
+            **state,
+            "graph_render_admitted": True,
+            "graph_publication": "unreviewed",
+        }
+
+    monkeypatch.setattr(agent_graph, "orchestrator_route", fake_route)
+    monkeypatch.setattr(agent_graph, "run_search_phase", fake_search)
+    monkeypatch.setattr(agent_graph, "architect_node", fake_architect)
+    monkeypatch.setattr(agent_graph, "maybe_expand_with_search_tool", fake_expand)
+    monkeypatch.setattr(agent_graph, "apply_graph_worker", fake_apply)
+    monkeypatch.setattr(agent_graph, "graph_critic_node", fake_review)
+    monkeypatch.setattr(agent_graph, "graph_render_gate_node", fake_render_gate)
+    monkeypatch.setattr(agent_graph, "orchestrator_synthesise", fake_synth)
+
+    state = _state(send)
+    run_task = asyncio.create_task(agent_graph.run_agent(state, [], [], []))
+    await asyncio.wait_for(rendered_gate.wait(), 0.5)
+    await asyncio.wait_for(arch_started.wait(), 0.5)
+    await asyncio.wait_for(review_started.wait(), 0.1)
+    assert arch_started.is_set()
+    release_review.set()
+    result = await run_task
+    assert render_order.index("render") == 0
+    assert "architect" in render_order
+    assert "critic" in render_order
+    assert render_order.index("architect") > render_order.index("render")
+    assert render_order.index("critic") > render_order.index("render")
+
+    assert result["response_text"] == "ready"
+    assert result["graph_publication"] == "approved"
+
+
+@pytest.mark.asyncio
+async def test_parallel_initial_review_rejects_if_architect_fails_despite_critic_approval(
+    monkeypatch,
+):
+    import agent.graph as agent_graph
+
+    async def send(_event):
+        return None
+
+    async def fake_route(state):
+        return {**state, "route": "search"}
+
+    async def fake_search(state, _tools):
+        return state, None
+
+    async def fake_expand(state, _tools, _wait_task):
+        return state
+
+    async def fake_apply(state, _tools):
+        return {
+            **state,
+            "graph_changed": True,
+            "graph_data": {
+                "design_origin": "applied",
+                "title": "Parallel prototype draft",
+                "nodes": [],
+                "edges": [],
+                "sequence": [],
+            },
+            "graph_operation": {"kind": "create", "status": "candidate"},
+        }
+
+    async def fake_architect(_state):
+        return {
+            "architect_plan": {"interpretation": "growth system"},
+            "architecture_ready": False,
+        }
+
+    review_calls = 0
+
+    async def fake_review(state, **_kwargs):
+        nonlocal review_calls
+        review_calls += 1
+        return {
+            **state,
+            "graph_review": {
+                "approved": True,
+                "review_status": "completed",
+                "topology_proofs": [],
+            },
+        }
+
+    async def fake_render_gate(state):
+        return {
+            **state,
+            "graph_render_admitted": True,
+            "graph_publication": "unreviewed",
+        }
+
+    async def fake_synth(state):
+        return {**state, "response_text": "rejected"}
+
+    monkeypatch.setattr(agent_graph, "orchestrator_route", fake_route)
+    monkeypatch.setattr(agent_graph, "run_search_phase", fake_search)
+    monkeypatch.setattr(agent_graph, "architect_node", fake_architect)
+    monkeypatch.setattr(agent_graph, "apply_graph_worker", fake_apply)
+    monkeypatch.setattr(agent_graph, "maybe_expand_with_search_tool", fake_expand)
+    monkeypatch.setattr(agent_graph, "graph_critic_node", fake_review)
+    monkeypatch.setattr(agent_graph, "graph_render_gate_node", fake_render_gate)
+    monkeypatch.setattr(agent_graph, "orchestrator_synthesise", fake_synth)
+
+    result = await agent_graph.run_agent(_state(send), [], [], [])
+    assert result["graph_review"]["approved"] is False
+    assert result["graph_review"]["failure_code"] == "architecture_pass_unavailable"
+    assert result["graph_review"]["terminal"] is True
+    assert result["graph_publication"] == "withheld"
+    assert review_calls == 1
 
 
 def test_initial_revision_failures_still_reject_without_graph_change():
@@ -619,8 +888,12 @@ def test_rejected_candidate_restores_immutable_approved_graph_baseline():
         }
     )
 
-    assert restored["graph_data"] == approved
+    assert {key: restored["graph_data"][key] for key in approved} == approved
+    assert isinstance(restored["graph_data"]["version"], str)
     assert restored["graph_data"] is not approved
+    assert restored["approved_graph_data"] == restored["graph_data"]
+    assert restored["approved_graph_data"] is not restored["graph_data"]
+    assert "version" not in approved
     assert restored["graph_changed"] is False
     assert restored["graph_publication"] == "preserved"
 
@@ -701,7 +974,9 @@ async def test_rejected_expansion_preserves_baseline_without_publication(
         return {**state, "early_response_text": ""}
 
     async def fake_synth(state):
-        assert state["graph_data"] == approved_graph
+        assert state["graph_data"].get("title") == approved_graph["title"]
+        assert state["graph_data"].get("nodes") == approved_graph["nodes"]
+        assert state["graph_data"].get("edges") == approved_graph["edges"]
         assert state["graph_publication"] == "preserved"
         assert state["graph_changed"] is False
         return {**state, "response_text": "The expansion was withheld."}
@@ -725,7 +1000,9 @@ async def test_rejected_expansion_preserves_baseline_without_publication(
     )
     result = await agent_graph.run_agent(state, [], [], [])
 
-    assert result["graph_data"] == approved_graph
+    assert result["graph_data"].get("title") == approved_graph["title"]
+    assert result["graph_data"].get("nodes") == approved_graph["nodes"]
+    assert result["graph_data"].get("edges") == approved_graph["edges"]
     assert result["graph_operation"]["status"] == "failed"
     assert result["graph_publication"] == "preserved"
     assert critic_calls == 1
@@ -905,12 +1182,12 @@ async def test_langgraph_can_verify_bounded_repairs_then_publish(
     assert result["graph_publication"] == "approved"
     assert result["graph_notice_sent"] is False
     assert result["response_text"] == "reviewed answer"
-    assert role_order[:4] == [
-        "graph_builder",
-        "private_render",
-        "architect",
-        "critic",
-    ]
+    assert role_order[:2] == ["graph_builder", "private_render"]
+    assert role_order.count("graph_builder") == approval_round + 1
+    assert role_order.count("private_render") == approval_round + 1
+    assert role_order.count("architect") == 1
+    assert role_order.count("critic") == approval_round + 1
+    assert role_order.index("architect") > 1
     assert "challenger" not in role_order
     repair_events = [
         event
@@ -930,9 +1207,12 @@ async def test_outer_review_timeout_returns_the_charged_shared_budget(monkeypatc
 
     import agent.graph as agent_graph
     from agent.graph_review_budget import GraphReviewBudget
+    from config import settings
 
-    async def send(_event):
-        return None
+    events = []
+
+    async def send(event):
+        events.append(event)
 
     async def fake_route(state):
         return {**state, "route": "search"}
@@ -979,9 +1259,13 @@ async def test_outer_review_timeout_returns_the_charged_shared_budget(monkeypatc
     monkeypatch.setattr(agent_graph, "graph_critic_node", fake_review)
     monkeypatch.setattr(agent_graph, "orchestrator_synthesise", fake_synth)
     monkeypatch.setattr(agent_graph, "critic_timeout_seconds", lambda _state: 0.001)
+    monkeypatch.setattr(
+        settings, "internal_test_email_allowlist_raw", "eval@example.com"
+    )
 
     review_budget = GraphReviewBudget()
     state = _state(send)
+    state["user_email"] = "eval@example.com"
     state["_graph_review_budget"] = review_budget
 
     result = await agent_graph.run_agent(state, [], [], [])
@@ -989,6 +1273,18 @@ async def test_outer_review_timeout_returns_the_charged_shared_budget(monkeypatc
     assert review_budget.critic_calls == 1
     assert result["graph_critic_call_count"] == 1
     assert result["graph_contract_correction_count"] == 0
+    assert len(result["graph_review_diagnostics"]) == 1
+    diagnostic = result["graph_review_diagnostics"][0]
+    assert diagnostic["critic_call_count"] == 1
+    assert diagnostic["review_disposition"] == "unavailable"
+    diagnostic_events = [
+        event
+        for event in events
+        if event.get("type") == "workflow_progress"
+        and event.get("phase") == "review"
+        and "diagnostic" in event
+    ]
+    assert [event["diagnostic"] for event in diagnostic_events] == [diagnostic]
     assert result["graph_review"]["failure_code"] == "semantic_review_timeout"
     assert result["graph_publication"] == "withheld"
 
@@ -1031,6 +1327,12 @@ async def test_two_distinct_connection_repairs_apply_exact_terminal_edges_and_pu
             ),
             "connection_addition_obligations": list(
                 selectors.get("connection_addition_obligations") or []
+            ),
+            "existing_edge_operations": list(
+                selectors.get("existing_edge_operations") or []
+            ),
+            "existing_node_operations": list(
+                selectors.get("existing_node_operations") or []
             ),
             "composition_append_counts": {},
         }
@@ -1616,6 +1918,8 @@ async def test_malformed_patch_correction_and_two_repairs_stay_within_all_ceilin
             "context_node_ids": [],
             "addition_count": 0,
             "connection_addition_obligations": [],
+            "existing_edge_operations": [],
+            "existing_node_operations": [],
             "composition_append_counts": {},
         }
 
@@ -2261,3 +2565,208 @@ async def test_contract_correction_approval_publishes_the_retained_private_candi
     assert apply_rounds == [0, 1]
     assert result["graph_publication"] == "approved"
     assert result["graph_changed"] is True
+
+
+@pytest.mark.asyncio
+async def test_exact_existing_edge_repairs_stop_after_two_failed_reviews(monkeypatch):
+    import agent.graph as agent_graph
+    from agent.nodes.graph_worker import (
+        _apply_applied_graph_patch,
+        _normalise_applied_graph,
+    )
+
+    events = []
+    apply_rounds = []
+    reviewed_labels = []
+    rendered_labels = []
+
+    async def send(event):
+        events.append(event)
+
+    def layer(*, failed=False, edge_selector=None, operation=None):
+        return {
+            "status": "fail" if failed else "pass",
+            "score": 0.7 if failed else 0.9,
+            "blocking_findings": ["The request edge needs a precise contract."]
+            if failed
+            else [],
+            "deterministic_finding_ids": [],
+            "node_ids": [],
+            "edge_selectors": [edge_selector] if edge_selector else [],
+            "group_ids": [],
+            "composition_fields": [],
+            "sequence_indexes": [],
+            "assumption_indexes": [],
+            "reason": "The review grants the one edge required by this repair.",
+            "context_node_ids": [],
+            "addition_count": 0,
+            "connection_addition_obligations": [],
+            "existing_edge_operations": [operation] if operation else [],
+            "existing_node_operations": [],
+            "composition_append_counts": {},
+        }
+
+    def repair_contract(current_label, next_label):
+        selector = {
+            "source": "request",
+            "target": "worker",
+            "label": current_label,
+        }
+        operation = {
+            "kind": "update",
+            "edge_selector": selector,
+            "set": {"label": next_label},
+            "replacement_obligations": [],
+        }
+        return {
+            "repair_scope": "local",
+            "layers": {
+                "components": layer(),
+                "connections": layer(
+                    failed=True,
+                    edge_selector=selector,
+                    operation=operation,
+                ),
+                "composition": layer(),
+                "render": layer(),
+            },
+        }
+
+    initial_label = "requests work"
+    first_label = "submits work request"
+    second_label = "sends reviewed work request"
+    third_label = "sends approved work request"
+    initial_graph = _normalise_applied_graph(
+        {
+            "title": "Work request",
+            "nodes": [
+                {
+                    "id": "request",
+                    "label": "Work request",
+                    "type": "service",
+                    "technology": "Domain service",
+                    "description": "Accepts one bounded work request.",
+                },
+                {
+                    "id": "worker",
+                    "label": "Worker",
+                    "type": "service",
+                    "technology": "Domain service",
+                    "description": "Processes one bounded work request.",
+                },
+            ],
+            "edges": [
+                {
+                    "source": "request",
+                    "target": "worker",
+                    "label": initial_label,
+                    "technology": "Domain command",
+                    "sync": "async",
+                    "flow": "runtime",
+                    "description": "Carries one work request.",
+                }
+            ],
+            "groups": [],
+            "sequence": [],
+        },
+        safety_max_nodes=2,
+        resolved_complexity="prototype",
+    )
+
+    async def fake_route(state):
+        return {**state, "route": "search"}
+
+    async def fake_search(state, _tools):
+        return state, None
+
+    async def fake_architect(_state):
+        return {"architect_plan": {"interpretation": "work request"}}
+
+    async def fake_expand(state, _tools, _wait_task):
+        return state
+
+    async def fake_apply(state, _tools):
+        revision = int(state.get("graph_revision_count", 0))
+        apply_rounds.append(revision)
+        if revision == 0:
+            return {
+                **state,
+                "graph_data": initial_graph,
+                "graph_changed": True,
+                "graph_operation": {"kind": "create", "status": "candidate"},
+            }
+        current_label, next_label = (
+            (initial_label, first_label)
+            if revision == 1
+            else (first_label, second_label)
+        )
+        contract = state["graph_review"]["repair_contract"]
+        patched_graph = _apply_applied_graph_patch(
+            state["graph_data"],
+            {"update_edges": [{"edge_id": "edge_1", "set": {"label": next_label}}]},
+            safety_max_nodes=2,
+            resolved_complexity="prototype",
+            repair_contract=contract,
+        )
+        assert contract == repair_contract(current_label, next_label)
+        return {
+            **state,
+            "graph_data": patched_graph,
+            "graph_changed": True,
+            "graph_operation": {"kind": "create", "status": "candidate"},
+        }
+
+    async def fake_review(state, **_kwargs):
+        revision = int(state.get("graph_repair_round_count", 0))
+        current_label = state["graph_data"]["edges"][0]["label"]
+        reviewed_labels.append(current_label)
+        next_label = (first_label, second_label, third_label)[revision]
+        return {
+            **state,
+            "graph_review": {
+                "approved": False,
+                "terminal": False,
+                "review_status": "completed",
+                "repair_contract": repair_contract(current_label, next_label),
+            },
+        }
+
+    async def fake_render(graph):
+        rendered_labels.append(graph["edges"][0]["label"])
+        return {
+            "screenshot_base64": "private-render",
+            "report": {
+                "rendered_nodes": len(graph["nodes"]),
+                "rendered_edges": len(graph["edges"]),
+                "overlap_count": 0,
+                "clipped_nodes": 0,
+                "clipped_edges": 0,
+                "minimum_text_px": 12,
+            },
+        }
+
+    async def fake_synth(state):
+        assert state["graph_data"] is None
+        assert state["graph_publication"] == "withheld"
+        return {**state, "response_text": "reviewed answer"}
+
+    monkeypatch.setattr(agent_graph, "orchestrator_route", fake_route)
+    monkeypatch.setattr(agent_graph, "run_search_phase", fake_search)
+    monkeypatch.setattr(agent_graph, "architect_node", fake_architect)
+    monkeypatch.setattr(agent_graph, "maybe_expand_with_search_tool", fake_expand)
+    monkeypatch.setattr(agent_graph, "apply_graph_worker", fake_apply)
+    monkeypatch.setattr(agent_graph, "graph_critic_node", fake_review)
+    monkeypatch.setattr(agent_graph, "orchestrator_synthesise", fake_synth)
+
+    state = _state(send)
+    state["await_diagram_evaluation"] = fake_render
+    result = await agent_graph.run_agent(state, [], [], [])
+
+    assert apply_rounds == [0, 1, 2]
+    assert reviewed_labels == [initial_label, first_label, second_label]
+    assert rendered_labels == [initial_label, first_label, second_label]
+    assert result["graph_repair_round_count"] == 2
+    assert result["graph_publication"] == "withheld"
+    assert result["graph_data"] is None
+    assert result["graph_operation"]["failure_code"] == "graph_review_rejected"
+    assert not any(event.get("type") == "graph_data" for event in events)
