@@ -380,6 +380,39 @@ async def test_render_gate_does_not_reuse_initial_preview_deadline_for_repair():
     assert events[-1] == {"type": "graph_preview", "data": graph}
 
 
+@pytest.mark.asyncio
+async def test_render_gate_does_not_reuse_initial_preview_deadline_for_staged_preview():
+    graph = _domain_graph()
+    graph["design_origin"] = "applied"
+    events = []
+    rendered_graphs = []
+
+    async def send(event):
+        events.append(event)
+
+    async def render(candidate):
+        rendered_graphs.append(candidate)
+        return await _accept_diagram(candidate)
+
+    result = await graph_render_gate_node(
+        {
+            "graph_data": graph,
+            "graph_changed": True,
+            "graph_stage_preview_count": 1,
+            "send": send,
+            "await_diagram_evaluation": render,
+            "graph_preview_deadline_s": asyncio.get_running_loop().time() - 1,
+        }
+    )
+
+    assert result["graph_render_admitted"] is True
+    assert rendered_graphs == [graph]
+    assert result["diagram_evaluation"]["result"]["screenshot_base64"] == (
+        "private-render"
+    )
+    assert events[-1] == {"type": "graph_preview", "data": graph}
+
+
 def _critic_state(*, graph=None, complexity="prototype"):
     return {
         "graph_data": graph or _domain_graph(),

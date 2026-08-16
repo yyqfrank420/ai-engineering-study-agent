@@ -46,7 +46,11 @@
             "backend/tests/test_pipeline_steps.py",
             "backend/tests/test_rag_retrieval.py",
             "backend/tests/test_rag_worker.py",
-            "backend/tests/test_search_tool_flow.py"
+            "backend/tests/test_search_tool_flow.py",
+            "backend/tests/test_staged_graph_contract.py",
+            "backend/tests/test_staged_graph_generation.py",
+            "backend/tests/test_staged_graph_gate.py",
+            "backend/tests/test_staged_graph_workflow.py"
           ]
         }
       ]

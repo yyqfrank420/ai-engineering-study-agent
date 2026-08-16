@@ -314,6 +314,21 @@ def test_scheduled_eval_blocks_manual_review_for_an_approved_corpus():
     ) in workflow
 
 
+def test_scheduled_diagnostic_can_select_staged_pipeline_without_changing_defaults():
+    workflow = Path(".github/workflows/scheduled-eval.yml").read_text(encoding="utf-8")
+
+    assert "pipeline_mode:" in workflow
+    assert "options: [legacy, staged]" in workflow
+    assert "pipeline_mode=legacy" in workflow
+    assert (
+        'if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && '
+        '[ "$suite" = diagnostic ]; then'
+    ) in workflow
+    assert 'pipeline_mode="$DISPATCH_PIPELINE_MODE"' in workflow
+    assert "EVAL_PIPELINE_MODE=$pipeline_mode" in workflow
+    assert "GRAPH_PIPELINE_MODE=$EVAL_PIPELINE_MODE" in workflow
+
+
 def test_dashboard_smoke_checks_every_frontend_endpoint_sequentially(monkeypatch):
     expected_responses = {
         "/api/internal/dashboard/overview": {"kpis": {}, "providers": {}},

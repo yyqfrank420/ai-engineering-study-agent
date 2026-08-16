@@ -19,6 +19,10 @@ GRAPH_MAX_REPAIR_ROUNDS = 2
 GRAPH_MAX_PROTOCOL_CORRECTIONS = 1
 GRAPH_MAX_CONTRACT_CORRECTIONS = 1
 GRAPH_MAX_CRITIC_CALLS = 1 + GRAPH_MAX_REPAIR_ROUNDS + GRAPH_MAX_CONTRACT_CORRECTIONS
+STAGED_COMPONENT_GENERATION_CALLS = 2
+STAGED_CONNECTION_GENERATION_CALLS = 2
+STAGED_GATE_CALLS = 4
+STAGED_RENDER_CALLS = 4
 
 
 class Settings(BaseSettings):
@@ -42,6 +46,14 @@ class Settings(BaseSettings):
     architecture_model: str = "claude-opus-5"
     graph_builder_model: str = "kimi-k3"
     graph_qa_model: str = "claude-sonnet-5"
+    # Keep the established graph execution path active until an explicitly
+    # configured staging diagnostic opts into the staged pipeline.
+    graph_pipeline_mode: Literal["legacy", "staged"] = "legacy"
+    # Each staged layer has one generation retry and one gate retry. The
+    # 90-second prototype first-preview target is an SLO, not a runtime cutoff.
+    staged_component_timeout_s: float = 130.0
+    staged_connection_timeout_s: float = 130.0
+    staged_gate_timeout_s: float = 55.0
     # Extended thinking budget per agent call (tokens)
     # Extended reasoning budgets used by prototype and production design paths.
     # max_tokens must leave room for both hidden reasoning and the final answer.
@@ -430,6 +442,9 @@ class Settings(BaseSettings):
             "GRAPH_PATCH_TIMEOUT_S": self.graph_patch_timeout_s,
             "GRAPH_SYNTHESIS_TIMEOUT_S": self.graph_synthesis_timeout_s,
             "GRAPH_FINALIZATION_RESERVE_S": self.graph_finalization_reserve_s,
+            "STAGED_COMPONENT_TIMEOUT_S": self.staged_component_timeout_s,
+            "STAGED_CONNECTION_TIMEOUT_S": self.staged_connection_timeout_s,
+            "STAGED_GATE_TIMEOUT_S": self.staged_gate_timeout_s,
             "LLM_MAX_RETRIES": self.llm_max_retries,
             "LLM_DEFAULT_MAX_TOKENS": self.llm_default_max_tokens,
             "LLM_MAX_TOKENS": self.llm_max_tokens,
@@ -510,6 +525,19 @@ class Settings(BaseSettings):
             raise RuntimeError(
                 "Agent terminal window cannot fit the complete architecture repair path "
                 "and orchestration reserve."
+            )
+        complete_staged_pipeline_path_s = (
+            STAGED_COMPONENT_GENERATION_CALLS * self.staged_component_timeout_s
+            + STAGED_CONNECTION_GENERATION_CALLS * self.staged_connection_timeout_s
+            + STAGED_GATE_CALLS * self.staged_gate_timeout_s
+            + STAGED_RENDER_CALLS * self.diagram_evaluation_timeout_s
+            + self.graph_synthesis_timeout_s
+            + self.graph_finalization_reserve_s
+            + self.agent_orchestration_reserve_s
+        )
+        if complete_staged_pipeline_path_s > terminal_window_s:
+            raise RuntimeError(
+                "Agent terminal window cannot fit the complete staged pipeline path."
             )
         if self.llm_max_tokens <= self.production_thinking_budget_tokens:
             raise RuntimeError(

@@ -3206,6 +3206,8 @@ def _completed_critic_review(
 
 
 def _candidate_preview_deadline(state: AgentState) -> float | None:
+    if int(state.get("graph_stage_preview_count", 0)) > 0:
+        return None
     repair_round_count = int(
         state.get("graph_repair_round_count", state.get("graph_revision_count", 0))
     )

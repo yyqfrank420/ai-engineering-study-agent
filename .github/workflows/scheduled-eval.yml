@@ -16,6 +16,12 @@ on:
         required: false
         default: ''
         type: string
+      pipeline_mode:
+        description: Graph pipeline mode (diagnostic suite only)
+        required: false
+        default: legacy
+        type: choice
+        options: [legacy, staged]
 
 permissions:
   contents: read
@@ -54,6 +60,7 @@ jobs:
         env:
           DISPATCH_SUITE: ${{ inputs.suite }}
           DISPATCH_CASE_IDS: ${{ inputs.case_ids }}
+          DISPATCH_PIPELINE_MODE: ${{ inputs.pipeline_mode }}
         run: |
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             suite="$DISPATCH_SUITE"
@@ -70,8 +77,14 @@ jobs:
             echo "case_ids is accepted only for the diagnostic suite." >&2
             exit 1
           fi
+          pipeline_mode=legacy
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$suite" = diagnostic ]; then
+            pipeline_mode="$DISPATCH_PIPELINE_MODE"
+          fi
+          case "$pipeline_mode" in legacy|staged) ;; *) echo "Unsupported pipeline mode." >&2; exit 1 ;; esac
           echo "EVAL_SUITE=$suite" >> "$GITHUB_ENV"
           echo "EVAL_CASE_IDS=$case_ids" >> "$GITHUB_ENV"
+          echo "EVAL_PIPELINE_MODE=$pipeline_mode" >> "$GITHUB_ENV"
       - id: corpus
         name: Resolve corpus approval state without installing dependencies
         run: |
@@ -219,7 +232,7 @@ jobs:
             attempt_limit="$EVALUATION_PR_PROVIDER_ATTEMPT_LIMIT"
           fi
           echo "REVISION_TAG=$tag" >> "$GITHUB_ENV"
-          gcloud run deploy "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE@$IMAGE_DIGEST" --no-traffic --tag "$tag" --timeout 1000s --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4,ANTHROPIC_PROMPT_CACHE_ENABLED=true,OTEL_ENVIRONMENT=staging,EVALUATION_RUN_ID=$EVALUATION_RUN_ID,EVALUATION_PROVIDER_ATTEMPT_LIMIT=$attempt_limit --quiet
+          gcloud run deploy "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE@$IMAGE_DIGEST" --no-traffic --tag "$tag" --timeout 1000s --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4,ANTHROPIC_PROMPT_CACHE_ENABLED=true,OTEL_ENVIRONMENT=staging,EVALUATION_RUN_ID=$EVALUATION_RUN_ID,EVALUATION_PROVIDER_ATTEMPT_LIMIT=$attempt_limit,GRAPH_PIPELINE_MODE=$EVAL_PIPELINE_MODE --quiet
           url="$(gcloud run services describe "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json | python -c 'import json,os,sys; d=json.load(sys.stdin); t="scheduled-"+os.environ["GITHUB_RUN_ID"]; print(next((x.get("url", "") for x in d.get("status",{}).get("traffic",[]) if x.get("tag")==t), ""))')"
           [ -n "$url" ] || { echo "Cloud Run did not expose the tagged evaluation URL." >&2; exit 1; }
           echo "CANDIDATE_URL=$url" >> "$GITHUB_ENV"

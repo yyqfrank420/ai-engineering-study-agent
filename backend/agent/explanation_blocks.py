@@ -23,12 +23,8 @@ _BLOCK_KEYS = {
 _MINIMUM_BLOCKS = 3
 _MAXIMUM_BLOCKS = 6
 
-_PRESERVED_EDIT_COMPLETION_SENTENCE = (
-    "The requested diagram edit was not approved, so the prior approved diagram remains unchanged."
-)
-_PRESERVED_CREATE_COMPLETION_SENTENCE = (
-    "The requested new diagram was not approved, so the prior approved diagram remains unchanged."
-)
+_PRESERVED_EDIT_COMPLETION_SENTENCE = "The requested diagram edit was not approved, so the prior approved diagram remains unchanged."
+_PRESERVED_CREATE_COMPLETION_SENTENCE = "The requested new diagram was not approved, so the prior approved diagram remains unchanged."
 
 
 async def stream_explanation_blocks(
@@ -44,6 +40,8 @@ async def stream_explanation_blocks(
     graph_version: str | None,
     allowed_node_ids: set[str],
     allowed_evidence_refs: set[str] | None = None,
+    allow_fallback: bool = True,
+    provider_attempt_limit: int | None = None,
 ) -> str:
     """Emit a block as soon as its compact JSON object is complete.
 
@@ -80,6 +78,8 @@ async def stream_explanation_blocks(
         top_p=None,
         top_k=None,
         telemetry=telemetry,
+        allow_fallback=allow_fallback,
+        provider_attempt_limit=provider_attempt_limit,
     )
     timed_out = False
     try:
@@ -111,13 +111,15 @@ async def stream_explanation_blocks(
         await response_stream.aclose()
 
     if timed_out:
-        await send({
-            "type": "workflow_progress",
-            "phase": "explain",
-            "status": "degraded",
-            "title": "Explanation latency budget reached",
-            "detail": "Returning the bounded explanation available before the stage deadline.",
-        })
+        await send(
+            {
+                "type": "workflow_progress",
+                "phase": "explain",
+                "status": "degraded",
+                "title": "Explanation latency budget reached",
+                "detail": "Returning the bounded explanation available before the stage deadline.",
+            }
+        )
     if not emitted:
         if not timed_out:
             await send(
@@ -147,8 +149,7 @@ async def stream_explanation_blocks(
         await emit(pending_block)
 
     return "\n\n".join(
-        f"## {block['title']}\n\n{block['content']}"
-        for block in emitted
+        f"## {block['title']}\n\n{block['content']}" for block in emitted
     )
 
 
@@ -198,12 +199,16 @@ def _normalise_block(
 ) -> dict[str, Any] | None:
     if not isinstance(value, dict) or set(value) != _BLOCK_KEYS:
         return None
-    content = "\n".join(line.rstrip() for line in str(value.get("content") or "").splitlines()).strip()
+    content = "\n".join(
+        line.rstrip() for line in str(value.get("content") or "").splitlines()
+    ).strip()
     if not content:
         return None
     title = " ".join(str(value.get("title") or "Architecture note").split())[:100]
     title = title or "Architecture note"
-    block_id = " ".join(str(value.get("block_id") or title.lower().replace(" ", "_")).split())[:80]
+    block_id = " ".join(
+        str(value.get("block_id") or title.lower().replace(" ", "_")).split()
+    )[:80]
     block_id = block_id or "architecture_note"
     raw_related = value.get("related_node_ids")
     related_values = raw_related if isinstance(raw_related, list) else []

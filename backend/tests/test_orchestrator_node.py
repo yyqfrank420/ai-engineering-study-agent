@@ -902,6 +902,114 @@ async def test_approved_changed_graph_is_public_before_explanation_model_runs(
 
 
 @pytest.mark.asyncio
+async def test_staged_approved_graph_uses_one_low_effort_explanation_call(
+    monkeypatch,
+):
+    import agent.explanation_blocks as explanation_blocks
+    import agent.nodes.orchestrator_node as orchestrator
+
+    provider_calls = []
+
+    async def fail_condense_history(*_args, **_kwargs):
+        raise AssertionError("approved staged graphs must skip history condensation")
+
+    async def fake_stream_response(**kwargs):
+        provider_calls.append(kwargs)
+        yield (
+            "text",
+            '{"block_id":"overview","title":"Overview","content":"Approved graph.",'
+            '"related_node_ids":["entry"],"evidence_refs":[]}',
+        )
+        yield ("done", "")
+
+    monkeypatch.setattr(orchestrator, "maybe_condense_history", fail_condense_history)
+    monkeypatch.setattr(explanation_blocks, "stream_response", fake_stream_response)
+
+    async def send(_event):
+        return None
+
+    result = await orchestrator.orchestrator_synthesise(
+        {
+            "send": send,
+            "history": [{"role": "user", "content": "Earlier request"}],
+            "user_message": "Design the system",
+            "rag_chunks": [],
+            "graph_data": {
+                "title": "Approved architecture",
+                "version": "graph-v2",
+                "nodes": [{"id": "entry", "label": "Entry"}],
+                "edges": [],
+            },
+            "graph_changed": True,
+            "graph_publication": "approved",
+            "graph_contract": {"source": "staged"},
+        }
+    )
+
+    assert "## Overview\n\nApproved graph." in result["response_text"]
+    assert len(provider_calls) == 1
+    assert provider_calls[0]["effort"] == "low"
+    assert provider_calls[0]["allow_fallback"] is False
+    assert provider_calls[0]["provider_attempt_limit"] == 1
+
+
+def test_staged_provider_call_ceiling_is_nine():
+    from agent.staged_graph_workflow import _MAX_STAGE_ATTEMPTS
+
+    stage_count = 2
+    calls_per_candidate = 2
+    explanation_calls = 1
+
+    assert _MAX_STAGE_ATTEMPTS == 2
+    assert (
+        stage_count * _MAX_STAGE_ATTEMPTS * calls_per_candidate + explanation_calls == 9
+    )
+
+
+@pytest.mark.asyncio
+async def test_non_staged_graph_keeps_explanation_fallback_defaults(monkeypatch):
+    import agent.nodes.orchestrator_node as orchestrator
+
+    captured = {}
+    condense_calls = []
+
+    async def fake_condense_history(history, **_kwargs):
+        condense_calls.append(history)
+        return history
+
+    async def fake_stream_blocks(**kwargs):
+        captured.update(kwargs)
+        return "Walkthrough"
+
+    monkeypatch.setattr(orchestrator, "maybe_condense_history", fake_condense_history)
+    monkeypatch.setattr(orchestrator, "stream_explanation_blocks", fake_stream_blocks)
+
+    async def send(_event):
+        return None
+
+    await orchestrator.orchestrator_synthesise(
+        {
+            "send": send,
+            "history": [{"role": "user", "content": "Earlier request"}],
+            "user_message": "Design the system",
+            "rag_chunks": [],
+            "graph_data": {
+                "title": "Approved architecture",
+                "version": "graph-v2",
+                "nodes": [{"id": "entry", "label": "Entry"}],
+                "edges": [],
+            },
+            "graph_changed": True,
+            "graph_publication": "approved",
+        }
+    )
+
+    assert condense_calls == [[{"role": "user", "content": "Earlier request"}]]
+    assert captured["allow_fallback"] is True
+    assert captured["provider_attempt_limit"] is None
+
+
+@pytest.mark.asyncio
 async def test_requested_unavailable_research_is_explicit_in_synthesis_prompt(
     monkeypatch,
 ):

@@ -2928,6 +2928,120 @@ def _same_graph_payload(left: dict[str, Any], right: dict[str, Any]) -> bool:
     )
 
 
+def staged_edit_scope(
+    query: str,
+    graph: GraphData,
+    *,
+    resolved_complexity: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Compile the existing exact user-edit authority for staged generation."""
+    return _user_edit_scope(
+        query,
+        graph,
+        resolved_complexity=resolved_complexity,
+    )
+
+
+def admit_staged_graph_edit(
+    existing_graph: GraphData,
+    candidate: GraphData,
+    *,
+    resolved_complexity: str,
+    repair_contract: dict[str, Any],
+    mutation_permissions: dict[str, Any],
+) -> GraphData:
+    """Apply a full staged candidate through the exact-record patch authority."""
+    patch = _staged_candidate_patch(existing_graph, candidate)
+    return _apply_applied_graph_patch(
+        existing_graph,
+        patch,
+        safety_max_nodes=settings.graph_safety_max_nodes,
+        resolved_complexity=resolved_complexity,
+        repair_contract=repair_contract,
+        mutation_permissions=mutation_permissions,
+    )
+
+
+def _staged_candidate_patch(
+    existing_graph: GraphData,
+    candidate: GraphData,
+) -> dict[str, Any]:
+    existing_nodes = {
+        str(node.get("id") or ""): node for node in existing_graph.get("nodes") or []
+    }
+    candidate_nodes = {
+        str(node.get("id") or ""): node for node in candidate.get("nodes") or []
+    }
+    if "" in existing_nodes or "" in candidate_nodes:
+        raise ValueError("staged candidate contains a blank node ID")
+
+    patch: dict[str, Any] = {}
+    removed_nodes = sorted(set(existing_nodes) - set(candidate_nodes))
+    if removed_nodes:
+        patch["remove_nodes"] = removed_nodes
+    added_nodes = []
+    for node_id in candidate_nodes.keys() - existing_nodes.keys():
+        node = candidate_nodes[node_id]
+        added_nodes.append(
+            {
+                "id": node_id,
+                **{
+                    field: copy.deepcopy(node[field])
+                    for field in _PATCH_NODE_MUTABLE_FIELDS
+                    if field in node
+                },
+            }
+        )
+    if added_nodes:
+        patch["add_nodes"] = added_nodes
+    node_updates = []
+    for node_id in existing_nodes.keys() & candidate_nodes.keys():
+        before = existing_nodes[node_id]
+        after = candidate_nodes[node_id]
+        changes = {
+            field: copy.deepcopy(after.get(field))
+            for field in _PATCH_NODE_MUTABLE_FIELDS
+            if after.get(field) != before.get(field)
+        }
+        if changes:
+            node_updates.append({"id": node_id, "set": changes})
+    if node_updates:
+        patch["update_nodes"] = node_updates
+
+    before_edges = list(existing_graph.get("edges") or [])
+    after_edges = list(candidate.get("edges") or [])
+    common_count = min(len(before_edges), len(after_edges))
+    edge_updates = []
+    for index in range(common_count):
+        changes = {
+            field: copy.deepcopy(after_edges[index].get(field))
+            for field in _PATCH_EDGE_MUTABLE_FIELDS
+            if after_edges[index].get(field) != before_edges[index].get(field)
+        }
+        if changes:
+            edge_updates.append({"edge_id": _patch_edge_id(index), "set": changes})
+    if edge_updates:
+        patch["update_edges"] = edge_updates
+    if len(before_edges) > common_count:
+        patch["remove_edges"] = [
+            _patch_edge_id(index) for index in range(common_count, len(before_edges))
+        ]
+    if len(after_edges) > common_count:
+        patch["add_edges"] = [
+            {
+                field: copy.deepcopy(edge[field])
+                for field in _PATCH_EDGE_MUTABLE_FIELDS
+                if field in edge
+            }
+            for edge in after_edges[common_count:]
+        ]
+
+    for field in ("title", "assumptions", "sequence", "groups"):
+        if candidate.get(field) != existing_graph.get(field):
+            patch[field] = copy.deepcopy(candidate.get(field))
+    return patch
+
+
 def _patch_list(patch: dict[str, Any], key: str) -> list[Any]:
     value = patch.get(key, [])
     if not isinstance(value, list):

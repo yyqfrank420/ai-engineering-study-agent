@@ -55,6 +55,11 @@ from agent.pipeline_steps import (
     run_search_phase,
 )
 from agent.state import AgentState, GraphOperation, GraphPublicationDisposition
+from agent.staged_graph_workflow import (
+    run_staged_graph_pipeline,
+    should_use_staged_graph_pipeline,
+)
+from config import settings
 from observability import start_span
 
 
@@ -95,6 +100,7 @@ def _restore_approved_graph_state(
     publication: GraphPublicationDisposition | None = None,
 ) -> AgentState:
     approved_graph = state.get("approved_graph_data")
+    approved_contract = state.get("approved_graph_contract")
     restored_graph = copy.deepcopy(approved_graph)
     restored_approved = (
         _attach_graph_version(restored_graph)
@@ -105,6 +111,8 @@ def _restore_approved_graph_state(
         **state,
         "graph_data": restored_approved,
         "approved_graph_data": copy.deepcopy(restored_approved),
+        "graph_contract": copy.deepcopy(approved_contract),
+        "approved_graph_contract": copy.deepcopy(approved_contract),
         "graph_changed": False,
         "graph_publication": publication
         or ("preserved" if approved_graph is not None else "none"),
@@ -416,6 +424,9 @@ def build_agent_workflow(
         )
         return {**expanded, "search_tool_wait_task": None}
 
+    async def staged_graph(state: AgentState) -> AgentState:
+        return await run_staged_graph_pipeline(state)
+
     async def run_graph_review(state: AgentState) -> AgentState:
         if not state.get("graph_changed"):
             reviewed = await graph_critic_node(state, review_budget=review_budget)
@@ -600,7 +611,51 @@ def build_agent_workflow(
             timeout_s = synthesis_timeout_seconds(state)
             async with asyncio.timeout(timeout_s):
                 return await orchestrator_synthesise(state)
-        except (TimeoutError, StageAdmissionDenied) as exc:
+        except Exception as exc:
+            if (
+                should_use_staged_graph_pipeline(state)
+                and state.get("graph_publication") == "approved"
+            ):
+                graph = state.get("graph_data") or {}
+                labels = [
+                    str(node.get("label"))
+                    for node in graph.get("nodes") or []
+                    if isinstance(node, dict) and node.get("label")
+                ]
+                content = (
+                    "The staged diagram passed its component, connection, and render gates. "
+                    + (
+                        "Its main components are " + ", ".join(labels[:6]) + "."
+                        if labels
+                        else "The approved diagram is available on the canvas."
+                    )
+                )
+                await state["send"](
+                    {
+                        "type": "workflow_progress",
+                        "phase": "explain",
+                        "status": "degraded",
+                        "title": "Explanation unavailable",
+                        "detail": "The approved diagram remains publishable.",
+                    }
+                )
+                await state["send"](
+                    {
+                        "type": "explanation_block",
+                        "block_id": "approved_architecture",
+                        "title": "Approved architecture",
+                        "content": content,
+                        "related_node_ids": [],
+                        "evidence_refs": [],
+                        "graph_version": graph.get("version"),
+                    }
+                )
+                return {
+                    **state,
+                    "response_text": f"## Approved architecture\n\n{content}",
+                }
+            if not isinstance(exc, (TimeoutError, StageAdmissionDenied)):
+                raise
             raise WorkflowDeadlineExceeded(
                 "synthesis exceeded its reserved deadline"
             ) from exc
@@ -648,6 +703,9 @@ def build_agent_workflow(
     workflow.add_node(
         "expand_context", _traced("agent.search_tool_wait", expand_context)
     )
+    workflow.add_node(
+        "staged_graph", _traced("agent.staged_graph_pipeline", staged_graph)
+    )
     workflow.add_node("review_graph", _traced("agent.graph_review", review_graph))
     workflow.add_node("revise_graph", _traced("agent.graph_revision", revise_graph))
     workflow.add_node("reject_graph", _traced("agent.graph_rejected", reject_graph))
@@ -671,7 +729,12 @@ def build_agent_workflow(
     # is written. The graph critic reviews the assembled candidate after graph
     # construction against that same evidence.
     workflow.add_edge("gather_context", "expand_context")
-    workflow.add_edge("expand_context", "draft_graph")
+    workflow.add_conditional_edges(
+        "expand_context",
+        _route_after_context,
+        {"staged": "staged_graph", "legacy": "draft_graph"},
+    )
+    workflow.add_edge("staged_graph", "synthesise")
     workflow.add_conditional_edges(
         "draft_graph",
         _route_after_draft,
@@ -736,6 +799,10 @@ def build_agent_workflow(
 
 def _route_after_routing(state: AgentState) -> Literal["quick", "context"]:
     return "quick" if state.get("route") == "simple" else "context"
+
+
+def _route_after_context(state: AgentState) -> Literal["staged", "legacy"]:
+    return "staged" if should_use_staged_graph_pipeline(state) else "legacy"
 
 
 def _route_after_draft(state: AgentState) -> Literal["render", "reject"]:
@@ -910,6 +977,10 @@ async def run_agent(
         "approved_graph_data": copy.deepcopy(
             state.get("approved_graph_data", state.get("graph_data"))
         ),
+        "graph_contract": copy.deepcopy(state.get("graph_contract")),
+        "approved_graph_contract": copy.deepcopy(
+            state.get("approved_graph_contract", state.get("graph_contract"))
+        ),
         "graph_publication": (
             "unchanged" if state.get("graph_data") is not None else "none"
         ),
@@ -920,4 +991,11 @@ async def run_agent(
         node_detail_tools,
         review_budget=review_budget,
     )
-    return await workflow.ainvoke(initial_state, config={"recursion_limit": 24})
+    result = await workflow.ainvoke(initial_state, config={"recursion_limit": 24})
+    if (
+        settings.graph_pipeline_mode == "legacy"
+        and result.get("graph_changed")
+        and result.get("graph_data") is not None
+    ):
+        return {**result, "graph_contract": None}
+    return result

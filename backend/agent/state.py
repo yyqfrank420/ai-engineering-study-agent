@@ -125,6 +125,9 @@ class AgentState(TypedDict):
     retrieval_relevance: str  # "strong" | "weak"
     retrieval_notice: str  # explanation shown to the user when book retrieval is weak
     graph_data: GraphData | None  # populated by Graph Worker (Phase 1)
+    # Server-only metadata for the exact graph revision. Transports persist it
+    # beside graph_data and never include it in public graph payloads.
+    graph_contract: NotRequired[dict[str, Any] | None]
     # True when the graph changed this turn — tells orchestrator to emit graph_data event
     graph_changed: bool
     graph_notice_sent: (
@@ -149,6 +152,9 @@ class AgentState(TypedDict):
     graph_patch_validation_error: NotRequired[dict[str, str]]
     reviewed_graph_data: NotRequired[GraphData | None]
     approved_graph_data: NotRequired[GraphData | None]
+    approved_graph_contract: NotRequired[dict[str, Any] | None]
+    staged_graph_build: NotRequired[dict[str, Any]]
+    graph_stage_preview_count: NotRequired[int]
     graph_review_diagnostics: NotRequired[list[dict[str, Any]]]
     workflow_started_at_s: NotRequired[float]
     terminal_deadline_s: NotRequired[float]

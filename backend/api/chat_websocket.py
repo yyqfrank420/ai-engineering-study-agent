@@ -69,12 +69,14 @@ class _SingleWaitDiagramEvaluationChannel(DiagramEvaluationChannel):
         )
         self._waiters[evaluation_id] = waiter
         try:
-            await send(self.graph_candidate_event(
-                evaluation_id=evaluation_id,
-                graph_version=graph_version,
-                graph=graph,
-                criteria=waiter.criteria,
-            ))
+            await send(
+                self.graph_candidate_event(
+                    evaluation_id=evaluation_id,
+                    graph_version=graph_version,
+                    graph=graph,
+                    criteria=waiter.criteria,
+                )
+            )
             return await asyncio.wait_for(future, timeout=self._timeout_s)
         finally:
             self._waiters.pop(evaluation_id, None)
@@ -213,8 +215,11 @@ async def chat_websocket(websocket: WebSocket) -> None:
         history = message_store.get_history(
             user_id, body.thread_id, limit=settings.max_messages_per_thread
         )
-        base_graph = thread_store.get_graph(user_id, body.thread_id)
+        base_graph, base_graph_contract = thread_store.get_graph_artifact(
+            user_id, body.thread_id
+        )
         approved_graph_at_request_start = copy.deepcopy(base_graph)
+        approved_graph_contract_at_request_start = copy.deepcopy(base_graph_contract)
         content = body.content
         latest_graph = base_graph
         graph_preview_sent = False
@@ -236,7 +241,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 return
             if event.get("type") in {"graph_preview", "graph_data"}:
                 graph_preview_sent = True
-                event = {**event, "type": "graph_preview"}
+                event = {"type": "graph_preview", "data": event.get("data")}
             async with send_lock:
                 await websocket.send_json(event)
 
@@ -335,6 +340,12 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 "retrieval_notice": "",
                 "graph_data": latest_graph,
                 "approved_graph_data": copy.deepcopy(approved_graph_at_request_start),
+                "graph_contract": copy.deepcopy(
+                    approved_graph_contract_at_request_start
+                ),
+                "approved_graph_contract": copy.deepcopy(
+                    approved_graph_contract_at_request_start
+                ),
                 "graph_changed": False,
                 "graph_notice_sent": False,
                 "graph_revision_count": 0,
@@ -537,6 +548,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     user_content=content,
                     assistant_content=final_state["response_text"],
                     graph_data=final_state.get("graph_data"),
+                    graph_contract=final_state.get("graph_contract"),
                     client_request_id=body.client_request_id,
                 )
                 if not graph_saved:

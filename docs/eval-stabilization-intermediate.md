@@ -2,19 +2,21 @@
 
 Last updated: 2026-08-16
 
-Evidence in this record is current through paid diagnostic `31939496092` on exact head
-`06dac4e2946d6e26b949c396317765a46e798a8d`
-on 2026-08-16. PRs #37 through #40 merged on 2026-08-07, and PR #44 merged as `77df25e7`. The
-evidence-provenance, graph-review, and latency corrections have passed local review and the full
-offline CI matrix through the post-preview deadline correction. Twenty-four consecutive recent
-`graph-expansion` diagnostics have failed; there is no protected live success on the current branch.
-The latest paid run published turn 1, previewed the requested eight-node expansion on turn 2, then
-restored turn 1 after the repaired candidate inherited an expired first-preview deadline. Turn 1
-also called Sonnet twice because its parallel-review routing marker was absent from the LangGraph
-state schema. The working tree now persists that marker and applies the first-preview deadline only
-to repair round zero.
-Each budgeted critic dispatch now permits one provider attempt, so transport retries cannot repeat
-an identical model prompt outside that ceiling.
+Evidence in this record is current through paid diagnostic `31953303244` on
+`feature/staged-graph-pipeline` on 2026-08-16. PRs #37 through #40 merged on 2026-08-07, and PR #44
+merged as `77df25e7`. The evidence-provenance, graph-review, and latency corrections passed local
+review and the full offline CI matrix through the post-preview deadline correction. Twenty-five
+consecutive recent `graph-expansion` diagnostics have failed; there is no protected live success on
+the current branch.
+
+Diagnostic `31953303244` invalidates the Release 1 live prerequisite for the legacy repair loop.
+It made 13 application calls, cost $1.166855, and took 752.114 seconds. Turn 1 published 14 nodes
+and 19 edges. Turn 2 created a 15-node candidate, then the final connections contract failed
+`invalid_contract` and restored the 14-node graph. A final whole-graph repair gate cannot be the
+release path when it discards a candidate that satisfied the requested expansion.
+
+The staged state machine is available behind a feature flag. The legacy repair loop remains the
+default and rollback path. Each staged layer admits at most two generated candidates.
 Corpus `2026-08-12.v1` remains pending human review.
 
 ## Objective and operating rules
@@ -45,8 +47,9 @@ fresh candidate, rejected an impossible patch contract, and timed out during its
 The twenty-third failure rendered three private candidates, consumed two semantic repair rounds,
 and withheld the graph. The twenty-fourth published turn 1, previewed the requested turn 2
 expansion, and restored turn 1 after a repaired private render inherited the expired initial-preview
-deadline.
-Run links and exact heads come from GitHub Actions metadata. Latency, provider calls, failure codes,
+deadline. The twenty-fifth published a 14-node graph on turn 1, created a 15-node turn 2 candidate,
+and restored turn 1 after the final connections contract failed `invalid_contract`.
+Run links and recorded heads come from GitHub Actions metadata. Latency, provider calls, failure codes,
 and cost come from each retained `scheduled-eval-<run>/browser-results.json`, `live-results.json`,
 and `run-context.json` artifact. Model effort comes from source at the exact run head because the
 older telemetry did not store effort. Minimum cost is used whenever an accepted provider call has
@@ -78,8 +81,9 @@ incomplete usage.
 | 2026-08-15 | [`31900871827`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31900871827), `4faf04de329e3d9934a3363ea475c6a8d19dcf94` | A five-node, seven-edge candidate passed private rendering and emitted a preview after 68.077 seconds. Sonnet authorized four new nodes and nine exact edges, including `n3 -> n5` between existing nodes. Kimi completed the patch in 191.651 seconds, then the global new-component edge rule rejected that required edge. The contract correction retained the same contradiction and expanded the repair to seven nodes and fourteen edges. The retry was cancelled after 132.459 seconds, 1.192 seconds after its first text delta. Final `graph_data` was null; the case took 633.072 seconds. Seven calls ran without fallback or judge calls. One accepted Kimi call retained no terminal usage. | Exact connection obligations now own every added edge. Mixed new-component and existing-to-existing additions are permitted only when their source, target, and normalized label are cited. New-node attachment, graph anchoring, locked records, and post-normalization checks remain. | at least $0.440616 |
 | 2026-08-15 | [`31903086208`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31903086208), `f045abf` | The workflow wrapper reported success while the product withheld turn 1. Kimi high produced a private preview in 39.982 seconds. Private renders passed for candidates 8/11, 13/20, and 13/22. Sonnet medium rejected components once, then `edge_semantics` twice. The two successful semantic repair rounds were exhausted, so `graph_data` was withheld and turn 2 was skipped. Eight calls ran in 363.588 seconds with no fallback. | Prototype scorecards now exclude architect diagram requirements. Existing-edge repairs must declare exact update, remove, or replace operations. The reviewed graph snapshot remains paired with each scorecard. Safe internal diagnostics record the selected depth, locks, findings, blocker IDs, fingerprints, and correction outcomes. | $0.515946 |
 | 2026-08-16 | [`31939496092`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31939496092), `06dac4e2946d6e26b949c396317765a46e798a8d` | Turn 1 published a seven-node graph in 143.111 seconds and previewed it after 39.179 seconds. Its prototype parallel path called Sonnet twice. Turn 2 previewed the requested eight-node expansion after 25.259 seconds. Production review rejected it, Kimi completed one semantic repair, and the repaired private render failed `diagram_evaluation_timeout` because the 170-second first-preview deadline had already expired. The workflow restored turn 1, so the evaluator reported `graph expansion added 0 nodes; expected 1`. Ten calls ran without fallback or judge calls. The case cost $0.764855. | The parallel-review marker is now declared in `AgentState`, so LangGraph retains it and routes an approved prototype scorecard past a second critic call. Private rendering and preview transport consult the first-preview deadline only during repair round zero. Focused tests and the full offline matrix pass; paid verification remains pending. | $0.764855 |
+| 2026-08-16 | [`31953303244`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31953303244), `feature/staged-graph-pipeline` | Turn 1 published 14 nodes and 19 edges. Turn 2 created a 15-node candidate. The final connections contract failed `invalid_contract`, so the workflow restored the 14-node turn 1 graph. Thirteen application calls ran. The case took 752.114 seconds. | This invalidates the Release 1 live prerequisite for the legacy whole-graph repair loop. Release 1 changes to the flag-gated staged state machine described below. | $1.166855 |
 
-Known application spend across these twenty-four failures is at least **$8.608761**. Several provider
+Known application spend across these twenty-five failures is at least **$9.775616**. Several provider
 calls have incomplete usage; row amounts marked `at least` are lower bounds. Diagnostic
 `31549644038` retained only `connections.links[6]: topology`; it did not retain authored output and
 cannot distinguish an out-of-range endpoint from a self-link.
@@ -97,9 +101,62 @@ unverified. Scheduled `main` runs `31354658015` and `31456923829` were also canc
 or logs before manual diagnostics entered the global staging queue. These cancellations are excluded
 from the product-failure ledger.
 
+## Staged Release 1 decision
+
+Release 1 uses a sequential request-scoped state machine:
+
+```text
+request_started
+  -> component_candidate
+  -> private_component_render
+  -> reversible_component_preview
+  -> component_gate
+  -> connection_candidate
+  -> private_full_render
+  -> reversible_full_preview
+  -> connection_gate
+  -> explanation
+  -> atomic_persist
+```
+
+Each stage receives the request ID, cancellation generation, immutable accepted state, and input
+bounded to its layer. Steering, stop, timeout, or a failed retry ends the state machine and preserves
+the preceding durable graph. No stage can publish into another request.
+
+The staged mode applies only to applied create and edit requests. Kimi K3 high first returns a
+component wire, then a connection wire. The component wire owns the root index, title, assumptions,
+capabilities, and each component's label, type, responsibility, group label, group kind, and
+primary-flow membership. Kimi does not author a composition layer.
+
+The server owns IDs, group records, breadth-first sequence derivation, projection, versions,
+selected maturity, exact edit admission, validation, state transitions, and persistence. A
+component-only candidate has no edges. Its render gate emits a reversible preview before one Sonnet
+medium component gate call. The full candidate follows the same render, reversible-preview, then
+connection-gate order. Previews remain nonauthoritative until semantic acceptance and persistence.
+A malformed gate result ends the request. Each layer admits two candidates;
+connection retries cannot reopen an accepted component layer.
+
+Prototype gates exclude production criteria. Production proof requirements derive from the
+component wire's capabilities. There is no Opus root architecture pass and no final full-model gate.
+Opus low writes the explanation after both gates pass. A deterministic explanation fallback keeps an
+accepted graph publishable if that call fails.
+
+The transport atomically persists graph data and its server-only contract before authoritative
+`graph_data`. `auto` edits inherit stored maturity. Legacy graphs without a stored contract default
+to prototype. An explicit depth change reruns both semantic stages. A bounded edit retains exact
+record authority through that restage, so maturity cannot rewrite prior records or assumptions. The
+no-retry path makes five model calls and the bounded maximum is nine. The 90-second prototype
+first-preview target is an SLO.
+Generation calls use a 130-second timeout, gates use 55 seconds, and the request ceiling includes
+orchestration and private renders.
+
+`GRAPH_PIPELINE_MODE=legacy` is the default. A scheduled diagnostic may set `staged` for an applied
+create or edit request. The larger Release 2 project DAG, project scoring, and parallel scheduling
+remain deferred.
+
 ## Repeated-failure root cause
 
-The twenty-four recent failures include architect/evidence contract, topology-wire, review/repair,
+The twenty-five recent failures include architect/evidence contract, topology-wire, review/repair,
 and frontend layout failures. The immediate
 errors differed. The shared engineering defect was contract drift. Graph limits, model schemas,
 repair permissions, review state, browser measurements, and staging measurements had separate
@@ -308,14 +365,13 @@ Targeted diagnostic application spend recorded above: **$2.710510**. Semantic ju
 
 The chronology is important: these were not repetitions of one identical defect. Each run cleared the previous boundary and exposed the next one. The main process failure was that the earlier full-suite workflow and coarse `graph_emitted=false` telemetry made this dependency chain expensive to discover.
 
-## Current graph-review convergence checkpoint
+## Legacy graph-review convergence checkpoint
 
-This state machine supersedes the historical repair limits and layer-lock descriptions below.
-Focused offline tests cover its contracts. Diagnostic `31333075986` exercised this state on the
-protected `graph-expansion` case and exposed the architect-boundary failure recorded below.
-This checkpoint described the former Opus-first stabilization path. The preview-first state machine
-recorded in the 2026-08-12 latency section supersedes its generation order while retaining the same
-review, repair, layer-lock, and publication contracts.
+This is the historical whole-graph repair design. Once staged code lands, it has rollback-only
+status. Focused offline tests cover its contracts. Diagnostic `31333075986` exercised this state on
+the protected `graph-expansion` case and exposed the architect-boundary failure recorded below.
+The preview-first ordering retained the same whole-graph review, repair, layer-lock, and publication
+contracts. Diagnostic `31953303244` invalidated it as the Release 1 live prerequisite.
 
 - Every initial candidate receives one exhaustive component, connection, composition, and render
   scorecard. Every deterministic finding is classified exactly once. `novice_clarity` is advisory:
@@ -769,14 +825,15 @@ Historical checkpoint evidence:
   source-type mismatches, and model-supplied canonical IDs retain the existing fail-closed validator
   and generic public error.
 
-## 2026-08-14 convergence and latency state
+## Legacy 2026-08-14 convergence and latency state
 
 The recent diagnostic failure ledger above is the canonical status and chronology. The entries
 below retain implementation detail for the latest convergence and latency corrections.
 
-### Preview-first graph state machine
+### Legacy preview-first graph state machine
 
-The serial Opus-first path is retired. Initial graph creation now follows this order:
+This was the legacy whole-graph repair loop before the staged Release 1 decision. It remains
+available for rollback after staged code lands. Initial graph creation followed this order:
 
 1. Kimi K3 authors one topology candidate at high effort directly from the request, selected depth,
    and server-owned topology contract. The call has one provider attempt. A deterministic schema or

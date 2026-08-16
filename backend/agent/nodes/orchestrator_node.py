@@ -465,19 +465,26 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
     state = _withhold_unreviewed_graph(state)
     send = state["send"]
     history = state.get("history") or []
-    history = await maybe_condense_history(
-        history,
-        telemetry=build_telemetry(
-            "context_condense",
-            user_id=state.get("user_id"),
-            thread_id=state.get("session_id"),
-            is_production=state.get("is_production"),
-            metadata={
-                "request_id": state.get("request_id"),
-                "client_request_id": state.get("client_request_id"),
-            },
-        ),
+    graph_contract = state.get("graph_contract")
+    staged_explanation = bool(
+        isinstance(graph_contract, dict)
+        and graph_contract.get("source") == "staged"
+        and state.get("graph_publication") == "approved"
     )
+    if not staged_explanation:
+        history = await maybe_condense_history(
+            history,
+            telemetry=build_telemetry(
+                "context_condense",
+                user_id=state.get("user_id"),
+                thread_id=state.get("session_id"),
+                is_production=state.get("is_production"),
+                metadata={
+                    "request_id": state.get("request_id"),
+                    "client_request_id": state.get("client_request_id"),
+                },
+            ),
+        )
 
     current_graph = state.get("graph_data") or {}
     profile = _resolve_synthesis_complexity(state, current_graph)
@@ -625,6 +632,8 @@ async def orchestrator_synthesise(state: AgentState) -> AgentState:
                 chunks,
                 state.get("research_context") or "",
             ),
+            allow_fallback=not staged_explanation,
+            provider_attempt_limit=1 if staged_explanation else None,
         )
         completion_title, completion_detail = _explanation_completion_status(
             graph_is_preserved=graph_is_preserved,

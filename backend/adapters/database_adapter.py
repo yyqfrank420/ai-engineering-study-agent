@@ -47,6 +47,7 @@ POSTGRES_REQUIRED_POLICIES = {
 }
 
 POSTGRES_REQUIRED_COLUMNS = {
+    "chat_threads": {"graph_contract"},
     "chat_messages": {"client_request_id"},
     "rate_limit_events": {
         "key_hash",
@@ -85,6 +86,7 @@ def init_db() -> None:
                 user_id TEXT NOT NULL REFERENCES profiles(id),
                 title TEXT NOT NULL DEFAULT 'New chat',
                 graph_data TEXT,
+                graph_contract TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now')),
                 last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -237,8 +239,15 @@ def init_db() -> None:
             """
         )
         message_columns = {
-            row["name"] for row in conn.execute("PRAGMA table_info(chat_messages)").fetchall()
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(chat_messages)").fetchall()
         }
+        thread_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(chat_threads)").fetchall()
+        }
+        if "graph_contract" not in thread_columns:
+            conn.execute("ALTER TABLE chat_threads ADD COLUMN graph_contract TEXT")
         if "client_request_id" not in message_columns:
             conn.execute("ALTER TABLE chat_messages ADD COLUMN client_request_id TEXT")
         conn.execute(

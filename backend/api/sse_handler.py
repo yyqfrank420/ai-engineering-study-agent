@@ -14,6 +14,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 import asyncio
+import copy
 import logging
 import uuid
 from contextlib import suppress
@@ -259,7 +260,9 @@ async def chat_endpoint(
         history = message_store.get_history(
             user_id, thread_id, limit=settings.max_messages_per_thread
         )
-        existing_graph = thread_store.get_graph(user_id, thread_id)
+        existing_graph, existing_graph_contract = thread_store.get_graph_artifact(
+            user_id, thread_id
+        )
 
         enqueue_analytics_event(
             event_name="stream_started",
@@ -283,6 +286,8 @@ async def chat_endpoint(
             # completed turn has been durably persisted.
             if event.get("type") == "done":
                 return
+            if event.get("type") in {"graph_preview", "graph_data"}:
+                event = {"type": "graph_preview", "data": event.get("data")}
             await queue.put(event)
 
         async def await_search_tool_request(request_id: str, timeout_s: float) -> bool:
@@ -338,6 +343,9 @@ async def chat_endpoint(
             "retrieval_relevance": "strong",
             "retrieval_notice": "",
             "graph_data": existing_graph,
+            "graph_contract": copy.deepcopy(existing_graph_contract),
+            "approved_graph_data": copy.deepcopy(existing_graph),
+            "approved_graph_contract": copy.deepcopy(existing_graph_contract),
             "graph_changed": False,
             "graph_notice_sent": False,
             "research_context": "",
@@ -414,7 +422,7 @@ async def chat_endpoint(
                                     "latency_ms": first_token_latency_ms,
                                 },
                             )
-                    elif event.get("type") == "graph_data":
+                    elif event.get("type") in {"graph_preview", "graph_data"}:
                         graph_event_count += 1
                     yield sse(event)
                 except asyncio.TimeoutError:
@@ -504,6 +512,7 @@ async def chat_endpoint(
                     user_content=content,
                     assistant_content=final_state["response_text"],
                     graph_data=final_state.get("graph_data"),
+                    graph_contract=final_state.get("graph_contract"),
                     client_request_id=body.client_request_id,
                 )
                 if not graph_saved:
