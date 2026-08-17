@@ -54,6 +54,23 @@ _GRAPH_REVIEW_DIAGNOSTIC_FIELDS = frozenset(
         "validation_path_fingerprint",
     }
 )
+_STAGED_GRAPH_DIAGNOSTIC_FIELDS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "stage",
+        "attempt",
+        "code",
+        "path",
+        "path_fingerprint",
+        "candidate_fingerprint",
+        "fingerprint_disposition",
+    }
+)
+_STAGED_GRAPH_STAGES = frozenset({"components", "connections"})
+_STAGED_GRAPH_FINGERPRINT_DISPOSITIONS = frozenset(
+    {"matches_prior_candidate", "rejected_before_render"}
+)
 _GRAPH_REVIEW_COUNTER_FIELDS = (
     "repair_round",
     "critic_call_count",
@@ -110,6 +127,28 @@ def _safe_graph_review_dispositions(value: object) -> list[dict[str, str]] | Non
 
 def _project_graph_review_diagnostic(value: object) -> dict[str, Any] | None:
     """Copy only fixed-shape review metadata from internal evaluation events."""
+    if isinstance(value, dict) and value.get("kind") == "staged_generation":
+        if (
+            set(value) != _STAGED_GRAPH_DIAGNOSTIC_FIELDS
+            or value.get("schema_version") != 1
+            or value.get("stage") not in _STAGED_GRAPH_STAGES
+            or not isinstance(value.get("attempt"), int)
+            or isinstance(value.get("attempt"), bool)
+            or not 1 <= value["attempt"] <= 2
+            or not isinstance(value.get("code"), str)
+            or not _SAFE_GRAPH_REVIEW_RULE.fullmatch(value["code"])
+            or not isinstance(value.get("path"), str)
+            or not _SAFE_GRAPH_REVIEW_TEXT.fullmatch(value["path"])
+            or value.get("fingerprint_disposition")
+            not in _STAGED_GRAPH_FINGERPRINT_DISPOSITIONS
+            or not all(
+                isinstance(value.get(field), str)
+                and _SHA256_FINGERPRINT.fullmatch(value[field])
+                for field in ("path_fingerprint", "candidate_fingerprint")
+            )
+        ):
+            return None
+        return {field: value[field] for field in _STAGED_GRAPH_DIAGNOSTIC_FIELDS}
     if not isinstance(value, dict) or set(value) - _GRAPH_REVIEW_DIAGNOSTIC_FIELDS:
         return None
     required_fields = _GRAPH_REVIEW_DIAGNOSTIC_FIELDS - {

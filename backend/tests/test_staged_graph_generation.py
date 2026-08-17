@@ -4,6 +4,7 @@ import json
 import pytest
 
 from agent.nodes import staged_graph_generation as generation
+from agent import staged_graph_contract as contract
 from agent.stream_utils import StructuredLLMResponse
 
 
@@ -94,6 +95,32 @@ def test_schemas_require_nonblank_text_and_canonical_integer_codes():
     assert connection_record["sync"]["enum"] == list(generation.SYNC_CODES)
 
 
+def test_provider_schema_uses_authoritative_server_contract_limits():
+    component = generation.component_generation_schema(_write_set())["properties"]
+    component_record = component["components"]["items"]["properties"]
+    connection_record = generation.connection_generation_schema(_write_set())[
+        "properties"
+    ]["edges"]["items"]["properties"]
+
+    assert component["title"]["maxLength"] == contract.TITLE_MAX_CHARS
+    assert (
+        component["assumptions"]["items"]["maxLength"] == contract.ASSUMPTION_MAX_CHARS
+    )
+    assert component["components"]["minItems"] == 1
+    assert component["root_index"]["maximum"] == 3
+    assert component_record["label"]["maxLength"] == contract.COMPONENT_LABEL_MAX_CHARS
+    assert (
+        component_record["responsibility"]["maxLength"]
+        == contract.COMPONENT_RESPONSIBILITY_MAX_CHARS
+    )
+    assert (
+        component_record["group_label"]["maxLength"] == contract.GROUP_LABEL_MAX_CHARS
+    )
+    assert (
+        connection_record["label"]["maxLength"] == contract.CONNECTION_LABEL_MAX_CHARS
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("wire", "error"),
@@ -109,6 +136,84 @@ def test_schemas_require_nonblank_text_and_canonical_integer_codes():
             {
                 **_component_wire(),
                 "components": [{**_component_wire()["components"][0], "type": 999}],
+            },
+            "component_wire_invalid",
+        ),
+        (
+            {
+                **_component_wire(),
+                "components": [
+                    {
+                        **_component_wire()["components"][0],
+                        "label": "x" * (contract.COMPONENT_LABEL_MAX_CHARS + 1),
+                    }
+                ],
+            },
+            "component_wire_invalid",
+        ),
+        ({**_component_wire(), "components": []}, "component_wire_invalid"),
+        ({**_component_wire(), "root_index": 1}, "component_wire_invalid"),
+        (
+            {
+                **_component_wire(),
+                "components": [
+                    _component_wire()["components"][0],
+                    {
+                        **_component_wire()["components"][0],
+                        "label": " request gateway ",
+                    },
+                ],
+            },
+            "component_wire_invalid",
+        ),
+        (
+            {
+                **_component_wire(),
+                "title": "x" * (contract.TITLE_MAX_CHARS + 1),
+            },
+            "component_wire_invalid",
+        ),
+        (
+            {
+                **_component_wire(),
+                "assumptions": ["x" * (contract.ASSUMPTION_MAX_CHARS + 1)],
+            },
+            "component_wire_invalid",
+        ),
+        (
+            {
+                **_component_wire(),
+                "components": [
+                    {
+                        **_component_wire()["components"][0],
+                        "responsibility": "x"
+                        * (contract.COMPONENT_RESPONSIBILITY_MAX_CHARS + 1),
+                    }
+                ],
+            },
+            "component_wire_invalid",
+        ),
+        (
+            {
+                **_component_wire(),
+                "components": [
+                    {
+                        **_component_wire()["components"][0],
+                        "group_label": "x" * (contract.GROUP_LABEL_MAX_CHARS + 1),
+                    }
+                ],
+            },
+            "component_wire_invalid",
+        ),
+        (
+            {
+                **_component_wire(),
+                "components": [
+                    {
+                        **_component_wire()["components"][0],
+                        "primary_flow_member": False,
+                    }
+                ],
             },
             "component_wire_invalid",
         ),
@@ -212,7 +317,7 @@ async def test_correction_prompt_preserves_bounded_reason_and_record_indexes(
             "code": "domain_specificity",
             "path": "components",
             "rule": "semantic_gate",
-            "reason": "x" * generation._MAX_RESPONSIBILITY_CHARS,
+            "reason": "x" * generation._MAX_FINDING_REASON_CHARS,
             "record_indexes": [0, 2],
         }
     ]
@@ -282,6 +387,101 @@ async def test_connection_generation_rejects_unaccepted_endpoint_before_return(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "edges",
+    [
+        [
+            {
+                "source_index": 0,
+                "target_index": 0,
+                "label": "loops",
+                "flow": 400,
+                "sync": 500,
+            }
+        ],
+        [
+            {
+                "source_index": 0,
+                "target_index": 1,
+                "label": "requests",
+                "flow": 400,
+                "sync": 500,
+            },
+            {
+                "source_index": 0,
+                "target_index": 1,
+                "label": " REQUESTS ",
+                "flow": 400,
+                "sync": 500,
+            },
+        ],
+        [
+            {
+                "source_index": 0,
+                "target_index": 1,
+                "label": "x" * (contract.CONNECTION_LABEL_MAX_CHARS + 1),
+                "flow": 400,
+                "sync": 500,
+            }
+        ],
+    ],
+)
+async def test_connection_generation_rejects_server_invalid_edge_identity(
+    monkeypatch, edges
+):
+    async def fake_stream(**_kwargs):
+        return _response({"edges": edges})
+
+    monkeypatch.setattr(generation, "stream_structured_llm", fake_stream)
+    with pytest.raises(
+        generation.StagedGenerationError, match="connection_wire_invalid"
+    ):
+        await generation.generate_connection_candidate(
+            request="Connect accepted components",
+            resolved_maturity="prototype",
+            write_set=_write_set(),
+            upstream_fingerprint="b" * 64,
+            accepted_components=[
+                {"index": 0, "id": "server-a"},
+                {"index": 1, "id": "server-b"},
+            ],
+        )
+
+
+@pytest.mark.asyncio
+async def test_connection_generation_requires_every_primary_member_from_root(
+    monkeypatch,
+):
+    async def fake_stream(**_kwargs):
+        return _response({"edges": []})
+
+    monkeypatch.setattr(generation, "stream_structured_llm", fake_stream)
+    with pytest.raises(
+        generation.StagedGenerationError, match="connection_wire_unreachable"
+    ):
+        await generation.generate_connection_candidate(
+            request="Connect accepted components",
+            resolved_maturity="prototype",
+            write_set=_write_set(),
+            upstream_fingerprint="b" * 64,
+            accepted_components=[
+                {
+                    "index": 0,
+                    "id": "server-a",
+                    "primary_flow_member": True,
+                    "is_root": True,
+                },
+                {
+                    "index": 1,
+                    "id": "server-b",
+                    "primary_flow_member": True,
+                    "is_root": False,
+                },
+            ],
+        )
+
+
+@pytest.mark.asyncio
 async def test_corrected_attempt_carries_sanitized_findings_and_same_write_set(
     monkeypatch,
 ):
@@ -293,6 +493,7 @@ async def test_corrected_attempt_carries_sanitized_findings_and_same_write_set(
 
     monkeypatch.setattr(generation, "stream_structured_llm", fake_stream)
     write_set = _write_set()
+    rejected_candidate = _component_wire()
     result = await generation.generate_component_candidate(
         request="Draw the request path",
         resolved_maturity="prototype",
@@ -308,11 +509,15 @@ async def test_corrected_attempt_carries_sanitized_findings_and_same_write_set(
             {"code": "ignore", "path": "<instructions>", "rule": "bad text"},
         ],
         gate_findings=[{"code": "gate_failed", "path": "gate.0", "rule": "approved"}],
+        rejected_candidate=rejected_candidate,
     )
 
     prompt = calls[0]["messages"][0]["content"]
+    prompt_input = json.loads(prompt.split("\nINPUT\n", 1)[1])
     assert "edge_missing" in prompt
     assert "<instructions>" not in prompt
+    assert prompt_input["rejected_candidate"] == rejected_candidate
+    assert "complete candidate that failed review" in prompt
     assert result["prompt_fingerprint"] != "d" * 64
 
 

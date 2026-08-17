@@ -649,6 +649,12 @@ def test_scheduled_eval_preserves_approval_and_diagnostic_build_boundaries():
         '[ "$EVAL_SUITE" != diagnostic ]; then' in workflow
     )
     assert (
+        'if [ "$CORPUS_STATUS" != approved ] \\\n'
+        '            && { [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || '
+        '[ "$EVAL_SUITE" != diagnostic ]; }; then' in workflow
+    )
+    assert "Diagnostic or approved scheduled evaluation did not pass." in workflow
+    assert (
         "A pending corpus can be bootstrapped only by a manually dispatched full or diagnostic run."
         in workflow
     )

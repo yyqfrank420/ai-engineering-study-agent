@@ -196,6 +196,31 @@ def test_graph_review_diagnostics_project_only_allowlisted_metadata():
     ]
 
 
+def test_staged_graph_diagnostic_projects_only_fixed_safe_metadata():
+    fingerprint = "c" * 64
+    diagnostic = {
+        "schema_version": 1,
+        "kind": "staged_generation",
+        "stage": "components",
+        "attempt": 2,
+        "code": "contract_rejected",
+        "path": "components.0.label",
+        "path_fingerprint": fingerprint,
+        "candidate_fingerprint": fingerprint,
+        "fingerprint_disposition": "rejected_before_render",
+    }
+    events = [
+        {"type": "workflow_progress", "diagnostic": {**diagnostic, "prompt": "drop"}},
+        {
+            "type": "workflow_progress",
+            "diagnostic": {**diagnostic, "path": "components/0/label"},
+        },
+        {"type": "workflow_progress", "diagnostic": diagnostic},
+    ]
+
+    assert _graph_review_diagnostics_from_events(events) == [diagnostic]
+
+
 @pytest.mark.asyncio
 async def test_live_evaluation_records_projected_graph_review_diagnostics(monkeypatch):
     case = load_corpus().cases[0]

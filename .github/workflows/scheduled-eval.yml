@@ -315,11 +315,12 @@ jobs:
           BROWSER_OUTCOME: ${{ steps.browser.outcome }}
           SEMANTIC_OUTCOME: ${{ steps.semantic.outcome }}
         run: |
-          if [ "$CORPUS_STATUS" != approved ]; then
+          if [ "$CORPUS_STATUS" != approved ] \
+            && { [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || [ "$EVAL_SUITE" != diagnostic ]; }; then
             echo "Corpus is pending human review; this run produced non-blocking proposals."
             exit 0
           fi
           if [ "$BROWSER_OUTCOME" != success ] || [ "$SEMANTIC_OUTCOME" != success ]; then
-            echo "Approved scheduled evaluation did not pass." >&2
+            echo "Diagnostic or approved scheduled evaluation did not pass." >&2
             exit 1
           fi

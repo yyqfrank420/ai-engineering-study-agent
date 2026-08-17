@@ -274,9 +274,11 @@ async def test_component_gate_retries_at_most_twice_and_renders_each_candidate(
     monkeypatch,
 ):
     calls: list[object] = []
+    component_inputs: list[dict] = []
 
-    async def components(**_kwargs):
+    async def components(**kwargs):
         calls.append("components")
+        component_inputs.append(copy.deepcopy(kwargs))
         wire = _components_wire()
         if calls.count("components") == 2:
             wire["components"][1]["responsibility"] = (
@@ -309,6 +311,11 @@ async def test_component_gate_retries_at_most_twice_and_renders_each_candidate(
         ("render", 0),
         "component_gate",
     ]
+    assert component_inputs[0]["rejected_candidate"] is None
+    assert component_inputs[1]["rejected_candidate"] == _components_wire()
+    assert component_inputs[1]["attempt"] == 1
+    assert component_inputs[1]["prior_prompt_fingerprint"] == "component-1"
+    assert component_inputs[0]["write_set"] == component_inputs[1]["write_set"]
     assert (
         result["graph_operation"]["failure_code"]
         == "staged_component_attempts_exhausted"
@@ -319,6 +326,11 @@ async def test_component_gate_retries_at_most_twice_and_renders_each_candidate(
 async def test_identical_component_correction_is_not_reviewed_twice(monkeypatch):
     generation_calls = 0
     gate_calls = 0
+    events: list[dict] = []
+    analytics: list[dict] = []
+
+    async def send(event):
+        events.append(event)
 
     async def components(**_kwargs):
         nonlocal generation_calls
@@ -333,8 +345,16 @@ async def test_identical_component_correction_is_not_reviewed_twice(monkeypatch)
     monkeypatch.setattr(workflow, "generate_component_candidate", components)
     monkeypatch.setattr(workflow, "_render", _render_ok)
     monkeypatch.setattr(workflow, "review_components", component_gate)
+    monkeypatch.setattr(
+        workflow, "enqueue_analytics_event", lambda **event: analytics.append(event)
+    )
+    monkeypatch.setattr(
+        workflow.settings, "internal_test_email_allowlist_raw", "eval@example.com"
+    )
 
-    result = await workflow.run_staged_graph_pipeline(_state())
+    result = await workflow.run_staged_graph_pipeline(
+        _state(user_email="eval@example.com", send=send)
+    )
 
     assert generation_calls == 2
     assert gate_calls == 1
@@ -342,6 +362,17 @@ async def test_identical_component_correction_is_not_reviewed_twice(monkeypatch)
         result["graph_operation"]["failure_code"]
         == "staged_component_attempts_exhausted"
     )
+    diagnostic = result["graph_review"]["staged_failure"]
+    assert diagnostic == events[0]["diagnostic"]
+    assert diagnostic["stage"] == "components"
+    assert diagnostic["attempt"] == 2
+    assert diagnostic["code"] == "candidate_repeated"
+    assert diagnostic["path"] == "components"
+    assert diagnostic["fingerprint_disposition"] == "matches_prior_candidate"
+    assert len(diagnostic["candidate_fingerprint"]) == 64
+    assert "Request gateway" not in repr(diagnostic)
+    assert analytics[0]["event_name"] == "staged_graph_failure"
+    assert "path" not in analytics[0]["properties"]
 
 
 @pytest.mark.asyncio
@@ -367,6 +398,111 @@ async def test_malformed_component_gate_is_terminal_without_retry(monkeypatch):
     assert (
         result["graph_operation"]["failure_code"] == "staged_component_gate_unavailable"
     )
+
+
+@pytest.mark.asyncio
+async def test_component_contract_correction_receives_rejected_wire(monkeypatch):
+    component_inputs: list[dict] = []
+    rendered_edge_counts: list[int] = []
+    _install_success_boundaries(monkeypatch)
+
+    async def components(**kwargs):
+        component_inputs.append(copy.deepcopy(kwargs))
+        wire = _components_wire()
+        if len(component_inputs) == 1:
+            wire["components"][0]["label"] = "x" * 61
+        return {
+            "wire": wire,
+            "prompt_fingerprint": f"component-{len(component_inputs)}",
+        }
+
+    async def render(state, graph, *, preview_count):
+        rendered_edge_counts.append(len(graph["edges"]))
+        return await _render_ok(state, graph, preview_count=preview_count)
+
+    monkeypatch.setattr(workflow, "generate_component_candidate", components)
+    monkeypatch.setattr(workflow, "_render", render)
+
+    result = await workflow.run_staged_graph_pipeline(_state())
+
+    assert result["graph_publication"] == "approved"
+    assert (
+        component_inputs[1]["rejected_candidate"]["components"][0]["label"] == "x" * 61
+    )
+    assert rendered_edge_counts == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_repeated_invalid_component_wire_stops_before_render(monkeypatch):
+    generation_calls = 0
+    render_calls = 0
+
+    async def components(**_kwargs):
+        nonlocal generation_calls
+        generation_calls += 1
+        wire = _components_wire()
+        wire["components"][0]["label"] = "x" * 61
+        return {"wire": wire, "prompt_fingerprint": f"component-{generation_calls}"}
+
+    async def render(state, graph, *, preview_count):
+        nonlocal render_calls
+        render_calls += 1
+        return await _render_ok(state, graph, preview_count=preview_count)
+
+    monkeypatch.setattr(workflow, "generate_component_candidate", components)
+    monkeypatch.setattr(workflow, "_render", render)
+    monkeypatch.setattr(workflow, "enqueue_analytics_event", lambda **_event: True)
+
+    result = await workflow.run_staged_graph_pipeline(_state())
+
+    assert generation_calls == 2
+    assert render_calls == 0
+    assert result["graph_review"]["staged_failure"]["code"] == "candidate_repeated"
+
+
+@pytest.mark.asyncio
+async def test_final_component_contract_failure_retains_safe_coordinate(monkeypatch):
+    generation_calls = 0
+    render_calls = 0
+    gate_calls = 0
+    analytics: list[dict] = []
+
+    async def components(**_kwargs):
+        nonlocal generation_calls
+        generation_calls += 1
+        wire = _components_wire()
+        if generation_calls == 2:
+            wire["components"][0]["label"] = "secret-" + "x" * 60
+        return {"wire": wire, "prompt_fingerprint": f"component-{generation_calls}"}
+
+    async def render(state, graph, *, preview_count):
+        nonlocal render_calls
+        render_calls += 1
+        return await _render_ok(state, graph, preview_count=preview_count)
+
+    async def component_gate(**_kwargs):
+        nonlocal gate_calls
+        gate_calls += 1
+        return _rejected_gate()
+
+    monkeypatch.setattr(workflow, "generate_component_candidate", components)
+    monkeypatch.setattr(workflow, "_render", render)
+    monkeypatch.setattr(workflow, "review_components", component_gate)
+    monkeypatch.setattr(
+        workflow, "enqueue_analytics_event", lambda **event: analytics.append(event)
+    )
+
+    result = await workflow.run_staged_graph_pipeline(_state())
+
+    assert generation_calls == 2
+    assert render_calls == 1
+    assert gate_calls == 1
+    diagnostic = result["graph_review"]["staged_failure"]
+    assert diagnostic["code"] == "contract_rejected"
+    assert diagnostic["path"] == "components.0.label"
+    assert diagnostic["attempt"] == 2
+    assert "secret" not in repr(diagnostic)
+    assert "path" not in analytics[0]["properties"]
 
 
 @pytest.mark.asyncio
@@ -416,9 +552,89 @@ async def test_connection_retry_keeps_the_accepted_component_candidate_locked(
         connection_inputs[0]["upstream_fingerprint"]
         == connection_inputs[1]["upstream_fingerprint"]
     )
+    assert connection_inputs[0]["rejected_candidate"] is None
+    assert connection_inputs[1]["rejected_candidate"] == _connections_wire()
     assert connection_inputs[0]["upstream_fingerprint"] == component_fingerprint(
         result["staged_graph_build"]
     )
+
+
+@pytest.mark.asyncio
+async def test_identical_connection_correction_retains_safe_coordinate(monkeypatch):
+    connection_calls = 0
+    connection_gate_calls = 0
+    analytics: list[dict] = []
+    _install_success_boundaries(monkeypatch)
+
+    async def connections(**_kwargs):
+        nonlocal connection_calls
+        connection_calls += 1
+        return {"wire": _connections_wire(), "prompt_fingerprint": "c" * 64}
+
+    async def connection_gate(**_kwargs):
+        nonlocal connection_gate_calls
+        connection_gate_calls += 1
+        return _rejected_gate()
+
+    monkeypatch.setattr(workflow, "generate_connection_candidate", connections)
+    monkeypatch.setattr(workflow, "review_connections", connection_gate)
+    monkeypatch.setattr(
+        workflow, "enqueue_analytics_event", lambda **event: analytics.append(event)
+    )
+
+    result = await workflow.run_staged_graph_pipeline(_state())
+
+    assert connection_calls == 2
+    assert connection_gate_calls == 1
+    diagnostic = result["graph_review"]["staged_failure"]
+    assert diagnostic["stage"] == "connections"
+    assert diagnostic["attempt"] == 2
+    assert diagnostic["code"] == "candidate_repeated"
+    assert diagnostic["path"] == "connections"
+    assert diagnostic["fingerprint_disposition"] == "matches_prior_candidate"
+    assert "path" not in analytics[0]["properties"]
+
+
+@pytest.mark.asyncio
+async def test_final_connection_contract_failure_skips_second_render(monkeypatch):
+    connection_calls = 0
+    connection_gate_calls = 0
+    render_calls = 0
+    _install_success_boundaries(monkeypatch)
+
+    async def connections(**_kwargs):
+        nonlocal connection_calls
+        connection_calls += 1
+        wire = _connections_wire()
+        if connection_calls == 2:
+            wire["edges"][0]["target_index"] = 0
+        return {"wire": wire, "prompt_fingerprint": f"connection-{connection_calls}"}
+
+    async def connection_gate(**_kwargs):
+        nonlocal connection_gate_calls
+        connection_gate_calls += 1
+        return _rejected_gate()
+
+    async def render(state, graph, *, preview_count):
+        nonlocal render_calls
+        render_calls += 1
+        return await _render_ok(state, graph, preview_count=preview_count)
+
+    monkeypatch.setattr(workflow, "generate_connection_candidate", connections)
+    monkeypatch.setattr(workflow, "review_connections", connection_gate)
+    monkeypatch.setattr(workflow, "_render", render)
+    monkeypatch.setattr(workflow, "enqueue_analytics_event", lambda **_event: True)
+
+    result = await workflow.run_staged_graph_pipeline(_state())
+
+    assert connection_calls == 2
+    assert connection_gate_calls == 1
+    assert render_calls == 2
+    diagnostic = result["graph_review"]["staged_failure"]
+    assert diagnostic["stage"] == "connections"
+    assert diagnostic["attempt"] == 2
+    assert diagnostic["code"] == "contract_rejected"
+    assert diagnostic["path"] == "connections.0"
 
 
 @pytest.mark.asyncio
@@ -561,6 +777,35 @@ async def test_failure_restores_approved_graph_and_contract(monkeypatch):
     assert result["graph_data"] is not approved_graph
     assert result["graph_contract"] == approved_contract
     assert result["graph_contract"] is not approved_contract
+    assert result["graph_publication"] == "preserved"
+
+
+@pytest.mark.asyncio
+async def test_failure_progress_transport_does_not_block_state_restoration(monkeypatch):
+    approved_graph = _approved_graph()
+
+    async def closed_transport(_event):
+        raise RuntimeError("closed")
+
+    monkeypatch.setattr(workflow, "enqueue_analytics_event", lambda **_event: True)
+    diagnostic = workflow._failure_diagnostic(
+        workflow.GraphContractError("rejected", path="components[0].label"),
+        stage="components",
+        attempt=2,
+        candidate=_components_wire(),
+    )
+
+    result = await workflow._failed(
+        _state(
+            approved_graph_data=approved_graph,
+            graph_data=approved_graph,
+            send=closed_transport,
+        ),
+        "staged_component_attempts_exhausted",
+        diagnostic=diagnostic,
+    )
+
+    assert result["graph_data"] == approved_graph
     assert result["graph_publication"] == "preserved"
 
 

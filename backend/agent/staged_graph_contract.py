@@ -31,6 +31,15 @@ NodeType = Literal[
 Flow = Literal["runtime", "control", "feedback", "deployment"]
 GroupKind = Literal["runtime", "data", "operations", "delivery", "external"]
 
+# Model schemas import these limits so provider admission cannot be looser than
+# the authoritative server contract.
+TITLE_MAX_CHARS = 100
+ASSUMPTION_MAX_CHARS = 240
+COMPONENT_LABEL_MAX_CHARS = 60
+COMPONENT_RESPONSIBILITY_MAX_CHARS = 220
+GROUP_LABEL_MAX_CHARS = 80
+CONNECTION_LABEL_MAX_CHARS = 100
+
 
 class CapabilityPlan(TypedDict):
     external_effects: bool
@@ -204,15 +213,21 @@ def _normalise_component(value: Any, position: int) -> ComponentPlan:
         )
     component: ComponentPlan = {
         "model_index": model_index,
-        "label": _text(raw.get("label"), f"components[{position}].label", limit=60),
+        "label": _text(
+            raw.get("label"),
+            f"components[{position}].label",
+            limit=COMPONENT_LABEL_MAX_CHARS,
+        ),
         "type": node_type,
         "responsibility": _text(
             raw.get("responsibility"),
             f"components[{position}].responsibility",
-            limit=220,
+            limit=COMPONENT_RESPONSIBILITY_MAX_CHARS,
         ),
         "group_label": _text(
-            raw.get("group_label"), f"components[{position}].group_label", limit=80
+            raw.get("group_label"),
+            f"components[{position}].group_label",
+            limit=GROUP_LABEL_MAX_CHARS,
         ),
         "group_kind": group_kind,
         "primary_flow_member": primary,
@@ -246,7 +261,11 @@ def _normalise_connection(value: Any, position: int) -> ConnectionPlan:
     return {
         "source_id": _text(source, f"connections[{position}].source_id", limit=80),
         "target_id": _text(target, f"connections[{position}].target_id", limit=80),
-        "label": _text(raw.get("label"), f"connections[{position}].label", limit=100),
+        "label": _text(
+            raw.get("label"),
+            f"connections[{position}].label",
+            limit=CONNECTION_LABEL_MAX_CHARS,
+        ),
         "flow": flow,
         "sync": sync,
     }
@@ -254,7 +273,7 @@ def _normalise_connection(value: Any, position: int) -> ConnectionPlan:
 
 def _normalise_build(build: Mapping[str, Any]) -> StagedGraphBuild:
     request_id = _text(build.get("request_id"), "request_id", limit=128)
-    title = _text(build.get("title"), "title", limit=100)
+    title = _text(build.get("title"), "title", limit=TITLE_MAX_CHARS)
     maturity = build.get("maturity")
     if maturity not in {"prototype", "production"}:
         raise GraphContractError("must be prototype or production", path="maturity")
@@ -276,7 +295,7 @@ def _normalise_build(build: Mapping[str, Any]) -> StagedGraphBuild:
         for index, value in enumerate(raw_connections)
     ]
     assumptions = [
-        _text(value, f"assumptions[{index}]", limit=240)
+        _text(value, f"assumptions[{index}]", limit=ASSUMPTION_MAX_CHARS)
         for index, value in enumerate(raw_assumptions)
     ]
     model_indexes = [component["model_index"] for component in components]
@@ -697,7 +716,9 @@ def reconstruct_staged_graph_build(
         if not isinstance(group, Mapping):
             continue
         label = _text(
-            group.get("label"), f"graph_data.groups[{position}].label", limit=80
+            group.get("label"),
+            f"graph_data.groups[{position}].label",
+            limit=GROUP_LABEL_MAX_CHARS,
         )
         kind = group.get("kind", "runtime")
         if kind not in _GROUP_KINDS:
@@ -735,7 +756,9 @@ def reconstruct_staged_graph_build(
                 "model_index": index,
                 "server_id": node_id,
                 "label": _text(
-                    raw_node.get("label"), f"graph_data.nodes[{index}].label", limit=60
+                    raw_node.get("label"),
+                    f"graph_data.nodes[{index}].label",
+                    limit=COMPONENT_LABEL_MAX_CHARS,
                 ),
                 "type": raw_node.get("type")
                 if raw_node.get("type") in _NODE_TYPES
@@ -743,7 +766,7 @@ def reconstruct_staged_graph_build(
                 "responsibility": _text(
                     raw_node.get("description"),
                     f"graph_data.nodes[{index}].description",
-                    limit=220,
+                    limit=COMPONENT_RESPONSIBILITY_MAX_CHARS,
                 ),
                 "group_label": group_label,
                 "group_kind": group_kind,

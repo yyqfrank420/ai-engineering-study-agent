@@ -14,6 +14,14 @@ from typing import Any, TypedDict
 
 from adapters.llm_adapter import build_telemetry
 from agent.architecture_rubric import RUBRIC_CRITERIA, TOPOLOGY_PROOF_REQUIREMENTS
+from agent.staged_graph_contract import (
+    ASSUMPTION_MAX_CHARS,
+    COMPONENT_LABEL_MAX_CHARS,
+    COMPONENT_RESPONSIBILITY_MAX_CHARS,
+    CONNECTION_LABEL_MAX_CHARS,
+    GROUP_LABEL_MAX_CHARS,
+    TITLE_MAX_CHARS,
+)
 from config import settings
 
 from agent.stream_utils import stream_structured_llm
@@ -28,11 +36,8 @@ _FINGERPRINT = re.compile(r"[0-9a-f]{64}")
 _FINDING_TOKEN = re.compile(r"[a-zA-Z0-9_.:/-]{1,96}")
 _MAX_REQUEST_CHARS = 12_000
 _MAX_BASE_CHARS = 48_000
-_MAX_LABEL_CHARS = 240
-_MAX_RESPONSIBILITY_CHARS = 800
-_MAX_TITLE_CHARS = 320
 _MAX_ASSUMPTIONS = 16
-_MAX_ASSUMPTION_CHARS = 480
+_MAX_FINDING_REASON_CHARS = 280
 _NODE_TYPES = (
     "client",
     "service",
@@ -108,7 +113,7 @@ def component_generation_schema(write_set: Mapping[str, Any]) -> dict[str, Any]:
             "title": {
                 "type": "string",
                 "minLength": 1,
-                "maxLength": _MAX_TITLE_CHARS,
+                "maxLength": TITLE_MAX_CHARS,
             },
             "assumptions": {
                 "type": "array",
@@ -116,10 +121,14 @@ def component_generation_schema(write_set: Mapping[str, Any]) -> dict[str, Any]:
                 "items": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": _MAX_ASSUMPTION_CHARS,
+                    "maxLength": ASSUMPTION_MAX_CHARS,
                 },
             },
-            "root_index": {"type": "integer", "minimum": 0},
+            "root_index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": limits["component_limit"] - 1,
+            },
             "capabilities": {
                 "type": "object",
                 "additionalProperties": False,
@@ -136,6 +145,7 @@ def component_generation_schema(write_set: Mapping[str, Any]) -> dict[str, Any]:
             },
             "components": {
                 "type": "array",
+                "minItems": 1,
                 "maxItems": limits["component_limit"],
                 "items": {
                     "type": "object",
@@ -152,7 +162,7 @@ def component_generation_schema(write_set: Mapping[str, Any]) -> dict[str, Any]:
                         "label": {
                             "type": "string",
                             "minLength": 1,
-                            "maxLength": _MAX_LABEL_CHARS,
+                            "maxLength": COMPONENT_LABEL_MAX_CHARS,
                         },
                         "type": {
                             "type": "integer",
@@ -161,12 +171,12 @@ def component_generation_schema(write_set: Mapping[str, Any]) -> dict[str, Any]:
                         "responsibility": {
                             "type": "string",
                             "minLength": 1,
-                            "maxLength": _MAX_RESPONSIBILITY_CHARS,
+                            "maxLength": COMPONENT_RESPONSIBILITY_MAX_CHARS,
                         },
                         "group_label": {
                             "type": "string",
                             "minLength": 1,
-                            "maxLength": _MAX_LABEL_CHARS,
+                            "maxLength": GROUP_LABEL_MAX_CHARS,
                         },
                         "group_kind": {
                             "type": "integer",
@@ -207,7 +217,7 @@ def connection_generation_schema(write_set: Mapping[str, Any]) -> dict[str, Any]
                         "label": {
                             "type": "string",
                             "minLength": 1,
-                            "maxLength": _MAX_LABEL_CHARS,
+                            "maxLength": CONNECTION_LABEL_MAX_CHARS,
                         },
                         "flow": {"type": "integer", "enum": list(FLOW_CODES)},
                         "sync": {"type": "integer", "enum": list(SYNC_CODES)},
@@ -230,6 +240,7 @@ async def generate_component_candidate(
     structural_findings: Sequence[Mapping[str, Any]] = (),
     gate_findings: Sequence[Mapping[str, Any]] = (),
     base_components: Mapping[str, Any] | Sequence[Any] | None = None,
+    rejected_candidate: Mapping[str, Any] | None = None,
     state: Mapping[str, Any] | None = None,
     timeout_seconds: float | None = None,
     max_output_tokens: int | None = None,
@@ -248,6 +259,7 @@ async def generate_component_candidate(
         structural_findings=structural_findings,
         gate_findings=gate_findings,
         base=base_components,
+        rejected_candidate=rejected_candidate,
     )
     try:
         response = await _run_generation(
@@ -285,6 +297,7 @@ async def generate_connection_candidate(
     structural_findings: Sequence[Mapping[str, Any]] = (),
     gate_findings: Sequence[Mapping[str, Any]] = (),
     base_connections: Mapping[str, Any] | Sequence[Any] | None = None,
+    rejected_candidate: Mapping[str, Any] | None = None,
     state: Mapping[str, Any] | None = None,
     timeout_seconds: float | None = None,
     max_output_tokens: int | None = None,
@@ -304,6 +317,7 @@ async def generate_connection_candidate(
         structural_findings=structural_findings,
         gate_findings=gate_findings,
         base=base_connections,
+        rejected_candidate=rejected_candidate,
         accepted_components=accepted,
     )
     try:
@@ -321,7 +335,7 @@ async def generate_connection_candidate(
         )
         wire = _parse_connection_wire(
             response,
-            accepted_indexes={item["index"] for item in accepted},
+            accepted_components=accepted,
             edge_limit=_write_limits(valid_write_set)["edge_limit"],
         )
     except StagedGenerationError as exc:
@@ -415,6 +429,7 @@ def _attempt_prompt(
     structural_findings: Sequence[Mapping[str, Any]],
     gate_findings: Sequence[Mapping[str, Any]],
     base: Mapping[str, Any] | Sequence[Any] | None,
+    rejected_candidate: Mapping[str, Any] | None,
     accepted_components: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str]:
     _validate_fingerprint(upstream_fingerprint, "invalid_upstream_fingerprint")
@@ -432,6 +447,8 @@ def _attempt_prompt(
             raise StagedGenerationError("initial_attempt_has_prior_state")
         if findings["structural"] or findings["gate"]:
             raise StagedGenerationError("initial_attempt_has_correction_findings")
+        if rejected_candidate is not None:
+            raise StagedGenerationError("initial_attempt_has_rejected_candidate")
     elif attempt == 1:
         _validate_fingerprint(
             prior_prompt_fingerprint, "missing_or_invalid_prior_prompt_fingerprint"
@@ -455,6 +472,11 @@ def _attempt_prompt(
         "upstream_fingerprint": upstream_fingerprint,
         "write_set": _prompt_write_set(write_set),
         "base": _bounded_json(base),
+        "rejected_candidate": (
+            _bounded_json(rejected_candidate)
+            if rejected_candidate is not None
+            else None
+        ),
         "accepted_components": accepted_components,
         "findings": findings if attempt == 1 else None,
         "prior_prompt_fingerprint": prior_prompt_fingerprint if attempt == 1 else None,
@@ -491,6 +513,13 @@ def _attempt_prompt(
         if correction_requirements or findings["structural"] or findings["gate"]
         else ""
     )
+    rejected_candidate_rule = (
+        " The rejected_candidate is the complete candidate that failed review or server "
+        "admission. Return a complete corrected candidate. Change only fields needed to "
+        "address the listed findings and preserve all other candidate content."
+        if rejected_candidate is not None
+        else ""
+    )
     if stage == "components":
         instructions = (
             "Propose components only. Do not author server IDs, edges, final groups, "
@@ -504,6 +533,8 @@ def _attempt_prompt(
     else:
         instructions = (
             "Propose edges only. Use source_index and target_index from accepted_components. "
+            "Connect every primary_flow_member from is_root through directed runtime or control "
+            "edges. Do not emit self-loops or duplicate source, target, and label contracts. "
             "Do not emit nodes, components, composition, IDs, technology, layout, "
             f"publication, or permissions. Use these integer codes: {codebook}."
         )
@@ -513,6 +544,7 @@ def _attempt_prompt(
         + edit_rule
         + correction_requirements
         + correction_rule
+        + rejected_candidate_rule
         + "\nINPUT\n"
         + _canonical_json(prompt_input)
     )
@@ -529,7 +561,7 @@ def _parse_component_wire(text: str, *, component_limit: int) -> dict[str, Any]:
         {"title", "assumptions", "root_index", "capabilities", "components"},
     )
     if not isinstance(payload["title"], str) or not (
-        0 < len(payload["title"].strip()) <= _MAX_TITLE_CHARS
+        0 < len(payload["title"].strip()) <= TITLE_MAX_CHARS
     ):
         raise StagedGenerationError("component_wire_invalid")
     assumptions = payload["assumptions"]
@@ -538,7 +570,7 @@ def _parse_component_wire(text: str, *, component_limit: int) -> dict[str, Any]:
         or len(assumptions) > _MAX_ASSUMPTIONS
         or any(
             not isinstance(item, str)
-            or not (0 < len(item.strip()) <= _MAX_ASSUMPTION_CHARS)
+            or not (0 < len(item.strip()) <= ASSUMPTION_MAX_CHARS)
             for item in assumptions
         )
     ):
@@ -553,8 +585,14 @@ def _parse_component_wire(text: str, *, component_limit: int) -> dict[str, Any]:
     if any(not isinstance(value, bool) for value in capabilities.values()):
         raise StagedGenerationError("component_wire_invalid")
     components = payload["components"]
-    if not isinstance(components, list) or len(components) > component_limit:
+    if (
+        not isinstance(components, list)
+        or not components
+        or len(components) > component_limit
+        or not 0 <= payload["root_index"] < len(components)
+    ):
         raise StagedGenerationError("component_wire_invalid")
+    identities: set[tuple[str, int]] = set()
     for component in components:
         _require_exact_keys(
             component,
@@ -569,31 +607,45 @@ def _parse_component_wire(text: str, *, component_limit: int) -> dict[str, Any]:
         )
         if (
             not isinstance(component["label"], str)
-            or not (0 < len(component["label"].strip()) <= _MAX_LABEL_CHARS)
+            or not (0 < len(component["label"].strip()) <= COMPONENT_LABEL_MAX_CHARS)
             or component["type"] not in NODE_TYPE_CODES
             or not isinstance(component["responsibility"], str)
             or not (
                 0
                 < len(component["responsibility"].strip())
-                <= _MAX_RESPONSIBILITY_CHARS
+                <= COMPONENT_RESPONSIBILITY_MAX_CHARS
             )
             or not isinstance(component["group_label"], str)
-            or not (0 < len(component["group_label"].strip()) <= _MAX_LABEL_CHARS)
+            or not (0 < len(component["group_label"].strip()) <= GROUP_LABEL_MAX_CHARS)
             or component["group_kind"] not in GROUP_KIND_CODES
             or not isinstance(component["primary_flow_member"], bool)
         ):
             raise StagedGenerationError("component_wire_invalid")
+        identity = (
+            " ".join(component["label"].split()).casefold(),
+            component["type"],
+        )
+        if identity in identities:
+            raise StagedGenerationError("component_wire_invalid")
+        identities.add(identity)
+    if not components[payload["root_index"]]["primary_flow_member"]:
+        raise StagedGenerationError("component_wire_invalid")
     return payload
 
 
 def _parse_connection_wire(
-    text: str, *, accepted_indexes: set[int], edge_limit: int
+    text: str,
+    *,
+    accepted_components: Sequence[Mapping[str, Any]],
+    edge_limit: int,
 ) -> dict[str, Any]:
     payload = _parse_json(text)
     _require_exact_keys(payload, {"edges"})
     edges = payload["edges"]
+    accepted_indexes = {item["index"] for item in accepted_components}
     if not isinstance(edges, list) or len(edges) > edge_limit:
         raise StagedGenerationError("connection_wire_invalid")
+    identities: set[tuple[int, int, str]] = set()
     for edge in edges:
         _require_exact_keys(
             edge, {"source_index", "target_index", "label", "flow", "sync"}
@@ -603,12 +655,49 @@ def _parse_connection_wire(
             or not _is_integer(edge["target_index"])
             or edge["source_index"] not in accepted_indexes
             or edge["target_index"] not in accepted_indexes
+            or edge["source_index"] == edge["target_index"]
             or not isinstance(edge["label"], str)
-            or not (0 < len(edge["label"].strip()) <= _MAX_LABEL_CHARS)
+            or not (0 < len(edge["label"].strip()) <= CONNECTION_LABEL_MAX_CHARS)
             or edge["flow"] not in FLOW_CODES
             or edge["sync"] not in SYNC_CODES
         ):
             raise StagedGenerationError("connection_wire_invalid")
+        identity = (
+            edge["source_index"],
+            edge["target_index"],
+            " ".join(edge["label"].split()).casefold(),
+        )
+        if identity in identities:
+            raise StagedGenerationError("connection_wire_invalid")
+        identities.add(identity)
+    root_indexes = {
+        item["index"] for item in accepted_components if item.get("is_root") is True
+    }
+    primary_indexes = {
+        item["index"]
+        for item in accepted_components
+        if item.get("primary_flow_member") is True
+    }
+    if root_indexes:
+        root_index = next(iter(root_indexes))
+        adjacency = {index: [] for index in primary_indexes}
+        for edge in edges:
+            if (
+                FLOW_CODES[edge["flow"]] in {"runtime", "control"}
+                and edge["source_index"] in primary_indexes
+                and edge["target_index"] in primary_indexes
+            ):
+                adjacency[edge["source_index"]].append(edge["target_index"])
+        reached = {root_index}
+        pending = [root_index]
+        while pending:
+            current = pending.pop()
+            for target in adjacency[current]:
+                if target not in reached:
+                    reached.add(target)
+                    pending.append(target)
+        if primary_indexes - reached:
+            raise StagedGenerationError("connection_wire_unreachable")
     return payload
 
 
@@ -672,9 +761,21 @@ def _accepted_component_summary(
             raise StagedGenerationError("invalid_accepted_components")
         indexes.add(index)
         label = component.get("label")
+        primary_flow_member = component.get("primary_flow_member", False)
+        is_root = component.get("is_root", False)
+        if not isinstance(primary_flow_member, bool) or not isinstance(is_root, bool):
+            raise StagedGenerationError("invalid_accepted_components")
         accepted.append(
-            {"index": index, "label": label if isinstance(label, str) else "component"}
+            {
+                "index": index,
+                "label": label if isinstance(label, str) else "component",
+                "primary_flow_member": primary_flow_member,
+                "is_root": is_root,
+            }
         )
+    roots = [component for component in accepted if component["is_root"]]
+    if roots and (len(roots) != 1 or not roots[0]["primary_flow_member"]):
+        raise StagedGenerationError("invalid_accepted_components")
     return accepted
 
 
@@ -695,7 +796,7 @@ def _sanitize_findings(findings: Sequence[Mapping[str, Any]]) -> list[dict[str, 
         ):
             reason = finding.get("reason")
             safe_reason = (
-                " ".join(reason.split())[:_MAX_RESPONSIBILITY_CHARS]
+                " ".join(reason.split())[:_MAX_FINDING_REASON_CHARS]
                 if isinstance(reason, str)
                 else ""
             )
