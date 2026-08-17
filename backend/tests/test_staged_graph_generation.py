@@ -275,6 +275,12 @@ async def test_generation_prompt_uses_selected_prototype_maturity(monkeypatch, s
     assert prompt_input["resolved_maturity"] == "prototype"
     assert "Use prototype criteria only." in prompt
     assert "Do not add production-only controls" in prompt
+    if stage == "connections":
+        assert "both directions of a synchronous request-response" in prompt
+        assert "needs a distinct reverse response edge" in prompt
+        assert (
+            "Route each supporting branch to a rejoin or observable outcome" in prompt
+        )
 
 
 @pytest.mark.asyncio

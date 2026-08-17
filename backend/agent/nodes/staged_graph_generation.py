@@ -534,7 +534,11 @@ def _attempt_prompt(
         instructions = (
             "Propose edges only. Use source_index and target_index from accepted_components. "
             "Connect every primary_flow_member from is_root through directed runtime or control "
-            "edges. Do not emit self-loops or duplicate source, target, and label contracts. "
+            "edges. Represent both directions of a synchronous request-response. A read, fetch, "
+            "lookup, load, or query request that expects returned data needs a distinct reverse "
+            "response edge. Route each supporting branch to a rejoin or observable outcome. Do "
+            "not label a request edge as if it carries the returned payload. Do not emit self-loops "
+            "or duplicate source, target, and label contracts. "
             "Do not emit nodes, components, composition, IDs, technology, layout, "
             f"publication, or permissions. Use these integer codes: {codebook}."
         )

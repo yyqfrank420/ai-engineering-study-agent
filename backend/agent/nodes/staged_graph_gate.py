@@ -14,6 +14,7 @@ from adapters.llm_adapter import build_telemetry
 from agent.architecture_rubric import (
     RUBRIC_CODES,
     RUBRIC_CODE_OWNERS,
+    advisory_rubric_codes,
     TOPOLOGY_PROOF_REQUIREMENTS,
 )
 from agent.stream_utils import StructuredLLMResponse, stream_structured_llm
@@ -121,6 +122,7 @@ def _response_schema(
 def _rules_for_connections(
     resolved_maturity: str, required_production_guarantees: Sequence[str]
 ) -> tuple[str, ...]:
+    advisory_codes = advisory_rubric_codes(resolved_maturity)
     if resolved_maturity == "production":
         return tuple(
             code
@@ -133,6 +135,7 @@ def _rules_for_connections(
         for code in CONNECTION_RULE_CODES
         if code not in _PRODUCTION_CONNECTION_RULE_CODES
         and code not in TOPOLOGY_PROOF_REQUIREMENTS
+        and code not in advisory_codes
     )
 
 
@@ -478,6 +481,8 @@ async def _review(
             for proof in proofs
             if not proof["approved"]
         )
+    if not payload["approved"] and not findings:
+        return _terminal_result("provider rejected without blocking findings")
     approved = payload["approved"] and not findings
     if payload["approved"] and findings:
         diagnostics.append("provider approval was overridden by blocking findings")

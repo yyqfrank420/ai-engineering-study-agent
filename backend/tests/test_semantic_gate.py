@@ -196,8 +196,64 @@ def test_graph_review_diagnostics_project_only_allowlisted_metadata():
     ]
 
 
-def test_staged_graph_diagnostic_projects_only_fixed_safe_metadata():
+def test_staged_gate_diagnostic_projects_only_fixed_safe_metadata():
     fingerprint = "c" * 64
+    diagnostic = {
+        "schema_version": 1,
+        "kind": "staged_gate",
+        "stage": "components",
+        "attempt": 2,
+        "code": "gate_rejected",
+        "candidate_fingerprint": fingerprint,
+        "findings": [
+            {
+                "rule_code": "domain_specificity",
+                "record_paths": ["components", "components.0"],
+            },
+            {
+                "rule_code": "capability_classification",
+                "record_paths": ["components.3"],
+            },
+        ],
+    }
+    events = [
+        {
+            "type": "workflow_progress",
+            "diagnostic": {
+                **diagnostic,
+                "extra": "discarded",
+            },
+        },
+        {
+            "type": "workflow_progress",
+            "diagnostic": {**diagnostic, "kind": "staged_generation"},
+        },
+        {"type": "workflow_progress", "diagnostic": diagnostic},
+    ]
+    projected = {
+        "schema_version": 1,
+        "kind": "staged_gate",
+        "stage": "components",
+        "attempt": 2,
+        "code": "gate_rejected",
+        "candidate_fingerprint": fingerprint,
+        "findings": [
+            {
+                "rule_code": "domain_specificity",
+                "record_paths": ["components", "components.0"],
+            },
+            {
+                "rule_code": "capability_classification",
+                "record_paths": ["components.3"],
+            },
+        ],
+    }
+
+    assert _graph_review_diagnostics_from_events(events) == [projected]
+
+
+def test_staged_generation_diagnostic_projects_only_fixed_safe_metadata():
+    fingerprint = "f" * 64
     diagnostic = {
         "schema_version": 1,
         "kind": "staged_generation",
@@ -219,6 +275,58 @@ def test_staged_graph_diagnostic_projects_only_fixed_safe_metadata():
     ]
 
     assert _graph_review_diagnostics_from_events(events) == [diagnostic]
+
+
+def test_staged_gate_diagnostic_rejects_malformed_payloads():
+    fingerprint = "d" * 64
+    finding = {
+        "rule_code": "domain_specificity",
+        "record_paths": ["components.0"],
+    }
+    diagnostic = {
+        "schema_version": 1,
+        "kind": "staged_gate",
+        "stage": "components",
+        "attempt": 2,
+        "code": "gate_rejected",
+        "candidate_fingerprint": fingerprint,
+        "findings": [finding],
+    }
+    invalid_diagnostics = [
+        {**diagnostic, "stage": "composition"},
+        {**diagnostic, "attempt": True},
+        {**diagnostic, "code": "raw_provider_error"},
+        {**diagnostic, "candidate_fingerprint": "short"},
+        {**diagnostic, "prompt": "raw prompt"},
+        {
+            **diagnostic,
+            "findings": [{**finding, "reason": "raw model reason"}],
+        },
+        {
+            **diagnostic,
+            "findings": [
+                {"rule_code": "safe_action_boundary", "record_paths": ["components"]}
+            ],
+        },
+        {
+            **diagnostic,
+            "findings": [{**finding, "record_paths": ["components.-1"]}],
+        },
+        {
+            **diagnostic,
+            "findings": [{**finding, "record_paths": ["components.01"]}],
+        },
+        {
+            **diagnostic,
+            "findings": [{**finding, "record_paths": ["components.0", "components.0"]}],
+        },
+    ]
+    events = [
+        {"type": "workflow_progress", "diagnostic": value}
+        for value in invalid_diagnostics
+    ]
+
+    assert _graph_review_diagnostics_from_events(events) == []
 
 
 @pytest.mark.asyncio
@@ -324,6 +432,123 @@ async def test_live_evaluation_records_projected_graph_review_diagnostics(monkey
             "selector_fingerprints": [fingerprint],
             "prior_blocker_dispositions": [],
             "review_disposition": "rejected",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_live_evaluation_records_projected_staged_gate_diagnostics(monkeypatch):
+    case = load_corpus().cases[0]
+    fingerprint = "e" * 64
+    capture = {
+        "results": [
+            {
+                "id": case.id,
+                "deterministic_failures": ["graph was withheld"],
+                "failure_details": [{"kind": "quality"}],
+                "events": [
+                    {
+                        "type": "workflow_progress",
+                        "diagnostic": {
+                            "schema_version": 1,
+                            "kind": "staged_gate",
+                            "stage": "connections",
+                            "attempt": 1,
+                            "code": "gate_unavailable",
+                            "candidate_fingerprint": fingerprint,
+                            "findings": [
+                                {
+                                    "rule_code": "runtime_completeness",
+                                    "record_paths": ["connections", "connections.0"],
+                                },
+                                {
+                                    "rule_code": "authorization_and_compensation",
+                                    "record_paths": ["connections.1", "connections.11"],
+                                },
+                                {
+                                    "rule_code": "safe_action_boundary",
+                                    "record_paths": ["connections.2", "connections.3"],
+                                },
+                            ],
+                        },
+                    }
+                ],
+            }
+        ],
+        "application_telemetry": [{"provider_attempts": 1}],
+    }
+    monkeypatch.setattr(live_runner, "_load_capture", lambda _args: capture)
+    monkeypatch.setattr(
+        live_runner,
+        "_manifest",
+        lambda: {
+            "live": {
+                "budgets": {
+                    "application_calls": 2,
+                    "application_full_calls": 2,
+                    "judge_calls": 2,
+                    "pr_cases": 2,
+                },
+                "cost_policy": {},
+                "suites": {},
+            }
+        },
+    )
+    monkeypatch.setattr(
+        live_runner,
+        "account_application_cost",
+        lambda *_args: {"total": {"estimated_usd": 0}, "price_release": "test"},
+    )
+    monkeypatch.setattr(
+        live_runner,
+        "evaluate_cost_policy",
+        lambda *_args: {
+            "status": "pass",
+            "blocking_status": "pass",
+            "reason": "within budget",
+        },
+    )
+    monkeypatch.setattr(
+        live_runner,
+        "SemanticJudge",
+        lambda: SimpleNamespace(provider="anthropic", model="claude-sonnet-5"),
+    )
+
+    report, exit_code = await evaluate(
+        SimpleNamespace(
+            manual_review_policy="blocking",
+            require_approved_corpus=False,
+            capture_replay=False,
+            suite="diagnostic",
+            case=[case.id],
+            target="https://candidate.example",
+            resume_input=None,
+        )
+    )
+
+    assert exit_code == 1
+    assert report["evaluations"][0]["graph_review_diagnostics"] == [
+        {
+            "schema_version": 1,
+            "kind": "staged_gate",
+            "stage": "connections",
+            "attempt": 1,
+            "code": "gate_unavailable",
+            "candidate_fingerprint": fingerprint,
+            "findings": [
+                {
+                    "rule_code": "runtime_completeness",
+                    "record_paths": ["connections", "connections.0"],
+                },
+                {
+                    "rule_code": "authorization_and_compensation",
+                    "record_paths": ["connections.1", "connections.11"],
+                },
+                {
+                    "rule_code": "safe_action_boundary",
+                    "record_paths": ["connections.2", "connections.3"],
+                },
+            ],
         }
     ]
 

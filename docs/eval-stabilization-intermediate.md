@@ -1,11 +1,11 @@
 # Live Evaluation Stabilization: Intermediate Record
 
-Last updated: 2026-08-16
+Last updated: 2026-08-17
 
-Evidence in this record is current through paid diagnostic `31953303244` on
-`feature/staged-graph-pipeline` on 2026-08-16. PRs #37 through #40 merged on 2026-08-07, and PR #44
+Evidence in this record is current through paid diagnostic `32009504451` on
+`feature/staged-graph-pipeline` on 2026-08-17. PRs #37 through #40 merged on 2026-08-07, and PR #44
 merged as `77df25e7`. The evidence-provenance, graph-review, and latency corrections passed local
-review and the full offline CI matrix through the post-preview deadline correction. Twenty-five
+review and the full offline CI matrix through the staged correction-admission fix. Twenty-seven
 consecutive recent `graph-expansion` diagnostics have failed; there is no protected live success on
 the current branch.
 
@@ -33,7 +33,7 @@ Corpus `2026-08-12.v1` remains pending human review.
 ## Recent diagnostic failure ledger
 
 This is the canonical chronology for recent `graph-expansion` failures through
-`06dac4e2946d6e26b949c396317765a46e798a8d`. Every
+`e35c521071d1945c3d7ee44428706774ace6d222`. Every
 row records a live product failure. A green workflow conclusion for a report-only row means the
 pending-corpus workflow uploaded its evidence and exited without enforcing the failed verdict. The
 initial workflow runs failed; later report-only diagnostics concluded green under that policy.
@@ -48,7 +48,10 @@ The twenty-third failure rendered three private candidates, consumed two semanti
 and withheld the graph. The twenty-fourth published turn 1, previewed the requested turn 2
 expansion, and restored turn 1 after a repaired private render inherited the expired initial-preview
 deadline. The twenty-fifth published a 14-node graph on turn 1, created a 15-node turn 2 candidate,
-and restored turn 1 after the final connections contract failed `invalid_contract`.
+and restored turn 1 after the final connections contract failed `invalid_contract`. The twenty-sixth
+passed its first staged component render, then failed correction admission before a second render.
+The twenty-seventh passed component review and three private renders, then withheld turn 1 after
+two connection-review rejections.
 Run links and recorded heads come from GitHub Actions metadata. Latency, provider calls, failure codes,
 and cost come from each retained `scheduled-eval-<run>/browser-results.json`, `live-results.json`,
 and `run-context.json` artifact. Model effort comes from source at the exact run head because the
@@ -83,8 +86,9 @@ incomplete usage.
 | 2026-08-16 | [`31939496092`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31939496092), `06dac4e2946d6e26b949c396317765a46e798a8d` | Turn 1 published a seven-node graph in 143.111 seconds and previewed it after 39.179 seconds. Its prototype parallel path called Sonnet twice. Turn 2 previewed the requested eight-node expansion after 25.259 seconds. Production review rejected it, Kimi completed one semantic repair, and the repaired private render failed `diagram_evaluation_timeout` because the 170-second first-preview deadline had already expired. The workflow restored turn 1, so the evaluator reported `graph expansion added 0 nodes; expected 1`. Ten calls ran without fallback or judge calls. The case cost $0.764855. | The parallel-review marker is now declared in `AgentState`, so LangGraph retains it and routes an approved prototype scorecard past a second critic call. Private rendering and preview transport consult the first-preview deadline only during repair round zero. Focused tests and the full offline matrix pass; paid verification remains pending. | $0.764855 |
 | 2026-08-16 | [`31953303244`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31953303244), `feature/staged-graph-pipeline` | Turn 1 published 14 nodes and 19 edges. Turn 2 created a 15-node candidate. The final connections contract failed `invalid_contract`, so the workflow restored the 14-node turn 1 graph. Thirteen application calls ran. The case took 752.114 seconds. | This invalidates the Release 1 live prerequisite for the legacy whole-graph repair loop. Release 1 changes to the flag-gated staged state machine described below. | $1.166855 |
 | 2026-08-16 | [`31973080544`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31973080544), `8f061d00cf12b7edc04da3533cb7dad49d3c3f59` | The staged component preview contained seven nodes and passed private rendering after 58.441 seconds. Sonnet rejected the component layer. A second Kimi call completed, then the correction failed before its private render. The workflow discarded the validation coordinate, withheld turn 1, and skipped turn 2. Four calls ran without fallback. The case took 148.950 seconds. GitHub Actions reported success despite the failed live gate. | Corrections now receive the rejected component or connection candidate. Provider schemas share the server's text limits and reject empty components, invalid roots, duplicate identities, self-loops, duplicate edges, and unreachable primary flows. Safe diagnostics retain the stage, attempt, code, path, and fingerprints. Manually dispatched diagnostic failures now fail the Actions job. Paid verification remains pending. | $0.138016 |
+| 2026-08-17 | [`32009504451`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/32009504451), `e35c521071d1945c3d7ee44428706774ace6d222` | The component candidate passed review. Initial and corrected connection candidates contained five and seven edges; all three staged candidates passed private rendering. The correction added the inference response route while retaining a dangling model-artifact fetch. Sonnet rejected both connection candidates, `graph_data` was withheld, and turn 2 was skipped. Seven calls took 202.830 seconds without fallback or judge calls. The workflow failed closed. | Prototype staged review now excludes `logical_flow` and `branch_completion`, which the authoritative rubric marks advisory at that depth. Connection prompts require reverse response edges for synchronous reads and completion of supporting branches. Final gate exhaustion retains a safe scorecard diagnostic instead of discarding its rule codes and record paths. Paid verification remains pending. | $0.198687 |
 
-Known application spend across these twenty-six failures is at least **$9.913632**. Several provider
+Known application spend across these twenty-seven failures is at least **$10.112319**. Several provider
 calls have incomplete usage; row amounts marked `at least` are lower bounds. Diagnostic
 `31549644038` retained only `connections.links[6]: topology`; it did not retain authored output and
 cannot distinguish an out-of-range endpoint from a self-link.
@@ -157,7 +161,7 @@ remain deferred.
 
 ## Repeated-failure root cause
 
-The twenty-six recent failures include architect/evidence contract, topology-wire, review/repair,
+The twenty-seven recent failures include architect/evidence contract, topology-wire, review/repair,
 and frontend layout failures. The immediate
 errors differed. The shared engineering defect was contract drift. Graph limits, model schemas,
 repair permissions, review state, browser measurements, and staging measurements had separate

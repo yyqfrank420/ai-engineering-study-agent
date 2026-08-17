@@ -17,7 +17,12 @@ from agent.nodes.graph_worker import (
     admit_staged_graph_edit,
     staged_edit_scope,
 )
-from agent.nodes.staged_graph_gate import review_components, review_connections
+from agent.nodes.staged_graph_gate import (
+    COMPONENT_RULE_CODES,
+    CONNECTION_RULE_CODES,
+    review_components,
+    review_connections,
+)
 from agent.nodes.staged_graph_generation import (
     FLOW_CODES,
     GROUP_KIND_CODES,
@@ -166,6 +171,63 @@ def _gate_findings(
         }
         for finding in findings
     ]
+
+
+def _gate_failure_diagnostic(
+    findings: list[dict[str, Any]],
+    *,
+    stage: str,
+    attempt: int,
+    code: str,
+    candidate_records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    rule_codes = (
+        frozenset(COMPONENT_RULE_CODES)
+        if stage == "components"
+        else frozenset(CONNECTION_RULE_CODES)
+    )
+    record_count = len(candidate_records)
+    gate_findings = []
+    for finding in findings:
+        if len(gate_findings) >= 24:
+            break
+        if not isinstance(finding, Mapping):
+            continue
+        rule_code = finding.get("rule_code")
+        if not isinstance(rule_code, str) or rule_code not in rule_codes:
+            continue
+        paths = []
+        seen_paths: set[str] = set()
+        record_indexes = finding.get("record_indexes")
+        if not isinstance(record_indexes, list):
+            record_indexes = []
+        for index in record_indexes:
+            if (
+                isinstance(index, int)
+                and not isinstance(index, bool)
+                and 0 <= index < record_count
+            ):
+                path = f"{stage}.{index}"
+                if path not in seen_paths and len(paths) < 32:
+                    paths.append(path)
+                    seen_paths.add(path)
+        if not paths:
+            paths = [stage]
+        gate_findings.append(
+            {
+                "rule_code": rule_code,
+                "record_paths": paths,
+            }
+        )
+    return {
+        "schema_version": 1,
+        "kind": "staged_gate",
+        "stage": stage,
+        "attempt": attempt,
+        "code": code,
+        "candidate_fingerprint": _fingerprint(candidate_records),
+        "findings": gate_findings,
+    }
 
 
 def _decode_components(wire: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -622,6 +684,7 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
     previous_component_candidate: str | None = None
     previous_component_wire: str | None = None
     rejected_component_candidate: dict[str, Any] | None = None
+    reviewed_component_records: list[dict[str, Any]] = []
     correction_findings: list[dict[str, str]] = []
     preview_count = int(state.get("graph_stage_preview_count", 0))
     working_state = state
@@ -738,11 +801,12 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                 "root_index": assigned["root_index"],
                 "capabilities": assigned["capabilities"],
             }
+            reviewed_component_records = copy.deepcopy(assigned["components"])
             component_gate = await review_components(
                 user_request=request,
                 evidence_bundle=component_evidence,
                 resolved_maturity=maturity,
-                candidate_records=assigned["components"],
+                candidate_records=reviewed_component_records,
                 telemetry_context=state,
             )
             if component_gate["approved"]:
@@ -751,7 +815,18 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                 break
             if component_gate["terminal"]:
                 return await _failed(
-                    rendered, "staged_component_gate_unavailable", component_gate
+                    rendered,
+                    "staged_component_gate_unavailable",
+                    component_gate,
+                    diagnostic=_gate_failure_diagnostic(
+                        findings=component_gate.get("findings", [])
+                        if isinstance(component_gate.get("findings"), list)
+                        else [],
+                        stage="components",
+                        attempt=attempt + 1,
+                        code="gate_unavailable",
+                        candidate_records=reviewed_component_records,
+                    ),
                 )
             correction_findings = _gate_findings(
                 component_gate["findings"], stage="components"
@@ -782,13 +857,27 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                     working_state, "staged_component_generation_unavailable"
                 )
     if component_build is None:
-        return await _failed(working_state, "staged_component_attempts_exhausted")
+        return await _failed(
+            working_state,
+            "staged_component_attempts_exhausted",
+            review=component_gate,
+            diagnostic=_gate_failure_diagnostic(
+                findings=component_gate.get("findings", [])
+                if isinstance(component_gate.get("findings"), list)
+                else [],
+                stage="components",
+                attempt=_MAX_STAGE_ATTEMPTS,
+                code="gate_rejected",
+                candidate_records=reviewed_component_records,
+            ),
+        )
 
     accepted_component_fingerprint = component_fingerprint(component_build)
     previous_prompt = None
     previous_connection_candidate: str | None = None
     previous_connection_wire: str | None = None
     rejected_connection_candidate: dict[str, Any] | None = None
+    reviewed_connection_records: list[dict[str, Any]] = []
     correction_findings = []
     connection_gate: dict[str, Any] = {}
     for attempt in range(_MAX_STAGE_ATTEMPTS):
@@ -886,20 +975,21 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                 }
                 for component in candidate_build["components"]
             ]
+            reviewed_connection_records = [
+                {
+                    "source": edge["source_id"],
+                    "target": edge["target_id"],
+                    "label": edge["label"],
+                    "flow": edge["flow"],
+                    "sync": edge["sync"],
+                }
+                for edge in candidate_build["connections"]
+            ]
             connection_gate = await review_connections(
                 user_request=request,
                 evidence_bundle=evidence,
                 resolved_maturity=maturity,
-                candidate_records=[
-                    {
-                        "source": edge["source_id"],
-                        "target": edge["target_id"],
-                        "label": edge["label"],
-                        "flow": edge["flow"],
-                        "sync": edge["sync"],
-                    }
-                    for edge in candidate_build["connections"]
-                ],
+                candidate_records=reviewed_connection_records,
                 required_production_guarantees=production_proofs_for_capabilities(
                     candidate_build["capabilities"], maturity=maturity
                 ),
@@ -940,7 +1030,18 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                 }
             if connection_gate["terminal"]:
                 return await _failed(
-                    rendered, "staged_connection_gate_unavailable", connection_gate
+                    rendered,
+                    "staged_connection_gate_unavailable",
+                    connection_gate,
+                    diagnostic=_gate_failure_diagnostic(
+                        findings=connection_gate.get("findings", [])
+                        if isinstance(connection_gate.get("findings"), list)
+                        else [],
+                        stage="connections",
+                        attempt=attempt + 1,
+                        code="gate_unavailable",
+                        candidate_records=reviewed_connection_records,
+                    ),
                 )
             correction_findings = _gate_findings(
                 connection_gate["findings"], stage="connections"
@@ -970,4 +1071,17 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                 return await _failed(
                     working_state, "staged_connection_generation_unavailable"
                 )
-    return await _failed(working_state, "staged_connection_attempts_exhausted")
+    return await _failed(
+        working_state,
+        "staged_connection_attempts_exhausted",
+        review=connection_gate,
+        diagnostic=_gate_failure_diagnostic(
+            findings=connection_gate.get("findings", [])
+            if isinstance(connection_gate.get("findings"), list)
+            else [],
+            stage="connections",
+            attempt=_MAX_STAGE_ATTEMPTS,
+            code="gate_rejected",
+            candidate_records=reviewed_connection_records,
+        ),
+    )

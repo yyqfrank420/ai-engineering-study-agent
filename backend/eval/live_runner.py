@@ -10,6 +10,11 @@ from pathlib import Path
 import re
 from typing import Any, Literal
 
+from agent.architecture_rubric import (
+    RUBRIC_CODES,
+    RUBRIC_CODE_OWNERS,
+    TOPOLOGY_PROOF_REQUIREMENTS,
+)
 from eval.cost_gate import (
     CostPolicy,
     account_application_cost,
@@ -61,6 +66,17 @@ _STAGED_GRAPH_DIAGNOSTIC_FIELDS = frozenset(
         "stage",
         "attempt",
         "code",
+        "candidate_fingerprint",
+        "findings",
+    }
+)
+_STAGED_GENERATION_DIAGNOSTIC_FIELDS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "stage",
+        "attempt",
+        "code",
         "path",
         "path_fingerprint",
         "candidate_fingerprint",
@@ -68,9 +84,20 @@ _STAGED_GRAPH_DIAGNOSTIC_FIELDS = frozenset(
     }
 )
 _STAGED_GRAPH_STAGES = frozenset({"components", "connections"})
+_STAGED_GATE_CODES = frozenset({"gate_rejected", "gate_unavailable"})
 _STAGED_GRAPH_FINGERPRINT_DISPOSITIONS = frozenset(
     {"matches_prior_candidate", "rejected_before_render"}
 )
+_STAGED_GATE_RULE_CODES = {
+    "components": frozenset(
+        code for code in RUBRIC_CODES if RUBRIC_CODE_OWNERS[code] == "components"
+    )
+    | {"capability_classification"},
+    "connections": frozenset(
+        code for code in RUBRIC_CODES if RUBRIC_CODE_OWNERS[code] == "connections"
+    )
+    | frozenset(TOPOLOGY_PROOF_REQUIREMENTS),
+}
 _GRAPH_REVIEW_COUNTER_FIELDS = (
     "repair_round",
     "critic_call_count",
@@ -125,11 +152,85 @@ def _safe_graph_review_dispositions(value: object) -> list[dict[str, str]] | Non
     return sorted(dispositions, key=lambda item: item["prior_obligation_id"])
 
 
+def _safe_staged_gate_record_path(value: object, *, stage: str) -> str | None:
+    if not isinstance(value, str):
+        return None
+    if value == stage:
+        return value
+    prefix = f"{stage}."
+    if not value.startswith(prefix):
+        return None
+    suffix = value[len(prefix) :]
+    if re.fullmatch(r"(?:0|[1-9][0-9]*)", suffix) is None:
+        return None
+    return value
+
+
+def _safe_staged_gate_findings(
+    value: object, *, stage: str
+) -> list[dict[str, Any]] | None:
+    if not isinstance(value, list) or len(value) > 24:
+        return None
+    findings: list[dict[str, Any]] = []
+    for finding in value:
+        if not isinstance(finding, dict) or set(finding) != {
+            "rule_code",
+            "record_paths",
+        }:
+            return None
+        rule_code = finding.get("rule_code")
+        if (
+            not isinstance(rule_code, str)
+            or rule_code not in _STAGED_GATE_RULE_CODES[stage]
+        ):
+            return None
+        record_paths = finding.get("record_paths")
+        if not isinstance(record_paths, list) or len(record_paths) > 32:
+            return None
+        safe_paths = []
+        seen_paths: set[str] = set()
+        for record_path in record_paths:
+            path = _safe_staged_gate_record_path(record_path, stage=stage)
+            if path is None or path in seen_paths:
+                return None
+            seen_paths.add(path)
+            safe_paths.append(path)
+        findings.append({"rule_code": rule_code, "record_paths": safe_paths})
+    return findings
+
+
 def _project_graph_review_diagnostic(value: object) -> dict[str, Any] | None:
     """Copy only fixed-shape review metadata from internal evaluation events."""
-    if isinstance(value, dict) and value.get("kind") == "staged_generation":
+    if isinstance(value, dict) and value.get("kind") == "staged_gate":
         if (
             set(value) != _STAGED_GRAPH_DIAGNOSTIC_FIELDS
+            or value.get("schema_version") != 1
+            or value.get("stage") not in _STAGED_GRAPH_STAGES
+            or not isinstance(value.get("attempt"), int)
+            or isinstance(value.get("attempt"), bool)
+            or not 1 <= value["attempt"] <= 2
+            or value.get("code") not in _STAGED_GATE_CODES
+            or not isinstance(value.get("candidate_fingerprint"), str)
+            or not _SHA256_FINGERPRINT.fullmatch(value["candidate_fingerprint"])
+        ):
+            return None
+        findings = _safe_staged_gate_findings(
+            value.get("findings"), stage=value["stage"]
+        )
+        if findings is None:
+            return None
+        return {
+            "schema_version": 1,
+            "kind": "staged_gate",
+            "stage": value["stage"],
+            "attempt": value["attempt"],
+            "code": value["code"],
+            "candidate_fingerprint": value["candidate_fingerprint"],
+            "findings": findings,
+        }
+    if isinstance(value, dict) and value.get("kind") == "staged_generation":
+        if (
+            set(value) != _STAGED_GENERATION_DIAGNOSTIC_FIELDS
             or value.get("schema_version") != 1
             or value.get("stage") not in _STAGED_GRAPH_STAGES
             or not isinstance(value.get("attempt"), int)
@@ -138,7 +239,7 @@ def _project_graph_review_diagnostic(value: object) -> dict[str, Any] | None:
             or not isinstance(value.get("code"), str)
             or not _SAFE_GRAPH_REVIEW_RULE.fullmatch(value["code"])
             or not isinstance(value.get("path"), str)
-            or not _SAFE_GRAPH_REVIEW_TEXT.fullmatch(value["path"])
+            or not _SAFE_GRAPH_REVIEW_TEXT.fullmatch(value.get("path"))
             or value.get("fingerprint_disposition")
             not in _STAGED_GRAPH_FINGERPRINT_DISPOSITIONS
             or not all(
@@ -148,7 +249,7 @@ def _project_graph_review_diagnostic(value: object) -> dict[str, Any] | None:
             )
         ):
             return None
-        return {field: value[field] for field in _STAGED_GRAPH_DIAGNOSTIC_FIELDS}
+        return {field: value[field] for field in _STAGED_GENERATION_DIAGNOSTIC_FIELDS}
     if not isinstance(value, dict) or set(value) - _GRAPH_REVIEW_DIAGNOSTIC_FIELDS:
         return None
     required_fields = _GRAPH_REVIEW_DIAGNOSTIC_FIELDS - {

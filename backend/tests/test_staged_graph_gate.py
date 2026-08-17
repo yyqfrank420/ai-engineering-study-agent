@@ -152,6 +152,35 @@ def test_malformed_top_level_response_is_terminal(monkeypatch):
     assert result["findings"] == []
 
 
+@pytest.mark.parametrize("stage", ["components", "connections"])
+def test_rejection_without_findings_is_terminal(monkeypatch, stage):
+    _stub_response(monkeypatch, {"approved": False, "findings": []})
+
+    if stage == "components":
+        result = asyncio.run(
+            gate.review_components(
+                user_request="Design a service.",
+                evidence_bundle={},
+                resolved_maturity="prototype",
+                candidate_records=[{"id": "a"}],
+            )
+        )
+    else:
+        result = asyncio.run(
+            gate.review_connections(
+                user_request="Design a service.",
+                evidence_bundle={},
+                resolved_maturity="prototype",
+                candidate_records=[{"source": "a", "target": "b"}],
+            )
+        )
+
+    assert result["approved"] is False
+    assert result["terminal"] is True
+    assert result["findings"] == []
+    assert result["diagnostics"] == ["provider rejected without blocking findings"]
+
+
 def test_production_proofs_cover_required_guarantees_and_validate_route(monkeypatch):
     calls = _stub_response(
         monkeypatch,
@@ -214,6 +243,28 @@ def test_prototype_connection_schema_excludes_production_rules(monkeypatch):
     assert "production_proofs" not in schema["properties"]
     assert "topology_enforced_guarantees" not in codes
     assert "audit_and_provenance" not in codes
+    assert "logical_flow" not in codes
+    assert "branch_completion" not in codes
+
+
+def test_production_connection_schema_preserves_hard_rules(monkeypatch):
+    calls = _stub_response(monkeypatch, {"approved": True, "findings": []})
+
+    result = asyncio.run(
+        gate.review_connections(
+            user_request="Design a production service.",
+            evidence_bundle={},
+            resolved_maturity="production",
+            candidate_records=[{"source": "a", "target": "b"}],
+        )
+    )
+
+    schema = calls[0]["response_schema"]
+    codes = schema["properties"]["findings"]["items"]["properties"]["rule_code"]["enum"]
+
+    assert result["approved"] is True
+    assert "logical_flow" in codes
+    assert "branch_completion" in codes
 
 
 def test_failed_production_proof_is_an_independent_finding(monkeypatch):

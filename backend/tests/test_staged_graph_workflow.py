@@ -217,6 +217,18 @@ def _rejected_gate(*, terminal: bool = False) -> dict:
     }
 
 
+def _rejected_gate_with_findings(
+    findings: list[dict[str, object]], *, terminal: bool = False
+) -> dict:
+    return {
+        "approved": False,
+        "terminal": terminal,
+        "findings": findings,
+        "proofs": [],
+        "diagnostics": [],
+    }
+
+
 async def _approve_gate(**_kwargs) -> dict:
     return _approved_gate()
 
@@ -376,6 +388,82 @@ async def test_identical_component_correction_is_not_reviewed_twice(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_final_component_gate_rejection_returns_review_and_safe_gate_diagnostic(
+    monkeypatch,
+):
+    component_calls = 0
+    analytics: list[dict] = []
+    events: list[dict] = []
+
+    gate_findings = [
+        {
+            "rule_code": "domain_specificity",
+            "record_indexes": [0, 1, 0, -1, 9, True, "2"],
+        },
+        {"rule_code": "brief_coverage", "record_indexes": "secret-raw-index"},
+        {"rule_code": "invented_rule", "record_indexes": [0]},
+    ]
+    stage_gate = _rejected_gate_with_findings(gate_findings)
+
+    async def components(**_kwargs):
+        nonlocal component_calls
+        component_calls += 1
+        wire = _components_wire()
+        if component_calls == 2:
+            wire["components"][0]["responsibility"] = "secret-" + ("x" * 60)
+        return {"wire": wire, "prompt_fingerprint": f"component-{component_calls}"}
+
+    async def component_gate(**_kwargs):
+        return stage_gate
+
+    async def send(event):
+        events.append(event)
+
+    async def render(state, graph, *, preview_count):
+        return await _render_ok(state, graph, preview_count=preview_count)
+
+    monkeypatch.setattr(workflow, "generate_component_candidate", components)
+    monkeypatch.setattr(workflow, "_render", render)
+    monkeypatch.setattr(workflow, "review_components", component_gate)
+    monkeypatch.setattr(
+        workflow, "enqueue_analytics_event", lambda **event: analytics.append(event)
+    )
+    monkeypatch.setattr(
+        workflow.settings, "internal_test_email_allowlist_raw", "internal@openai.com"
+    )
+
+    result = await workflow.run_staged_graph_pipeline(
+        _state(user_email="internal@openai.com", send=send)
+    )
+
+    assert component_calls == 2
+    assert (
+        result["graph_operation"]["failure_code"]
+        == "staged_component_attempts_exhausted"
+    )
+    assert result["graph_review"]["staged_gate"] == stage_gate
+    diagnostic = result["graph_review"]["staged_failure"]
+    assert diagnostic["schema_version"] == 1
+    assert diagnostic["kind"] == "staged_gate"
+    assert diagnostic["stage"] == "components"
+    assert diagnostic["attempt"] == 2
+    assert diagnostic["code"] == "gate_rejected"
+    assert len(diagnostic["candidate_fingerprint"]) == 64
+    assert diagnostic["findings"] == [
+        {
+            "rule_code": "domain_specificity",
+            "record_paths": ["components.0", "components.1"],
+        },
+        {"rule_code": "brief_coverage", "record_paths": ["components"]},
+    ]
+    assert set(diagnostic["findings"][0].keys()) == {"rule_code", "record_paths"}
+    assert "secret-" not in repr(diagnostic)
+    assert events[0]["diagnostic"] == diagnostic
+    assert analytics[0]["properties"] == diagnostic
+    assert "secret-" not in repr(analytics[0])
+
+
+@pytest.mark.asyncio
 async def test_malformed_component_gate_is_terminal_without_retry(monkeypatch):
     calls = 0
 
@@ -398,6 +486,37 @@ async def test_malformed_component_gate_is_terminal_without_retry(monkeypatch):
     assert (
         result["graph_operation"]["failure_code"] == "staged_component_gate_unavailable"
     )
+    diagnostic = result["graph_review"]["staged_failure"]
+    assert diagnostic["code"] == "gate_unavailable"
+    assert diagnostic["stage"] == "components"
+    assert diagnostic["attempt"] == 1
+
+
+@pytest.mark.asyncio
+async def test_malformed_connection_gate_retains_safe_terminal_diagnostic(monkeypatch):
+    _install_success_boundaries(monkeypatch)
+
+    async def malformed_gate(**_kwargs):
+        return _rejected_gate_with_findings(
+            [{"rule_code": "edge_semantics", "record_indexes": [0]}],
+            terminal=True,
+        )
+
+    monkeypatch.setattr(workflow, "review_connections", malformed_gate)
+
+    result = await workflow.run_staged_graph_pipeline(_state())
+
+    assert (
+        result["graph_operation"]["failure_code"]
+        == "staged_connection_gate_unavailable"
+    )
+    diagnostic = result["graph_review"]["staged_failure"]
+    assert diagnostic["code"] == "gate_unavailable"
+    assert diagnostic["stage"] == "connections"
+    assert diagnostic["attempt"] == 1
+    assert diagnostic["findings"] == [
+        {"rule_code": "edge_semantics", "record_paths": ["connections.0"]}
+    ]
 
 
 @pytest.mark.asyncio
@@ -593,6 +712,138 @@ async def test_identical_connection_correction_retains_safe_coordinate(monkeypat
     assert diagnostic["path"] == "connections"
     assert diagnostic["fingerprint_disposition"] == "matches_prior_candidate"
     assert "path" not in analytics[0]["properties"]
+
+
+@pytest.mark.asyncio
+async def test_final_connection_gate_rejection_returns_review_and_safe_gate_diagnostic(
+    monkeypatch,
+):
+    connection_calls = 0
+    connection_gate_calls = 0
+    events: list[dict] = []
+
+    gate_findings = [
+        {
+            "rule_code": "edge_semantics",
+            "record_indexes": [0],
+            "reason": "Duplicate flow edge.",
+        }
+    ]
+    stage_gate = _rejected_gate_with_findings(gate_findings)
+
+    async def connections(**_kwargs):
+        nonlocal connection_calls
+        connection_calls += 1
+        wire = _connections_wire()
+        if connection_calls == 2:
+            wire["edges"][0]["label"] = "submits corrected payment"
+        return {
+            "wire": wire,
+            "prompt_fingerprint": f"connection-{connection_calls}",
+        }
+
+    async def component_gate(**_kwargs):
+        return _approved_gate()
+
+    async def connection_gate(**_kwargs):
+        nonlocal connection_gate_calls
+        connection_gate_calls += 1
+        return stage_gate
+
+    async def send(event):
+        events.append(event)
+
+    async def components(**_kwargs):
+        return {"wire": _components_wire(), "prompt_fingerprint": "component-1"}
+
+    monkeypatch.setattr(workflow, "generate_component_candidate", components)
+    monkeypatch.setattr(workflow, "review_components", component_gate)
+    monkeypatch.setattr(workflow, "generate_connection_candidate", connections)
+    monkeypatch.setattr(workflow, "review_connections", connection_gate)
+    monkeypatch.setattr(workflow, "_render", _render_ok)
+    monkeypatch.setattr(workflow, "enqueue_analytics_event", lambda **event: True)
+    monkeypatch.setattr(
+        workflow.settings, "internal_test_email_allowlist_raw", "internal@openai.com"
+    )
+    result = await workflow.run_staged_graph_pipeline(
+        _state(user_email="normal@example.com", send=send)
+    )
+
+    assert connection_calls == 2
+    assert connection_gate_calls == 2
+    assert (
+        result["graph_operation"]["failure_code"]
+        == "staged_connection_attempts_exhausted"
+    )
+    assert result["graph_review"]["staged_gate"] == stage_gate
+    diagnostic = result["graph_review"]["staged_failure"]
+    assert diagnostic["schema_version"] == 1
+    assert diagnostic["kind"] == "staged_gate"
+    assert diagnostic["stage"] == "connections"
+    assert diagnostic["attempt"] == 2
+    assert diagnostic["code"] == "gate_rejected"
+    assert diagnostic["findings"] == [
+        {"rule_code": "edge_semantics", "record_paths": ["connections.0"]}
+    ]
+    assert set(diagnostic["findings"][0].keys()) == {"rule_code", "record_paths"}
+    assert "reason" not in diagnostic["findings"][0]
+    assert "diagnostic" not in events[0]
+
+
+@pytest.mark.asyncio
+async def test_gate_diagnostic_caps_findings_and_redacts_from_non_internal_users(
+    monkeypatch,
+):
+    component_calls = 0
+
+    def _too_many_findings() -> list[dict]:
+        return [
+            {"rule_code": "domain_specificity", "record_indexes": [index % 2]}
+            for index in range(25)
+        ]
+
+    stage_gate = _rejected_gate_with_findings(_too_many_findings())
+    events: list[dict] = []
+
+    async def components(**_kwargs):
+        nonlocal component_calls
+        component_calls += 1
+        wire = _components_wire()
+        if component_calls == 2:
+            wire["components"][0]["responsibility"] = "Accepts validated requests."
+        return {
+            "wire": wire,
+            "prompt_fingerprint": f"component-{component_calls}",
+        }
+
+    async def component_gate(**_kwargs):
+        return stage_gate
+
+    async def send(event):
+        events.append(event)
+
+    monkeypatch.setattr(workflow, "generate_component_candidate", components)
+    monkeypatch.setattr(workflow, "review_components", component_gate)
+    monkeypatch.setattr(workflow, "enqueue_analytics_event", lambda **event: True)
+    monkeypatch.setattr(workflow, "_render", _render_ok)
+    monkeypatch.setattr(
+        workflow.settings, "internal_test_email_allowlist_raw", "internal@openai.com"
+    )
+
+    result = await workflow.run_staged_graph_pipeline(
+        _state(user_email="normal@example.com", send=send)
+    )
+
+    assert component_calls == 2
+    assert (
+        result["graph_operation"]["failure_code"]
+        == "staged_component_attempts_exhausted"
+    )
+    diagnostic = result["graph_review"]["staged_failure"]
+    assert len(diagnostic["findings"]) == 24
+    assert "record_indexes" not in diagnostic["findings"][0]
+    assert "reason" not in diagnostic["findings"][0]
+    assert "diagnostic" not in events[0]
 
 
 @pytest.mark.asyncio
