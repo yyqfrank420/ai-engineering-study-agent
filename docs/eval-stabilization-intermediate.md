@@ -2,11 +2,11 @@
 
 Last updated: 2026-08-19
 
-Evidence in this record is current through paid diagnostic `32295031180` on
+Evidence in this record is current through paid diagnostic `32298885657` on
 `feature/staged-graph-pipeline` on 2026-08-19. PRs #37 through #40 merged on 2026-08-07, and PR #44
 merged as `77df25e7`. The evidence-provenance, graph-review, and latency corrections passed local
-review and the full offline CI matrix through the staged component-rule scope fix. Thirty
-consecutive recent `graph-expansion` diagnostics have failed; there is no protected live success on
+review and the full offline CI matrix through the raw staged edit-scope fix. Thirty-one consecutive
+recent `graph-expansion` diagnostics have failed; there is no protected live success on
 the current branch.
 
 Diagnostic `31953303244` invalidates the Release 1 live prerequisite for the legacy repair loop.
@@ -33,7 +33,7 @@ Corpus `2026-08-12.v1` remains pending human review.
 ## Recent diagnostic failure ledger
 
 This is the canonical chronology for recent `graph-expansion` failures through
-`5e73e121fd4aafd6023762897259a52a79a9a310`. Every
+`c84915c1c2f44e7079780074ddbed6aac64a4ada`. Every
 row records a live product failure. A green workflow conclusion for a report-only row means the
 pending-corpus workflow uploaded its evidence and exited without enforcing the failed verdict. The
 initial workflow runs failed; later report-only diagnostics concluded green under that policy.
@@ -64,6 +64,10 @@ one serving responsibility for `capability_classification`. The correction remov
 retrieval claim and added an explicit no-retrieval assumption. The second gate then introduced an
 `independent_risk_coverage` blocker even though the staged route has no upstream reviewed-risk
 artifact.
+The thirty-first passed both staged gates on both turns and published the requested turn-two
+expansion. It preserved the title, all seven prior nodes, all ten prior edges, the sequence, and prior
+group records. It added one directly connected monitoring node. The generated component frame
+replaced all five prior assumption strings, so the exact graph-expansion preservation check failed.
 Run links and recorded heads come from GitHub Actions metadata. Latency, provider calls, failure codes,
 and cost come from each retained `scheduled-eval-<run>/browser-results.json`, `live-results.json`,
 and `run-context.json` artifact. Model effort comes from source at the exact run head because the
@@ -102,8 +106,9 @@ incomplete usage.
 | 2026-08-17 | [`32054742321`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/32054742321), `3b1ad90547ef76ee13e9d81caefe43de0b6b5374` | The component gate passed. The first connection candidate contained complete request, response, model-artifact return, and telemetry-storage paths. Its correction added `Monitoring Service -> API Gateway` as an asynchronous control edge. The final gate rejected `connections.8` for `edge_semantics` and `safe_action_boundary`. All private renders passed, then the workflow emitted `graph_data: null`. Seven calls took 192.767 seconds end to end, cost $0.200053, and used no fallback or judge calls. | Connection generation and review now receive the locked component responsibilities, assumptions, types, and capabilities. Observation-only runtime completeness accepts a durable telemetry sink. A create correction cannot introduce a control edge unless a locked endpoint owns a `control` or `decision` role. Internal evaluation evidence retains each rejected gate attempt. Paid verification remains pending. | $0.200053 |
 | 2026-08-19 | [`32291218614`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/32291218614), `be98b79d1683b44025e29e3bda2a37359321d8fa` | Deployment, readiness, and browser smoke checks passed. The first seven-component candidate failed `brief_coverage`, `independent_risk_coverage`, and `objective_fidelity`. Its thirteen-component correction still failed `brief_coverage`. No connection call ran, `graph_data` was null, and the case cost $0.187481. | Component generation and review now receive the same bounded formatted evidence frame. The context excludes internal evidence IDs, treats source records as untrusted data, keeps selected maturity authoritative, and states that checklist questions do not each require a component. Paid verification remains pending. | $0.187481 |
 | 2026-08-19 | [`32295031180`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/32295031180), `5e73e121fd4aafd6023762897259a52a79a9a310` | The first five-component candidate failed only `capability_classification` on the serving service. Its correction removed the ambiguous retrieval claim and added an explicit no-retrieval assumption. The second gate then rejected `independent_risk_coverage` on the serving service, model API, and monitoring service. No connection call ran. The browser case took 110.289 seconds and cost $0.145035. | The staged component gate no longer exposes `independent_risk_coverage`, whose contract requires an upstream independently reviewed risk artifact. The canonical rubric and full-graph review retain the rule. The two-candidate bound remains unchanged. Paid verification remains pending. | $0.145035 |
+| 2026-08-19 | [`32298885657`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/32298885657), `c84915c1c2f44e7079780074ddbed6aac64a4ada` | Both component gates and both connection gates passed. Turn 1 published seven nodes. Turn 2 kept those nodes and added `n8`, but replaced all five prior assumptions with six production-oriented assumptions. The evaluator failed `graph_expansion_prior_assumption_missing`. Ten one-attempt application calls cost $0.386631; no fallback or judge call ran. | Deterministic staged edit authority now compiles from the raw user message. The contextualized retrieval query remains model-facing. A production-depth expansion regression proves local scope and exact preservation of prior assumptions. Paid verification remains pending. | $0.386631 |
 
-Known application spend across these thirty failures is at least **$10.644888**. Several provider
+Known application spend across these thirty-one failures is at least **$11.031519**. Several provider
 calls have incomplete usage; row amounts marked `at least` are lower bounds. Diagnostic
 `31549644038` retained only `connections.links[6]: topology`; it did not retain authored output and
 cannot distinguish an out-of-range endpoint from a self-link.
@@ -115,7 +120,9 @@ Its [live-gate workflow
 skipped protected staging and model execution because the corpus is pending review. This proves the
 offline tree and gate policy. It supplies no live graph or latency evidence for `fdd70d1`.
 
-Recent branch CI had no genuine offline failure. Automatic live-gate runs `31333067244` and
+Recent branch CI had no genuine offline failure. Diagnostic `32296692133` was cancelled during
+dependency installation before deployment or model execution and incurred no provider spend.
+Automatic live-gate runs `31333067244` and
 `31335165144` were cancelled before protected browser or model execution while their new heads were
 unverified. Scheduled `main` runs `31354658015` and `31456923829` were also cancelled with no steps
 or logs before manual diagnostics entered the global staging queue. These cancellations are excluded
@@ -166,6 +173,8 @@ types, and capability flags. A monitoring-only path may terminate at a durable t
 create-time connection correction cannot add a control edge unless a locked `control` or `decision`
 component owns that role. Rejected gate attempts retain bounded internal diagnostics with rule codes,
 record paths, and candidate fingerprints. Prompts, reasons, and candidate content remain excluded.
+For edits, the raw user message alone grants deterministic mutation authority. Contextualized
+retrieval text remains available to generation and review without entering the edit-scope compiler.
 
 Prototype gates exclude production criteria. Production proof requirements derive from the
 component wire's capabilities. There is no Opus root architecture pass and no final full-model gate.
@@ -187,7 +196,7 @@ remain deferred.
 
 ## Repeated-failure root cause
 
-The thirty recent failures include architect/evidence contract, topology-wire, review/repair,
+The thirty-one recent failures include architect/evidence contract, topology-wire, review/repair,
 and frontend layout failures. The immediate
 errors differed. The shared engineering defect was contract drift. Graph limits, model schemas,
 repair permissions, review state, browser measurements, and staging measurements had separate

@@ -1251,16 +1251,20 @@ def test_auto_edit_inherits_stored_maturity_and_explicit_change_restages():
 @pytest.mark.asyncio
 async def test_explicit_depth_change_compiles_narrow_edit_scope(monkeypatch):
     calls: list[tuple[dict, dict]] = []
+    component_inputs: list[dict] = []
+    scope_queries: list[str] = []
     _install_success_boundaries(monkeypatch)
     component_wire = _components_wire()
     component_wire["components"][0]["label"] = "Public gateway"
 
-    async def components(**_kwargs):
+    async def components(**kwargs):
+        component_inputs.append(copy.deepcopy(kwargs))
         return {"wire": component_wire, "prompt_fingerprint": "component-prompt"}
 
     original_scope = workflow.staged_edit_scope
 
     def capture_scope(*args, **kwargs):
+        scope_queries.append(args[0])
         contract, permissions = original_scope(*args, **kwargs)
         calls.append((contract, permissions))
         return contract, permissions
@@ -1272,15 +1276,20 @@ async def test_explicit_depth_change_compiles_narrow_edit_scope(monkeypatch):
             graph_intent="edit",
             complexity="production",
             user_message="Rename Request gateway to Public gateway.",
-            design_query="Rename Request gateway to Public gateway.",
+            design_query=(
+                "Existing graph context: Payment processing.\n"
+                "Latest user request: Rename Request gateway to Public gateway."
+            ),
             approved_graph_data=_accepted_staged_graph(maturity="prototype"),
             approved_graph_contract={"maturity": "prototype", "capabilities": {}},
         )
     )
 
     assert len(calls) == 1
+    assert scope_queries == ["Rename Request gateway to Public gateway."]
     assert calls[0][0]["repair_scope"] == "local"
     assert calls[0][1]["editable_node_ids"] == ["n1"]
+    assert component_inputs[0]["request"].startswith("Existing graph context:")
     assert result["graph_contract"]["maturity"] == "production"
 
 
@@ -1479,6 +1488,7 @@ async def test_production_scoped_expansion_keeps_prior_records_and_uses_exact_au
     )
     component_inputs: list[dict] = []
     scope_calls: list[tuple[dict, dict]] = []
+    scope_queries: list[str] = []
     original_scope = workflow.staged_edit_scope
 
     async def components(**kwargs):
@@ -1489,6 +1499,7 @@ async def test_production_scoped_expansion_keeps_prior_records_and_uses_exact_au
         return {"wire": connection_wire, "prompt_fingerprint": "connection-prompt"}
 
     def capture_scope(*args, **kwargs):
+        scope_queries.append(args[0])
         contract, permissions = original_scope(*args, **kwargs)
         scope_calls.append((contract, permissions))
         return contract, permissions
@@ -1512,7 +1523,10 @@ async def test_production_scoped_expansion_keeps_prior_records_and_uses_exact_au
             graph_intent="edit",
             complexity="production",
             user_message="Expand Request gateway.",
-            design_query="Expand Request gateway.",
+            design_query=(
+                "Existing graph context: Payment processing.\n"
+                "Latest user request: Expand Request gateway."
+            ),
             approved_graph_data=previous_graph,
             approved_graph_contract={
                 "maturity": "prototype",
@@ -1531,6 +1545,7 @@ async def test_production_scoped_expansion_keeps_prior_records_and_uses_exact_au
     assert len(component_inputs[0]["write_set"]["component_ids"]) == 3
     assert len(component_inputs[0]["write_set"]["edge_ids"]) == 2
     assert len(scope_calls) == 1
+    assert scope_queries == ["Expand Request gateway."]
     assert scope_calls[0][0]["repair_scope"] == "local"
     assert [
         node for node in result["graph_data"]["nodes"] if node["id"] in {"n1", "n2"}

@@ -652,6 +652,7 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
     """Build, render, and review one applied graph with one retry per layer."""
     maturity, full_restage = _maturity(state)
     request = str(state.get("design_query") or state.get("user_message") or "")
+    raw_request = str(state.get("user_message") or "")
     approved_graph = state.get("approved_graph_data") or state.get("graph_data")
     approved_contract = state.get("approved_graph_contract") or state.get(
         "graph_contract"
@@ -685,14 +686,14 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                 return await _failed(state, "staged_base_graph_invalid")
         try:
             repair_contract, permissions = staged_edit_scope(
-                request,
+                raw_request,
                 approved_graph,
                 resolved_complexity=maturity,
             )
         except ValueError:
             if not full_restage and re.search(
                 r"\b(?:rebuild|redesign|replace|redraw|start\s+over)\b",
-                request,
+                raw_request,
                 re.IGNORECASE,
             ):
                 full_restage = True
