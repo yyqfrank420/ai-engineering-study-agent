@@ -13,7 +13,7 @@ RUBRIC_CRITERIA = {
     ),
     "runtime_completeness": (
         "connections",
-        "Connect observations, processing or decisions, applicable actions, and measurable outcomes.",
+        "Connect observations and accepted processing to measurable outcomes. Require decisions and actions only when accepted component responsibilities own them. For observation-only designs, a durable telemetry sink is a complete outcome.",
     ),
     "safe_action_boundary": (
         "connections",

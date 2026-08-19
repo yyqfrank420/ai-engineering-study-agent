@@ -11,6 +11,7 @@ from agent.staged_graph_contract import (
     production_proofs_for_capabilities,
     project_graph_data,
     reconstruct_staged_graph_build,
+    validate_create_connection_correction_authority,
     validate_component_write_set,
     validate_connection_write_set,
     validate_staged_graph_build,
@@ -179,3 +180,72 @@ def test_write_sets_reject_uncited_component_and_connection_changes():
                 "incident_edge_ids": [],
             },
         )
+
+
+def test_create_connection_correction_allows_control_endpoint():
+    rejected = assign_server_ids(_plan())
+    corrected = copy.deepcopy(rejected)
+    corrected["connections"].append(
+        {
+            "source_id": "n1",
+            "target_id": "n2",
+            "label": "requests authorization status",
+            "flow": "control",
+            "sync": "sync",
+        }
+    )
+
+    accepted = validate_create_connection_correction_authority(rejected, corrected)
+
+    assert accepted["connections"][-1]["flow"] == "control"
+
+
+def test_create_connection_correction_rejects_control_edge_without_authority():
+    rejected = assign_server_ids(_plan())
+    corrected = copy.deepcopy(rejected)
+    corrected["connections"].append(
+        {
+            "source_id": "n1",
+            "target_id": "n3",
+            "label": "controls ledger state",
+            "flow": "control",
+            "sync": "sync",
+        }
+    )
+
+    with pytest.raises(GraphContractError, match="control or decision") as error:
+        validate_create_connection_correction_authority(rejected, corrected)
+
+    assert error.value.path == "connections"
+
+
+def test_create_connection_correction_rejects_runtime_to_control_without_authority():
+    rejected = _plan()
+    rejected["connections"].append(
+        {
+            "source_id": "0",
+            "target_id": "2",
+            "label": "records payment request",
+            "flow": "runtime",
+            "sync": "sync",
+        }
+    )
+    rejected = assign_server_ids(rejected)
+    corrected = copy.deepcopy(rejected)
+    corrected["connections"][-1]["flow"] = "control"
+
+    with pytest.raises(GraphContractError, match="control or decision") as error:
+        validate_create_connection_correction_authority(rejected, corrected)
+
+    assert error.value.path == "connections"
+
+
+def test_create_connection_correction_cannot_change_components():
+    rejected = assign_server_ids(_plan())
+    corrected = copy.deepcopy(rejected)
+    corrected["components"][0]["type"] = "control"
+
+    with pytest.raises(GraphContractError, match="cannot change components") as error:
+        validate_create_connection_correction_authority(rejected, corrected)
+
+    assert error.value.path == "components"

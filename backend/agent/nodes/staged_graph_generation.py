@@ -7,6 +7,7 @@ server identifiers, write application, and every domain decision.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 import hashlib
 import json
 import re
@@ -29,7 +30,7 @@ from agent.stream_utils import stream_structured_llm
 _MODEL = "kimi-k3"
 _EFFORT = "high"
 _COMPONENT_PROMPT_VERSION = "staged_components_v1"
-_CONNECTION_PROMPT_VERSION = "staged_connections_v1"
+_CONNECTION_PROMPT_VERSION = "staged_connections_v2"
 _COMPONENT_SCHEMA_VERSION = "staged_components_wire_v1"
 _CONNECTION_SCHEMA_VERSION = "staged_connections_wire_v1"
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}")
@@ -61,6 +62,26 @@ GROUP_KIND_CODES = {600 + index: value for index, value in enumerate(_GROUP_KIND
 class GenerationResult(TypedDict):
     wire: dict[str, Any]
     prompt_fingerprint: str
+
+
+@dataclass(frozen=True)
+class AcceptedContext:
+    """An immutable snapshot of component-stage facts accepted by the server."""
+
+    assumptions: tuple[str, ...]
+    external_effects: bool
+    retrieval_or_reuse: bool
+    learning_or_release: bool
+
+    def prompt_value(self) -> dict[str, Any]:
+        return {
+            "assumptions": list(self.assumptions),
+            "capabilities": {
+                "external_effects": self.external_effects,
+                "retrieval_or_reuse": self.retrieval_or_reuse,
+                "learning_or_release": self.learning_or_release,
+            },
+        }
 
 
 class StagedGenerationError(ValueError):
@@ -291,6 +312,7 @@ async def generate_connection_candidate(
     write_set: Mapping[str, Any],
     upstream_fingerprint: str,
     accepted_components: Sequence[Mapping[str, Any]],
+    accepted_context: Mapping[str, Any],
     attempt: int = 0,
     prior_prompt_fingerprint: str | None = None,
     prior_write_set_fingerprint: str | None = None,
@@ -305,6 +327,7 @@ async def generate_connection_candidate(
     """Generate edges whose endpoints are limited to accepted server components."""
     valid_write_set = _validated_write_set(write_set)
     accepted = _accepted_component_summary(accepted_components)
+    context = _accepted_context(accepted_context)
     prompt, prompt_fingerprint = _attempt_prompt(
         stage="connections",
         request=request,
@@ -319,6 +342,7 @@ async def generate_connection_candidate(
         base=base_connections,
         rejected_candidate=rejected_candidate,
         accepted_components=accepted,
+        accepted_context=context,
     )
     try:
         response = await _run_generation(
@@ -431,6 +455,7 @@ def _attempt_prompt(
     base: Mapping[str, Any] | Sequence[Any] | None,
     rejected_candidate: Mapping[str, Any] | None,
     accepted_components: list[dict[str, Any]] | None = None,
+    accepted_context: AcceptedContext | None = None,
 ) -> tuple[str, str]:
     _validate_fingerprint(upstream_fingerprint, "invalid_upstream_fingerprint")
     maturity = _validated_maturity(resolved_maturity)
@@ -478,6 +503,9 @@ def _attempt_prompt(
             else None
         ),
         "accepted_components": accepted_components,
+        "accepted_context": (
+            accepted_context.prompt_value() if accepted_context is not None else None
+        ),
         "findings": findings if attempt == 1 else None,
         "prior_prompt_fingerprint": prior_prompt_fingerprint if attempt == 1 else None,
     }
@@ -533,6 +561,10 @@ def _attempt_prompt(
     else:
         instructions = (
             "Propose edges only. Use source_index and target_index from accepted_components. "
+            "Accepted component types are authoritative. Accepted responsibilities, assumptions, "
+            "and capabilities are authoritative. Observation-only monitoring may terminate at a "
+            "durable telemetry/log sink. A correction cannot introduce control unless an accepted "
+            "endpoint has type control or decision. "
             "Connect every primary_flow_member from is_root through directed runtime or control "
             "edges. Represent both directions of a synchronous request-response. A read, fetch, "
             "lookup, load, or query request that expects returned data needs a distinct reverse "
@@ -750,7 +782,12 @@ def _accepted_component_summary(
     accepted: list[dict[str, Any]] = []
     indexes: set[int] = set()
     for component in accepted_components:
-        if not isinstance(component, Mapping) or not {"index", "id"} <= set(component):
+        if not isinstance(component, Mapping) or not {
+            "index",
+            "id",
+            "type",
+            "responsibility",
+        } <= set(component):
             raise StagedGenerationError("invalid_accepted_components")
         index = component["index"]
         component_id = component["id"]
@@ -765,14 +802,27 @@ def _accepted_component_summary(
             raise StagedGenerationError("invalid_accepted_components")
         indexes.add(index)
         label = component.get("label")
+        component_type = component["type"]
+        responsibility = component["responsibility"]
         primary_flow_member = component.get("primary_flow_member", False)
         is_root = component.get("is_root", False)
-        if not isinstance(primary_flow_member, bool) or not isinstance(is_root, bool):
+        if (
+            not _is_integer(component_type)
+            or component_type not in NODE_TYPE_CODES
+            or not isinstance(responsibility, str)
+            or not (
+                0 < len(responsibility.strip()) <= COMPONENT_RESPONSIBILITY_MAX_CHARS
+            )
+            or not isinstance(primary_flow_member, bool)
+            or not isinstance(is_root, bool)
+        ):
             raise StagedGenerationError("invalid_accepted_components")
         accepted.append(
             {
                 "index": index,
                 "label": label if isinstance(label, str) else "component",
+                "type": component_type,
+                "responsibility": responsibility,
                 "primary_flow_member": primary_flow_member,
                 "is_root": is_root,
             }
@@ -781,6 +831,40 @@ def _accepted_component_summary(
     if roots and (len(roots) != 1 or not roots[0]["primary_flow_member"]):
         raise StagedGenerationError("invalid_accepted_components")
     return accepted
+
+
+def _accepted_context(value: Mapping[str, Any]) -> AcceptedContext:
+    if not isinstance(value, Mapping) or set(value) != {"assumptions", "capabilities"}:
+        raise StagedGenerationError("invalid_accepted_context")
+    assumptions = value["assumptions"]
+    if (
+        not isinstance(assumptions, list)
+        or len(assumptions) > _MAX_ASSUMPTIONS
+        or any(
+            not isinstance(assumption, str)
+            or not (0 < len(assumption.strip()) <= ASSUMPTION_MAX_CHARS)
+            for assumption in assumptions
+        )
+    ):
+        raise StagedGenerationError("invalid_accepted_context")
+    capabilities = value["capabilities"]
+    required_capabilities = {
+        "external_effects",
+        "retrieval_or_reuse",
+        "learning_or_release",
+    }
+    if (
+        not isinstance(capabilities, Mapping)
+        or set(capabilities) != required_capabilities
+        or any(not isinstance(flag, bool) for flag in capabilities.values())
+    ):
+        raise StagedGenerationError("invalid_accepted_context")
+    return AcceptedContext(
+        assumptions=tuple(assumptions),
+        external_effects=capabilities["external_effects"],
+        retrieval_or_reuse=capabilities["retrieval_or_reuse"],
+        learning_or_release=capabilities["learning_or_release"],
+    )
 
 
 def _sanitize_findings(findings: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:

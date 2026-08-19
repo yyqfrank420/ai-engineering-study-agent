@@ -942,3 +942,54 @@ def validate_connection_write_set(
             "connection writes cannot change components", path="components"
         )
     return revised
+
+
+def _semantic_edge_identity(
+    edge: Mapping[str, Any],
+) -> tuple[str, str, str, str, str]:
+    return (
+        edge["source_id"],
+        edge["target_id"],
+        edge["label"].casefold(),
+        edge["flow"],
+        edge["sync"],
+    )
+
+
+def validate_create_connection_correction_authority(
+    rejected_build: Mapping[str, Any],
+    corrected_build: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Require a control authority endpoint for new correction-time control edges."""
+    # A correction can follow a connection-generation failure before the first
+    # full graph is structurally valid. Component-stage state is still accepted
+    # authority, so normalize its IDs without requiring connection reachability.
+    rejected = assign_server_ids(rejected_build)
+    corrected = validate_staged_graph_build(assign_server_ids(corrected_build))
+    if rejected["components"] != corrected["components"]:
+        raise GraphContractError(
+            "connection correction cannot change components", path="components"
+        )
+    rejected_edges = {
+        _semantic_edge_identity(connection) for connection in rejected["connections"]
+    }
+    component_types = {
+        component["server_id"]: component["type"]
+        for component in corrected["components"]
+    }
+    for connection in corrected["connections"]:
+        if (
+            connection["flow"] != "control"
+            or _semantic_edge_identity(connection) in rejected_edges
+        ):
+            continue
+        endpoint_types = {
+            component_types[connection["source_id"]],
+            component_types[connection["target_id"]],
+        }
+        if endpoint_types.isdisjoint({"control", "decision"}):
+            raise GraphContractError(
+                "new control connections require a control or decision endpoint",
+                path="connections",
+            )
+    return corrected

@@ -42,6 +42,7 @@ from agent.staged_graph_contract import (
     production_proofs_for_capabilities,
     project_graph_data,
     reconstruct_staged_graph_build,
+    validate_create_connection_correction_authority,
     validate_component_write_set,
     validate_staged_graph_build,
 )
@@ -524,6 +525,58 @@ async def _render(
     )
 
 
+def _may_emit_staged_diagnostics(state: AgentState) -> bool:
+    email = str(state.get("user_email") or "").strip().lower()
+    return email in settings.internal_test_email_allowlist
+
+
+async def _retain_staged_diagnostic(
+    state: AgentState,
+    diagnostic: Mapping[str, Any],
+    *,
+    emit_gate_progress: bool = False,
+) -> AgentState:
+    safe_diagnostic = copy.deepcopy(dict(diagnostic))
+    diagnostics = [
+        copy.deepcopy(item)
+        for item in (state.get("graph_review_diagnostics") or [])
+        if isinstance(item, dict)
+    ]
+    recorded = safe_diagnostic not in diagnostics
+    if recorded:
+        diagnostics.append(safe_diagnostic)
+    retained_state: AgentState = {
+        **state,
+        "graph_review_diagnostics": diagnostics,
+    }
+    if (
+        not emit_gate_progress
+        or not recorded
+        or not _may_emit_staged_diagnostics(state)
+    ):
+        return retained_state
+
+    send = state.get("send")
+    if callable(send):
+        try:
+            await send(
+                {
+                    "type": "workflow_progress",
+                    "phase": "review",
+                    "status": "retry",
+                    "title": "Correcting staged graph candidate",
+                    "detail": "The candidate failed one bounded admission check. One correction is running.",
+                    "diagnostic": copy.deepcopy(safe_diagnostic),
+                }
+            )
+        except Exception as exc:
+            logger.info(
+                "Staged gate progress event was not delivered: %s",
+                type(exc).__name__,
+            )
+    return retained_state
+
+
 async def _failed(
     state: AgentState,
     code: str,
@@ -531,6 +584,8 @@ async def _failed(
     *,
     diagnostic: Mapping[str, Any] | None = None,
 ) -> AgentState:
+    if diagnostic:
+        state = await _retain_staged_diagnostic(state, diagnostic)
     approved_graph = copy.deepcopy(state.get("approved_graph_data"))
     approved_contract = copy.deepcopy(state.get("approved_graph_contract"))
     intent = state.get("graph_intent")
@@ -561,8 +616,7 @@ async def _failed(
             "title": "Staged graph candidate rejected",
             "detail": "The candidate failed a bounded staged admission check and remains unpublished.",
         }
-        email = str(state.get("user_email") or "").strip().lower()
-        if email in settings.internal_test_email_allowlist:
+        if _may_emit_staged_diagnostics(state):
             progress_event["diagnostic"] = safe_diagnostic
         send = state.get("send")
         if callable(send):
@@ -833,7 +887,22 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
             )
             previous_prompt = generated["prompt_fingerprint"]
             previous_component_candidate = candidate_fingerprint
-            working_state = rendered
+            if attempt + 1 < _MAX_STAGE_ATTEMPTS:
+                working_state = await _retain_staged_diagnostic(
+                    rendered,
+                    _gate_failure_diagnostic(
+                        findings=component_gate.get("findings", [])
+                        if isinstance(component_gate.get("findings"), list)
+                        else [],
+                        stage="components",
+                        attempt=attempt + 1,
+                        code="gate_rejected",
+                        candidate_records=reviewed_component_records,
+                    ),
+                    emit_gate_progress=True,
+                )
+            else:
+                working_state = rendered
         except (GraphContractError, StagedGenerationError, ValueError) as exc:
             if attempt + 1 >= _MAX_STAGE_ATTEMPTS:
                 return await _failed(
@@ -846,6 +915,16 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                         candidate=rejected_component_candidate,
                     ),
                 )
+            working_state = await _retain_staged_diagnostic(
+                working_state,
+                _failure_diagnostic(
+                    exc,
+                    stage="components",
+                    attempt=attempt + 1,
+                    candidate=rejected_component_candidate,
+                ),
+                emit_gate_progress=True,
+            )
             correction_findings = [_safe_finding(exc, stage="components")]
             previous_prompt = (
                 exc.prompt_fingerprint
@@ -876,6 +955,7 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
     previous_prompt = None
     previous_connection_candidate: str | None = None
     previous_connection_wire: str | None = None
+    previous_connection_build: dict[str, Any] | None = None
     rejected_connection_candidate: dict[str, Any] | None = None
     reviewed_connection_records: list[dict[str, Any]] = []
     correction_findings = []
@@ -892,12 +972,22 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                         "index": component["model_index"],
                         "id": component["server_id"],
                         "label": component["label"],
+                        "type": next(
+                            code
+                            for code, value in NODE_TYPE_CODES.items()
+                            if value == component["type"]
+                        ),
+                        "responsibility": component["responsibility"],
                         "primary_flow_member": component["primary_flow_member"],
                         "is_root": component["model_index"]
                         == component_build["root_index"],
                     }
                     for component in component_build["components"]
                 ],
+                accepted_context={
+                    "assumptions": copy.deepcopy(component_build["assumptions"]),
+                    "capabilities": copy.deepcopy(component_build["capabilities"]),
+                },
                 attempt=attempt,
                 prior_prompt_fingerprint=previous_prompt,
                 prior_write_set_fingerprint=(
@@ -930,7 +1020,13 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                     "correction repeated the prior candidate",
                     path="connections",
                 )
-            validate_staged_graph_build(candidate_build)
+            if attempt == 1 and permissions is None:
+                candidate_build = validate_create_connection_correction_authority(
+                    previous_connection_build or {**component_build, "connections": []},
+                    candidate_build,
+                )
+            else:
+                candidate_build = validate_staged_graph_build(candidate_build)
             projected = _attach_graph_version(project_graph_data(candidate_build))
             if projected is None:
                 raise GraphContractError(
@@ -975,6 +1071,12 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                 }
                 for component in candidate_build["components"]
             ]
+            evidence["candidate_context"] = {
+                "title": candidate_build["title"],
+                "assumptions": copy.deepcopy(candidate_build["assumptions"]),
+                "root_index": candidate_build["root_index"],
+                "capabilities": copy.deepcopy(candidate_build["capabilities"]),
+            }
             reviewed_connection_records = [
                 {
                     "source": edge["source_id"],
@@ -1048,7 +1150,23 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
             )
             previous_prompt = generated["prompt_fingerprint"]
             previous_connection_candidate = candidate_fingerprint
-            working_state = rendered
+            previous_connection_build = copy.deepcopy(candidate_build)
+            if attempt + 1 < _MAX_STAGE_ATTEMPTS:
+                working_state = await _retain_staged_diagnostic(
+                    rendered,
+                    _gate_failure_diagnostic(
+                        findings=connection_gate.get("findings", [])
+                        if isinstance(connection_gate.get("findings"), list)
+                        else [],
+                        stage="connections",
+                        attempt=attempt + 1,
+                        code="gate_rejected",
+                        candidate_records=reviewed_connection_records,
+                    ),
+                    emit_gate_progress=True,
+                )
+            else:
+                working_state = rendered
         except (GraphContractError, StagedGenerationError, ValueError) as exc:
             if attempt + 1 >= _MAX_STAGE_ATTEMPTS:
                 return await _failed(
@@ -1061,6 +1179,16 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                         candidate=rejected_connection_candidate,
                     ),
                 )
+            working_state = await _retain_staged_diagnostic(
+                working_state,
+                _failure_diagnostic(
+                    exc,
+                    stage="connections",
+                    attempt=attempt + 1,
+                    candidate=rejected_connection_candidate,
+                ),
+                emit_gate_progress=True,
+            )
             correction_findings = [_safe_finding(exc, stage="connections")]
             previous_prompt = (
                 exc.prompt_fingerprint

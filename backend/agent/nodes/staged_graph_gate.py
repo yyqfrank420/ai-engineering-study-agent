@@ -22,7 +22,7 @@ from config import settings
 
 
 _COMPONENT_GATE_PROMPT_VERSION = "staged_component_gate_v1"
-_CONNECTION_GATE_PROMPT_VERSION = "staged_connection_gate_v1"
+_CONNECTION_GATE_PROMPT_VERSION = "staged_connection_gate_v2"
 _GATE_EFFORT = "medium"
 _MAX_REASON_CHARS = 280
 _MAX_FINDINGS = 24
@@ -217,7 +217,15 @@ def _prompt(
             "learning_or_release means feedback can change a model, prompt, ranking, or live "
             "configuration. Audit candidate_context.capabilities against the request and records."
             if gate == "components"
-            else ""
+            else (
+                "\nFor connection review, use evidence_bundle.candidate_context.capabilities and "
+                "evidence_bundle.candidate_context.assumptions together with the accepted "
+                "candidate component responsibilities in evidence_bundle.candidate_components. "
+                "Resolved maturity remains authoritative. When assessing runtime_completeness, "
+                "require decisions, actions, and control loops only when accepted component "
+                "responsibilities own them. Do not require an undeclared action or control loop. "
+                "For an observation-only design, a durable telemetry sink is a complete outcome."
+            )
         )
         + production_instructions
     )

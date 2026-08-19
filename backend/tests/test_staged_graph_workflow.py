@@ -375,7 +375,11 @@ async def test_identical_component_correction_is_not_reviewed_twice(monkeypatch)
         == "staged_component_attempts_exhausted"
     )
     diagnostic = result["graph_review"]["staged_failure"]
-    assert diagnostic == events[0]["diagnostic"]
+    assert result["graph_review_diagnostics"] == [
+        events[0]["diagnostic"],
+        diagnostic,
+    ]
+    assert events[-1]["diagnostic"] == diagnostic
     assert diagnostic["stage"] == "components"
     assert diagnostic["attempt"] == 2
     assert diagnostic["code"] == "candidate_repeated"
@@ -399,6 +403,7 @@ async def test_final_component_gate_rejection_returns_review_and_safe_gate_diagn
         {
             "rule_code": "domain_specificity",
             "record_indexes": [0, 1, 0, -1, 9, True, "2"],
+            "reason": "Missing domain ownership.",
         },
         {"rule_code": "brief_coverage", "record_indexes": "secret-raw-index"},
         {"rule_code": "invented_rule", "record_indexes": [0]},
@@ -458,7 +463,18 @@ async def test_final_component_gate_rejection_returns_review_and_safe_gate_diagn
     ]
     assert set(diagnostic["findings"][0].keys()) == {"rule_code", "record_paths"}
     assert "secret-" not in repr(diagnostic)
-    assert events[0]["diagnostic"] == diagnostic
+    diagnostics = result["graph_review_diagnostics"]
+    assert len(diagnostics) == 2
+    assert [item["attempt"] for item in diagnostics] == [1, 2]
+    assert diagnostics[-1] == diagnostic
+    assert [event.get("diagnostic") for event in events] == diagnostics
+    assert [event["status"] for event in events] == ["retry", "rejected"]
+    for event in events:
+        assert event["type"] == "workflow_progress"
+        assert event["phase"] == "review"
+        assert "Missing domain ownership." not in repr(event)
+        assert "secret-" not in repr(event)
+        assert "record_indexes" not in repr(event)
     assert analytics[0]["properties"] == diagnostic
     assert "secret-" not in repr(analytics[0])
 
@@ -549,6 +565,52 @@ async def test_component_contract_correction_receives_rejected_wire(monkeypatch)
         component_inputs[1]["rejected_candidate"]["components"][0]["label"] == "x" * 61
     )
     assert rendered_edge_counts == [0, 1]
+    assert len(result["graph_review_diagnostics"]) == 1
+    assert result["graph_review_diagnostics"][0]["kind"] == "staged_generation"
+    assert result["graph_review_diagnostics"][0]["stage"] == "components"
+    assert result["graph_review_diagnostics"][0]["attempt"] == 1
+    assert result["graph_review_diagnostics"][0]["code"] == "contract_rejected"
+
+
+@pytest.mark.asyncio
+async def test_successful_connection_contract_correction_retains_first_diagnostic(
+    monkeypatch,
+):
+    connection_calls = 0
+    render_calls = 0
+    _install_success_boundaries(monkeypatch)
+
+    async def connections(**_kwargs):
+        nonlocal connection_calls
+        connection_calls += 1
+        wire = _connections_wire()
+        if connection_calls == 1:
+            wire["edges"][0]["target_index"] = 0
+        return {
+            "wire": wire,
+            "prompt_fingerprint": f"connection-{connection_calls}",
+        }
+
+    async def render(state, graph, *, preview_count):
+        nonlocal render_calls
+        render_calls += 1
+        return await _render_ok(state, graph, preview_count=preview_count)
+
+    monkeypatch.setattr(workflow, "generate_connection_candidate", connections)
+    monkeypatch.setattr(workflow, "_render", render)
+
+    result = await workflow.run_staged_graph_pipeline(_state())
+
+    assert result["graph_publication"] == "approved"
+    assert connection_calls == 2
+    assert render_calls == 2
+    assert len(result["graph_review_diagnostics"]) == 1
+    diagnostic = result["graph_review_diagnostics"][0]
+    assert diagnostic["kind"] == "staged_generation"
+    assert diagnostic["stage"] == "connections"
+    assert diagnostic["attempt"] == 1
+    assert diagnostic["code"] == "contract_rejected"
+    assert diagnostic["path"] == "connections.0"
 
 
 @pytest.mark.asyncio
@@ -667,6 +729,23 @@ async def test_connection_retry_keeps_the_accepted_component_candidate_locked(
         connection_inputs[0]["accepted_components"]
         == connection_inputs[1]["accepted_components"]
     )
+    assert connection_inputs[0]["accepted_components"][0] == {
+        "index": 0,
+        "id": "n1",
+        "label": "Request gateway",
+        "type": 104,
+        "responsibility": "Accepts the payment request.",
+        "primary_flow_member": True,
+        "is_root": True,
+    }
+    assert connection_inputs[0]["accepted_context"] == {
+        "assumptions": ["The caller is authenticated."],
+        "capabilities": {
+            "external_effects": False,
+            "retrieval_or_reuse": False,
+            "learning_or_release": False,
+        },
+    }
     assert (
         connection_inputs[0]["upstream_fingerprint"]
         == connection_inputs[1]["upstream_fingerprint"]
@@ -676,6 +755,189 @@ async def test_connection_retry_keeps_the_accepted_component_candidate_locked(
     assert connection_inputs[0]["upstream_fingerprint"] == component_fingerprint(
         result["staged_graph_build"]
     )
+
+
+@pytest.mark.parametrize("full_restage", [False, True])
+@pytest.mark.asyncio
+async def test_create_connection_correction_cannot_invent_unowned_control_flow(
+    monkeypatch,
+    full_restage,
+):
+    connection_calls = 0
+    connection_gate_calls = 0
+    render_calls = 0
+    _install_success_boundaries(monkeypatch)
+
+    async def connections(**_kwargs):
+        nonlocal connection_calls
+        connection_calls += 1
+        wire = _connections_wire()
+        if connection_calls == 2:
+            wire["edges"].append(
+                {
+                    "source_index": 1,
+                    "target_index": 0,
+                    "label": "feed monitoring findings back to gate",
+                    "flow": 401,
+                    "sync": 501,
+                }
+            )
+        return {
+            "wire": wire,
+            "prompt_fingerprint": f"connection-{connection_calls}",
+        }
+
+    async def connection_gate(**_kwargs):
+        nonlocal connection_gate_calls
+        connection_gate_calls += 1
+        return _rejected_gate_with_findings(
+            [
+                {
+                    "rule_code": "runtime_completeness",
+                    "reason": "Connect monitoring to an outcome.",
+                }
+            ]
+        )
+
+    async def render(state, graph, *, preview_count):
+        nonlocal render_calls
+        render_calls += 1
+        return await _render_ok(state, graph, preview_count=preview_count)
+
+    monkeypatch.setattr(workflow, "generate_connection_candidate", connections)
+    monkeypatch.setattr(workflow, "review_connections", connection_gate)
+    monkeypatch.setattr(workflow, "_render", render)
+    monkeypatch.setattr(workflow, "enqueue_analytics_event", lambda **_event: True)
+
+    state = _state()
+    if full_restage:
+        previous_graph = _accepted_staged_graph(maturity="prototype")
+
+        def reject_scoped_edit(*_args, **_kwargs):
+            raise ValueError("full restage required")
+
+        monkeypatch.setattr(workflow, "staged_edit_scope", reject_scoped_edit)
+        state = _state(
+            graph_intent="edit",
+            complexity="production",
+            user_message="Redesign the entire graph at production depth.",
+            design_query="Redesign the entire graph at production depth.",
+            approved_graph_data=previous_graph,
+            graph_data=previous_graph,
+            approved_graph_contract={
+                "maturity": "prototype",
+                "capabilities": {
+                    "external_effects": False,
+                    "retrieval_or_reuse": False,
+                    "learning_or_release": False,
+                },
+            },
+        )
+
+    result = await workflow.run_staged_graph_pipeline(state)
+
+    assert connection_calls == 2
+    assert connection_gate_calls == 1
+    assert render_calls == 2
+    assert (
+        result["graph_operation"]["failure_code"]
+        == "staged_connection_attempts_exhausted"
+    )
+    assert [item["attempt"] for item in result["graph_review_diagnostics"]] == [1, 2]
+    final = result["graph_review"]["staged_failure"]
+    assert final["kind"] == "staged_generation"
+    assert final["code"] == "contract_rejected"
+    assert final["path"] == "connections"
+    assert "monitoring" not in repr(final)
+
+
+@pytest.mark.parametrize("full_restage", [False, True])
+@pytest.mark.asyncio
+async def test_connection_correction_after_generation_error_cannot_invent_control_flow(
+    monkeypatch,
+    full_restage,
+):
+    connection_calls = 0
+    connection_gate_calls = 0
+    render_calls = 0
+    _install_success_boundaries(monkeypatch)
+
+    async def connections(**_kwargs):
+        nonlocal connection_calls
+        connection_calls += 1
+        if connection_calls == 1:
+            raise workflow.StagedGenerationError(
+                "connection_wire_invalid",
+                prompt_fingerprint="c" * 64,
+            )
+        wire = _connections_wire()
+        wire["edges"].append(
+            {
+                "source_index": 1,
+                "target_index": 0,
+                "label": "feed monitoring findings back to gate",
+                "flow": 401,
+                "sync": 501,
+            }
+        )
+        return {"wire": wire, "prompt_fingerprint": "connection-2"}
+
+    async def connection_gate(**_kwargs):
+        nonlocal connection_gate_calls
+        connection_gate_calls += 1
+        return _approved_gate()
+
+    async def render(state, graph, *, preview_count):
+        nonlocal render_calls
+        render_calls += 1
+        return await _render_ok(state, graph, preview_count=preview_count)
+
+    monkeypatch.setattr(workflow, "generate_connection_candidate", connections)
+    monkeypatch.setattr(workflow, "review_connections", connection_gate)
+    monkeypatch.setattr(workflow, "_render", render)
+    monkeypatch.setattr(workflow, "enqueue_analytics_event", lambda **_event: True)
+
+    state = _state()
+    if full_restage:
+        previous_graph = _accepted_staged_graph(maturity="prototype")
+        previous_graph["edges"][0] = {
+            **previous_graph["edges"][0],
+            "flow": "control",
+        }
+
+        def reject_scoped_edit(*_args, **_kwargs):
+            raise ValueError("full restage required")
+
+        monkeypatch.setattr(workflow, "staged_edit_scope", reject_scoped_edit)
+        state = _state(
+            graph_intent="edit",
+            complexity="production",
+            user_message="Redesign the entire graph at production depth.",
+            design_query="Redesign the entire graph at production depth.",
+            approved_graph_data=previous_graph,
+            graph_data=previous_graph,
+            approved_graph_contract={
+                "maturity": "prototype",
+                "capabilities": {
+                    "external_effects": False,
+                    "retrieval_or_reuse": False,
+                    "learning_or_release": False,
+                },
+            },
+        )
+
+    result = await workflow.run_staged_graph_pipeline(state)
+
+    assert connection_calls == 2
+    assert connection_gate_calls == 0
+    assert render_calls == 1
+    assert (
+        result["graph_operation"]["failure_code"]
+        == "staged_connection_attempts_exhausted"
+    )
+    assert [item["attempt"] for item in result["graph_review_diagnostics"]] == [1, 2]
+    assert result["graph_review"]["staged_failure"]["code"] == "contract_rejected"
+    assert result["graph_review"]["staged_failure"]["path"] == "connections"
 
 
 @pytest.mark.asyncio
@@ -787,6 +1049,9 @@ async def test_final_connection_gate_rejection_returns_review_and_safe_gate_diag
     ]
     assert set(diagnostic["findings"][0].keys()) == {"rule_code", "record_paths"}
     assert "reason" not in diagnostic["findings"][0]
+    assert [item["attempt"] for item in result["graph_review_diagnostics"]] == [1, 2]
+    assert result["graph_review_diagnostics"][-1] == diagnostic
+    assert len(events) == 1
     assert "diagnostic" not in events[0]
 
 

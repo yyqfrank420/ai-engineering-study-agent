@@ -523,7 +523,7 @@ async def test_review_diagnostic_event_is_limited_to_internal_test_users(
 
 
 def test_semantic_critic_rejects_cache_replay_or_retry_gate_bypasses():
-    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v58"
+    assert _GRAPH_CRITIC_PROMPT_VERSION == "architecture_critic_v59"
     assert "gate-preserving reuse" in _GRAPH_CRITIC_SYSTEM
     assert "reuse stores accepted" in _GRAPH_CRITIC_SYSTEM
     assert "post-gate artifacts" in _GRAPH_CRITIC_SYSTEM

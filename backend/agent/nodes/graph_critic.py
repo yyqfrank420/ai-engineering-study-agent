@@ -72,7 +72,7 @@ class CriticProtocolError(ValueError):
         self.rule = rule if rule in _PROTOCOL_ERROR_RULES else None
 
 
-_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v58"
+_GRAPH_CRITIC_PROMPT_VERSION = "architecture_critic_v59"
 _NODE_LABEL_CHARS = 60
 _NODE_TECHNOLOGY_CHARS = 60
 _NODE_DESCRIPTION_CHARS = 220
@@ -2514,10 +2514,10 @@ before the user sees them.
 Compare the diagram with the user's exact request. Check all of the following:
 1. domain specificity: component names and boundaries are particular to this user's system;
 2. objective fidelity: the requested goal and constraints materially shape the design;
-3. runtime completeness: observations, processing or decisions, applicable actions, and measurable
-   outcomes connect. Require
-   a feedback edge only when outcomes inform a later decision, adaptation, or learning loop; a finite
-   read-only or advisory request may end at its observable outcome;
+3. runtime completeness: observations and reviewed processing connect to measurable outcomes.
+   Require decisions and actions only when component responsibilities own them. An observation-only
+   design may end at a durable telemetry sink. Require a feedback edge only when outcomes inform a
+   later decision, adaptation, or learning loop;
 4. safe action boundary: external mutations have policy, approval, audit, or rollback controls;
 5. edge semantics: every edge carries one distinct contract needed to follow behavior or prove a
    guarantee. Consolidate duplicate interactions. Parallel edges between one component pair must

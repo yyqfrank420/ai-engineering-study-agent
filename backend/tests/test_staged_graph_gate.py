@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+from agent.architecture_rubric import RUBRIC_CRITERIA
 from agent.nodes import staged_graph_gate as gate
 from agent.stream_utils import StructuredLLMResponse
 
@@ -245,6 +246,74 @@ def test_prototype_connection_schema_excludes_production_rules(monkeypatch):
     assert "audit_and_provenance" not in codes
     assert "logical_flow" not in codes
     assert "branch_completion" not in codes
+
+
+@pytest.mark.parametrize("maturity", ["prototype", "production"])
+def test_connection_schema_keeps_runtime_completeness(monkeypatch, maturity):
+    calls = _stub_response(monkeypatch, {"approved": True, "findings": []})
+
+    result = asyncio.run(
+        gate.review_connections(
+            user_request="Design an observation-only service.",
+            evidence_bundle={},
+            resolved_maturity=maturity,
+            candidate_records=[],
+        )
+    )
+
+    schema = calls[0]["response_schema"]
+    codes = schema["properties"]["findings"]["items"]["properties"]["rule_code"]["enum"]
+
+    assert result["approved"] is True
+    assert "runtime_completeness" in codes
+
+
+def test_connection_gate_prompt_scopes_runtime_completeness_to_accepted_context(
+    monkeypatch,
+):
+    calls = _stub_response(monkeypatch, {"approved": True, "findings": []})
+    candidate_context = {
+        "capabilities": {"external_effects": False},
+        "assumptions": ["Telemetry is retained durably."],
+    }
+    components = [
+        {"id": "collector", "responsibility": "Collect observations."},
+        {"id": "telemetry", "responsibility": "Persist telemetry durably."},
+    ]
+
+    result = asyncio.run(
+        gate.review_connections(
+            user_request="Design an observation-only service.",
+            evidence_bundle={
+                "candidate_context": candidate_context,
+                "candidate_components": components,
+            },
+            resolved_maturity="prototype",
+            candidate_records=[
+                {"source": "collector", "target": "telemetry", "label": "event"}
+            ],
+        )
+    )
+
+    prompt = calls[0]["messages"][0]["content"]
+
+    assert result["approved"] is True
+    assert calls[0]["telemetry"]["metadata"]["prompt_version"] == "staged_connection_gate_v2"
+    assert "candidate_context.capabilities" in prompt
+    assert "candidate_context.assumptions" in prompt
+    assert "candidate component responsibilities" in prompt
+    assert "Resolved maturity remains authoritative." in prompt
+    assert "Do not require an undeclared action or control loop." in prompt
+    assert "a durable telemetry sink is a complete outcome" in prompt
+
+
+def test_runtime_completeness_allows_observation_only_telemetry_outcome():
+    assert RUBRIC_CRITERIA["runtime_completeness"] == (
+        "connections",
+        "Connect observations and accepted processing to measurable outcomes. Require "
+        "decisions and actions only when accepted component responsibilities own them. For "
+        "observation-only designs, a durable telemetry sink is a complete outcome.",
+    )
 
 
 def test_production_connection_schema_preserves_hard_rules(monkeypatch):

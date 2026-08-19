@@ -53,6 +53,36 @@ def _connection_wire() -> dict:
     }
 
 
+def _accepted_context() -> dict:
+    return {
+        "assumptions": ["The caller supplies an authenticated request."],
+        "capabilities": {
+            "external_effects": False,
+            "retrieval_or_reuse": True,
+            "learning_or_release": False,
+        },
+    }
+
+
+def _accepted_components() -> list[dict]:
+    return [
+        {
+            "index": 0,
+            "id": "n1",
+            "label": "Request gateway",
+            "type": 104,
+            "responsibility": "Accepts authenticated requests.",
+        },
+        {
+            "index": 1,
+            "id": "n2",
+            "label": "Request service",
+            "type": 101,
+            "responsibility": "Processes accepted requests.",
+        },
+    ]
+
+
 def _response(payload: dict) -> StructuredLLMResponse:
     return StructuredLLMResponse(
         text=json.dumps(payload),
@@ -263,10 +293,8 @@ async def test_generation_prompt_uses_selected_prototype_maturity(monkeypatch, s
             resolved_maturity="prototype",
             write_set=_write_set(),
             upstream_fingerprint="b" * 64,
-            accepted_components=[
-                {"index": 0, "id": "n1", "label": "Request gateway"},
-                {"index": 1, "id": "n2", "label": "Request service"},
-            ],
+            accepted_components=_accepted_components(),
+            accepted_context=_accepted_context(),
             state=state,
         )
 
@@ -281,6 +309,96 @@ async def test_generation_prompt_uses_selected_prototype_maturity(monkeypatch, s
         assert (
             "Route each supporting branch to a rejoin or observable outcome" in prompt
         )
+
+
+@pytest.mark.asyncio
+async def test_connection_prompt_carries_authoritative_accepted_context(monkeypatch):
+    calls = []
+
+    async def fake_stream(**kwargs):
+        calls.append(kwargs)
+        return _response(_connection_wire())
+
+    monkeypatch.setattr(generation, "stream_structured_llm", fake_stream)
+    await generation.generate_connection_candidate(
+        request="Connect accepted components",
+        resolved_maturity="prototype",
+        write_set=_write_set(),
+        upstream_fingerprint="b" * 64,
+        accepted_components=_accepted_components(),
+        accepted_context=_accepted_context(),
+    )
+
+    prompt = calls[0]["messages"][0]["content"]
+    prompt_input = json.loads(prompt.split("\nINPUT\n", 1)[1])
+    assert calls[0]["telemetry"]["metadata"]["prompt_version"] == "staged_connections_v2"
+    assert prompt_input["accepted_context"] == _accepted_context()
+    assert prompt_input["accepted_components"] == [
+        {
+            "index": 0,
+            "label": "Request gateway",
+            "type": 104,
+            "responsibility": "Accepts authenticated requests.",
+            "primary_flow_member": False,
+            "is_root": False,
+        },
+        {
+            "index": 1,
+            "label": "Request service",
+            "type": 101,
+            "responsibility": "Processes accepted requests.",
+            "primary_flow_member": False,
+            "is_root": False,
+        },
+    ]
+    assert "Accepted component types are authoritative" in prompt
+    assert (
+        "Accepted responsibilities, assumptions, and capabilities are authoritative"
+        in prompt
+    )
+    assert (
+        "Observation-only monitoring may terminate at a durable telemetry/log sink"
+        in prompt
+    )
+    assert (
+        "A correction cannot introduce control unless an accepted endpoint has type control or decision"
+        in prompt
+    )
+
+
+@pytest.mark.parametrize(
+    "accepted_context",
+    [
+        {},
+        {"assumptions": [], "capabilities": {}},
+        {
+            "assumptions": [],
+            "capabilities": {
+                "external_effects": False,
+                "retrieval_or_reuse": True,
+                "learning_or_release": "false",
+            },
+        },
+        {
+            "assumptions": ["x" * (contract.ASSUMPTION_MAX_CHARS + 1)],
+            "capabilities": _accepted_context()["capabilities"],
+        },
+    ],
+)
+def test_accepted_context_rejects_malformed_or_unbounded_values(accepted_context):
+    with pytest.raises(
+        generation.StagedGenerationError, match="invalid_accepted_context"
+    ):
+        generation._accepted_context(accepted_context)
+
+
+def test_accepted_context_is_an_immutable_snapshot():
+    context = _accepted_context()
+    accepted = generation._accepted_context(context)
+    context["assumptions"].append("A later mutation must not reach the prompt.")
+    context["capabilities"]["external_effects"] = True
+
+    assert accepted.prompt_value() == _accepted_context()
 
 
 @pytest.mark.asyncio
@@ -386,9 +504,10 @@ async def test_connection_generation_rejects_unaccepted_endpoint_before_return(
             write_set=_write_set(),
             upstream_fingerprint="b" * 64,
             accepted_components=[
-                {"index": 0, "id": "server-a"},
-                {"index": 1, "id": "server-b"},
+                {**_accepted_components()[0], "id": "server-a"},
+                {**_accepted_components()[1], "id": "server-b"},
             ],
+            accepted_context=_accepted_context(),
         )
 
 
@@ -448,9 +567,10 @@ async def test_connection_generation_rejects_server_invalid_edge_identity(
             write_set=_write_set(),
             upstream_fingerprint="b" * 64,
             accepted_components=[
-                {"index": 0, "id": "server-a"},
-                {"index": 1, "id": "server-b"},
+                {**_accepted_components()[0], "id": "server-a"},
+                {**_accepted_components()[1], "id": "server-b"},
             ],
+            accepted_context=_accepted_context(),
         )
 
 
@@ -474,16 +594,21 @@ async def test_connection_generation_requires_every_primary_member_from_root(
                 {
                     "index": 0,
                     "id": "server-a",
+                    "type": 104,
+                    "responsibility": "Accepts authenticated requests.",
                     "primary_flow_member": True,
                     "is_root": True,
                 },
                 {
                     "index": 1,
                     "id": "server-b",
+                    "type": 101,
+                    "responsibility": "Processes accepted requests.",
                     "primary_flow_member": True,
                     "is_root": False,
                 },
             ],
+            accepted_context=_accepted_context(),
         )
 
 
