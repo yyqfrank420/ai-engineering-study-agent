@@ -106,10 +106,15 @@ def test_component_gate_prompt_includes_capability_metadata_from_evidence(monkey
     }
     assert "capability_classification" in prompt
     assert calls[0]["telemetry"]["metadata"]["prompt_version"] == (
-        "staged_component_gate_v2"
+        "staged_component_gate_v3"
     )
     assert "architecture_context is the same bounded evidence and review frame" in prompt
     assert "Resolved maturity overrides maturity wording" in prompt
+
+
+def test_staged_component_gate_excludes_rules_without_upstream_review():
+    assert "independent_risk_coverage" in RUBRIC_CRITERIA
+    assert "independent_risk_coverage" not in gate.COMPONENT_RULE_CODES
 
 
 def test_unknown_rule_is_ignored_with_diagnostic(monkeypatch):

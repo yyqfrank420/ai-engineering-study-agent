@@ -21,16 +21,22 @@ from agent.stream_utils import StructuredLLMResponse, stream_structured_llm
 from config import settings
 
 
-_COMPONENT_GATE_PROMPT_VERSION = "staged_component_gate_v2"
+_COMPONENT_GATE_PROMPT_VERSION = "staged_component_gate_v3"
 _CONNECTION_GATE_PROMPT_VERSION = "staged_connection_gate_v2"
 _GATE_EFFORT = "medium"
 _MAX_REASON_CHARS = 280
 _MAX_FINDINGS = 24
 _MAX_WITNESSES = 32
 _PRODUCTION_CONNECTION_RULE_CODES = frozenset(RUBRIC_CODES[16:])
+# The staged route has no upstream architect or challenger risk artifact. Keep
+# this rubric rule in full-graph review until staged input carries that authority.
+_RULES_REQUIRING_UPSTREAM_REVIEW = frozenset({"independent_risk_coverage"})
 
 COMPONENT_RULE_CODES = tuple(
-    code for code in RUBRIC_CODES if RUBRIC_CODE_OWNERS[code] == "components"
+    code
+    for code in RUBRIC_CODES
+    if RUBRIC_CODE_OWNERS[code] == "components"
+    and code not in _RULES_REQUIRING_UPSTREAM_REVIEW
 ) + ("capability_classification",)
 CONNECTION_RULE_CODES = tuple(
     code for code in RUBRIC_CODES if RUBRIC_CODE_OWNERS[code] == "connections"
