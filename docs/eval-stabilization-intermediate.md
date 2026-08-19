@@ -1,11 +1,11 @@
 # Live Evaluation Stabilization: Intermediate Record
 
-Last updated: 2026-08-17
+Last updated: 2026-08-19
 
-Evidence in this record is current through paid diagnostic `32054742321` on
-`feature/staged-graph-pipeline` on 2026-08-17. PRs #37 through #40 merged on 2026-08-07, and PR #44
+Evidence in this record is current through paid diagnostic `32291218614` on
+`feature/staged-graph-pipeline` on 2026-08-19. PRs #37 through #40 merged on 2026-08-07, and PR #44
 merged as `77df25e7`. The evidence-provenance, graph-review, and latency corrections passed local
-review and the full offline CI matrix through the staged correction-admission fix. Twenty-eight
+review and the full offline CI matrix through the shared component-context fix. Twenty-nine
 consecutive recent `graph-expansion` diagnostics have failed; there is no protected live success on
 the current branch.
 
@@ -33,7 +33,7 @@ Corpus `2026-08-12.v1` remains pending human review.
 ## Recent diagnostic failure ledger
 
 This is the canonical chronology for recent `graph-expansion` failures through
-`3b1ad90547ef76ee13e9d81caefe43de0b6b5374`. Every
+`be98b79d1683b44025e29e3bda2a37359321d8fa`. Every
 row records a live product failure. A green workflow conclusion for a report-only row means the
 pending-corpus workflow uploaded its evidence and exited without enforcing the failed verdict. The
 initial workflow runs failed; later report-only diagnostics concluded green under that policy.
@@ -54,6 +54,11 @@ The twenty-seventh passed component review and three private renders, then withh
 two connection-review rejections. The twenty-eighth produced a complete eight-edge model-serving
 candidate, then a generic correction added an undeclared monitoring-to-gateway control edge. The
 second connection gate rejected that exact edge and withheld turn 1.
+The twenty-ninth passed deployment, readiness, and browser smoke checks. Both component candidates
+passed private rendering, then failed the component gate before connection generation. The first
+candidate failed `brief_coverage`, `independent_risk_coverage`, and `objective_fidelity`; the second
+failed `brief_coverage`. The generator had only the request while the gate also had the canonical
+evidence frame.
 Run links and recorded heads come from GitHub Actions metadata. Latency, provider calls, failure codes,
 and cost come from each retained `scheduled-eval-<run>/browser-results.json`, `live-results.json`,
 and `run-context.json` artifact. Model effort comes from source at the exact run head because the
@@ -90,8 +95,9 @@ incomplete usage.
 | 2026-08-16 | [`31973080544`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/31973080544), `8f061d00cf12b7edc04da3533cb7dad49d3c3f59` | The staged component preview contained seven nodes and passed private rendering after 58.441 seconds. Sonnet rejected the component layer. A second Kimi call completed, then the correction failed before its private render. The workflow discarded the validation coordinate, withheld turn 1, and skipped turn 2. Four calls ran without fallback. The case took 148.950 seconds. GitHub Actions reported success despite the failed live gate. | Corrections now receive the rejected component or connection candidate. Provider schemas share the server's text limits and reject empty components, invalid roots, duplicate identities, self-loops, duplicate edges, and unreachable primary flows. Safe diagnostics retain the stage, attempt, code, path, and fingerprints. Manually dispatched diagnostic failures now fail the Actions job. Paid verification remains pending. | $0.138016 |
 | 2026-08-17 | [`32009504451`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/32009504451), `e35c521071d1945c3d7ee44428706774ace6d222` | The component candidate passed review. Initial and corrected connection candidates contained five and seven edges; all three staged candidates passed private rendering. The correction added the inference response route while retaining a dangling model-artifact fetch. Sonnet rejected both connection candidates, `graph_data` was withheld, and turn 2 was skipped. Seven calls took 202.830 seconds without fallback or judge calls. The workflow failed closed. | Prototype staged review now excludes `logical_flow` and `branch_completion`, which the authoritative rubric marks advisory at that depth. Connection prompts require reverse response edges for synchronous reads and completion of supporting branches. Final gate exhaustion retains a safe scorecard diagnostic instead of discarding its rule codes and record paths. Paid verification remains pending. | $0.198687 |
 | 2026-08-17 | [`32054742321`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/32054742321), `3b1ad90547ef76ee13e9d81caefe43de0b6b5374` | The component gate passed. The first connection candidate contained complete request, response, model-artifact return, and telemetry-storage paths. Its correction added `Monitoring Service -> API Gateway` as an asynchronous control edge. The final gate rejected `connections.8` for `edge_semantics` and `safe_action_boundary`. All private renders passed, then the workflow emitted `graph_data: null`. Seven calls took 192.767 seconds end to end, cost $0.200053, and used no fallback or judge calls. | Connection generation and review now receive the locked component responsibilities, assumptions, types, and capabilities. Observation-only runtime completeness accepts a durable telemetry sink. A create correction cannot introduce a control edge unless a locked endpoint owns a `control` or `decision` role. Internal evaluation evidence retains each rejected gate attempt. Paid verification remains pending. | $0.200053 |
+| 2026-08-19 | [`32291218614`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/32291218614), `be98b79d1683b44025e29e3bda2a37359321d8fa` | Deployment, readiness, and browser smoke checks passed. The first seven-component candidate failed `brief_coverage`, `independent_risk_coverage`, and `objective_fidelity`. Its thirteen-component correction still failed `brief_coverage`. No connection call ran, `graph_data` was null, and the case cost $0.187481. | Component generation and review now receive the same bounded formatted evidence frame. The context excludes internal evidence IDs, treats source records as untrusted data, keeps selected maturity authoritative, and states that checklist questions do not each require a component. Paid verification remains pending. | $0.187481 |
 
-Known application spend across these twenty-eight failures is at least **$10.312372**. Several provider
+Known application spend across these twenty-nine failures is at least **$10.499853**. Several provider
 calls have incomplete usage; row amounts marked `at least` are lower bounds. Diagnostic
 `31549644038` retained only `connections.links[6]: topology`; it did not retain authored output and
 cannot distinguish an out-of-range endpoint from a self-link.
@@ -143,6 +149,10 @@ medium component gate call. The full candidate follows the same render, reversib
 connection-gate order. Previews remain nonauthoritative until semantic acceptance and persistence.
 A malformed gate result ends the request. Each layer admits two candidates;
 connection retries cannot reopen an accepted component layer.
+Component generation and review receive one formatted snapshot of the canonical evidence frame.
+The snapshot contains the same checklist and source text for both stages, excludes canonical
+evidence IDs, and marks source records as untrusted data. The selected maturity remains authoritative,
+and checklist questions are review prompts rather than mandatory component rows.
 Connection generation and review receive the accepted component responsibilities, assumptions,
 types, and capability flags. A monitoring-only path may terminate at a durable telemetry sink. A
 create-time connection correction cannot add a control edge unless a locked `control` or `decision`
@@ -169,7 +179,7 @@ remain deferred.
 
 ## Repeated-failure root cause
 
-The twenty-eight recent failures include architect/evidence contract, topology-wire, review/repair,
+The twenty-nine recent failures include architect/evidence contract, topology-wire, review/repair,
 and frontend layout failures. The immediate
 errors differed. The shared engineering defect was contract drift. Graph limits, model schemas,
 repair permissions, review state, browser measurements, and staging measurements had separate

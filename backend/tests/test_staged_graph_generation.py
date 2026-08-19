@@ -64,6 +64,10 @@ def _accepted_context() -> dict:
     }
 
 
+def _architecture_context() -> str:
+    return "Stable review frame:\n- goal: Serve authenticated requests."
+
+
 def _accepted_components() -> list[dict]:
     return [
         {
@@ -261,6 +265,7 @@ async def test_component_generation_rejects_blank_text_and_unknown_codes(
         await generation.generate_component_candidate(
             request="Draw the request path",
             resolved_maturity="prototype",
+            architecture_context=_architecture_context(),
             write_set=_write_set(),
             upstream_fingerprint="a" * 64,
         )
@@ -283,6 +288,7 @@ async def test_generation_prompt_uses_selected_prototype_maturity(monkeypatch, s
         await generation.generate_component_candidate(
             request="Design a production-grade request path.",
             resolved_maturity="prototype",
+            architecture_context=_architecture_context(),
             write_set=_write_set(),
             upstream_fingerprint="b" * 64,
             state=state,
@@ -303,7 +309,11 @@ async def test_generation_prompt_uses_selected_prototype_maturity(monkeypatch, s
     assert prompt_input["resolved_maturity"] == "prototype"
     assert "Use prototype criteria only." in prompt
     assert "Do not add production-only controls" in prompt
-    if stage == "connections":
+    if stage == "components":
+        assert prompt_input["architecture_context"] == _architecture_context()
+        assert "shared evidence and review frame" in prompt
+    else:
+        assert prompt_input["architecture_context"] is None
         assert "both directions of a synchronous request-response" in prompt
         assert "needs a distinct reverse response edge" in prompt
         assert (
@@ -401,6 +411,21 @@ def test_accepted_context_is_an_immutable_snapshot():
     assert accepted.prompt_value() == _accepted_context()
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        " " * 20,
+        "x" * (generation._MAX_ARCHITECTURE_CONTEXT_CHARS + 1),
+    ],
+)
+def test_architecture_context_rejects_empty_or_unbounded_values(value):
+    with pytest.raises(
+        generation.StagedGenerationError, match="invalid_architecture_context"
+    ):
+        generation._accepted_architecture_context(value)
+
+
 @pytest.mark.asyncio
 async def test_correction_prompt_preserves_bounded_reason_and_record_indexes(
     monkeypatch,
@@ -416,6 +441,7 @@ async def test_correction_prompt_preserves_bounded_reason_and_record_indexes(
     await generation.generate_component_candidate(
         request="Repair the request path.",
         resolved_maturity="prototype",
+        architecture_context=_architecture_context(),
         write_set=write_set,
         upstream_fingerprint="c" * 64,
         attempt=1,
@@ -461,6 +487,7 @@ async def test_component_generation_uses_kimi_high_one_attempt_and_safe_telemetr
     result = await generation.generate_component_candidate(
         request="Draw the request path",
         resolved_maturity="production",
+        architecture_context=_architecture_context(),
         write_set=_write_set(),
         upstream_fingerprint="a" * 64,
         state={"user_id": "user-1", "session_id": "thread-1", "is_production": True},
@@ -471,7 +498,7 @@ async def test_component_generation_uses_kimi_high_one_attempt_and_safe_telemetr
     assert calls[0]["model"] == "kimi-k3"
     assert calls[0]["effort"] == "high"
     assert calls[0]["provider_attempt_limit"] == 1
-    assert calls[0]["telemetry"]["metadata"]["prompt_version"] == "staged_components_v1"
+    assert calls[0]["telemetry"]["metadata"]["prompt_version"] == "staged_components_v2"
     assert "request" not in calls[0]["telemetry"]["metadata"]
 
 
@@ -628,6 +655,7 @@ async def test_corrected_attempt_carries_sanitized_findings_and_same_write_set(
     result = await generation.generate_component_candidate(
         request="Draw the request path",
         resolved_maturity="prototype",
+        architecture_context=_architecture_context(),
         write_set=write_set,
         upstream_fingerprint="c" * 64,
         attempt=1,
@@ -664,6 +692,7 @@ async def test_correction_rejects_changed_write_set_or_identical_prompt(monkeypa
         await generation.generate_component_candidate(
             request="request",
             resolved_maturity="prototype",
+            architecture_context=_architecture_context(),
             write_set=_write_set(),
             upstream_fingerprint="e" * 64,
             attempt=1,
@@ -680,6 +709,7 @@ async def test_correction_rejects_changed_write_set_or_identical_prompt(monkeypa
         await generation.generate_component_candidate(
             request="request",
             resolved_maturity="prototype",
+            architecture_context=_architecture_context(),
             write_set=write_set,
             upstream_fingerprint="e" * 64,
             attempt=1,

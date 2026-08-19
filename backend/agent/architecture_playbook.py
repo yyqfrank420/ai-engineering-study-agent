@@ -259,8 +259,7 @@ def _prompt_json(value: dict[str, str]) -> str:
 
 def format_evidence_bundle(bundle: dict[str, Any]) -> str:
     checklist = "\n".join(
-        f"- {item['area']}: {item['question']}"
-        for item in bundle.get("checklist") or []
+        f"- {area}: {question}" for area, question in ARCHITECTURE_CHECKLIST
     )
     evidence_parts = []
     for index, item in enumerate(evidence_records(bundle), start=1):

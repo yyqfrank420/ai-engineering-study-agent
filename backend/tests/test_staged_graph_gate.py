@@ -105,6 +105,11 @@ def test_component_gate_prompt_includes_capability_metadata_from_evidence(monkey
         "candidate_capabilities": capabilities
     }
     assert "capability_classification" in prompt
+    assert calls[0]["telemetry"]["metadata"]["prompt_version"] == (
+        "staged_component_gate_v2"
+    )
+    assert "architecture_context is the same bounded evidence and review frame" in prompt
+    assert "Resolved maturity overrides maturity wording" in prompt
 
 
 def test_unknown_rule_is_ignored_with_diagnostic(monkeypatch):

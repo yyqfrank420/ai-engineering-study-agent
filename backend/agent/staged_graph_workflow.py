@@ -10,6 +10,7 @@ import re
 from typing import Any, Mapping
 
 from analytics.events import enqueue_analytics_event
+from agent.architecture_playbook import format_evidence_bundle
 from agent.complexity import resolve_complexity
 from agent.nodes.graph_critic import graph_render_gate_node
 from agent.nodes.graph_worker import (
@@ -721,11 +722,13 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
             edge_limit=edge_capacity,
         )
 
+    architecture_context = format_evidence_bundle(state.get("evidence_bundle") or {})
+
     upstream_fingerprint = _fingerprint(
         {
             "request": request,
             "maturity": maturity,
-            "evidence": state.get("evidence_bundle") or {},
+            "architecture_context": architecture_context,
             "base_version": (approved_graph or {}).get("version")
             if isinstance(approved_graph, Mapping)
             else None,
@@ -748,6 +751,7 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
             generated = await generate_component_candidate(
                 request=request,
                 resolved_maturity=maturity,
+                architecture_context=architecture_context,
                 write_set=generation_write_set,
                 upstream_fingerprint=upstream_fingerprint,
                 attempt=attempt,
@@ -848,12 +852,14 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
             if not rendered.get("graph_render_admitted"):
                 return await _failed(rendered, "staged_component_render_rejected")
             preview_count += 1
-            component_evidence = copy.deepcopy(state.get("evidence_bundle") or {})
-            component_evidence["candidate_context"] = {
-                "title": assigned["title"],
-                "assumptions": assigned["assumptions"],
-                "root_index": assigned["root_index"],
-                "capabilities": assigned["capabilities"],
+            component_evidence = {
+                "architecture_context": architecture_context,
+                "candidate_context": {
+                    "title": assigned["title"],
+                    "assumptions": assigned["assumptions"],
+                    "root_index": assigned["root_index"],
+                    "capabilities": assigned["capabilities"],
+                },
             }
             reviewed_component_records = copy.deepcopy(assigned["components"])
             component_gate = await review_components(

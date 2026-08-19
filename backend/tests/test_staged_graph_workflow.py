@@ -287,6 +287,17 @@ async def test_component_gate_retries_at_most_twice_and_renders_each_candidate(
 ):
     calls: list[object] = []
     component_inputs: list[dict] = []
+    gate_inputs: list[dict] = []
+    evidence_bundle = {
+        "book_evidence": [
+            {
+                "chapter": 10,
+                "page_number": 473,
+                "section": "Serving",
+                "text": "Add routing and monitoring when the serving flow needs them.",
+            }
+        ]
+    }
 
     async def components(**kwargs):
         calls.append("components")
@@ -305,15 +316,18 @@ async def test_component_gate_retries_at_most_twice_and_renders_each_candidate(
         calls.append(("render", len(graph["edges"])))
         return await _render_ok(state, graph, preview_count=preview_count)
 
-    async def component_gate(**_kwargs):
+    async def component_gate(**kwargs):
         calls.append("component_gate")
+        gate_inputs.append(copy.deepcopy(kwargs))
         return _rejected_gate()
 
     monkeypatch.setattr(workflow, "generate_component_candidate", components)
     monkeypatch.setattr(workflow, "_render", render)
     monkeypatch.setattr(workflow, "review_components", component_gate)
 
-    result = await workflow.run_staged_graph_pipeline(_state())
+    result = await workflow.run_staged_graph_pipeline(
+        _state(evidence_bundle=evidence_bundle)
+    )
 
     assert calls == [
         "components",
@@ -328,6 +342,17 @@ async def test_component_gate_retries_at_most_twice_and_renders_each_candidate(
     assert component_inputs[1]["attempt"] == 1
     assert component_inputs[1]["prior_prompt_fingerprint"] == "component-1"
     assert component_inputs[0]["write_set"] == component_inputs[1]["write_set"]
+    architecture_context = workflow.format_evidence_bundle(evidence_bundle)
+    assert component_inputs[0]["architecture_context"] == architecture_context
+    assert component_inputs[1]["architecture_context"] == architecture_context
+    assert gate_inputs[0]["evidence_bundle"]["architecture_context"] == (
+        architecture_context
+    )
+    assert gate_inputs[1]["evidence_bundle"]["architecture_context"] == (
+        architecture_context
+    )
+    assert "Add routing and monitoring" in architecture_context
+    assert "book:" not in architecture_context
     assert (
         result["graph_operation"]["failure_code"]
         == "staged_component_attempts_exhausted"
