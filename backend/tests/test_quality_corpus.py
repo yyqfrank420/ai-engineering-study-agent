@@ -125,7 +125,7 @@ def test_graph_expansion_corpus_has_one_bounded_expansion():
         "and existing components. Add exactly one directly connected responsibility."
     )
     assert first_turn.ui.complexity == "prototype"
-    assert second_turn.ui.complexity == "production"
+    assert second_turn.ui.complexity == "auto"
     assert first_turn.graph_output_max_latency_ms == 180_000
     assert second_turn.graph_output_max_latency_ms == 180_000
     assert case.deterministic.provider_fallback_allowed is False
@@ -135,13 +135,11 @@ def test_graph_expansion_corpus_has_one_bounded_expansion():
         second_turn.graph_expansion.new_node_connected_to_prior_label_contains
         == "monitor"
     )
-    assert (
-        resolve_complexity(
-            first_turn.ui.complexity,
-            first_turn.prompt,
-        ).resolved
-        == "prototype"
-    )
+    stored_maturity = resolve_complexity(
+        first_turn.ui.complexity,
+        first_turn.prompt,
+    ).resolved
+    assert stored_maturity == "prototype"
 
     contract, permissions = graph_worker._user_edit_scope(
         second_turn.prompt,
@@ -152,7 +150,7 @@ def test_graph_expansion_corpus_has_one_bounded_expansion():
             "sequence": [],
             "assumptions": [],
         },
-        resolved_complexity=second_turn.ui.complexity,
+        resolved_complexity=stored_maturity,
     )
 
     assert contract["layers"]["components"]["addition_count"] == 1

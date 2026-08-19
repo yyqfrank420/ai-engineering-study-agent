@@ -339,7 +339,7 @@
         {
           "prompt": "Expand the monitoring component while preserving the original graph topic and existing components. Add exactly one directly connected responsibility.",
           "ui": {
-            "complexity": "production",
+            "complexity": "auto",
             "graph_mode": "on",
             "research_enabled": false
           },

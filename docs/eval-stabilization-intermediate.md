@@ -2,10 +2,10 @@
 
 Last updated: 2026-08-19
 
-Evidence in this record is current through paid diagnostic `32298885657` on
+Evidence in this record is current through paid diagnostic `32300653373` on
 `feature/staged-graph-pipeline` on 2026-08-19. PRs #37 through #40 merged on 2026-08-07, and PR #44
 merged as `77df25e7`. The evidence-provenance, graph-review, and latency corrections passed local
-review and the full offline CI matrix through the raw staged edit-scope fix. Thirty-one consecutive
+review and the full offline CI matrix through the raw staged edit-scope fix. Thirty-two consecutive
 recent `graph-expansion` diagnostics have failed; there is no protected live success on
 the current branch.
 
@@ -33,7 +33,7 @@ Corpus `2026-08-12.v1` remains pending human review.
 ## Recent diagnostic failure ledger
 
 This is the canonical chronology for recent `graph-expansion` failures through
-`c84915c1c2f44e7079780074ddbed6aac64a4ada`. Every
+`8efaaf957ff01676377db9bf10a96ba68de626d9`. Every
 row records a live product failure. A green workflow conclusion for a report-only row means the
 pending-corpus workflow uploaded its evidence and exited without enforcing the failed verdict. The
 initial workflow runs failed; later report-only diagnostics concluded green under that policy.
@@ -68,6 +68,12 @@ The thirty-first passed both staged gates on both turns and published the reques
 expansion. It preserved the title, all seven prior nodes, all ten prior edges, the sequence, and prior
 group records. It added one directly connected monitoring node. The generated component frame
 replaced all five prior assumption strings, so the exact graph-expansion preservation check failed.
+The thirty-second preserved the four turn-one assumptions and compiled the requested turn-two
+expansion as a local edit. Its first component candidate changed a locked component and failed
+`component_write_set`. The correction preserved all five locked components and added one alert
+triage component. The component gate then raised `objective_fidelity` against one locked record and
+the new record, `selected_depth` against the stage, and `capability_classification` against the new
+record. The prior graph remained authoritative, so the evaluator reported a reused graph version.
 Run links and recorded heads come from GitHub Actions metadata. Latency, provider calls, failure codes,
 and cost come from each retained `scheduled-eval-<run>/browser-results.json`, `live-results.json`,
 and `run-context.json` artifact. Model effort comes from source at the exact run head because the
@@ -107,8 +113,9 @@ incomplete usage.
 | 2026-08-19 | [`32291218614`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/32291218614), `be98b79d1683b44025e29e3bda2a37359321d8fa` | Deployment, readiness, and browser smoke checks passed. The first seven-component candidate failed `brief_coverage`, `independent_risk_coverage`, and `objective_fidelity`. Its thirteen-component correction still failed `brief_coverage`. No connection call ran, `graph_data` was null, and the case cost $0.187481. | Component generation and review now receive the same bounded formatted evidence frame. The context excludes internal evidence IDs, treats source records as untrusted data, keeps selected maturity authoritative, and states that checklist questions do not each require a component. Paid verification remains pending. | $0.187481 |
 | 2026-08-19 | [`32295031180`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/32295031180), `5e73e121fd4aafd6023762897259a52a79a9a310` | The first five-component candidate failed only `capability_classification` on the serving service. Its correction removed the ambiguous retrieval claim and added an explicit no-retrieval assumption. The second gate then rejected `independent_risk_coverage` on the serving service, model API, and monitoring service. No connection call ran. The browser case took 110.289 seconds and cost $0.145035. | The staged component gate no longer exposes `independent_risk_coverage`, whose contract requires an upstream independently reviewed risk artifact. The canonical rubric and full-graph review retain the rule. The two-candidate bound remains unchanged. Paid verification remains pending. | $0.145035 |
 | 2026-08-19 | [`32298885657`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/32298885657), `c84915c1c2f44e7079780074ddbed6aac64a4ada` | Both component gates and both connection gates passed. Turn 1 published seven nodes. Turn 2 kept those nodes and added `n8`, but replaced all five prior assumptions with six production-oriented assumptions. The evaluator failed `graph_expansion_prior_assumption_missing`. Ten one-attempt application calls cost $0.386631; no fallback or judge call ran. | Deterministic staged edit authority now compiles from the raw user message. The contextualized retrieval query remains model-facing. A production-depth expansion regression proves local scope and exact preservation of prior assumptions. Paid verification remains pending. | $0.386631 |
+| 2026-08-19 | [`32300653373`](https://github.com/yyqfrank420/ai-engineering-study-agent/actions/runs/32300653373), `8efaaf957ff01676377db9bf10a96ba68de626d9` | Turn 1 published five nodes. Turn 2 preserved the four prior assumptions. Its first component candidate failed `component_write_set`; the corrected six-component candidate failed `objective_fidelity`, `selected_depth`, and `capability_classification`. The preserved turn-one graph caused `required_graph_version_reused`. Nine one-attempt application calls cost $0.313516; no fallback or judge call ran. | Independent review found that this graph-expansion case also changed maturity from prototype to production. The production gate then judged locked prototype records that the local edit could not change. The uncommitted scoped-gate patch was removed. Turn 2 now uses `auto` to inherit stored prototype maturity and keep this case focused on additive expansion. Focused offline validation passed, and paid retries stopped. | $0.313516 |
 
-Known application spend across these thirty-one failures is at least **$11.031519**. Several provider
+Known application spend across these thirty-two failures is at least **$11.345035**. Several provider
 calls have incomplete usage; row amounts marked `at least` are lower bounds. Diagnostic
 `31549644038` retained only `connections.links[6]: topology`; it did not retain authored output and
 cannot distinguish an out-of-range endpoint from a self-link.
@@ -196,12 +203,18 @@ remain deferred.
 
 ## Repeated-failure root cause
 
-The thirty-one recent failures include architect/evidence contract, topology-wire, review/repair,
+The thirty-two recent failures include architect/evidence contract, topology-wire, review/repair,
 and frontend layout failures. The immediate
 errors differed. The shared engineering defect was contract drift. Graph limits, model schemas,
 repair permissions, review state, browser measurements, and staging measurements had separate
 owners and were tested mainly through mocked boundaries. A candidate could satisfy one boundary and
 remain impossible or invalid at the next one.
+
+The last two diagnostics also exposed corpus-scope drift. The graph-expansion case changed maturity
+from prototype to production while requiring exact preservation of prior graph records. That mixed
+an additive edit with a global maturity transition and made production review judge locked prototype
+records. Turn 2 now uses `auto`, so this case measures bounded expansion at the stored maturity.
+Explicit maturity changes remain covered by product tests.
 
 The convergence work makes each boundary explicit and fail-closed. The backend owns semantic graph
 limits, exact repair authority, review-layer reopening, the evaluation viewport, and the post-fit
