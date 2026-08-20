@@ -26,6 +26,7 @@ describe('measureDiagram', () => {
     title.classList.add('node-title');
     title.style.fontSize = '12px';
     title.getScreenCTM = () => ({ a: 0.6, b: 0 } as DOMMatrix);
+    title.getBoundingClientRect = () => rect(120, 120, 80, 16);
     const badge = document.createElementNS('http://www.w3.org/2000/svg', 'text');
     badge.style.fontSize = '4px';
     badge.getScreenCTM = () => ({ a: 0.6, b: 0 } as DOMMatrix);
@@ -43,6 +44,26 @@ describe('measureDiagram', () => {
     expect(report.minimum_text_px).toBeCloseTo(7.2);
     expect(report.clipped_nodes).toBe(0);
     expect(report.clipped_edges).toBe(0);
+  });
+
+  it('fails the title metric when any rendered node has no visible title', () => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.getBoundingClientRect = () => rect(0, 0, 720, 800);
+    const visibleNode = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    visibleNode.classList.add('node');
+    visibleNode.getBoundingClientRect = () => rect(100, 100, 180, 56);
+    const title = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    title.classList.add('node-title');
+    title.style.fontSize = '15px';
+    title.getScreenCTM = () => ({ a: 1, b: 0 } as DOMMatrix);
+    title.getBoundingClientRect = () => rect(120, 120, 80, 16);
+    visibleNode.append(title);
+    const missingTitleNode = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    missingTitleNode.classList.add('node');
+    missingTitleNode.getBoundingClientRect = () => rect(400, 100, 180, 56);
+    svg.append(visibleNode, missingTitleNode);
+
+    expect(measureDiagram(svg).minimum_text_px).toBe(0);
   });
 
   it('reports an edge whose rendered geometry leaves the viewport', () => {

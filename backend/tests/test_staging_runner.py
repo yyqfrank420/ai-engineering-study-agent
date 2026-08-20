@@ -312,6 +312,32 @@ def test_scheduled_eval_blocks_manual_review_for_an_approved_corpus():
         'if [ "$BROWSER_OUTCOME" != success ] || '
         '[ "$SEMANTIC_OUTCOME" != success ]; then'
     ) in workflow
+    pending_guard = (
+        'if [ "$CORPUS_STATUS" != approved ] \\\n'
+        '            && { [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || '
+        '[ "$EVAL_SUITE" != diagnostic ]; }; then'
+    )
+    assert pending_guard in workflow
+    assert workflow.index(pending_guard) < workflow.index(
+        'if [ "$BROWSER_OUTCOME" != success ] || '
+        '[ "$SEMANTIC_OUTCOME" != success ]; then'
+    )
+    assert "Diagnostic or approved scheduled evaluation did not pass." in workflow
+
+
+def test_scheduled_diagnostic_can_select_staged_pipeline_without_changing_defaults():
+    workflow = Path(".github/workflows/scheduled-eval.yml").read_text(encoding="utf-8")
+
+    assert "pipeline_mode:" in workflow
+    assert "options: [legacy, staged]" in workflow
+    assert "pipeline_mode=legacy" in workflow
+    assert (
+        'if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && '
+        '[ "$suite" = diagnostic ]; then'
+    ) in workflow
+    assert 'pipeline_mode="$DISPATCH_PIPELINE_MODE"' in workflow
+    assert "EVAL_PIPELINE_MODE=$pipeline_mode" in workflow
+    assert "GRAPH_PIPELINE_MODE=$EVAL_PIPELINE_MODE" in workflow
 
 
 def test_dashboard_smoke_checks_every_frontend_endpoint_sequentially(monkeypatch):
@@ -398,16 +424,22 @@ def test_extract_helpers_return_expected_values():
         {"nodes": [{"label": "Retriever"}, {"id": "missing-label"}]}
     ) == {"Retriever"}
     assert extract_response_text(events) == "Hello world"
-    assert extract_graph_data([
-        {"type": "graph_candidate", "data": {"title": "candidate"}},
-        {"type": "graph_data", "data": {"title": "Graph"}},
-    ])["title"] == "Graph"
     assert (
-        extract_graph_data([
-            {"type": "graph_data", "data": {"title": "Graph"}},
-            {"type": "graph_candidate", "data": None},
-        ])
-        == {"title": "Graph"}
+        extract_graph_data(
+            [
+                {"type": "graph_candidate", "data": {"title": "candidate"}},
+                {"type": "graph_data", "data": {"title": "Graph"}},
+            ]
+        )["title"]
+        == "Graph"
+    )
+    assert (
+        extract_graph_data(
+            [
+                {"type": "graph_candidate", "data": {"title": "candidate"}},
+            ]
+        )
+        is None
     )
 
 
@@ -420,6 +452,38 @@ def test_extract_response_text_includes_progressive_explanation_blocks():
     assert extract_response_text(events) == "Interpretation\n\nRuntime path"
 
 
+def test_staging_graph_expectations_ignore_private_candidates():
+    step = StagingStep(
+        kind="chat",
+        description="private graph candidates are not published",
+        expect=StepExpectation(
+            graph_emitted=True,
+            graph_min_retained_node_ratio=0.6,
+        ),
+    )
+    run = {
+        "status_code": 200,
+        "events": [
+            {
+                "type": "graph_candidate",
+                "data": {"nodes": [{"id": "retained"}], "edges": []},
+            }
+        ],
+        "body_text": "",
+    }
+
+    failures = evaluate_expectation(
+        step,
+        run,
+        {"last_graph_data": {"nodes": [{"id": "retained"}], "edges": []}},
+    )
+
+    assert "graph_emitted expected True, got False" in failures
+    assert (
+        "graph quality expectations were set but no graph_data was emitted" in failures
+    )
+
+
 def test_staging_diagram_upload_uses_bounded_protocol_frames(monkeypatch):
     class FakeWebSocket:
         def __init__(self):
@@ -429,24 +493,37 @@ def test_staging_diagram_upload_uses_bounded_protocol_frames(monkeypatch):
             self.frames.append(json.loads(raw))
 
     encoded = base64.b64encode(b"rendered-jpeg").decode("ascii")
-    monkeypatch.setattr(
-        "eval.staging_runner.render_staging_diagram",
-        lambda graph: (
+    received = {}
+
+    def render(graph, criteria):
+        received["criteria"] = criteria
+        return (
             encoded,
             "image/jpeg",
             {
+                "viewport_width": criteria.viewport_width,
+                "viewport_height": criteria.viewport_height,
                 "rendered_nodes": len(graph["nodes"]),
                 "rendered_edges": len(graph["edges"]),
                 "overlap_count": 0,
                 "clipped_nodes": 0,
-                "minimum_text_px": 11,
+                "minimum_text_px": criteria.minimum_text_px,
             },
-        ),
+        )
+
+    monkeypatch.setattr(
+        "eval.staging_runner.render_staging_diagram",
+        render,
     )
     websocket = FakeWebSocket()
     candidate = {
         "evaluation_id": "eval-1",
         "graph_version": "v1",
+        "criteria": {
+            "viewport_width": 1440,
+            "viewport_height": 960,
+            "minimum_text_px": 11,
+        },
         "data": {"nodes": [{"id": "n1"}], "edges": []},
     }
 
@@ -454,6 +531,9 @@ def test_staging_diagram_upload_uses_bounded_protocol_frames(monkeypatch):
 
     assert websocket.frames[0]["type"] == "diagram_evaluation_start"
     assert websocket.frames[0]["graph_version"] == "v1"
+    assert websocket.frames[0]["report"]["viewport_width"] == 1440
+    assert websocket.frames[0]["report"]["viewport_height"] == 960
+    assert received["criteria"].minimum_text_px == 11
     assert websocket.frames[1] == {
         "type": "diagram_evaluation_chunk",
         "evaluation_id": "eval-1",
@@ -461,6 +541,21 @@ def test_staging_diagram_upload_uses_bounded_protocol_frames(monkeypatch):
         "data": encoded,
     }
     assert websocket.frames[-1]["type"] == "diagram_evaluation_complete"
+
+
+def test_staging_diagram_upload_rejects_missing_render_criteria():
+    class FakeWebSocket:
+        async def send(self, _raw):
+            raise AssertionError("invalid candidate must not upload")
+
+    candidate = {
+        "evaluation_id": "eval-1",
+        "graph_version": "v1",
+        "data": {"nodes": [{"id": "n1"}], "edges": []},
+    }
+
+    with pytest.raises(RuntimeError, match="did not contain render criteria"):
+        asyncio.run(_submit_staging_diagram(FakeWebSocket(), candidate))
 
 
 def test_evaluate_expectation_checks_graph_quality_contract():

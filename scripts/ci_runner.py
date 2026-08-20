@@ -29,6 +29,8 @@ TEST_ENV_DEFAULTS = {
     "FAISS_ARTIFACT_SHA256": "0" * 64,
     "FRONTEND_ORIGIN": "http://localhost:5173",
     "VITE_API_URL": "https://ci-placeholder.run.app",
+    "VITE_SUPABASE_URL": "http://127.0.0.1:54321",
+    "VITE_SUPABASE_ANON_KEY": "ci-test-anon-key",
     "VITE_DEV_BYPASS_AUTH": "false",
     "VITE_EVAL_AUTH_BOOTSTRAP": "false",
     "PYTHONPATH": "backend",

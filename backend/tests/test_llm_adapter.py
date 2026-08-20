@@ -312,10 +312,41 @@ async def test_stream_response_success_records_thinking_text_and_done(monkeypatc
     assert telemetry_records[0]["metadata"]["prompt_sha256"] == hashlib.sha256(
         b"system"
     ).hexdigest()
+    assert telemetry_records[0]["metadata"]["system_chars"] == len("system")
+    assert telemetry_records[0]["metadata"]["message_chars"] == len(
+        json.dumps(
+            [{"role": "user", "content": "hi"}],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    )
+    assert telemetry_records[0]["metadata"]["schema_chars"] == 0
     assert telemetry_records[0]["metadata"]["input_tokens"] == 0
     assert telemetry_records[0]["metadata"]["output_tokens"] == 0
     assert telemetry_records[0]["metadata"]["provider_attempts"] == 1
     assert metric_records[0]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_stream_response_records_anthropic_first_delta_latencies(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    monkeypatch.setattr(settings, "llm_max_retries", 1)
+    telemetry_records, _ = _patch_llm_telemetry(monkeypatch)
+    clock = iter((0.0, 10.0, 10.125, 10.375, 10.5, 10.75))
+    monkeypatch.setattr(llm.time, "perf_counter", lambda: next(clock))
+
+    async def fake_anthropic_stream_once(_kwargs):
+        yield _Event("content_block_delta", _Delta("thinking_delta", thinking="plan"))
+        yield _Event("content_block_delta", _Delta("text_delta", text="answer"))
+
+    monkeypatch.setattr(llm, "_anthropic_stream_once", fake_anthropic_stream_once)
+
+    await _collect(llm.stream_response("claude-opus-5", "system", []))
+
+    attempt = telemetry_records[0]["metadata"]["attempts"][0]
+    assert attempt["first_reasoning_delta_ms"] == 125
+    assert attempt["first_text_delta_ms"] == 375
 
 
 @pytest.mark.asyncio
@@ -349,6 +380,8 @@ async def test_stream_response_records_outer_deadline_cancellation(monkeypatch):
     assert telemetry_records[0]["error_type"] == "CancelledError"
     assert telemetry_records[0]["metadata"]["provider_attempts"] == 1
     assert telemetry_records[0]["metadata"]["attempts"][0]["status"] == "cancelled"
+    assert telemetry_records[0]["metadata"]["attempts"][0]["first_reasoning_delta_ms"] is None
+    assert telemetry_records[0]["metadata"]["attempts"][0]["first_text_delta_ms"] is None
     assert metric_records[0]["status"] == "error"
 
 
@@ -466,13 +499,25 @@ async def test_anthropic_stream_once_uses_supported_posthog_streaming_path(
 
 
 @pytest.mark.asyncio
-async def test_stream_response_retries_before_tokens_then_succeeds(monkeypatch):
+async def test_stream_response_retries_before_message_start_then_succeeds(monkeypatch):
     import adapters.llm_adapter as llm
 
     monkeypatch.setattr(settings, "llm_max_retries", 2)
-    monkeypatch.setattr(settings, "llm_retry_delay_s", 0)
+    monkeypatch.setattr(settings, "llm_retry_delay_s", 2)
     _patch_llm_telemetry(monkeypatch)
     attempts = 0
+    sleep_delays = []
+    jitter_bounds = []
+
+    async def fake_sleep(delay_s):
+        sleep_delays.append(delay_s)
+
+    def maximum_jitter(lower, upper):
+        jitter_bounds.append((lower, upper))
+        return upper
+
+    monkeypatch.setattr(llm.random, "uniform", maximum_jitter)
+    monkeypatch.setattr(llm.asyncio, "sleep", fake_sleep)
 
     async def fake_anthropic_stream_once(_kwargs):
         nonlocal attempts
@@ -483,12 +528,52 @@ async def test_stream_response_retries_before_tokens_then_succeeds(monkeypatch):
 
     monkeypatch.setattr(llm, "_anthropic_stream_once", fake_anthropic_stream_once)
 
-    assert await _collect(llm.stream_response("model", "system", [])) == [("text", "ok"), ("done", "")]
+    assert await _collect(
+        llm.stream_response(
+            "model",
+            "system",
+            [],
+            provider_attempt_limit=2,
+        )
+    ) == [("text", "ok"), ("done", "")]
     assert attempts == 2
+    assert jitter_bounds == [(1, 3)]
+    assert sleep_delays == [3]
 
 
 @pytest.mark.asyncio
-async def test_stream_response_accounts_usage_for_every_anthropic_attempt(monkeypatch):
+async def test_stream_response_honors_one_provider_attempt(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    monkeypatch.setattr(settings, "llm_max_retries", 2)
+    monkeypatch.setattr(settings, "llm_retry_delay_s", 0)
+    _patch_llm_telemetry(monkeypatch)
+    attempts = 0
+
+    async def fake_anthropic_stream_once(_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError("connect failed")
+        yield
+
+    monkeypatch.setattr(llm, "_anthropic_stream_once", fake_anthropic_stream_once)
+
+    with pytest.raises(RuntimeError, match="connect failed"):
+        await _collect(
+            llm.stream_response(
+                "model",
+                "system",
+                [],
+                allow_fallback=False,
+                provider_attempt_limit=1,
+            )
+        )
+
+    assert attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_response_does_not_replay_after_message_start(monkeypatch):
     import adapters.llm_adapter as llm
 
     monkeypatch.setattr(settings, "llm_max_retries", 2)
@@ -510,32 +595,36 @@ async def test_stream_response_accounts_usage_for_every_anthropic_attempt(monkey
                 )
             ),
         )
-        if attempts == 1:
-            raise RuntimeError("retry after accepted request")
-        yield SimpleNamespace(
-            type="message_delta",
-            usage=SimpleNamespace(output_tokens=25),
-        )
-        yield _Event("content_block_delta", _Delta("text_delta", text="ok"))
+        raise RuntimeError("failure after accepted request")
 
     monkeypatch.setattr(llm, "_anthropic_stream_once", fake_anthropic_stream_once)
 
-    assert await _collect(llm.stream_response("claude-opus-5", "system", [])) == [
-        ("text", "ok"),
-        ("done", ""),
-    ]
+    with pytest.raises(RuntimeError, match="failure after accepted request"):
+        await _collect(
+            llm.stream_response(
+                "claude-opus-5",
+                "system",
+                [],
+                allow_fallback=False,
+                provider_attempt_limit=2,
+            )
+        )
+
+    assert attempts == 1
     metadata = telemetry_records[0]["metadata"]
-    assert metadata["input_tokens"] == 300
+    assert metadata["input_tokens"] == 100
     assert metadata["cache_creation_input_tokens"] == 1_000
-    assert metadata["cache_read_input_tokens"] == 2_000
-    assert metadata["output_tokens"] == 25
-    assert metadata["queue_wait_ms"] == 30
+    assert metadata["cache_read_input_tokens"] == 0
+    assert metadata["output_tokens"] == 0
+    assert metadata["provider_attempts"] == 1
+    assert metadata["queue_wait_ms"] == 10
     assert [attempt["status"] for attempt in metadata["attempts"]] == [
-        "error_incomplete_usage",
-        "success",
+        "error_incomplete_usage"
     ]
     assert metadata["attempts"][0]["accepted"] is True
     assert metadata["attempts"][0]["usage_complete"] is False
+    assert metadata["attempts"][0]["first_reasoning_delta_ms"] is None
+    assert metadata["attempts"][0]["first_text_delta_ms"] is None
 
 
 @pytest.mark.asyncio
@@ -668,13 +757,14 @@ async def test_stream_response_falls_back_to_openai_after_anthropic_exhaustion(m
 
 
 @pytest.mark.asyncio
-async def test_stream_response_accounts_fallback_usage_separately(monkeypatch):
+async def test_stream_response_does_not_fallback_after_message_start(monkeypatch):
     import adapters.llm_adapter as llm
 
     monkeypatch.setattr(settings, "llm_max_retries", 1)
     monkeypatch.setattr(llm, "_FALLBACK_MODELS", {"claude-opus-5": "gpt-5.4"})
     monkeypatch.setattr(llm, "_get_openai_client", lambda: object())
     telemetry_records, _ = _patch_llm_telemetry(monkeypatch)
+    openai_calls = 0
 
     async def failing_anthropic(kwargs):
         kwargs["_queue_wait_observer"](7)
@@ -685,6 +775,8 @@ async def test_stream_response_accounts_fallback_usage_separately(monkeypatch):
         raise RuntimeError("anthropic down after accepting request")
 
     async def fake_openai_stream(*_args):
+        nonlocal openai_calls
+        openai_calls += 1
         yield (
             "usage",
             '{"input_tokens": 80, "output_tokens": 20}',
@@ -695,16 +787,16 @@ async def test_stream_response_accounts_fallback_usage_separately(monkeypatch):
     monkeypatch.setattr(llm, "_anthropic_stream_once", failing_anthropic)
     monkeypatch.setattr(llm, "_openai_stream", fake_openai_stream)
 
-    await _collect(llm.stream_response("claude-opus-5", "system", []))
+    with pytest.raises(RuntimeError, match="anthropic down after accepting request"):
+        await _collect(llm.stream_response("claude-opus-5", "system", []))
 
     metadata = telemetry_records[0]["metadata"]
-    assert metadata["input_tokens"] == 200
-    assert metadata["output_tokens"] == 20
-    assert metadata["provider_attempts"] == 2
+    assert openai_calls == 0
+    assert metadata["input_tokens"] == 120
+    assert metadata["output_tokens"] == 0
+    assert metadata["provider_attempts"] == 1
     assert metadata["attempts"][0]["model"] == "claude-opus-5"
     assert metadata["attempts"][0]["input_tokens"] == 120
-    assert metadata["attempts"][1]["model"] == "gpt-5.4"
-    assert metadata["attempts"][1]["input_tokens"] == 80
 
 
 @pytest.mark.asyncio
@@ -834,6 +926,8 @@ async def test_kimi_routes_directly_with_max_reasoning_and_strict_schema(monkeyp
         chat=SimpleNamespace(completions=_Completions()),
     )
     monkeypatch.setattr(llm, "_get_kimi_client", lambda: client)
+    clock = iter((0.0, 10.0, 10.125, 10.25, 10.5, 10.75))
+    monkeypatch.setattr(llm.time, "perf_counter", lambda: next(clock))
     schema = {
         "type": "object",
         "properties": {"ok": {"type": "boolean"}},
@@ -881,6 +975,9 @@ async def test_kimi_routes_directly_with_max_reasoning_and_strict_schema(monkeyp
     assert telemetry_records[0]["provider"] == "kimi"
     assert telemetry_records[0]["metadata"]["input_tokens"] == 40
     assert telemetry_records[0]["metadata"]["cache_read_input_tokens"] == 80
+    attempt = telemetry_records[0]["metadata"]["attempts"][0]
+    assert attempt["first_reasoning_delta_ms"] == 125
+    assert attempt["first_text_delta_ms"] == 250
 
 
 @pytest.mark.asyncio
@@ -964,6 +1061,31 @@ async def test_kimi_does_not_replay_after_a_reasoning_delta(monkeypatch):
     attempt = telemetry_records[0]["metadata"]["attempts"][0]
     assert attempt["status"] == "error_incomplete_usage"
     assert attempt["accepted"] is True
+
+
+@pytest.mark.asyncio
+async def test_kimi_cancellation_keeps_observed_phase_latency(monkeypatch):
+    import adapters.llm_adapter as llm
+
+    monkeypatch.setattr(settings, "llm_max_retries", 1)
+    telemetry_records, _ = _patch_llm_telemetry(monkeypatch)
+
+    async def delayed_kimi(*_args, **_kwargs):
+        yield "thinking", "partial reasoning"
+        await asyncio.Event().wait()
+        if False:
+            yield "text", "unreachable"
+
+    monkeypatch.setattr(llm, "_kimi_stream", delayed_kimi)
+
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.01):
+            await _collect(llm.stream_response("kimi-k3", "system", []))
+
+    attempt = telemetry_records[0]["metadata"]["attempts"][0]
+    assert attempt["status"] == "cancelled_incomplete_usage"
+    assert attempt["first_reasoning_delta_ms"] >= 1
+    assert attempt["first_text_delta_ms"] is None
 
 
 @pytest.mark.asyncio

@@ -13,7 +13,7 @@ RUBRIC_CRITERIA = {
     ),
     "runtime_completeness": (
         "connections",
-        "Connect observations, processing or decisions, applicable actions, and measurable outcomes.",
+        "Connect observations and accepted processing to measurable outcomes. Require decisions and actions only when accepted component responsibilities own them. For observation-only designs, a durable telemetry sink is a complete outcome.",
     ),
     "safe_action_boundary": (
         "connections",
@@ -61,7 +61,7 @@ RUBRIC_CRITERIA = {
     ),
     "independent_risk_coverage": (
         "components",
-        "Give each material challenger risk a named responsibility owner.",
+        "Give each material independently reviewed risk a named responsibility owner.",
     ),
     "gate_preserving_reuse": (
         "connections",
@@ -118,6 +118,45 @@ RUBRIC_CODE_OWNERS = {
     code: owner for code, (owner, _requirement) in RUBRIC_CRITERIA.items()
 }
 
+# Screenshot readability is useful reviewer guidance, but it has no typed,
+# server-checkable closure rule. Keep its wire code stable without allowing a
+# subjective preference to withhold an otherwise valid graph.
+ADVISORY_RUBRIC_CODES = frozenset({"novice_clarity"})
+PROTOTYPE_ADVISORY_RUBRIC_CODES = frozenset(
+    {
+        "logical_flow",
+        "authored_composition",
+        "branch_completion",
+    }
+)
+
+
+def advisory_rubric_codes(resolved_depth: str) -> frozenset[str]:
+    """Return criteria that cannot withhold a graph at the selected UI depth."""
+    if resolved_depth == "production":
+        return ADVISORY_RUBRIC_CODES
+    return ADVISORY_RUBRIC_CODES | PROTOTYPE_ADVISORY_RUBRIC_CODES
+
+
+COMPOSITION_REPAIR_PROFILES = {
+    "assumption_hygiene": ("assumptions",),
+}
+
+
+def required_composition_repair_fields(criteria: list[str]) -> list[str]:
+    """Return server-owned composition authority required by hard criteria."""
+    required = {
+        field
+        for criterion in criteria
+        for field in COMPOSITION_REPAIR_PROFILES.get(criterion, ())
+    }
+    return [
+        field
+        for field in ("title", "groups", "sequence", "assumptions")
+        if field in required
+    ]
+
+
 TOPOLOGY_PROOF_REQUIREMENTS = {
     "state_effect_reconciliation": (
         "Show a directed witness from durable operation reservation through execution and authoritative read-back to every reconciliation outcome."
@@ -142,6 +181,12 @@ def repair_requirements(
     topology_proofs: list[dict[str, Any]],
 ) -> list[dict[str, str]]:
     """Return compact acceptance criteria for only the failed review items."""
+    component_layer = (contract.get("layers") or {}).get("components")
+    component_operations = (
+        component_layer.get("existing_node_operations")
+        if isinstance(component_layer, dict)
+        else None
+    )
     findings = {
         str(finding)
         for layer in (contract.get("layers") or {}).values()
@@ -149,7 +194,20 @@ def repair_requirements(
         for finding in (layer.get("blocking_findings") or [])
     }
     requirements = [
-        {"criterion": code, "owner_layer": owner, "requirement": requirement}
+        {
+            "criterion": code,
+            "owner_layer": owner,
+            "requirement": " ".join(
+                part
+                for part in (
+                    requirement,
+                    _format_repair_node_operations(component_operations)
+                    if owner == "components"
+                    else "",
+                )
+                if part
+            ),
+        }
         for code, (owner, requirement) in RUBRIC_CRITERIA.items()
         if f"Repair {code.replace('_', ' ')} in the {owner} layer." in findings
     ]
@@ -162,7 +220,7 @@ def repair_requirements(
                 for part in (
                     TOPOLOGY_PROOF_REQUIREMENTS[guarantee],
                     _format_repair_obligations(proof.get("repair_obligations")),
-                    _format_repair_edges(proof.get("repair_edge_selectors")),
+                    _format_repair_edge_operations(proof.get("repair_edge_operations")),
                 )
                 if part
             ),
@@ -197,21 +255,45 @@ def _format_repair_obligations(value: Any) -> str:
     )
 
 
-def _format_repair_edges(value: Any) -> str:
+def _format_repair_node_operations(value: Any) -> str:
     if not isinstance(value, list):
         return ""
-    selectors = [
-        selector
-        for selector in value
-        if isinstance(selector, dict)
-        and all(
-            isinstance(selector.get(field), str) and selector[field].strip()
-            for field in ("source", "target", "label")
-        )
-    ]
-    if not selectors:
+    operations = [operation for operation in value if isinstance(operation, dict)]
+    if not operations:
         return ""
-    return "Required existing-edge repairs: " + "; ".join(
-        f"{selector['source']} -> {selector['target']}: {selector['label']}"
-        for selector in selectors
+    return "Required existing-node updates: " + "; ".join(
+        f"update {operation.get('node_id', '?')}: "
+        + ", ".join(
+            f"{field}={item!s}"
+            for field, item in sorted((operation.get("set") or {}).items())
+        )
+        for operation in operations
     )
+
+
+def _format_repair_edge_operations(value: Any) -> str:
+    if not isinstance(value, list):
+        return ""
+    operations = [operation for operation in value if isinstance(operation, dict)]
+    if not operations:
+        return ""
+    return "Required existing-edge operations: " + "; ".join(
+        _format_repair_edge_operation(operation) for operation in operations
+    )
+
+
+def _format_repair_edge_operation(operation: dict[str, Any]) -> str:
+    selector = operation.get("edge_selector") or {}
+    identity = (
+        f"{selector.get('source', '?')} -> {selector.get('target', '?')}: "
+        f"{selector.get('label', '?')}"
+    )
+    kind = operation.get("kind")
+    if kind == "update":
+        return f"update {identity} to {str((operation.get('set') or {}).get('label') or '')}"
+    if kind == "replace":
+        replacements = _format_repair_obligations(
+            operation.get("replacement_obligations")
+        ).removeprefix("Required additions: ")
+        return f"replace {identity} with {replacements}"
+    return f"remove {identity}"

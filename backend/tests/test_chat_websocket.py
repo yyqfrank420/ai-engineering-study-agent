@@ -1,11 +1,14 @@
 import asyncio
 import base64
+from io import BytesIO
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from PIL import Image
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
+import api.chat_websocket as chat_websocket
 from adapters.database_adapter import init_db
 from api.chat_websocket import (
     _SingleWaitDiagramEvaluationChannel,
@@ -18,6 +21,32 @@ from storage import runtime_state_store
 from storage.message_store import get_history
 from storage.profile_store import upsert_profile
 from storage.thread_store import create_thread, persist_turn
+
+
+def _png(width: int = 1440, height: int = 960) -> bytes:
+    output = BytesIO()
+    Image.new("RGB", (width, height), "black").save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
+def _layout_report(**overrides):
+    return {
+        "viewport_width": 1440,
+        "viewport_height": 960,
+        "rendered_nodes": 0,
+        "rendered_edges": 0,
+        "overlap_count": 0,
+        "clipped_nodes": 0,
+        "clipped_edges": 0,
+        "minimum_text_px": 12,
+        "overview_required_edge_labels": 0,
+        "visible_overview_required_edge_labels": 0,
+        "grouped_nodes": 0,
+        "group_labelled_nodes": 0,
+        "visible_group_boundaries": 0,
+        "group_boundary_overlap_count": 0,
+        **overrides,
+    }
 
 
 def _ready_app(temp_data_dir, monkeypatch):
@@ -48,7 +77,7 @@ def _receive_until(socket, event_type: str, *, limit: int = 20) -> list[dict]:
 async def test_diagram_evaluation_uses_one_correlated_wait_and_ignores_mismatched_id():
     channel = _SingleWaitDiagramEvaluationChannel(
         timeout_s=1,
-        max_screenshot_bytes=1_024,
+        max_screenshot_bytes=100_000,
     )
     graph = {"version": "graph-v1", "nodes": [], "edges": []}
     candidate_events = []
@@ -56,6 +85,11 @@ async def test_diagram_evaluation_uses_one_correlated_wait_and_ignores_mismatche
     async def send(event):
         candidate_events.append(event)
         evaluation_id = event["evaluation_id"]
+        assert event["criteria"] == {
+            "viewport_width": 1440,
+            "viewport_height": 960,
+            "minimum_text_px": 11.0,
+        }
         wrong_id = "wrong-evaluation-id"
         channel.accept(
             {
@@ -82,25 +116,29 @@ async def test_diagram_evaluation_uses_one_correlated_wait_and_ignores_mismatche
         )
         assert not channel._waiters[evaluation_id].future.done()
 
-        encoded = base64.b64encode(b"browser-render").decode()
+        encoded = base64.b64encode(_png()).decode()
+        chunks = [
+            encoded[offset : offset + 8_000] for offset in range(0, len(encoded), 8_000)
+        ]
         channel.accept(
             {
                 "type": "diagram_evaluation_start",
                 "evaluation_id": evaluation_id,
                 "graph_version": "graph-v1",
-                "media_type": "image/jpeg",
-                "total_chunks": 1,
-                "report": {"overlap_count": 0},
+                "media_type": "image/png",
+                "total_chunks": len(chunks),
+                "report": _layout_report(),
             }
         )
-        channel.accept(
-            {
-                "type": "diagram_evaluation_chunk",
-                "evaluation_id": evaluation_id,
-                "index": 0,
-                "data": encoded,
-            }
-        )
+        for index, data in enumerate(chunks):
+            channel.accept(
+                {
+                    "type": "diagram_evaluation_chunk",
+                    "evaluation_id": evaluation_id,
+                    "index": index,
+                    "data": data,
+                }
+            )
         channel.accept(
             {
                 "type": "diagram_evaluation_complete",
@@ -110,7 +148,7 @@ async def test_diagram_evaluation_uses_one_correlated_wait_and_ignores_mismatche
 
     result = await channel.request(graph, send)
 
-    assert result["report"] == {"overlap_count": 0}
+    assert result["report"] == _layout_report()
     assert len(candidate_events) == 1
     assert channel._waiters == {}
     assert channel._uploads == {}
@@ -161,25 +199,48 @@ def test_websocket_steer_cancels_draft_restarts_and_persists_combined_turn(
 ):
     app, user, thread = _ready_app(temp_data_dir, monkeypatch)
     approved_graph = {
+        "version": "approved-v1",
         "title": "Approved baseline",
         "nodes": [],
         "edges": [],
         "sequence": [],
     }
+    approved_graph_contract = {
+        "graph_version": "approved-v1",
+        "resolved_complexity": "prototype",
+        "component_fingerprint": "component-fingerprint",
+    }
     monkeypatch.setattr(
-        "api.chat_websocket.thread_store.get_graph",
-        lambda _user_id, _thread_id: approved_graph,
+        "api.chat_websocket.thread_store.get_graph_artifact",
+        lambda _user_id, _thread_id: (approved_graph, approved_graph_contract),
     )
     calls: list[str] = []
+    input_graphs: list[dict | None] = []
     terminal_deadlines: list[float] = []
     approved_baselines: list[dict] = []
+    input_contracts: list[dict | None] = []
+    approved_contracts: list[dict | None] = []
+    persisted_contracts: list[dict | None] = []
     first_cancelled = False
+
+    original_persist_turn = chat_websocket.thread_store.persist_turn
+
+    def capture_persist_turn(*args, **kwargs):
+        persisted_contracts.append(kwargs.get("graph_contract"))
+        return original_persist_turn(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "api.chat_websocket.thread_store.persist_turn", capture_persist_turn
+    )
 
     async def fake_run_agent(state, _rag_tools, _graph_tools, _detail_tools):
         nonlocal first_cancelled
         calls.append(state["user_message"])
+        input_graphs.append(state["graph_data"])
         terminal_deadlines.append(state["terminal_deadline_s"])
         approved_baselines.append(state["approved_graph_data"])
+        input_contracts.append(state["graph_contract"])
+        approved_contracts.append(state["approved_graph_contract"])
         if len(calls) == 1:
             await state["send"](
                 {
@@ -207,7 +268,11 @@ def test_websocket_steer_cancels_draft_restarts_and_persists_combined_turn(
             {"type": "response_delta", "content": "specific revised answer"}
         )
         await state["send"]({"type": "done"})
-        return {**state, "response_text": "specific revised answer", "graph_data": None}
+        return {
+            **state,
+            "response_text": "specific revised answer",
+            "graph_data": approved_graph,
+        }
 
     monkeypatch.setattr("api.chat_websocket.run_agent", fake_run_agent)
 
@@ -230,6 +295,8 @@ def test_websocket_steer_cancels_draft_restarts_and_persists_combined_turn(
             )
             initial = _receive_until(socket, "response_delta")
             assert initial[-1]["content"] == "generic draft"
+            assert any(event["type"] == "graph_preview" for event in initial)
+            assert not any(event["type"] == "graph_data" for event in initial)
 
             socket.send_json(
                 {
@@ -247,6 +314,20 @@ def test_websocket_steer_cancels_draft_restarts_and_persists_combined_turn(
     assert approved_baselines[0] is not approved_graph
     assert approved_baselines[1] is not approved_graph
     assert approved_baselines[0] is not approved_baselines[1]
+    assert approved_contracts == [approved_graph_contract, approved_graph_contract]
+    assert input_contracts == [approved_graph_contract, approved_graph_contract]
+    assert approved_contracts[0] is not approved_graph_contract
+    assert approved_contracts[1] is not approved_graph_contract
+    assert approved_contracts[0] is not approved_contracts[1]
+    assert input_graphs == [approved_graph, approved_graph]
+    assert persisted_contracts == [approved_graph_contract]
+    reset_index = next(
+        index for index, event in enumerate(events) if event["type"] == "response_reset"
+    )
+    assert events[reset_index - 1] == {
+        "type": "graph_data",
+        "data": approved_graph,
+    }
     assert any(event["type"] == "response_reset" for event in events)
     assert any(event["type"] == "steer_applied" for event in events)
     assert any(
@@ -254,10 +335,156 @@ def test_websocket_steer_cancels_draft_restarts_and_persists_combined_turn(
         and event.get("content") == "specific revised answer"
         for event in events
     )
+    assert all("graph_contract" not in event for event in events)
     history = get_history(user["id"], thread["id"])
     assert [item["role"] for item in history] == ["user", "assistant"]
     assert "User steering update 1" in history[0]["content"]
     assert history[1]["content"] == "specific revised answer"
+
+
+def test_websocket_steer_reuses_graph_review_budget_after_cancellation(
+    temp_data_dir, monkeypatch
+):
+    app, _user, thread = _ready_app(temp_data_dir, monkeypatch)
+    budgets = []
+    first_cancelled = False
+
+    async def fake_run_agent(state, _rag_tools, _graph_tools, _detail_tools):
+        nonlocal first_cancelled
+        budget = state["_graph_review_budget"]
+        budgets.append(budget)
+        if len(budgets) == 1:
+            budget.claim_provider_call(correction="contract")
+            await state["send"]({"type": "response_delta", "content": "draft"})
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                first_cancelled = True
+                raise
+
+        assert budget.critic_calls == 1
+        assert budget.contract_corrections == 1
+        budget.claim_provider_call(correction=None)
+        await state["send"]({"type": "response_delta", "content": "revised"})
+        return {**state, "response_text": "revised", "graph_data": None}
+
+    monkeypatch.setattr("api.chat_websocket.run_agent", fake_run_agent)
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/api/chat/ws", headers={"origin": "http://localhost:5173"}
+        ) as socket:
+            socket.send_json({"type": "auth", "access_token": "test-token"})
+            assert socket.receive_json() == {"type": "ready"}
+            socket.send_json(
+                {
+                    "type": "start",
+                    "thread_id": thread["id"],
+                    "content": "Design an approval workflow",
+                    "complexity": "prototype",
+                    "graph_mode": "on",
+                    "research_enabled": False,
+                    "client_request_id": "client-ws-budget",
+                }
+            )
+            _receive_until(socket, "response_delta")
+            socket.send_json(
+                {
+                    "type": "steer",
+                    "content": "Include the approval boundary",
+                    "client_request_id": "client-ws-budget",
+                }
+            )
+            _receive_until(socket, "done")
+
+    assert first_cancelled is True
+    assert len(budgets) == 2
+    assert budgets[0] is budgets[1]
+    assert budgets[0].state_counters() == {
+        "graph_critic_call_count": 2,
+        "graph_protocol_correction_count": 0,
+        "graph_contract_correction_count": 1,
+    }
+
+
+def test_websocket_stop_restores_request_start_graph_without_exposing_contract(
+    temp_data_dir, monkeypatch
+):
+    app, _user, thread = _ready_app(temp_data_dir, monkeypatch)
+    approved_graph = {
+        "version": "approved-v1",
+        "title": "Approved baseline",
+        "nodes": [],
+        "edges": [],
+        "sequence": [],
+    }
+    approved_graph_contract = {
+        "graph_version": "approved-v1",
+        "resolved_complexity": "prototype",
+    }
+    monkeypatch.setattr(
+        "api.chat_websocket.thread_store.get_graph_artifact",
+        lambda _user_id, _thread_id: (approved_graph, approved_graph_contract),
+    )
+    observed_states: list[dict] = []
+    cancelled = False
+
+    async def fake_run_agent(state, _rag_tools, _graph_tools, _detail_tools):
+        nonlocal cancelled
+        observed_states.append(state)
+        await state["send"](
+            {
+                "type": "graph_data",
+                "data": {
+                    "version": "candidate-v1",
+                    "title": "Candidate",
+                    "nodes": [],
+                    "edges": [],
+                    "sequence": [],
+                },
+                "graph_contract": {"secret": "must stay server-side"},
+            }
+        )
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+
+    monkeypatch.setattr("api.chat_websocket.run_agent", fake_run_agent)
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/api/chat/ws", headers={"origin": "http://localhost:5173"}
+        ) as socket:
+            socket.send_json({"type": "auth", "access_token": "test-token"})
+            assert socket.receive_json() == {"type": "ready"}
+            socket.send_json(
+                {
+                    "type": "start",
+                    "thread_id": thread["id"],
+                    "content": "Design an approval flow",
+                    "client_request_id": "client-ws-stop-contract",
+                }
+            )
+            candidate_events = _receive_until(socket, "graph_preview")
+            socket.send_json(
+                {
+                    "type": "stop",
+                    "client_request_id": "client-ws-stop-contract",
+                }
+            )
+            stopped_events = _receive_until(socket, "stopped")
+
+    events = [*candidate_events, *stopped_events]
+    assert cancelled is True
+    assert len(observed_states) == 1
+    assert observed_states[0]["graph_contract"] == approved_graph_contract
+    assert observed_states[0]["approved_graph_contract"] == approved_graph_contract
+    assert any(
+        event == {"type": "graph_data", "data": approved_graph} for event in events
+    )
+    assert all("graph_contract" not in event for event in events)
 
 
 def test_websocket_rejects_untrusted_browser_origin(temp_data_dir, monkeypatch):
@@ -309,6 +536,54 @@ def test_websocket_replays_completed_idempotent_turn_without_running_agent(
 
     assert events == [
         {"type": "response_delta", "content": "Canonical stored answer"},
+        {"type": "graph_data", "data": None},
+        {"type": "done"},
+    ]
+
+
+def test_websocket_replays_completed_idempotent_turn_with_graph_before_done(
+    temp_data_dir, monkeypatch
+):
+    app, user, thread = _ready_app(temp_data_dir, monkeypatch)
+    graph = {
+        "version": "graph-v1",
+        "nodes": [{"id": "n1", "title": "Start"}],
+        "edges": [],
+    }
+    persist_turn(
+        user["id"],
+        thread["id"],
+        title="Stored",
+        user_content="Explain RAG",
+        assistant_content="Canonical stored answer",
+        graph_data=graph,
+        client_request_id="client-replay-2",
+    )
+
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("an idempotent replay must not call the model")
+
+    monkeypatch.setattr("api.chat_websocket.run_agent", fail_if_called)
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/api/chat/ws", headers={"origin": "http://localhost:5173"}
+        ) as socket:
+            socket.send_json({"type": "auth", "access_token": "test-token"})
+            assert socket.receive_json() == {"type": "ready"}
+            socket.send_json(
+                {
+                    "type": "start",
+                    "thread_id": thread["id"],
+                    "content": "Explain RAG",
+                    "client_request_id": "client-replay-2",
+                }
+            )
+            events = _receive_until(socket, "done")
+
+    assert events == [
+        {"type": "response_delta", "content": "Canonical stored answer"},
+        {"type": "graph_data", "data": graph},
         {"type": "done"},
     ]
 
@@ -398,31 +673,35 @@ def test_websocket_keeps_candidate_private_until_browser_evaluation(
                 event.get("type") == "graph_data" for event in candidate_events
             )
             candidate = candidate_events[-1]
-            encoded = base64.b64encode(b"browser-render").decode()
+            assert candidate["criteria"] == {
+                "viewport_width": 1440,
+                "viewport_height": 960,
+                "minimum_text_px": 11.0,
+            }
+            encoded = base64.b64encode(_png()).decode()
+            chunks = [
+                encoded[offset : offset + 8_000]
+                for offset in range(0, len(encoded), 8_000)
+            ]
             socket.send_json(
                 {
                     "type": "diagram_evaluation_start",
                     "evaluation_id": candidate["evaluation_id"],
                     "graph_version": "graph-v1",
-                    "media_type": "image/jpeg",
-                    "total_chunks": 1,
-                    "report": {
-                        "rendered_nodes": 0,
-                        "rendered_edges": 0,
-                        "overlap_count": 0,
-                        "clipped_nodes": 0,
-                        "minimum_text_px": 12,
-                    },
+                    "media_type": "image/png",
+                    "total_chunks": len(chunks),
+                    "report": _layout_report(),
                 }
             )
-            socket.send_json(
-                {
-                    "type": "diagram_evaluation_chunk",
-                    "evaluation_id": candidate["evaluation_id"],
-                    "index": 0,
-                    "data": encoded,
-                }
-            )
+            for index, data in enumerate(chunks):
+                socket.send_json(
+                    {
+                        "type": "diagram_evaluation_chunk",
+                        "evaluation_id": candidate["evaluation_id"],
+                        "index": index,
+                        "data": data,
+                    }
+                )
             socket.send_json(
                 {
                     "type": "diagram_evaluation_complete",
@@ -431,7 +710,18 @@ def test_websocket_keeps_candidate_private_until_browser_evaluation(
             )
             published = _receive_until(socket, "done")
 
-    assert any(event.get("type") == "graph_data" for event in published)
+    preview_index = next(
+        index
+        for index, event in enumerate(published)
+        if event.get("type") == "graph_preview"
+    )
+    graph_data_index = next(
+        index
+        for index, event in enumerate(published)
+        if event.get("type") == "graph_data"
+    )
+    assert preview_index < graph_data_index < len(published) - 1
+    assert published[graph_data_index]["data"] == graph
     assert any(
         event.get("type") == "response_delta" and event.get("content") == "approved"
         for event in published

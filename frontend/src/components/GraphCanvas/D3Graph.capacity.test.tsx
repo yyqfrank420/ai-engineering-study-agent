@@ -3,14 +3,21 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { GraphData, GraphEdge, GraphNode } from '../../types';
 import { D3Graph } from './D3Graph';
-import { NODE_H, NODE_W } from './graphLayout';
+import { modelServingPaidCandidate } from './__fixtures__/modelServingPaidCandidate';
+import {
+  BOTTOM_NODE_GAP,
+  MAX_PUBLISHED_GRAPH_NODES,
+  MIN_PUBLISHED_TITLE_PX,
+  NODE_H,
+  NODE_TITLE_PX,
+  NODE_W,
+} from './graphLayout';
 
 
 const LEGACY_VIEWPORT = { width: 760, height: 500 };
 const DEEP_VIEWPORT = { width: 656, height: 848 };
 const PUBLICATION_VIEWPORT = { width: 1440, height: 960 };
-const NODE_TITLE_PX = 15.36;
-const MIN_PUBLISHED_TITLE_PX = 6;
+const MIN_LEGACY_TITLE_PX = 6;
 let viewport = LEGACY_VIEWPORT;
 
 const originalGetBBox = SVGGraphicsElement.prototype.getBBox;
@@ -302,7 +309,7 @@ describe('dense production graph rendering', () => {
     expect(container.querySelectorAll('text.node-group-label')).toHaveLength(13);
     expect(nodes.every(node => Number(node.getAttribute('opacity')) === 1)).toBe(true);
     expect(paths.every(path => Number(path.getAttribute('opacity')) > 0)).toBe(true);
-    expect(NODE_TITLE_PX * transform.scale).toBeGreaterThanOrEqual(MIN_PUBLISHED_TITLE_PX);
+    expect(NODE_TITLE_PX * transform.scale).toBeGreaterThanOrEqual(MIN_LEGACY_TITLE_PX);
 
     for (const renderedNode of nodes) {
       const position = parsePosition(renderedNode.getAttribute('transform'));
@@ -340,6 +347,214 @@ describe('dense production graph rendering', () => {
     expect(nodeMarkers).toContain('OUTCOME');
   });
 
+  it('keeps the paid model-serving candidate readable, non-overlapping, and in frame', () => {
+    viewport = PUBLICATION_VIEWPORT;
+    expect(modelServingPaidCandidate.nodes).toHaveLength(10);
+    expect(modelServingPaidCandidate.edges).toHaveLength(15);
+
+    const { container } = render(
+      <div style={{ width: viewport.width, height: viewport.height }}>
+        <D3Graph
+          graphData={modelServingPaidCandidate}
+          currentStep={-1}
+          activeNodeIds={new Set<string>()}
+          onNodeClick={() => undefined}
+        />
+      </div>,
+    );
+
+    const transform = parseTransform(
+      container.querySelector('svg > g')?.getAttribute('transform') ?? null,
+    );
+    const renderedNodes = Array.from(container.querySelectorAll<SVGGElement>('g.node'));
+    const paths = Array.from(container.querySelectorAll<SVGPathElement>('path.edge-vis'));
+    const positions = renderedNodes.map(renderedNode => (
+      parsePosition(renderedNode.getAttribute('transform'))
+    ));
+
+    expect(renderedNodes).toHaveLength(10);
+    expect(paths).toHaveLength(15);
+    expect(NODE_TITLE_PX * transform.scale).toBeGreaterThanOrEqual(MIN_PUBLISHED_TITLE_PX);
+
+    for (let left = 0; left < positions.length; left += 1) {
+      for (let right = left + 1; right < positions.length; right += 1) {
+        const horizontalOverlap = Math.abs(positions[left].x - positions[right].x) < NODE_W;
+        const verticalOverlap = Math.abs(positions[left].y - positions[right].y) < NODE_H;
+        expect(horizontalOverlap && verticalOverlap).toBe(false);
+      }
+    }
+
+    for (const position of positions) {
+      expect(transform.x + transform.scale * (position.x - NODE_W / 2)).toBeGreaterThanOrEqual(0);
+      expect(transform.x + transform.scale * (position.x + NODE_W / 2)).toBeLessThanOrEqual(viewport.width);
+      expect(transform.y + transform.scale * (position.y - NODE_H / 2)).toBeGreaterThanOrEqual(0);
+      expect(transform.y + transform.scale * (position.y + NODE_H / 2)).toBeLessThanOrEqual(viewport.height);
+    }
+
+    for (const path of paths) {
+      const points = pathControlPoints(path.getAttribute('d'));
+      expect(points.length).toBeGreaterThanOrEqual(2);
+      for (const point of points) {
+        expect(transform.x + transform.scale * point.x).toBeGreaterThanOrEqual(0);
+        expect(transform.x + transform.scale * point.x).toBeLessThanOrEqual(viewport.width);
+        expect(transform.y + transform.scale * point.y).toBeGreaterThanOrEqual(0);
+        expect(transform.y + transform.scale * point.y).toBeLessThanOrEqual(viewport.height);
+      }
+    }
+  });
+
+  it('routes a horizontal skip edge around unrelated middle-column cards', () => {
+    viewport = PUBLICATION_VIEWPORT;
+    const graph: GraphData = {
+      graph_type: 'architecture',
+      design_origin: 'applied',
+      title: 'Horizontal skip route',
+      nodes: [
+        node('a', 'Source', 'client'),
+        node('b', 'Upper worker'),
+        node('c', 'Middle worker'),
+        node('e', 'Lower worker'),
+        node('d', 'Outcome', 'external'),
+      ],
+      edges: [
+        edge('a', 'b', 'dispatches upper work'),
+        edge('a', 'c', 'dispatches middle work'),
+        edge('a', 'e', 'dispatches lower work'),
+        edge('b', 'd', 'returns upper result'),
+        edge('a', 'd', 'sends direct result'),
+      ],
+      groups: [{
+        id: 'runtime',
+        label: 'Runtime',
+        kind: 'runtime',
+        nodeIds: ['a', 'b', 'c', 'e', 'd'],
+      }],
+      sequence: [],
+    };
+    const { container } = render(
+      <div style={{ width: viewport.width, height: viewport.height }}>
+        <D3Graph
+          graphData={graph}
+          currentStep={-1}
+          activeNodeIds={new Set<string>()}
+          onNodeClick={() => undefined}
+        />
+      </div>,
+    );
+    const positions = new Map(
+      Array.from(container.querySelectorAll<SVGGElement>('g.node')).map(renderedNode => [
+        renderedNode.getAttribute('data-node-id') ?? '',
+        parsePosition(renderedNode.getAttribute('transform')),
+      ]),
+    );
+    const skipPath = container.querySelector<SVGPathElement>(
+      'path.edge-vis[data-source-id="a"][data-target-id="d"]',
+    );
+    const points = pathControlPoints(skipPath?.getAttribute('d') ?? null);
+
+    expect(points.length).toBeGreaterThanOrEqual(6);
+    for (const [nodeId, position] of positions) {
+      if (nodeId === 'a' || nodeId === 'd') continue;
+      for (let index = 1; index < points.length; index += 1) {
+        expect(segmentIntersectsNode(points[index - 1], points[index], position)).toBe(false);
+      }
+    }
+  });
+
+  it('routes vertical edges around wrapped cards in an adjacent rank', () => {
+    viewport = PUBLICATION_VIEWPORT;
+    const rankOne = Array.from({ length: 10 }, (_, index) => (
+      node(`worker_${index}`, index === 0 ? 'Anchor worker' : `Worker ${index}`)
+    ));
+    const rankTwo = Array.from({ length: 6 }, (_, index) => (
+      node(`outcome_${index}`, `Outcome ${index}`, 'external')
+    ));
+    const graph: GraphData = {
+      graph_type: 'architecture',
+      design_origin: 'applied',
+      title: 'Wrapped adjacent ranks',
+      nodes: [node('root', 'Root', 'client'), ...rankOne, ...rankTwo],
+      edges: [
+        ...rankOne.map(worker => edge('root', worker.id, `starts ${worker.id}`)),
+        ...rankTwo.map(outcome => edge('worker_0', outcome.id, `produces ${outcome.id}`)),
+      ],
+      groups: [{
+        id: 'runtime',
+        label: 'Runtime',
+        kind: 'runtime',
+        nodeIds: ['root', ...rankOne.map(worker => worker.id), ...rankTwo.map(outcome => outcome.id)],
+      }],
+      sequence: [],
+    };
+    const { container } = render(
+      <div style={{ width: viewport.width, height: viewport.height }}>
+        <D3Graph
+          graphData={graph}
+          currentStep={-1}
+          activeNodeIds={new Set<string>()}
+          onNodeClick={() => undefined}
+        />
+      </div>,
+    );
+    const positions = new Map(
+      Array.from(container.querySelectorAll<SVGGElement>('g.node')).map(renderedNode => [
+        renderedNode.getAttribute('data-node-id') ?? '',
+        parsePosition(renderedNode.getAttribute('transform')),
+      ]),
+    );
+    const path = container.querySelector<SVGPathElement>(
+      'path.edge-vis[data-source-id="worker_0"][data-target-id="outcome_0"]',
+    );
+    const points = pathControlPoints(path?.getAttribute('d') ?? null);
+
+    expect(points.length).toBeGreaterThanOrEqual(6);
+    for (const [nodeId, position] of positions) {
+      if (nodeId === 'worker_0' || nodeId === 'outcome_0') continue;
+      for (let index = 1; index < points.length; index += 1) {
+        expect(segmentIntersectsNode(points[index - 1], points[index], position)).toBe(false);
+      }
+    }
+  });
+
+  it('reserves a full card and gap for bottom nodes in the same column', () => {
+    const graph: GraphData = {
+      graph_type: 'architecture',
+      design_origin: 'applied',
+      title: 'Bottom band boundary',
+      nodes: [
+        node('source', 'Source', 'client'),
+        node('main', 'Main capability'),
+        node('audit_one', 'Audit one', 'datastore', 'bottom'),
+        node('audit_two', 'Audit two', 'datastore', 'bottom'),
+      ],
+      edges: [
+        edge('source', 'main', 'starts work'),
+        edge('source', 'audit_one', 'records one'),
+        edge('source', 'audit_two', 'records two'),
+      ],
+      groups: [],
+      sequence: [],
+    };
+    const { container } = render(
+      <div style={{ width: viewport.width, height: viewport.height }}>
+        <D3Graph
+          graphData={graph}
+          currentStep={-1}
+          activeNodeIds={new Set<string>()}
+          onNodeClick={() => undefined}
+        />
+      </div>,
+    );
+    const bottomPositions = ['audit_one', 'audit_two'].map((nodeId) => {
+      const renderedNode = container.querySelector<SVGGElement>(`g.node[data-node-id="${nodeId}"]`);
+      return parsePosition(renderedNode?.getAttribute('transform') ?? null);
+    });
+
+    expect(bottomPositions[0].x).toBe(bottomPositions[1].x);
+    expect(Math.abs(bottomPositions[0].y - bottomPositions[1].y))
+      .toBeGreaterThanOrEqual(NODE_H + BOTTOM_NODE_GAP);
+  });
+
   it('keeps a 39-node, 65-edge deep architecture readable in the live viewport', () => {
     viewport = DEEP_VIEWPORT;
     const graph = deepCapacityGraph();
@@ -363,7 +578,7 @@ describe('dense production graph rendering', () => {
     expect(nodes).toHaveLength(39);
     expect(paths).toHaveLength(65);
     expect(container.querySelectorAll('text.node-group-label')).toHaveLength(39);
-    expect(NODE_TITLE_PX * transform.scale).toBeGreaterThanOrEqual(MIN_PUBLISHED_TITLE_PX);
+    expect(NODE_TITLE_PX * transform.scale).toBeGreaterThanOrEqual(MIN_LEGACY_TITLE_PX);
     expect(nodes.every(renderedNode => Number(renderedNode.getAttribute('opacity')) === 1)).toBe(true);
     expect(paths.every(path => Boolean(path.getAttribute('d')))).toBe(true);
 
@@ -462,6 +677,91 @@ describe('dense production graph rendering', () => {
       }
     }
 
+  });
+
+  it('renders the 60-node schema boundary through the compact fallback', () => {
+    viewport = PUBLICATION_VIEWPORT;
+    const generated = deepCapacityGraph(
+      Array.from({ length: 10 }, () => [1, 5]).flat(),
+      80,
+    );
+    const bottomIds = new Set(generated.nodes.slice(-6).map(graphNode => graphNode.id));
+    const graph: GraphData = {
+      ...generated,
+      nodes: generated.nodes.map(graphNode => (
+        bottomIds.has(graphNode.id) ? { ...graphNode, lane: 'bottom' as const } : graphNode
+      )),
+    };
+    const { container } = render(
+      <div style={{ width: viewport.width, height: viewport.height }}>
+        <D3Graph
+          graphData={graph}
+          currentStep={-1}
+          activeNodeIds={new Set<string>()}
+          onNodeClick={() => undefined}
+        />
+      </div>,
+    );
+    const transform = parseTransform(
+      container.querySelector('svg > g')?.getAttribute('transform') ?? null,
+    );
+    const renderedNodes = Array.from(container.querySelectorAll<SVGGElement>('g.node'));
+    const positions = new Map(renderedNodes.map(renderedNode => [
+      renderedNode.getAttribute('data-node-id') ?? '',
+      parsePosition(renderedNode.getAttribute('transform')),
+    ]));
+    const paths = Array.from(container.querySelectorAll<SVGPathElement>('path.edge-vis'));
+
+    expect(renderedNodes).toHaveLength(MAX_PUBLISHED_GRAPH_NODES);
+    expect(NODE_TITLE_PX * transform.scale).toBeGreaterThanOrEqual(MIN_PUBLISHED_TITLE_PX);
+    const positionedNodes = [...positions.values()];
+    for (let left = 0; left < positionedNodes.length; left += 1) {
+      for (let right = left + 1; right < positionedNodes.length; right += 1) {
+        const horizontalOverlap = Math.abs(positionedNodes[left].x - positionedNodes[right].x) < NODE_W;
+        const verticalOverlap = Math.abs(positionedNodes[left].y - positionedNodes[right].y) < NODE_H;
+        expect(horizontalOverlap && verticalOverlap).toBe(false);
+      }
+    }
+
+    const mainPositions = graph.nodes
+      .filter(graphNode => graphNode.lane !== 'bottom')
+      .map(graphNode => positions.get(graphNode.id));
+    const bottomPositions = graph.nodes
+      .filter(graphNode => graphNode.lane === 'bottom')
+      .map(graphNode => positions.get(graphNode.id));
+    expect(mainPositions).not.toHaveLength(0);
+    expect(bottomPositions).not.toHaveLength(0);
+    expect(Math.min(...bottomPositions.map(position => position?.y ?? -Infinity)))
+      .toBeGreaterThanOrEqual(
+        Math.max(...mainPositions.map(position => position?.y ?? Infinity))
+          + NODE_H
+          + BOTTOM_NODE_GAP,
+      );
+
+    for (const path of paths) {
+      const points = pathControlPoints(path.getAttribute('d'));
+      for (const point of points) {
+        expect(transform.x + transform.scale * point.x).toBeGreaterThanOrEqual(0);
+        expect(transform.x + transform.scale * point.x).toBeLessThanOrEqual(viewport.width);
+        expect(transform.y + transform.scale * point.y).toBeGreaterThanOrEqual(0);
+        expect(transform.y + transform.scale * point.y).toBeLessThanOrEqual(viewport.height);
+      }
+      const sourceId = path.getAttribute('data-source-id');
+      const targetId = path.getAttribute('data-target-id');
+      for (const [nodeId, position] of positions) {
+        if (nodeId === sourceId || nodeId === targetId) continue;
+        for (let index = 1; index < points.length; index += 1) {
+          expect(segmentIntersectsNode(points[index - 1], points[index], position)).toBe(false);
+        }
+      }
+    }
+
+    const sameRowSkipPath = container.querySelector<SVGPathElement>(
+      'path.edge-vis[data-source-id="level_1_node_1"][data-target-id="level_2_node_5"]',
+    );
+    const sameRowSkipPoints = pathControlPoints(sameRowSkipPath?.getAttribute('d') ?? null);
+    expect(sameRowSkipPoints).toHaveLength(4);
+    expect(sameRowSkipPoints[0].y).not.toBe(sameRowSkipPoints[1].y);
   });
 
   it('keeps required labels inside the frame for a live-shaped multi-track graph', () => {

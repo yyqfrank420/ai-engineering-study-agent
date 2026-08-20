@@ -34,6 +34,7 @@ async def test_one_provider_call_emits_complete_explanation_blocks(monkeypatch):
         send=send,
         graph_version="v1",
         allowed_node_ids={"input", "approval"},
+        allowed_evidence_refs={"Chapter 4, p.8"},
     )
 
     assert len(calls) == 1
@@ -124,9 +125,48 @@ async def test_stream_timeout_before_complete_block_emits_bounded_fallback(monke
 
     fallback = next(event for event in events if event["type"] == "explanation_block")
     assert closed is True
-    assert fallback["title"] == "Architecture explanation"
-    assert len(fallback["content"]) <= 4000
-    assert "partial" in response
+    assert fallback["title"] == "Explanation unavailable"
+    assert (
+        fallback["content"] == "The explanation response was unavailable. Please retry."
+    )
+    assert "partial" not in response
+    assert fallback["evidence_refs"] == []
+    assert any(
+        event["type"] == "workflow_progress" and event["status"] == "degraded"
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_malformed_model_output_emits_server_authored_fallback(monkeypatch):
+    async def fake_stream_response(**_kwargs):
+        yield ("text", '{"block_id":"overview","content":"unsupported claim"}')
+
+    monkeypatch.setattr(explanation_blocks, "stream_response", fake_stream_response)
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    response = await explanation_blocks.stream_explanation_blocks(
+        model="claude-opus-5",
+        system="system",
+        messages=[{"role": "user", "content": "explain"}],
+        effort="low",
+        max_output_tokens=4500,
+        timeout_seconds=40,
+        telemetry={"operation": "test"},
+        send=send,
+        graph_version="v1",
+        allowed_node_ids=set(),
+    )
+
+    fallback = next(event for event in events if event["type"] == "explanation_block")
+    assert (
+        fallback["content"] == "The explanation response was unavailable. Please retry."
+    )
+    assert fallback["evidence_refs"] == []
+    assert "unsupported claim" not in response
     assert any(
         event["type"] == "workflow_progress" and event["status"] == "degraded"
         for event in events
@@ -182,7 +222,7 @@ async def test_preserved_edit_appends_required_completion_sentence_after_parsing
     assert response.endswith(sentence)
 
 
-def test_block_normalisation_rejects_scalar_lists_and_empty_identifiers():
+def test_block_normalisation_rejects_non_array_evidence_refs():
     block = explanation_blocks._normalise_block(
         {
             "block_id": "   ",
@@ -194,13 +234,7 @@ def test_block_normalisation_rejects_scalar_lists_and_empty_identifiers():
         {"input"},
     )
 
-    assert block == {
-        "block_id": "architecture_note",
-        "title": "Architecture note",
-        "content": "Useful detail",
-        "related_node_ids": [],
-        "evidence_refs": [],
-    }
+    assert block is None
 
 
 def test_block_normalisation_requires_exact_contract_keys():
@@ -214,6 +248,22 @@ def test_block_normalisation_requires_exact_contract_keys():
             "unexpected": "value",
         },
         set(),
+    )
+
+    assert block is None
+
+
+def test_block_normalisation_rejects_unknown_evidence_references():
+    block = explanation_blocks._normalise_block(
+        {
+            "block_id": "overview",
+            "title": "Overview",
+            "content": "Useful detail",
+            "related_node_ids": [],
+            "evidence_refs": ["Chapter 1, p.1"],
+        },
+        set(),
+        {"Chapter 2, p.2"},
     )
 
     assert block is None
@@ -259,7 +309,13 @@ async def test_stream_limits_blocks_and_rejects_duplicate_ids(monkeypatch):
     assert len({block["block_id"] for block in blocks}) == 6
 
 
-def test_fallback_block_bounds_unstructured_model_output():
+def test_fallback_block_is_server_authored_and_has_no_evidence_refs():
     block = explanation_blocks._fallback_block("x" * 5000)
 
-    assert len(block["content"]) == 4000
+    assert block == {
+        "block_id": "architecture_explanation",
+        "title": "Explanation unavailable",
+        "content": "The explanation response was unavailable. Please retry.",
+        "related_node_ids": [],
+        "evidence_refs": [],
+    }

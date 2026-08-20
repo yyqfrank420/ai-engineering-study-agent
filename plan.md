@@ -1,71 +1,136 @@
 # Architecture generation recovery and staged redesign plan
 
-Last updated: 2026-08-09
+Last updated: 2026-08-16
 
 ## Decision
 
-Restore the current architecture pipeline and deploy it before starting the staged generation redesign.
+Replace the legacy whole-graph repair loop with a small staged pipeline behind a feature flag. The
+staged pipeline is the next recovery path. It does not require the deferred Release 2 project DAG,
+project scoring, or parallel scheduling.
 
-The current release completes architecture planning, Kimi generation, private rendering, at most two semantic repairs, one error-informed critic-contract correction, and post-patch review. The reviewed graph snapshot stays beside its scorecard. Dependency-aware layer retention reopens downstream review when an upstream owned record changes. A request-scoped four-call ceiling bounds Sonnet critic provider calls across all review stages. Diagnostic `31257810429` exposed serial semantic defect discovery. Diagnostic `31259489721` exposed serial scorecard validation. Diagnostic `31261404727` exposed model-owned completion state, which critic v41 replaced with a server-owned merge. Diagnostic `31262285743` then exposed a direct schema/parser contradiction: the provider schema allowed categorical strings while the applied topology parser required integer codes. The parser now accepts only the finite canonical codebook names or their integer codes.
+The legacy release used architecture planning, Kimi generation, private rendering, up to two semantic repairs, one error-informed critic-contract correction, and post-patch review. The reviewed graph snapshot stayed beside its scorecard. Dependency-aware layer retention reopened downstream review when an upstream owned record changed. A request-scoped four-call ceiling bounded Sonnet critic provider calls across all review stages. Diagnostic `31257810429` exposed serial semantic defect discovery. Diagnostic `31259489721` exposed serial scorecard validation. Diagnostic `31261404727` exposed model-owned completion state, which critic v41 replaced with a server-owned merge. Diagnostic `31262285743` then exposed a direct schema/parser contradiction: the provider schema allowed categorical strings while the applied topology parser required integer codes. The parser accepted only the finite canonical codebook names or their integer codes.
 
-The redesign stays outside the release-critical path. It begins after the current pipeline passes the targeted live diagnostic with fresh explicit authorization and then passes the production smoke test.
+Diagnostic `31953303244` invalidated the Release 1 live prerequisite for the legacy pipeline. It
+made 13 application calls, cost $1.166855, and took 752.114 seconds. Turn 1 published a 14-node,
+19-edge graph. Turn 2 created a 15-node candidate, then its final connections contract failed
+`invalid_contract`; the workflow restored the 14-node graph. A path that can add the requested
+component and then discard it at the final contract gate is not a valid release prerequisite.
 
-## Release 1: restore the current pipeline
+The legacy path remains available only as a feature-flag rollback once staged code lands. It must
+not receive another release-validation attempt as the preferred production design.
+
+## Release 1: staged pipeline recovery
 
 ### Scope
 
-1. Make topology-proof handling use the resolved architecture depth at every boundary.
-2. Ignore or omit topology-proof judgments for depths that do not require them.
-3. Retain strict proof validation for production depth.
-4. Record safe validation paths and rule codes when critic output is rejected.
-5. Add paired prototype and production tests.
-6. Give the active critic verdict priority over speculative repair time while preserving synthesis and finalization.
-7. Keep whole-graph generation, private render, MECE review layers, dependency-aware retention and reopening, at most two semantic repairs, and one error-informed critic-contract correction.
-8. Complete the first exhaustive editable review before spending the repair budget.
+1. Build one request-scoped state machine with explicit server-owned stages.
+2. Generate the root and each graph layer as typed partial input. The server alone materializes,
+   validates, versions, and persists canonical graph data.
+3. Permit one bounded retry per layer, shared by generation and review. A failed retry fails the
+   request and preserves the preceding durable graph.
+4. Apply maturity rules at each stage. A later stage may consume only server-accepted records from
+   its prerequisite stages.
+5. Emit reversible component previews after a mature component stage and a reversible full preview
+   after the final renderable graph stage.
+6. Persist after deterministic maturity and render checks. There is no final whole-graph model gate.
+7. Select the staged pipeline only for applied create and edit requests when the diagnostic flag
+   requests it. The legacy pipeline remains the default and rollback path.
+
+### Chosen state machine
+
+```text
+request_started
+  -> component_candidate
+  -> private_component_render
+  -> reversible_component_preview
+  -> component_gate
+  -> connection_candidate
+  -> private_full_render
+  -> reversible_full_preview
+  -> connection_gate
+  -> explanation
+  -> atomic_persist
+```
+
+Every stage is request-scoped. It receives the request ID, cancellation generation, immutable
+accepted state from earlier stages, and bounded input for its own layer. Steering or cancellation
+ends the current state machine and starts a new one. No stage can publish into a later request.
+
+Kimi K3 at high effort first returns a component wire, then a connection wire. The component wire
+owns the root index, title, assumptions, capabilities, and each component's label, type,
+responsibility, group label, group kind, and primary-flow membership. Kimi does not author a
+composition layer.
+
+The server owns IDs, group records, breadth-first sequence derivation, graph projection, versions,
+selected maturity, exact edit admission, state transitions, validation, and persistence. It derives
+production proofs from declared capabilities. Prototype gates exclude production criteria. Models
+never write canonical graph data or decide state transitions.
+
+A component-only graph has no edges. Its deterministic render gate emits a reversible preview before
+one Sonnet medium component gate call. The full graph follows the same render, reversible-preview,
+then connection-gate order. Each preview remains nonauthoritative until its semantic gate passes and
+the final turn persists. Each gate handles one candidate. A malformed
+gate result is terminal. Each layer admits at most two candidates. A rejected component candidate
+can retry that layer; a rejected connection candidate can retry connections without reopening an
+accepted component layer.
+
+There is no Opus root architecture pass and no final full-model gate. Opus low writes the
+explanation after both layer gates pass. A deterministic explanation is used when that call fails.
+The transport atomically persists graph data and its server-only graph contract before emitting
+authoritative `graph_data`.
+
+For edits, `auto` inherits stored maturity. A legacy graph without a contract defaults to prototype.
+An explicit different depth reruns both semantic stages at the selected maturity. A bounded edit keeps
+its exact record authority during that restage, so maturity never grants permission to rewrite prior
+components, edges, title, groups, sequence, or assumptions. Prompt wording cannot alter selected
+maturity.
+
+The no-retry path makes five application model calls: component generation, component gate,
+connection generation, connection gate, and explanation. The bounded maximum is nine calls. The
+prototype 90-second first-preview target is an SLO. Generation calls use a 130-second timeout,
+gates use 55 seconds, and the request ceiling includes orchestration and private renders.
 
 ### Current status
 
-- Canonicalisation and final validation use the resolved architecture depth.
-- Prototype review sends an empty proof object and production review keeps the full proof contract.
-- The initial review returns one exhaustive scorecard. One bounded protocol correction can repair a malformed scorecard. A rejected patch can receive one separate error-informed contract correction with a safe validation path and rule.
-- The shared initial critic stage may borrow up to 195 seconds. The measured timing replay preserves 98 seconds for patching and 101 seconds for final review.
-- Repair scope is derived from failed layer ownership. It grants exact permissions for cited non-adjacent records in one connected candidate and exact directed connection obligations. Every added component region must connect to an existing node. Group moves require both source and destination group authority. Editable defects enter at most two successful bounded repair rounds and render-only defects fail closed.
-- Diagnostic `31333075986` exposed a local architect response-limit conflict and an invalid fallback path before the intended graph review could complete. The current recovery removes that conflict and fails closed when architecture input is unavailable.
-- Diagnostic `31335429802` failed at `architecture_pass_evidence_provenance` before graph construction. It made two application calls, no judge calls, and cost $0.353252. The architect took 139.767 seconds and emitted 9,931 output tokens; synthesis took 25.602 seconds. The turn took 168.228 seconds and the case took 170.265 seconds. No graph, private render, fallback, Kimi, Sonnet, repair, or second turn ran.
-- Diagnostic `31340006983` reached the corrected evidence contract but the Opus architect exhausted its 150-second role deadline at `xhigh` effort. The accepted provider attempt ran for 149.813 seconds with zero final output and no queue wait. The turn failed closed before Kimi, Sonnet, rendering, repair, or turn two. Architect effort is now `high`; the model, response contract, independent review, and deadline stay unchanged.
-- The root cause was ambiguous book and web evidence identity at the architecture boundary, plus a `graph-expansion` corpus precondition that did not explicitly request the monitoring component before asking to expand it. The current correction uses opaque hashed book and web evidence IDs, returns safe provenance path and rule coordinates, explicitly requests monitoring in the first prompt, and limits the second prompt to one directly connected child.
-- Corpus `2026-08-09.v1` is pending a fresh full protected capture, human review, judge calibration, and approved manifest hash. No live success is recorded. No further paid run is authorized.
-- The current offline matrix passes 1,216 backend tests and 217 frontend tests.
+- Diagnostic `31953303244` is failure 25 in the live ledger and invalidates the former Release 1
+  prerequisite.
+- The staged pipeline is the release work. The legacy repair loop is retained for rollback-only
+  after staged code lands.
+- The existing full offline matrix remains a prerequisite for any staged diagnostic.
 
 ### Tests
 
-- A prototype review with incomplete topology witnesses succeeds when all required prototype checks pass.
-- The same incomplete witnesses fail at production depth.
-- A corrected review can recover from one malformed response.
-- An initial editable rejection receives exactly one completion pass before repair.
-- A completion may add defects and selectors. Omitted prior repair evidence remains in the server-owned merged contract. The reviewed graph snapshot and scorecard remain paired by graph version.
-- Post-patch reviews do not start another completion pass.
-- Safe error telemetry identifies the rejected field and rule without storing raw prompts or model output.
-- Existing graph critic, repair, workflow, API, and browser tests remain green.
-- Backend and frontend coverage stay at or above their current 90% thresholds.
+- Each stage accepts only server-accepted data from its predecessor.
+- Each layer permits a second candidate and rejects a third.
+- Model output cannot create, mutate, version, or persist a canonical graph directly.
+- The component preview contains no edges and passes private rendering before the component gate.
+- The full graph passes private rendering before the connection gate.
+- Cancellation, steering, timeout, retry failure, and persistence failure restore the prior durable graph.
+- The feature flag selects one pipeline for a request and prevents mixed legacy and staged writes.
+- Existing graph, transport, API, browser, static-analysis, and coverage gates remain green.
 
 ### Release gate
 
 1. The focused tests, static analysis, and full offline CI matrix have passed on the current tree.
-2. After fresh explicit authorization, run one targeted `graph-expansion` real-model diagnostic.
-3. Require a fresh graph version, successful private render, completed semantic review, and explicit `approved`, `preserved`, or `withheld` publication state. An edit cannot fall back to creation.
-4. Merge and deploy only after the exact commit passes.
-5. Run a production smoke test and confirm stable traffic before beginning Release 2 work.
+2. Run the staged `graph-expansion` diagnostic with `pipeline_mode=staged`.
+3. Require it to persist a fresh 15-node turn 2 graph rather
+   than restoring turn 1.
+4. Record latency, cost, preview, retry, maturity, and rollback telemetry.
+5. Merge and deploy only after the exact commit passes.
 
 ### Scope freeze
 
-Release 1 must not introduce component-stage orchestration, parallel builders, a new project-state model, multi-candidate search, generated layers, or new scoring layers. The staged DAG and layer-as-generated architecture remain Release 2 work.
+Release 1 includes only the request-scoped sequential state machine, server-owned layer contracts,
+one retry per layer, maturity checks, progressive previews, and a feature flag. It excludes a
+project-wide DAG, scoring, parallel builders, speculative work, alternatives, and adaptive routing.
 
-## Release 2: staged architecture generation
+## Release 2: deferred project DAG, scoring, and parallelism
 
 ### Goal
 
-Generate one accepted architecture through project-wide risk gates. Each worker changes a scoped part of an immutable project snapshot. Every gate evaluates the complete current project, its maturity stage, remaining plan, and proposed patch.
+Release 2 remains deferred until the staged Release 1 path has production evidence. It may add a
+project-wide risk-gated DAG, project scoring, and bounded parallel work. It must preserve the
+server-owned graph contract and maturity rules established in Release 1.
 
 ### Authoritative state
 
@@ -230,13 +295,13 @@ Exit criterion: measured improvement on held-out architecture cases and stable p
 
 ## Rollout
 
-- Keep the current pipeline as the production default during Release 2 development.
-- Run the staged pipeline in shadow mode on the rotating corpus.
-- Store exact prompt, model, scorer, snapshot, latency, cost, and outcome versions.
-- Compare both pipelines on matched cases.
-- Enable staged generation for internal traffic after it meets the release thresholds.
-- Roll back through one configuration switch.
-- Remove the old path only after staged generation passes the agreed production observation window.
+- Keep the legacy pipeline as the default behind `GRAPH_PIPELINE_MODE=legacy`.
+- Permit `GRAPH_PIPELINE_MODE=staged` only for the scheduled diagnostic applied create/edit path.
+- Record stage latency, retries, maturity failures, preview outcomes, graph versions, cost, and
+  rollback use.
+- Disabling staged diagnostics routes new requests to the legacy pipeline. Once staged code lands,
+  the legacy repair loop has rollback-only status.
+- Remove the legacy path after the agreed production observation window.
 
 ## Main risks
 

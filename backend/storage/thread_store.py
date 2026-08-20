@@ -43,7 +43,9 @@ def delete_thread(user_id: str, thread_id: str) -> None:
     """Atomically delete a thread and its messages on either database."""
     with _connect() as conn:
         conn.execute(
-            _adapt_query("DELETE FROM chat_messages WHERE thread_id = ? AND user_id = ?"),
+            _adapt_query(
+                "DELETE FROM chat_messages WHERE thread_id = ? AND user_id = ?"
+            ),
             (thread_id, user_id),
         )
         conn.execute(
@@ -89,14 +91,20 @@ def create_thread(user_id: str, title: str = "New chat") -> dict:
                 oldest_id = oldest["id"]
                 logger.info(
                     "thread_store: evicting oldest thread %s for user %s (limit=%d)",
-                    oldest_id, user_id, settings.max_threads_per_user,
+                    oldest_id,
+                    user_id,
+                    settings.max_threads_per_user,
                 )
                 conn.execute(
-                    _adapt_query("DELETE FROM chat_messages WHERE thread_id = ? AND user_id = ?"),
+                    _adapt_query(
+                        "DELETE FROM chat_messages WHERE thread_id = ? AND user_id = ?"
+                    ),
                     (oldest_id, user_id),
                 )
                 conn.execute(
-                    _adapt_query("DELETE FROM chat_threads WHERE id = ? AND user_id = ?"),
+                    _adapt_query(
+                        "DELETE FROM chat_threads WHERE id = ? AND user_id = ?"
+                    ),
                     (oldest_id, user_id),
                 )
 
@@ -124,7 +132,11 @@ def create_thread(user_id: str, title: str = "New chat") -> dict:
 
     if thread and thread.get("graph_data"):
         try:
-            thread["graph_data"] = json.loads(thread["graph_data"]) if isinstance(thread["graph_data"], str) else thread["graph_data"]
+            thread["graph_data"] = (
+                json.loads(thread["graph_data"])
+                if isinstance(thread["graph_data"], str)
+                else thread["graph_data"]
+            )
         except Exception:
             thread["graph_data"] = None
     return thread
@@ -141,7 +153,11 @@ def get_thread(user_id: str, thread_id: str) -> dict | None:
     )
     if row and row.get("graph_data"):
         try:
-            row["graph_data"] = json.loads(row["graph_data"]) if isinstance(row["graph_data"], str) else row["graph_data"]
+            row["graph_data"] = (
+                json.loads(row["graph_data"])
+                if isinstance(row["graph_data"], str)
+                else row["graph_data"]
+            )
         except Exception:
             row["graph_data"] = None
     return row
@@ -174,7 +190,11 @@ def get_latest_thread(user_id: str) -> dict | None:
     )
     if row and row.get("graph_data"):
         try:
-            row["graph_data"] = json.loads(row["graph_data"]) if isinstance(row["graph_data"], str) else row["graph_data"]
+            row["graph_data"] = (
+                json.loads(row["graph_data"])
+                if isinstance(row["graph_data"], str)
+                else row["graph_data"]
+            )
         except Exception:
             row["graph_data"] = None
     return row
@@ -208,10 +228,65 @@ def get_graph(user_id: str, thread_id: str) -> dict | None:
     )
     if row and row.get("graph_data"):
         try:
-            return json.loads(row["graph_data"]) if isinstance(row["graph_data"], str) else row["graph_data"]
+            return (
+                json.loads(row["graph_data"])
+                if isinstance(row["graph_data"], str)
+                else row["graph_data"]
+            )
         except Exception:
             return None
     return None
+
+
+def get_graph_artifact(
+    user_id: str,
+    thread_id: str,
+) -> tuple[dict | None, dict | None]:
+    """Return the persisted graph and server-only contract for workflow recovery.
+
+    Thread API reads deliberately select only ``graph_data``. Keep callers that
+    need the contract on this storage boundary rather than adding it to thread
+    response objects.
+    """
+    row = fetchone(
+        """
+        SELECT graph_data, graph_contract
+        FROM chat_threads
+        WHERE id = ? AND user_id = ?
+        """,
+        (thread_id, user_id),
+    )
+    if row is None:
+        return None, None
+
+    def deserialize(value: object) -> dict | None:
+        if value is None:
+            return None
+        try:
+            parsed = json.loads(value) if isinstance(value, str) else value
+        except (TypeError, json.JSONDecodeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    graph_data = deserialize(row.get("graph_data"))
+    graph_contract = deserialize(row.get("graph_contract"))
+    if graph_contract is None:
+        return graph_data, None
+
+    graph_version = graph_data.get("version") if graph_data is not None else None
+    contract_version = graph_contract.get("graph_version")
+    if (
+        not isinstance(contract_version, str)
+        or not contract_version.strip()
+        or contract_version != graph_version
+    ):
+        logger.warning(
+            "thread_store: ignoring graph contract with invalid graph_version for thread %s",
+            thread_id,
+        )
+        return graph_data, None
+
+    return graph_data, graph_contract
 
 
 def save_graph(user_id: str, thread_id: str, graph_data: dict) -> bool:
@@ -238,7 +313,11 @@ def save_graph(user_id: str, thread_id: str, graph_data: dict) -> bool:
 
         stored_graph = row["graph_data"]
         try:
-            current_graph = json.loads(stored_graph) if isinstance(stored_graph, str) else stored_graph
+            current_graph = (
+                json.loads(stored_graph)
+                if isinstance(stored_graph, str)
+                else stored_graph
+            )
         except (TypeError, json.JSONDecodeError):
             logger.warning(
                 "thread_store: current graph_data is invalid for thread %s; skipping layout save",
@@ -258,9 +337,24 @@ def save_graph(user_id: str, thread_id: str, graph_data: dict) -> bool:
         if byte_size > settings.max_graph_data_bytes:
             logger.warning(
                 "thread_store: graph_data too large (%d bytes > %d limit) for thread %s; skipping save",
-                byte_size, settings.max_graph_data_bytes, thread_id,
+                byte_size,
+                settings.max_graph_data_bytes,
+                thread_id,
             )
             return False
+
+        submitted_version = graph_data.get("version")
+        current_version = current_graph.get("version")
+        if (
+            not isinstance(submitted_version, str)
+            or not isinstance(current_version, str)
+            or submitted_version != current_version
+        ):
+            logger.info(
+                "thread_store: stale graph layout ignored for thread %s",
+                thread_id,
+            )
+            return True
         conn.execute(
             _adapt_query(
                 """
@@ -282,6 +376,7 @@ def persist_turn(
     user_content: str,
     assistant_content: str,
     graph_data: dict | None,
+    graph_contract: dict | None = None,
     client_request_id: str | None = None,
 ) -> bool:
     """Atomically and idempotently persist a completed turn and optional graph.
@@ -292,6 +387,7 @@ def persist_turn(
     Any database error rolls the complete turn back, avoiding partial history.
     """
     serialized_graph: str | None = None
+    serialized_contract: str | None = None
     graph_saved = True
     if graph_data is not None:
         candidate = json.dumps(graph_data, ensure_ascii=False)
@@ -299,6 +395,23 @@ def persist_turn(
             graph_saved = False
         else:
             serialized_graph = candidate
+
+    if graph_contract is not None:
+        if not isinstance(graph_data, dict):
+            raise ValueError("graph_contract requires graph_data")
+        if not isinstance(graph_contract, dict):
+            raise ValueError("graph_contract must be an object")
+        graph_version = graph_data.get("version")
+        contract_version = graph_contract.get("graph_version")
+        if (
+            not isinstance(graph_version, str)
+            or not graph_version.strip()
+            or contract_version != graph_version
+        ):
+            raise ValueError(
+                "graph_contract.graph_version must match graph_data.version"
+            )
+        serialized_contract = json.dumps(graph_contract, ensure_ascii=False)
 
     with _connect() as conn:
         if not settings.use_postgres:
@@ -329,7 +442,9 @@ def persist_turn(
             if prior_rows:
                 prior_roles = {row["role"] for row in prior_rows}
                 if prior_roles != {"user", "assistant"}:
-                    raise RuntimeError("Stored turn is incomplete; refusing an ambiguous retry")
+                    raise RuntimeError(
+                        "Stored turn is incomplete; refusing an ambiguous retry"
+                    )
                 return True
 
         row = conn.execute(
@@ -369,12 +484,12 @@ def persist_turn(
                 _adapt_query(
                     """
                     UPDATE chat_threads
-                    SET title = ?, graph_data = ?, updated_at = CURRENT_TIMESTAMP,
+                    SET title = ?, graph_data = ?, graph_contract = ?, updated_at = CURRENT_TIMESTAMP,
                         last_seen_at = CURRENT_TIMESTAMP
                     WHERE id = ? AND user_id = ?
                     """
                 ),
-                (title, serialized_graph, thread_id, user_id),
+                (title, serialized_graph, serialized_contract, thread_id, user_id),
             )
         else:
             conn.execute(

@@ -47,6 +47,32 @@ def test_empty_and_oversized_inputs_are_not_live_model_cases():
     assert all(len(prompt.encode("utf-8")) <= 12_000 for prompt in prompts)
 
 
+def test_graph_latency_limit_requires_graph_output_on_that_turn(tmp_path):
+    raw = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
+    graph_case = next(case for case in raw["cases"] if case["id"] == "graph-expansion")
+    graph_case["steps"][0]["ui"]["graph_mode"] = "off"
+    path = tmp_path / "invalid-graph-latency.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError, match="latency limit without requiring graph output"
+    ):
+        load_corpus(path=path)
+
+
+def test_graph_expansion_contract_requires_a_prior_renderable_graph_turn(tmp_path):
+    raw = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
+    graph_case = next(case for case in raw["cases"] if case["id"] == "graph-expansion")
+    graph_case["steps"][0]["graph_expansion"] = graph_case["steps"][1][
+        "graph_expansion"
+    ]
+    path = tmp_path / "invalid-first-turn-expansion.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="turn 1 cannot expand a prior graph"):
+        load_corpus(path=path)
+
+
 def test_graph_expansion_corpus_has_one_bounded_expansion():
     from agent.complexity import resolve_complexity
     from agent.nodes import graph_worker
@@ -55,7 +81,7 @@ def test_graph_expansion_corpus_has_one_bounded_expansion():
     case = corpus.by_id["graph-expansion"]
     first_turn, second_turn = case.steps
 
-    assert corpus.corpus_version == "2026-08-09.v1"
+    assert corpus.corpus_version == "2026-08-12.v1"
     assert (
         corpus.approval.status,
         corpus.approval.reviewed_by,
@@ -99,14 +125,21 @@ def test_graph_expansion_corpus_has_one_bounded_expansion():
         "and existing components. Add exactly one directly connected responsibility."
     )
     assert first_turn.ui.complexity == "prototype"
-    assert second_turn.ui.complexity == "production"
+    assert second_turn.ui.complexity == "auto"
+    assert first_turn.graph_output_max_latency_ms == 180_000
+    assert second_turn.graph_output_max_latency_ms == 180_000
+    assert case.deterministic.provider_fallback_allowed is False
+    assert second_turn.graph_expansion is not None
+    assert second_turn.graph_expansion.added_node_count == 1
     assert (
-        resolve_complexity(
-            first_turn.ui.complexity,
-            first_turn.prompt,
-        ).resolved
-        == "prototype"
+        second_turn.graph_expansion.new_node_connected_to_prior_label_contains
+        == "monitor"
     )
+    stored_maturity = resolve_complexity(
+        first_turn.ui.complexity,
+        first_turn.prompt,
+    ).resolved
+    assert stored_maturity == "prototype"
 
     contract, permissions = graph_worker._user_edit_scope(
         second_turn.prompt,
@@ -117,7 +150,7 @@ def test_graph_expansion_corpus_has_one_bounded_expansion():
             "sequence": [],
             "assumptions": [],
         },
-        resolved_complexity=second_turn.ui.complexity,
+        resolved_complexity=stored_maturity,
     )
 
     assert contract["layers"]["components"]["addition_count"] == 1
@@ -718,7 +751,16 @@ async def test_expected_error_case_can_continue_to_a_later_turn(monkeypatch):
         update={
             "deterministic": original.deterministic.model_copy(
                 update={"error_expected": True, "graph_emitted": False}
-            )
+            ),
+            "steps": [
+                step.model_copy(
+                    update={
+                        "graph_output_max_latency_ms": None,
+                        "graph_expansion": None,
+                    }
+                )
+                for step in original.steps
+            ],
         }
     )
     step_order: list[int] = []
@@ -795,6 +837,458 @@ async def test_browser_turn_timing_captures_request_identifiers(monkeypatch):
     assert timings[0]["request_id"] == "request-456"
     assert timings[0]["first_event_ms"] is not None
     assert timings[0]["first_token_ms"] >= timings[0]["first_event_ms"]
+    assert timings[0]["graph_output_latency_ms"] is not None
+
+
+@pytest.mark.asyncio
+async def test_browser_turn_timing_counts_explanation_blocks_as_visible_content(
+    monkeypatch,
+):
+    from eval.browser_runner import _send_case_steps
+
+    case = load_corpus().by_id["rag-grounding"]
+
+    async def fake_send_step(page, sent_case, step_index, frames, *, timeout_seconds):
+        del page, sent_case, step_index, timeout_seconds
+        now = time.time()
+        frames.extend(
+            [
+                {
+                    "direction": "sent",
+                    "message": {"type": "start"},
+                    "at": now,
+                },
+                {
+                    "direction": "received",
+                    "message": {"type": "worker_status"},
+                    "at": now + 0.01,
+                },
+                {
+                    "direction": "received",
+                    "message": {
+                        "type": "graph_data",
+                        "data": {"version": "graph-v1", "nodes": [], "edges": []},
+                    },
+                    "at": now + 0.02,
+                },
+                {
+                    "direction": "received",
+                    "message": {
+                        "type": "explanation_block",
+                        "content": "Working through the evidence.",
+                    },
+                    "at": now + 0.03,
+                },
+                {
+                    "direction": "received",
+                    "message": {"type": "done"},
+                    "at": now + 0.04,
+                },
+            ]
+        )
+        return [
+            frame["message"] for frame in frames if frame["direction"] == "received"
+        ]
+
+    monkeypatch.setattr("eval.browser_runner._send_step", fake_send_step)
+    timings = []
+    await _send_case_steps(
+        None,
+        case,
+        [],
+        [],
+        timeout_seconds=390,
+        turn_timings=timings,
+    )
+
+    assert 10 <= timings[0]["first_token_ms"] < 30
+    assert 10 <= timings[0]["graph_output_latency_ms"] < 30
+
+
+@pytest.mark.asyncio
+async def test_required_graph_turn_rejects_graph_data_after_its_latency_limit(
+    monkeypatch,
+):
+    from eval.browser_runner import BrowserQualityError, _send_case_steps
+
+    case = load_corpus().by_id["graph-expansion"]
+
+    async def fake_send_step(page, sent_case, step_index, frames, *, timeout_seconds):
+        del page, sent_case, step_index, timeout_seconds
+        now = time.time()
+        frames.extend(
+            [
+                {
+                    "direction": "sent",
+                    "message": {"type": "start"},
+                    "at": now,
+                },
+                {
+                    "direction": "received",
+                    "message": {
+                        "type": "graph_data",
+                        "data": {"version": "graph-v1", "nodes": [], "edges": []},
+                    },
+                    "at": now + 181,
+                },
+                {
+                    "direction": "received",
+                    "message": {"type": "done"},
+                    "at": now + 182,
+                },
+            ]
+        )
+        return [frame["message"] for frame in frames]
+
+    monkeypatch.setattr("eval.browser_runner._send_step", fake_send_step)
+    with pytest.raises(BrowserQualityError) as raised:
+        await _send_case_steps(None, case, [], [], timeout_seconds=390)
+
+    assert raised.value.code == "required_graph_slow"
+    assert "limit is 180000 ms" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_graph_output_deadline_stops_the_active_browser_turn(monkeypatch):
+    from eval.browser_runner import BrowserQualityError, _send_step
+
+    original = load_corpus().by_id["graph-expansion"]
+    case = original.model_copy(
+        update={
+            "steps": [
+                original.steps[0].model_copy(update={"graph_output_max_latency_ms": 5})
+            ]
+        }
+    )
+    stop_clicks = 0
+    completion_cancelled = False
+
+    async def skip_modes(*_args):
+        return None
+
+    class Control:
+        def __init__(self, name):
+            self.name = name
+
+        async def fill(self, _value):
+            return None
+
+        async def click(self):
+            nonlocal stop_clicks
+            if self.name == "Stop generation":
+                stop_clicks += 1
+
+        async def wait_for(self, *, state, timeout):
+            nonlocal completion_cancelled
+            del state, timeout
+            if self.name == "Stop generation":
+                return None
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                completion_cancelled = True
+                raise
+
+    class Page:
+        def get_by_placeholder(self, _pattern):
+            return Control("textarea")
+
+        def get_by_label(self, name):
+            return Control(name)
+
+    monkeypatch.setattr("eval.browser_runner._set_modes", skip_modes)
+    with pytest.raises(BrowserQualityError) as raised:
+        await _send_step(Page(), case, 0, [], timeout_seconds=390)
+
+    assert raised.value.code == "required_graph_slow"
+    assert stop_clicks == 1
+    assert completion_cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_graph_expansion_rejects_provider_fallback_before_second_turn(
+    monkeypatch,
+):
+    from eval.browser_runner import BrowserQualityError, _send_case_steps
+
+    case = load_corpus().by_id["graph-expansion"]
+    calls: list[int] = []
+
+    async def fake_send_step(page, sent_case, step_index, frames, *, timeout_seconds):
+        del page, sent_case, frames, timeout_seconds
+        calls.append(step_index)
+        return [
+            {"type": "provider_switch", "provider": "openai"},
+            {
+                "type": "graph_data",
+                "data": {
+                    "version": "graph-v1",
+                    "nodes": [{"id": "existing", "label": "Monitoring"}],
+                    "edges": [],
+                },
+            },
+            {"type": "done"},
+        ]
+
+    monkeypatch.setattr("eval.browser_runner._send_step", fake_send_step)
+    with pytest.raises(BrowserQualityError) as raised:
+        await _send_case_steps(None, case, [], [], timeout_seconds=390)
+
+    assert raised.value.code == "provider_fallback_used"
+    assert calls == [0]
+
+
+@pytest.mark.parametrize(
+    ("current_graph", "expected_code"),
+    [
+        (
+            {
+                "nodes": [
+                    {"id": "old", "label": "Monitoring"},
+                    {"id": "new"},
+                ],
+                "edges": [{"source": "old", "target": "new", "label": "feeds"}],
+            },
+            None,
+        ),
+        (
+            {"nodes": [{"id": "new"}], "edges": []},
+            "graph_expansion_prior_node_missing",
+        ),
+        (
+            {"nodes": [{"id": "old", "label": "Monitoring"}], "edges": []},
+            "graph_expansion_added_node_count_mismatch",
+        ),
+        (
+            {
+                "nodes": [
+                    {"id": "old", "label": "Monitoring"},
+                    {"id": "new"},
+                ],
+                "edges": [],
+            },
+            "graph_expansion_new_node_not_connected",
+        ),
+    ],
+)
+def test_graph_expansion_checks_preservation_size_and_connection(
+    current_graph,
+    expected_code,
+):
+    from eval.browser_runner import _graph_expansion_failure
+
+    failure = _graph_expansion_failure(
+        {"nodes": [{"id": "old", "label": "Monitoring"}], "edges": []},
+        current_graph,
+        anchor_label_contains="monitor",
+    )
+
+    assert (failure[0] if failure else None) == expected_code
+
+
+def test_graph_expansion_preserves_prior_edge_identity():
+    from eval.browser_runner import _graph_expansion_failure
+
+    failure = _graph_expansion_failure(
+        {
+            "nodes": [
+                {"id": "a", "label": "Monitoring"},
+                {"id": "b"},
+            ],
+            "edges": [{"source": "a", "target": "b", "label": "prior"}],
+        },
+        {
+            "nodes": [
+                {"id": "a", "label": "Monitoring"},
+                {"id": "b"},
+                {"id": "new"},
+            ],
+            "edges": [{"source": "b", "target": "new", "label": "new"}],
+        },
+        anchor_label_contains="monitor",
+    )
+
+    assert failure is not None
+    assert failure[0] == "graph_expansion_prior_edge_missing"
+
+
+def test_graph_expansion_rejects_topic_component_composition_and_anchor_rewrites():
+    from eval.browser_runner import _graph_expansion_failure
+
+    previous = {
+        "title": "Model serving",
+        "nodes": [
+            {"id": "monitor", "label": "Monitoring", "description": "Measures"},
+            {"id": "api", "label": "API", "description": "Serves"},
+        ],
+        "edges": [
+            {
+                "source": "api",
+                "target": "monitor",
+                "label": "telemetry",
+                "flow": "runtime",
+            }
+        ],
+        "groups": [
+            {
+                "id": "runtime",
+                "label": "Runtime",
+                "kind": "runtime",
+                "nodeIds": ["api", "monitor"],
+            }
+        ],
+        "sequence": [{"step": 1, "nodes": ["api"], "description": "Serve"}],
+        "assumptions": ["Requests are authenticated."],
+    }
+
+    def candidate():
+        result = json.loads(json.dumps(previous))
+        result["nodes"].append({"id": "new", "label": "Alerting"})
+        result["edges"].append(
+            {"source": "monitor", "target": "new", "label": "alerts"}
+        )
+        return result
+
+    mutations = []
+    changed_title = candidate()
+    changed_title["title"] = "Different topic"
+    mutations.append((changed_title, "graph_expansion_topic_changed"))
+    changed_node = candidate()
+    changed_node["nodes"][0]["description"] = "Rewritten"
+    mutations.append((changed_node, "graph_expansion_prior_node_changed"))
+    changed_edge = candidate()
+    changed_edge["edges"][0]["flow"] = "control"
+    mutations.append((changed_edge, "graph_expansion_prior_edge_missing"))
+    changed_group = candidate()
+    changed_group["groups"][0]["nodeIds"].remove("monitor")
+    mutations.append((changed_group, "graph_expansion_prior_group_changed"))
+    changed_sequence = candidate()
+    changed_sequence["sequence"][0]["description"] = "Changed"
+    mutations.append((changed_sequence, "graph_expansion_prior_sequence_changed"))
+    removed_assumption = candidate()
+    removed_assumption["assumptions"] = []
+    mutations.append((removed_assumption, "graph_expansion_prior_assumption_missing"))
+    wrong_anchor = candidate()
+    wrong_anchor["edges"][-1] = {
+        "source": "api",
+        "target": "new",
+        "label": "alerts",
+    }
+    mutations.append((wrong_anchor, "graph_expansion_new_node_not_connected"))
+
+    for current, expected_code in mutations:
+        failure = _graph_expansion_failure(
+            previous,
+            current,
+            anchor_label_contains="monitor",
+        )
+        assert failure is not None
+        assert failure[0] == expected_code
+
+
+@pytest.mark.asyncio
+async def test_required_graph_turn_accepts_graph_data_at_its_latency_limit(monkeypatch):
+    from eval.browser_runner import _send_case_steps
+
+    case = load_corpus().by_id["graph-expansion"]
+
+    async def fake_send_step(page, sent_case, step_index, frames, *, timeout_seconds):
+        del page, sent_case, timeout_seconds
+        now = time.time()
+        turn_frames = [
+            {
+                "direction": "sent",
+                "message": {"type": "start"},
+                "at": now,
+            },
+            {
+                "direction": "received",
+                "message": {
+                    "type": "graph_data",
+                    "data": {
+                        "version": f"graph-v{step_index + 1}",
+                        "nodes": [
+                            {"id": "existing", "label": "Monitoring"},
+                            *([{"id": "added"}] if step_index == 1 else []),
+                        ],
+                        "edges": (
+                            [
+                                {
+                                    "source": "existing",
+                                    "target": "added",
+                                    "label": "feeds",
+                                }
+                            ]
+                            if step_index == 1
+                            else []
+                        ),
+                    },
+                },
+                "at": now + 180,
+            },
+            {
+                "direction": "received",
+                "message": {"type": "done"},
+                "at": now + 181,
+            },
+        ]
+        frames.extend(turn_frames)
+        return [frame["message"] for frame in turn_frames]
+
+    monkeypatch.setattr("eval.browser_runner._send_step", fake_send_step)
+    timings: list[dict] = []
+    await _send_case_steps(
+        None,
+        case,
+        [],
+        [],
+        timeout_seconds=390,
+        turn_timings=timings,
+    )
+
+    assert [timing["graph_output_latency_ms"] for timing in timings] == [
+        180_000,
+        180_000,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_required_graph_private_render_timeout_raises_infrastructure_before_quality(
+    monkeypatch,
+):
+    from eval.browser_runner import BrowserInfrastructureError, _send_case_steps
+
+    case = load_corpus().by_id["graph-expansion"]
+
+    async def fake_send_step(page, sent_case, step_index, frames, *, timeout_seconds):
+        del page, sent_case, step_index, timeout_seconds
+        events = [
+            {
+                "type": "workflow_progress",
+                "phase": "review",
+                "status": "rejected",
+                "failure_code": "diagram_evaluation_timeout",
+            },
+            {"type": "done"},
+        ]
+        frames.extend(
+            {"direction": "received", "message": event, "at": time.time()}
+            for event in events
+        )
+        return events
+
+    monkeypatch.setattr("eval.browser_runner._send_step", fake_send_step)
+
+    with pytest.raises(BrowserInfrastructureError) as raised:
+        await _send_case_steps(
+            None,
+            case,
+            [],
+            [],
+            timeout_seconds=390,
+        )
+
+    assert raised.value.code == "diagram_evaluation_timeout"
 
 
 @pytest.mark.asyncio
@@ -1436,6 +1930,69 @@ def test_web_research_provider_failure_is_classified_as_infrastructure():
         detail for detail in details if detail["code"] == "research_unavailable"
     )
     assert research_failure["kind"] == "infrastructure"
+
+
+@pytest.mark.parametrize(
+    "failure_code",
+    [
+        "diagram_evaluation_timeout",
+        "diagram_evaluation_error",
+        "diagram_evaluation_transport_unavailable",
+    ],
+)
+def test_private_render_unavailable_withholds_required_graph_as_infrastructure(
+    failure_code,
+):
+    from eval.browser_runner import _deterministic_failure_details
+
+    case = load_corpus().by_id["graph-expansion"]
+    events = [
+        {
+            "type": "workflow_progress",
+            "phase": "review",
+            "status": "rejected",
+            "failure_code": failure_code,
+        },
+        {"type": "done"},
+    ]
+
+    details = _deterministic_failure_details(case, events, rendered_nodes=0)
+
+    assert details == [
+        {
+            "kind": "infrastructure",
+            "code": failure_code,
+            "message": "private browser rendering did not complete; required graph_data was withheld",
+            "blocking": True,
+            "retryable": True,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "failure_code",
+    ["diagram_evaluation_layout_rejected", "semantic_review_timeout"],
+)
+def test_private_render_rejections_remain_quality_failures(failure_code):
+    from eval.browser_runner import _deterministic_failure_details
+
+    case = load_corpus().by_id["graph-expansion"]
+    details = _deterministic_failure_details(
+        case,
+        [
+            {
+                "type": "workflow_progress",
+                "phase": "review",
+                "status": "rejected",
+                "failure_code": failure_code,
+            },
+            {"type": "graph_notice"},
+            {"type": "done"},
+        ],
+        rendered_nodes=0,
+    )
+
+    assert all(detail["kind"] == "quality" for detail in details)
 
 
 def test_book_citations_must_match_retrieval_provenance():

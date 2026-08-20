@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import Counter
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 import html
@@ -54,6 +55,13 @@ _PROVIDER_OR_TRANSPORT_FAILURE = re.compile(
     r"connection (?:reset|refused|failed|closed)|network (?:error|failure)|"
     r"websocket (?:error|closed|disconnected)|browser.{0,20}(?:closed|disconnected))",
     re.I,
+)
+_PRIVATE_RENDER_INFRASTRUCTURE_FAILURE_CODES = frozenset(
+    {
+        "diagram_evaluation_timeout",
+        "diagram_evaluation_error",
+        "diagram_evaluation_transport_unavailable",
+    }
 )
 
 FailureKind = Literal["quality", "infrastructure"]
@@ -280,7 +288,12 @@ def _capture_socket(frames: list[dict[str, Any]], socket: WebSocket) -> None:
             return
         if isinstance(message, dict):
             frames.append(
-                {"direction": direction, "message": message, "at": time.time()}
+                {
+                    "direction": direction,
+                    "message": message,
+                    "at": time.time(),
+                    "at_monotonic": time.monotonic(),
+                }
             )
 
     socket.on("framesent", lambda payload: record("sent", payload))
@@ -316,6 +329,7 @@ async def _send_step(
     timeout_seconds: int,
 ) -> list[dict[str, Any]]:
     start = len(frames)
+    graph_deadline_started_s = time.monotonic()
     try:
         await _set_modes(page, case, step_index)
         textarea = page.get_by_placeholder(re.compile(r"Ask a question"))
@@ -331,11 +345,88 @@ async def _send_step(
             f"{type(exc).__name__}: {exc}",
         ) from exc
 
-    try:
-        await page.get_by_label("Send message").wait_for(
+    completion_task = asyncio.create_task(
+        page.get_by_label("Send message").wait_for(
             state="visible",
             timeout=timeout_seconds * 1000,
         )
+    )
+    graph_deadline_task: asyncio.Task[None] | None = None
+    graph_limit_ms = case.steps[step_index].graph_output_max_latency_ms
+    try:
+        if graph_limit_ms is not None:
+            graph_deadline_s = graph_deadline_started_s + graph_limit_ms / 1000
+            graph_deadline_task = asyncio.create_task(
+                asyncio.sleep(max(0.0, graph_deadline_s - time.monotonic()))
+            )
+            completed, _ = await asyncio.wait(
+                {completion_task, graph_deadline_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if graph_deadline_task in completed and not completion_task.done():
+                received_frames = [
+                    frame
+                    for frame in frames[start:]
+                    if frame["direction"] == "received"
+                ]
+                timely_graph = any(
+                    frame["message"].get("type") in {"graph_preview", "graph_data"}
+                    and isinstance(frame["message"].get("data"), dict)
+                    and (
+                        not isinstance(frame.get("at_monotonic"), (int, float))
+                        or frame["at_monotonic"] <= graph_deadline_s
+                    )
+                    for frame in received_frames
+                )
+                if not timely_graph:
+                    received_events = [frame["message"] for frame in received_frames]
+                    try:
+                        await page.get_by_label("Stop generation").click()
+                    except PlaywrightError:
+                        pass
+                    private_render_failure_code = (
+                        _private_render_infrastructure_failure_code(
+                            True,
+                            None,
+                            received_events,
+                        )
+                    )
+                    if private_render_failure_code is not None:
+                        raise BrowserInfrastructureError(
+                            private_render_failure_code,
+                            f"case {case.id} turn {step_index + 1} required a graph but "
+                            "private browser rendering did not complete",
+                        )
+                    errors = "; ".join(
+                        str(event.get("content") or "")
+                        for event in received_events
+                        if event.get("type") == "error"
+                    )
+                    if errors and re.search(r"\bresponse timed out\b", errors, re.I):
+                        raise BrowserInfrastructureError(
+                            "application_response_timeout",
+                            f"case {case.id} turn {step_index + 1} exceeded the "
+                            f"backend response SLA: {errors}",
+                            retryable=False,
+                        )
+                    if errors and _PROVIDER_OR_TRANSPORT_FAILURE.search(errors):
+                        raise BrowserInfrastructureError(
+                            "provider_or_transport_failed",
+                            f"case {case.id} turn {step_index + 1} failed before "
+                            f"completion: {errors}",
+                        )
+                    if errors:
+                        raise BrowserQualityError(
+                            "unexpected_backend_error",
+                            f"case {case.id} turn {step_index + 1} returned an "
+                            f"unexpected backend error: {errors}",
+                        )
+                    raise BrowserQualityError(
+                        "required_graph_slow",
+                        f"case {case.id} turn {step_index + 1} received no visible "
+                        f"graph output within {graph_limit_ms} ms",
+                    )
+        await completion_task
     except PlaywrightTimeoutError as exc:
         raise BrowserInfrastructureError(
             "application_turn_timeout",
@@ -353,6 +444,18 @@ async def _send_step(
             "browser_ui_interaction_failed",
             f"case {case.id} turn {step_index + 1} completion UI failed: {message}",
         ) from exc
+    finally:
+        for task in (completion_task, graph_deadline_task):
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(
+            *(
+                task
+                for task in (completion_task, graph_deadline_task)
+                if task is not None
+            ),
+            return_exceptions=True,
+        )
     step_frames = [
         frame for frame in frames[start:] if frame["direction"] == "received"
     ]
@@ -426,6 +529,145 @@ def _extract_public_graph_data(events: list[dict[str, Any]]) -> dict[str, Any] |
             data = event.get("data")
             if isinstance(data, dict):
                 return data
+    return None
+
+
+def _graph_expansion_failure(
+    previous_graph: dict[str, Any],
+    current_graph: dict[str, Any],
+    *,
+    anchor_label_contains: str,
+) -> tuple[str, str] | None:
+    if current_graph.get("title") != previous_graph.get("title"):
+        return (
+            "graph_expansion_topic_changed",
+            "graph expansion changed the prior graph title",
+        )
+    previous_nodes = {
+        str(node.get("id") or ""): node for node in previous_graph.get("nodes") or []
+    }
+    current_nodes = {
+        str(node.get("id") or ""): node for node in current_graph.get("nodes") or []
+    }
+    previous_node_ids = set(previous_nodes)
+    current_node_ids = set(current_nodes)
+    missing_nodes = previous_node_ids - current_node_ids
+    if missing_nodes:
+        return (
+            "graph_expansion_prior_node_missing",
+            "graph expansion removed a prior node",
+        )
+    if any(current_nodes[node_id] != node for node_id, node in previous_nodes.items()):
+        return (
+            "graph_expansion_prior_node_changed",
+            "graph expansion changed a prior component record",
+        )
+
+    record_identity = lambda record: json.dumps(  # noqa: E731
+        record,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    previous_edges = Counter(
+        record_identity(edge) for edge in previous_graph.get("edges") or []
+    )
+    current_edges = Counter(
+        record_identity(edge) for edge in current_graph.get("edges") or []
+    )
+    if previous_edges - current_edges:
+        return (
+            "graph_expansion_prior_edge_missing",
+            "graph expansion removed a prior edge",
+        )
+
+    current_groups = {
+        str(group.get("id") or ""): group for group in current_graph.get("groups") or []
+    }
+    for previous_group in previous_graph.get("groups") or []:
+        group_id = str(previous_group.get("id") or "")
+        current_group = current_groups.get(group_id)
+        if current_group is None:
+            return (
+                "graph_expansion_prior_group_missing",
+                "graph expansion removed a prior group",
+            )
+        previous_members = set(previous_group.get("nodeIds") or [])
+        current_members = set(current_group.get("nodeIds") or [])
+        previous_metadata = {
+            key: value for key, value in previous_group.items() if key != "nodeIds"
+        }
+        current_metadata = {
+            key: value for key, value in current_group.items() if key != "nodeIds"
+        }
+        if previous_metadata != current_metadata or not previous_members.issubset(
+            current_members
+        ):
+            return (
+                "graph_expansion_prior_group_changed",
+                "graph expansion changed a prior group or membership",
+            )
+
+    previous_sequence = [
+        record_identity(item) for item in previous_graph.get("sequence") or []
+    ]
+    current_sequence = [
+        record_identity(item) for item in current_graph.get("sequence") or []
+    ]
+    sequence_cursor = iter(current_sequence)
+    if any(
+        not any(candidate == item for candidate in sequence_cursor)
+        for item in previous_sequence
+    ):
+        return (
+            "graph_expansion_prior_sequence_changed",
+            "graph expansion changed the prior sequence",
+        )
+    previous_assumptions = Counter(
+        record_identity(item) for item in previous_graph.get("assumptions") or []
+    )
+    current_assumptions = Counter(
+        record_identity(item) for item in current_graph.get("assumptions") or []
+    )
+    if previous_assumptions - current_assumptions:
+        return (
+            "graph_expansion_prior_assumption_missing",
+            "graph expansion removed a prior assumption",
+        )
+    added_node_ids = current_node_ids - previous_node_ids
+    if len(added_node_ids) != 1:
+        return (
+            "graph_expansion_added_node_count_mismatch",
+            f"graph expansion added {len(added_node_ids)} nodes; expected 1",
+        )
+    added_node_id = next(iter(added_node_ids))
+    anchor_text = anchor_label_contains.casefold()
+    anchor_node_ids = {
+        node_id
+        for node_id, node in previous_nodes.items()
+        if anchor_text in str(node.get("label") or "").casefold()
+    }
+    if not anchor_node_ids:
+        return (
+            "graph_expansion_anchor_missing",
+            f"prior graph has no component matching {anchor_label_contains!r}",
+        )
+    connected = any(
+        (
+            str(edge.get("source") or "") == added_node_id
+            and str(edge.get("target") or "") in anchor_node_ids
+        )
+        or (
+            str(edge.get("target") or "") == added_node_id
+            and str(edge.get("source") or "") in anchor_node_ids
+        )
+        for edge in current_graph.get("edges") or []
+    )
+    if not connected:
+        return (
+            "graph_expansion_new_node_not_connected",
+            "graph expansion did not connect the new node to the requested prior component",
+        )
     return None
 
 
@@ -547,11 +789,13 @@ async def _send_case_steps(
 ) -> None:
     """Run a case's conversation turns in order on the same page and thread."""
     seen_graph_versions: set[str] = set()
+    previous_turn_graph: dict[str, Any] | None = None
     for step_index in range(len(case.steps)):
         frame_start = len(frames)
         turn_started = time.monotonic()
         turn_started_at = time.time()
         step_events: list[dict[str, Any]] = []
+        graph_output_latency_ms: int | None = None
         try:
             received_events = await _send_step(
                 page,
@@ -572,6 +816,27 @@ async def _send_case_steps(
                     for frame in step_frames
                     if frame["direction"] == "received"
                 )
+            received = [
+                frame for frame in step_frames if frame["direction"] == "received"
+            ]
+            first_graph_output = next(
+                (
+                    frame
+                    for frame in received
+                    if frame["message"].get("type") in {"graph_preview", "graph_data"}
+                    and isinstance(frame["message"].get("data"), dict)
+                ),
+                None,
+            )
+            if first_graph_output is not None:
+                graph_output_latency_ms = max(
+                    0,
+                    int((first_graph_output["at"] - turn_started_at) * 1000),
+                )
+            elif _extract_public_graph_data(step_events) is not None:
+                # Unit-level transports may return events without timestamped
+                # frames. Completion time is a conservative fallback.
+                graph_output_latency_ms = int((time.monotonic() - turn_started) * 1000)
             if turn_timings is not None:
                 sent_start = next(
                     (
@@ -582,14 +847,17 @@ async def _send_case_steps(
                     ),
                     None,
                 )
-                received = [
-                    frame for frame in step_frames if frame["direction"] == "received"
-                ]
-                first_token = next(
+                first_visible_content = next(
                     (
                         frame
                         for frame in received
-                        if frame["message"].get("type") == "response_delta"
+                        if frame["message"].get("type")
+                        in {
+                            "explanation_block",
+                            "graph_data",
+                            "graph_preview",
+                            "response_delta",
+                        }
                     ),
                     None,
                 )
@@ -612,10 +880,11 @@ async def _send_case_steps(
                             else None
                         ),
                         "first_token_ms": (
-                            int((first_token["at"] - turn_started_at) * 1000)
-                            if first_token
+                            int((first_visible_content["at"] - turn_started_at) * 1000)
+                            if first_visible_content
                             else None
                         ),
+                        "graph_output_latency_ms": graph_output_latency_ms,
                         "client_request_id": (
                             sent_start["message"].get("client_request_id")
                             if sent_start
@@ -650,6 +919,13 @@ async def _send_case_steps(
                     f"case {case.id} turn {step_index + 1} returned an "
                     f"unexpected backend error: {message}",
                 )
+        if not case.deterministic.provider_fallback_allowed and any(
+            event.get("type") == "provider_switch" for event in step_events
+        ):
+            raise BrowserQualityError(
+                "provider_fallback_used",
+                f"case {case.id} turn {step_index + 1} used a provider fallback",
+            )
         graph_failure = _required_graph_turn_failure(
             case,
             step_index,
@@ -657,7 +933,29 @@ async def _send_case_steps(
             seen_graph_versions,
         )
         if graph_failure is not None:
+            private_render_failure_code = _private_render_infrastructure_failure_code(
+                True,
+                _extract_public_graph_data(step_events),
+                step_events,
+            )
+            if private_render_failure_code is not None:
+                raise BrowserInfrastructureError(
+                    private_render_failure_code,
+                    f"case {case.id} turn {step_index + 1} required a graph but "
+                    "private browser rendering did not complete",
+                )
             raise BrowserQualityError(*graph_failure)
+        graph_output_max_latency_ms = case.steps[step_index].graph_output_max_latency_ms
+        if (
+            graph_output_max_latency_ms is not None
+            and graph_output_latency_ms is not None
+            and graph_output_latency_ms > graph_output_max_latency_ms
+        ):
+            raise BrowserQualityError(
+                "required_graph_slow",
+                f"case {case.id} turn {step_index + 1} received visible graph output after "
+                f"{graph_output_latency_ms} ms; limit is {graph_output_max_latency_ms} ms",
+            )
         turn_graph = _extract_public_graph_data(step_events)
         if turn_graph and isinstance(turn_graph.get("version"), str):
             seen_graph_versions.add(turn_graph["version"])
@@ -676,6 +974,25 @@ async def _send_case_steps(
             ) from exc
         if render_failure is not None:
             raise BrowserQualityError(*render_failure)
+        if case.steps[step_index].graph_expansion is not None:
+            if previous_turn_graph is None or turn_graph is None:
+                raise BrowserQualityError(
+                    "graph_expansion_baseline_missing",
+                    f"case {case.id} turn {step_index + 1} has no prior graph baseline",
+                )
+            expansion_failure = _graph_expansion_failure(
+                previous_turn_graph,
+                turn_graph,
+                anchor_label_contains=(
+                    case.steps[
+                        step_index
+                    ].graph_expansion.new_node_connected_to_prior_label_contains
+                ),
+            )
+            if expansion_failure is not None:
+                raise BrowserQualityError(*expansion_failure)
+        if turn_graph is not None:
+            previous_turn_graph = turn_graph
         if turn_graphs is not None and turn_graph:
             dom = await _graph_dom_state(page, turn_graph)
             turn_graphs.append(
@@ -799,6 +1116,21 @@ def _deterministic_failure_details(
                 retryable=True,
             )
         ]
+    graph = _extract_public_graph_data(events)
+    private_render_failure_code = _private_render_infrastructure_failure_code(
+        expected.graph_emitted is True,
+        graph,
+        events,
+    )
+    if private_render_failure_code is not None:
+        return [
+            _failure_detail(
+                "infrastructure",
+                private_render_failure_code,
+                "private browser rendering did not complete; required graph_data was withheld",
+                retryable=True,
+            )
+        ]
     workers = extract_workers(events)
     observed_status = (
         200 if any(event.get("type") == "done" for event in events) else 500
@@ -835,7 +1167,6 @@ def _deterministic_failure_details(
                 f"route expected {expected.route}, got {detect_route(events)}",
             )
         )
-    graph = _extract_public_graph_data(events)
     if expected.graph_emitted is not None and bool(graph) != expected.graph_emitted:
         failures.append(
             _failure_detail(
@@ -1014,6 +1345,22 @@ def _deterministic_failure_details(
                     )
                 )
     return failures
+
+
+def _private_render_infrastructure_failure_code(
+    required_graph: bool,
+    graph: dict[str, Any] | None,
+    events: list[dict[str, Any]],
+) -> str | None:
+    if not required_graph or graph is not None:
+        return None
+    for event in reversed(events):
+        if event.get("type") != "workflow_progress":
+            continue
+        failure_code = event.get("failure_code")
+        if failure_code in _PRIVATE_RENDER_INFRASTRUCTURE_FAILURE_CODES:
+            return failure_code
+    return None
 
 
 def _deterministic_failures(

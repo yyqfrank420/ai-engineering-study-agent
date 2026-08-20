@@ -23,12 +23,8 @@ _BLOCK_KEYS = {
 _MINIMUM_BLOCKS = 3
 _MAXIMUM_BLOCKS = 6
 
-_PRESERVED_EDIT_COMPLETION_SENTENCE = (
-    "The requested diagram edit was not approved, so the prior approved diagram remains unchanged."
-)
-_PRESERVED_CREATE_COMPLETION_SENTENCE = (
-    "The requested new diagram was not approved, so the prior approved diagram remains unchanged."
-)
+_PRESERVED_EDIT_COMPLETION_SENTENCE = "The requested diagram edit was not approved, so the prior approved diagram remains unchanged."
+_PRESERVED_CREATE_COMPLETION_SENTENCE = "The requested new diagram was not approved, so the prior approved diagram remains unchanged."
 
 
 async def stream_explanation_blocks(
@@ -43,13 +39,15 @@ async def stream_explanation_blocks(
     send: SendEvent,
     graph_version: str | None,
     allowed_node_ids: set[str],
+    allowed_evidence_refs: set[str] | None = None,
+    allow_fallback: bool = True,
+    provider_attempt_limit: int | None = None,
 ) -> str:
     """Emit a block as soon as its compact JSON object is complete.
 
     The provider still receives one request. UI pause only delays browser reveal;
     it never restarts a paid model call.
     """
-    raw_output = ""
     parse_buffer = ""
     emitted: list[dict[str, Any]] = []
     emitted_ids: set[str] = set()
@@ -80,6 +78,8 @@ async def stream_explanation_blocks(
         top_p=None,
         top_k=None,
         telemetry=telemetry,
+        allow_fallback=allow_fallback,
+        provider_attempt_limit=provider_attempt_limit,
     )
     timed_out = False
     try:
@@ -90,12 +90,12 @@ async def stream_explanation_blocks(
                     continue
                 if event_type != "text":
                     continue
-                raw_output += content
                 parse_buffer += content
                 parse_buffer, parsed = _decode_available(
                     parse_buffer,
                     decoder,
                     allowed_node_ids,
+                    allowed_evidence_refs or set(),
                 )
                 for block in parsed:
                     if len(emitted) >= _MAXIMUM_BLOCKS:
@@ -111,15 +111,27 @@ async def stream_explanation_blocks(
         await response_stream.aclose()
 
     if timed_out:
-        await send({
-            "type": "workflow_progress",
-            "phase": "explain",
-            "status": "degraded",
-            "title": "Explanation latency budget reached",
-            "detail": "Returning the bounded explanation available before the stage deadline.",
-        })
+        await send(
+            {
+                "type": "workflow_progress",
+                "phase": "explain",
+                "status": "degraded",
+                "title": "Explanation latency budget reached",
+                "detail": "Returning the bounded explanation available before the stage deadline.",
+            }
+        )
     if not emitted:
-        fallback = _fallback_block(raw_output)
+        if not timed_out:
+            await send(
+                {
+                    "type": "workflow_progress",
+                    "phase": "explain",
+                    "status": "degraded",
+                    "title": "Explanation format unavailable",
+                    "detail": "Returning a safe fallback because the model response did not meet the required block contract.",
+                }
+            )
+        fallback = _fallback_block()
         emitted.append(fallback)
         emitted_ids.add(fallback["block_id"])
         await emit_parsed(fallback)
@@ -137,8 +149,7 @@ async def stream_explanation_blocks(
         await emit(pending_block)
 
     return "\n\n".join(
-        f"## {block['title']}\n\n{block['content']}"
-        for block in emitted
+        f"## {block['title']}\n\n{block['content']}" for block in emitted
     )
 
 
@@ -146,6 +157,7 @@ def _decode_available(
     buffer: str,
     decoder: json.JSONDecoder,
     allowed_node_ids: set[str],
+    allowed_evidence_refs: set[str],
 ) -> tuple[str, list[dict[str, Any]]]:
     parsed: list[dict[str, Any]] = []
     remaining = buffer
@@ -163,26 +175,40 @@ def _decode_available(
             value, end = decoder.raw_decode(candidate)
         except json.JSONDecodeError:
             return candidate, parsed
-        parsed.extend(_normalise_payload(value, allowed_node_ids))
+        parsed.extend(
+            _normalise_payload(value, allowed_node_ids, allowed_evidence_refs)
+        )
         remaining = candidate[end:]
 
 
-def _normalise_payload(value: Any, allowed_node_ids: set[str]) -> list[dict[str, Any]]:
+def _normalise_payload(
+    value: Any,
+    allowed_node_ids: set[str],
+    allowed_evidence_refs: set[str],
+) -> list[dict[str, Any]]:
     if not isinstance(value, dict):
         return []
-    block = _normalise_block(value, allowed_node_ids)
+    block = _normalise_block(value, allowed_node_ids, allowed_evidence_refs)
     return [block] if block else []
 
 
-def _normalise_block(value: Any, allowed_node_ids: set[str]) -> dict[str, Any] | None:
+def _normalise_block(
+    value: Any,
+    allowed_node_ids: set[str],
+    allowed_evidence_refs: set[str] | None = None,
+) -> dict[str, Any] | None:
     if not isinstance(value, dict) or set(value) != _BLOCK_KEYS:
         return None
-    content = "\n".join(line.rstrip() for line in str(value.get("content") or "").splitlines()).strip()
+    content = "\n".join(
+        line.rstrip() for line in str(value.get("content") or "").splitlines()
+    ).strip()
     if not content:
         return None
     title = " ".join(str(value.get("title") or "Architecture note").split())[:100]
     title = title or "Architecture note"
-    block_id = " ".join(str(value.get("block_id") or title.lower().replace(" ", "_")).split())[:80]
+    block_id = " ".join(
+        str(value.get("block_id") or title.lower().replace(" ", "_")).split()
+    )[:80]
     block_id = block_id or "architecture_note"
     raw_related = value.get("related_node_ids")
     related_values = raw_related if isinstance(raw_related, list) else []
@@ -192,12 +218,12 @@ def _normalise_block(value: Any, allowed_node_ids: set[str]) -> dict[str, Any] |
         if str(node_id) in allowed_node_ids
     ]
     raw_evidence = value.get("evidence_refs")
-    evidence_values = raw_evidence if isinstance(raw_evidence, list) else []
-    evidence = [
-        " ".join(str(reference).split())[:120]
-        for reference in evidence_values[:6]
-        if str(reference).strip()
-    ]
+    if not isinstance(raw_evidence, list) or not all(
+        isinstance(reference, str) and reference in (allowed_evidence_refs or set())
+        for reference in raw_evidence
+    ):
+        return None
+    evidence = raw_evidence[:6]
     return {
         "block_id": block_id,
         "title": title,
@@ -207,14 +233,11 @@ def _normalise_block(value: Any, allowed_node_ids: set[str]) -> dict[str, Any] |
     }
 
 
-def _fallback_block(raw_output: str) -> dict[str, Any]:
-    content = raw_output.strip().removeprefix("```json").removesuffix("```").strip()
+def _fallback_block(_raw_output: str = "") -> dict[str, Any]:
     return {
         "block_id": "architecture_explanation",
-        "title": "Architecture explanation",
-        "content": (
-            content or "The architecture is ready. Select a node to explore its responsibility."
-        )[:4000],
+        "title": "Explanation unavailable",
+        "content": "The explanation response was unavailable. Please retry.",
         "related_node_ids": [],
         "evidence_refs": [],
     }

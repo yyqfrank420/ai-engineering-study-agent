@@ -10,6 +10,7 @@ from anthropic import (
 import httpx
 import pytest
 
+import eval.live_runner as live_runner
 from eval.calibration import calculate_calibration
 from eval.judge_adapter import (
     DEFAULT_ANTHROPIC_JUDGE_MODEL,
@@ -26,7 +27,9 @@ from eval.judge_adapter import (
 )
 from eval.live_runner import (
     _assert_approved_judge_identity,
+    _classify_deterministic,
     _exit_code_for_statuses,
+    _graph_review_diagnostics_from_events,
     _judge_payload,
     _load_resume_evaluations,
     _write_outputs,
@@ -92,6 +95,462 @@ def test_report_only_review_never_masks_clear_or_infrastructure_failures():
     assert (
         _exit_code_for_statuses({"manual_review", "infrastructure"}, "report-only") == 2
     )
+
+
+def test_typed_browser_failure_details_override_legacy_error_text():
+    assert (
+        _classify_deterministic(
+            ["provider timed out"],
+            [{"kind": "quality"}],
+        )
+        == "quality"
+    )
+    assert (
+        _classify_deterministic(
+            ["graph data was withheld"],
+            [{"kind": "infrastructure"}],
+        )
+        == "infrastructure"
+    )
+
+
+def test_legacy_deterministic_failure_without_details_uses_text_classification():
+    assert _classify_deterministic(["provider timed out"]) == "infrastructure"
+
+
+def test_invalid_typed_browser_failure_details_are_rejected():
+    with pytest.raises(RuntimeError, match="invalid kind"):
+        _classify_deterministic(["provider timed out"], [{"kind": "unknown"}])
+
+
+def test_graph_review_diagnostics_project_only_allowlisted_metadata():
+    fingerprint = "a" * 64
+    events = [
+        {
+            "type": "workflow_progress",
+            "diagnostic": {
+                "schema_version": 1,
+                "repair_round": 1,
+                "critic_call_count": 2,
+                "protocol_correction_count": 0,
+                "contract_correction_count": 1,
+                "depth": "prototype",
+                "locked_layers": ["render"],
+                "reopened_layers": ["composition", "connections"],
+                "finding_codes": ["edge_semantics"],
+                "blocker_ids": ["rubric:connections:edge_semantics"],
+                "selector_fingerprints": [fingerprint],
+                "prior_blocker_dispositions": [
+                    {"prior_obligation_id": "blocker-1", "status": "resolved"}
+                ],
+                "review_disposition": "rejected",
+                "validation_rule": "locked_record_changed",
+                "validation_path_fingerprint": fingerprint,
+                "raw_prompt": "discard this",
+            },
+        },
+        {
+            "type": "workflow_progress",
+            "diagnostic": {
+                "schema_version": 1,
+                "repair_round": 1,
+                "critic_call_count": 2,
+                "protocol_correction_count": 0,
+                "contract_correction_count": 1,
+                "depth": "prototype",
+                "locked_layers": ["render"],
+                "reopened_layers": ["composition", "connections"],
+                "finding_codes": ["edge_semantics"],
+                "blocker_ids": ["rubric:connections:edge_semantics"],
+                "selector_fingerprints": [fingerprint],
+                "prior_blocker_dispositions": [
+                    {"prior_obligation_id": "blocker-1", "status": "resolved"}
+                ],
+                "review_disposition": "rejected",
+                "validation_rule": "locked_record_changed",
+                "validation_path_fingerprint": fingerprint,
+            },
+        },
+    ]
+
+    assert _graph_review_diagnostics_from_events(events) == [
+        {
+            "schema_version": 1,
+            "repair_round": 1,
+            "critic_call_count": 2,
+            "protocol_correction_count": 0,
+            "contract_correction_count": 1,
+            "depth": "prototype",
+            "locked_layers": ["render"],
+            "reopened_layers": ["composition", "connections"],
+            "finding_codes": ["edge_semantics"],
+            "blocker_ids": ["rubric:connections:edge_semantics"],
+            "selector_fingerprints": [fingerprint],
+            "prior_blocker_dispositions": [
+                {"prior_obligation_id": "blocker-1", "status": "resolved"}
+            ],
+            "review_disposition": "rejected",
+            "validation_rule": "locked_record_changed",
+            "validation_path_fingerprint": fingerprint,
+        }
+    ]
+
+
+def test_staged_gate_diagnostic_projects_only_fixed_safe_metadata():
+    fingerprint = "c" * 64
+    diagnostic = {
+        "schema_version": 1,
+        "kind": "staged_gate",
+        "stage": "components",
+        "attempt": 2,
+        "code": "gate_rejected",
+        "candidate_fingerprint": fingerprint,
+        "findings": [
+            {
+                "rule_code": "domain_specificity",
+                "record_paths": ["components", "components.0"],
+            },
+            {
+                "rule_code": "capability_classification",
+                "record_paths": ["components.3"],
+            },
+        ],
+    }
+    events = [
+        {
+            "type": "workflow_progress",
+            "diagnostic": {
+                **diagnostic,
+                "extra": "discarded",
+            },
+        },
+        {
+            "type": "workflow_progress",
+            "diagnostic": {**diagnostic, "kind": "staged_generation"},
+        },
+        {"type": "workflow_progress", "diagnostic": diagnostic},
+    ]
+    projected = {
+        "schema_version": 1,
+        "kind": "staged_gate",
+        "stage": "components",
+        "attempt": 2,
+        "code": "gate_rejected",
+        "candidate_fingerprint": fingerprint,
+        "findings": [
+            {
+                "rule_code": "domain_specificity",
+                "record_paths": ["components", "components.0"],
+            },
+            {
+                "rule_code": "capability_classification",
+                "record_paths": ["components.3"],
+            },
+        ],
+    }
+
+    assert _graph_review_diagnostics_from_events(events) == [projected]
+
+
+def test_staged_generation_diagnostic_projects_only_fixed_safe_metadata():
+    fingerprint = "f" * 64
+    diagnostic = {
+        "schema_version": 1,
+        "kind": "staged_generation",
+        "stage": "components",
+        "attempt": 2,
+        "code": "contract_rejected",
+        "path": "components.0.label",
+        "path_fingerprint": fingerprint,
+        "candidate_fingerprint": fingerprint,
+        "fingerprint_disposition": "rejected_before_render",
+    }
+    events = [
+        {"type": "workflow_progress", "diagnostic": {**diagnostic, "prompt": "drop"}},
+        {
+            "type": "workflow_progress",
+            "diagnostic": {**diagnostic, "path": "components/0/label"},
+        },
+        {"type": "workflow_progress", "diagnostic": diagnostic},
+    ]
+
+    assert _graph_review_diagnostics_from_events(events) == [diagnostic]
+
+
+def test_staged_gate_diagnostic_rejects_malformed_payloads():
+    fingerprint = "d" * 64
+    finding = {
+        "rule_code": "domain_specificity",
+        "record_paths": ["components.0"],
+    }
+    diagnostic = {
+        "schema_version": 1,
+        "kind": "staged_gate",
+        "stage": "components",
+        "attempt": 2,
+        "code": "gate_rejected",
+        "candidate_fingerprint": fingerprint,
+        "findings": [finding],
+    }
+    invalid_diagnostics = [
+        {**diagnostic, "stage": "composition"},
+        {**diagnostic, "attempt": True},
+        {**diagnostic, "code": "raw_provider_error"},
+        {**diagnostic, "candidate_fingerprint": "short"},
+        {**diagnostic, "prompt": "raw prompt"},
+        {
+            **diagnostic,
+            "findings": [{**finding, "reason": "raw model reason"}],
+        },
+        {
+            **diagnostic,
+            "findings": [
+                {"rule_code": "safe_action_boundary", "record_paths": ["components"]}
+            ],
+        },
+        {
+            **diagnostic,
+            "findings": [{**finding, "record_paths": ["components.-1"]}],
+        },
+        {
+            **diagnostic,
+            "findings": [{**finding, "record_paths": ["components.01"]}],
+        },
+        {
+            **diagnostic,
+            "findings": [{**finding, "record_paths": ["components.0", "components.0"]}],
+        },
+    ]
+    events = [
+        {"type": "workflow_progress", "diagnostic": value}
+        for value in invalid_diagnostics
+    ]
+
+    assert _graph_review_diagnostics_from_events(events) == []
+
+
+@pytest.mark.asyncio
+async def test_live_evaluation_records_projected_graph_review_diagnostics(monkeypatch):
+    case = load_corpus().cases[0]
+    fingerprint = "b" * 64
+    capture = {
+        "results": [
+            {
+                "id": case.id,
+                "deterministic_failures": ["graph was withheld"],
+                "failure_details": [{"kind": "quality"}],
+                "events": [
+                    {
+                        "type": "workflow_progress",
+                        "diagnostic": {
+                            "schema_version": 1,
+                            "repair_round": 0,
+                            "critic_call_count": 1,
+                            "protocol_correction_count": 0,
+                            "contract_correction_count": 0,
+                            "depth": "prototype",
+                            "locked_layers": [],
+                            "reopened_layers": [
+                                "components",
+                                "connections",
+                                "composition",
+                            ],
+                            "finding_codes": ["edge_semantics"],
+                            "blocker_ids": ["rubric:connections:edge_semantics"],
+                            "selector_fingerprints": [fingerprint],
+                            "prior_blocker_dispositions": [],
+                            "review_disposition": "rejected",
+                        },
+                    }
+                ],
+            }
+        ],
+        "application_telemetry": [{"provider_attempts": 1}],
+    }
+    monkeypatch.setattr(live_runner, "_load_capture", lambda _args: capture)
+    monkeypatch.setattr(
+        live_runner,
+        "_manifest",
+        lambda: {
+            "live": {
+                "budgets": {
+                    "application_calls": 2,
+                    "application_full_calls": 2,
+                    "judge_calls": 2,
+                    "pr_cases": 2,
+                },
+                "cost_policy": {},
+                "suites": {},
+            }
+        },
+    )
+    monkeypatch.setattr(
+        live_runner,
+        "account_application_cost",
+        lambda *_args: {"total": {"estimated_usd": 0}, "price_release": "test"},
+    )
+    monkeypatch.setattr(
+        live_runner,
+        "evaluate_cost_policy",
+        lambda *_args: {
+            "status": "pass",
+            "blocking_status": "pass",
+            "reason": "within budget",
+        },
+    )
+    monkeypatch.setattr(
+        live_runner,
+        "SemanticJudge",
+        lambda: SimpleNamespace(provider="anthropic", model="claude-sonnet-5"),
+    )
+
+    report, exit_code = await evaluate(
+        SimpleNamespace(
+            manual_review_policy="blocking",
+            require_approved_corpus=False,
+            capture_replay=False,
+            suite="diagnostic",
+            case=[case.id],
+            target="https://candidate.example",
+            resume_input=None,
+        )
+    )
+
+    assert exit_code == 1
+    assert report["evaluations"][0]["graph_review_diagnostics"] == [
+        {
+            "schema_version": 1,
+            "repair_round": 0,
+            "critic_call_count": 1,
+            "protocol_correction_count": 0,
+            "contract_correction_count": 0,
+            "depth": "prototype",
+            "locked_layers": [],
+            "reopened_layers": ["components", "composition", "connections"],
+            "finding_codes": ["edge_semantics"],
+            "blocker_ids": ["rubric:connections:edge_semantics"],
+            "selector_fingerprints": [fingerprint],
+            "prior_blocker_dispositions": [],
+            "review_disposition": "rejected",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_live_evaluation_records_projected_staged_gate_diagnostics(monkeypatch):
+    case = load_corpus().cases[0]
+    fingerprint = "e" * 64
+    capture = {
+        "results": [
+            {
+                "id": case.id,
+                "deterministic_failures": ["graph was withheld"],
+                "failure_details": [{"kind": "quality"}],
+                "events": [
+                    {
+                        "type": "workflow_progress",
+                        "diagnostic": {
+                            "schema_version": 1,
+                            "kind": "staged_gate",
+                            "stage": "connections",
+                            "attempt": 1,
+                            "code": "gate_unavailable",
+                            "candidate_fingerprint": fingerprint,
+                            "findings": [
+                                {
+                                    "rule_code": "runtime_completeness",
+                                    "record_paths": ["connections", "connections.0"],
+                                },
+                                {
+                                    "rule_code": "authorization_and_compensation",
+                                    "record_paths": ["connections.1", "connections.11"],
+                                },
+                                {
+                                    "rule_code": "safe_action_boundary",
+                                    "record_paths": ["connections.2", "connections.3"],
+                                },
+                            ],
+                        },
+                    }
+                ],
+            }
+        ],
+        "application_telemetry": [{"provider_attempts": 1}],
+    }
+    monkeypatch.setattr(live_runner, "_load_capture", lambda _args: capture)
+    monkeypatch.setattr(
+        live_runner,
+        "_manifest",
+        lambda: {
+            "live": {
+                "budgets": {
+                    "application_calls": 2,
+                    "application_full_calls": 2,
+                    "judge_calls": 2,
+                    "pr_cases": 2,
+                },
+                "cost_policy": {},
+                "suites": {},
+            }
+        },
+    )
+    monkeypatch.setattr(
+        live_runner,
+        "account_application_cost",
+        lambda *_args: {"total": {"estimated_usd": 0}, "price_release": "test"},
+    )
+    monkeypatch.setattr(
+        live_runner,
+        "evaluate_cost_policy",
+        lambda *_args: {
+            "status": "pass",
+            "blocking_status": "pass",
+            "reason": "within budget",
+        },
+    )
+    monkeypatch.setattr(
+        live_runner,
+        "SemanticJudge",
+        lambda: SimpleNamespace(provider="anthropic", model="claude-sonnet-5"),
+    )
+
+    report, exit_code = await evaluate(
+        SimpleNamespace(
+            manual_review_policy="blocking",
+            require_approved_corpus=False,
+            capture_replay=False,
+            suite="diagnostic",
+            case=[case.id],
+            target="https://candidate.example",
+            resume_input=None,
+        )
+    )
+
+    assert exit_code == 1
+    assert report["evaluations"][0]["graph_review_diagnostics"] == [
+        {
+            "schema_version": 1,
+            "kind": "staged_gate",
+            "stage": "connections",
+            "attempt": 1,
+            "code": "gate_unavailable",
+            "candidate_fingerprint": fingerprint,
+            "findings": [
+                {
+                    "rule_code": "runtime_completeness",
+                    "record_paths": ["connections", "connections.0"],
+                },
+                {
+                    "rule_code": "authorization_and_compensation",
+                    "record_paths": ["connections.1", "connections.11"],
+                },
+                {
+                    "rule_code": "safe_action_boundary",
+                    "record_paths": ["connections.2", "connections.3"],
+                },
+            ],
+        }
+    ]
 
 
 @pytest.mark.asyncio

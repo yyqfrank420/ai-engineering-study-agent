@@ -2,21 +2,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from copy import deepcopy
 import json
 import logging
 import re
+from collections.abc import Iterable
+from copy import deepcopy
 from typing import Any
 
 from adapters.llm_adapter import build_telemetry
-from agent.architecture_playbook import evidence_records, format_evidence_bundle
+from config import settings
+
+from agent.architecture_playbook import (
+    evidence_records,
+    evidence_reference_map,
+    format_evidence_bundle,
+)
 from agent.complexity import resolve_complexity
 from agent.deadlines import architecture_timeout_seconds
 from agent.state import AgentState
 from agent.stream_utils import StructuredLLMResponse, stream_structured_llm
-from config import settings
-
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +38,13 @@ _REVIEW_PLAN_LIST_LIMITS = {
     "decisions": 20,
     "runtime_flow": 30,
 }
-_ARCHITECT_PROMPT_VERSION = "architecture_roles_v21"
+_ARCHITECT_PROMPT_VERSION = "architecture_roles_v25"
 _SAFE_EVIDENCE_FAILURE_PATH = re.compile(
     r"evidence_basis\[(?:0|[1-9][0-9]*)\]\.(?:basis|evidence_ref)"
 )
 _EVIDENCE_FAILURE_RULES = {
     "basis_mismatch",
     "invalid_basis",
-    "invalid_engineering_area",
     "invalid_user_span",
     "missing_evidence_id",
     "unknown_evidence_id",
@@ -142,12 +145,6 @@ _ARCHITECT_RESPONSE_SCHEMA = _strict_object_schema(
                     "basis": {
                         "type": "string",
                         "maxLength": 40,
-                        "enum": [
-                            "user",
-                            "book",
-                            "web",
-                            "engineering_recommendation",
-                        ],
                     },
                     "evidence_ref": _bounded_string_schema(500),
                 }
@@ -209,14 +206,18 @@ _CHALLENGER_RESPONSE_SCHEMA = _strict_object_schema(
 )
 
 
-_ARCHITECT_SYSTEM = """<role>
+_ARCHITECT_SYSTEM_TEMPLATE = """<role>
 You are the primary AI systems architect. Produce a complete implementation plan for another
-agent to turn into a diagram. Think across the complete supplied review frame, but include a
-concern only when it materially affects this scenario.
+agent to review against the supplied candidate diagram. The candidate is a reversible draft, not
+an accepted design. Think across the complete supplied review frame, but include a concern only
+when it materially affects this scenario.
 </role>
 
 <rules>
 - Preserve the user's domain nouns and constraints.
+- Audit the supplied candidate's exact components, connections, groups, sequence, and assumptions.
+  Put every material missing or incorrect visible commitment in diagram_requirements. This plan
+  supplies review context only; it cannot mutate the candidate or grant repair permission.
 - The latest user request is the only source for user requirements and user-sourced evidence.
   Treat any broader design context as context only, never as a user requirement.
 - Treat a terse request as a design seed. Enrich it into a complete, best-practice product brief
@@ -238,8 +239,7 @@ concern only when it materially affects this scenario.
 - The selected depth is authoritative. At low depth, use only low-depth criteria and controls
   material to the request. At prototype depth, use only prototype criteria: concrete buildable
   boundaries and applicable requested failure paths. Do not require production hardening at either
-  low or prototype depth; record it as assumptions or open questions. At selected production depth
-  only, include applicable production controls as explicit routes and responsibilities.
+  low or prototype depth; record it as assumptions or open questions.
 - Compose the plan around a clear runtime spine, bounded parallel branches that rejoin, explicit
   decision/failure paths, and separate data and delivery planes. Close feedback into the next
   decision only when a repeated decision or learning loop materially exists.
@@ -254,7 +254,13 @@ concern only when it materially affects this scenario.
   Include decided mechanisms (for example caching, fallback, or approval), every runtime mode's
   route back to an observable outcome, and a bypass around any conditional control when it does
   not apply. Keep these domain-specific; do not turn optional hardening into a requirement.
-- Prefer reusable platform boundaries over one-off AI infrastructure. At selected production depth only, keep risky customer writes in dedicated contextual confirmation flows rather than a free-form model tool loop.
+- Prefer reusable platform boundaries over one-off AI infrastructure.
+- Untrusted retrieved content stays untrusted after filtering or sanitization.
+<production_only_rules>
+- At selected production depth only, include applicable production controls as explicit routes and
+  responsibilities.
+- At selected production depth only, keep risky customer writes in dedicated contextual confirmation
+  flows rather than a free-form model tool loop.
 - At selected production depth only, treat production guarantees as directed paths, not adjectives. A label or assumption that says
   durable, trusted, idempotent, approved, audited, or safe does not establish the guarantee. For a
   material external action, plan the path from authoritative observation through verification,
@@ -269,7 +275,6 @@ concern only when it materially affects this scenario.
   Make COMMITTED, NOT_FOUND, and STILL_UNKNOWN read-back outcomes explicit; fence or serialize
   concurrent actions on the same target. Revalidate token expiry, current policy, live preconditions,
   and action freshness immediately before execution, including automatically authorized lanes.
-- Untrusted retrieved content stays untrusted after filtering or sanitization.
 - At selected production depth only, require model output that can cause an action to cross typed
   deterministic validation and the relevant policy/interlock. Learning or configuration feedback
   must pass versioned offline evaluation, reviewed release,
@@ -282,12 +287,16 @@ concern only when it materially affects this scenario.
   late-data handling, and compatible schema evolution. Do not invent stream infrastructure for a
   finite request/response product.
 - At selected production depth only, treat every model and prompt as a versioned deployable with regression tests and rollback.
+</production_only_rules>
 - Do not draw the final graph and do not expose private chain-of-thought.
-- For every book- or web-grounded decision, put the exact opaque source ID from the supplied source
-  records in evidence_ref. A display citation, URL, or source excerpt is never a valid evidence_ref.
-  Never invent a source or imply that a snippet establishes more than it says.
-- For user evidence, evidence_ref must be an exact phrase from the latest user request. For an
-  engineering recommendation, evidence_ref must be an exact supplied checklist area.
+- For every book- or web-grounded decision, copy the exact short source slot shown in square
+  brackets in the supplied source records into evidence_ref, such as source_1. Do not copy a
+  display citation, URL, source excerpt, or altered slot. Never invent a source or imply that a
+  snippet establishes more than it says.
+- evidence_basis may be empty. Include an entry only for a claim grounded in the latest user
+  request or one supplied source record. State checklist-guided recommendations in decisions or
+  assumptions. Keep uncited synthesis in decisions or assumptions.
+- For user evidence, evidence_ref must be an exact phrase from the latest user request.
 - Remove repeated rationale before dropping a material actor, boundary, route, failure outcome, or
   decision. The field and list limits below are the complete response bounds.
 - Hard list limits are inclusive: actors 10; inputs 12; outputs 10; required_capabilities 18;
@@ -315,12 +324,31 @@ Return one JSON object and nothing else:
   "constraints": ["explicit user constraint only"],
   "assumptions": ["material assumption"],
   "open_questions": ["unknown that could materially change the design"],
-  "evidence_basis": [{"claim": "brief decision", "basis": "user|book|web|engineering_recommendation", "evidence_ref": "opaque source ID for book/web, exact user phrase, or exact checklist area"}],
+  "evidence_basis": [{"claim": "brief decision", "basis": "user|book|web", "evidence_ref": "short source slot for book/web or exact user phrase"}],
   "decisions": [{"area": "checklist area", "decision": "specific choice", "why": "short rationale"}],
   "runtime_flow": ["observable step"],
   "status_update": "one useful, non-sensitive finding to show while the user waits"
 }
 </output_contract>"""
+
+
+def _architect_system_for_depth(depth: str) -> str:
+    before, separator, remainder = _ARCHITECT_SYSTEM_TEMPLATE.partition(
+        "<production_only_rules>\n"
+    )
+    production_rules, end_separator, after = remainder.partition(
+        "</production_only_rules>\n"
+    )
+    if not separator or not end_separator:
+        raise RuntimeError("architect production rule boundary is missing")
+    return (
+        f"{before}{production_rules}{after}"
+        if depth == "production"
+        else f"{before}{after}"
+    )
+
+
+_ARCHITECT_SYSTEM = _architect_system_for_depth("production")
 
 
 _CHALLENGER_SYSTEM = """<role>
@@ -397,11 +425,13 @@ graph is produced. Return one corrected complete plan plus the audit that caused
   claim 240; each evidence_ref 500; each decision area 80; each decision and why 300; each
   runtime_flow step 300; status_update 220. Each risk area is limited to 80; each risk and
   mitigation to 300; each missing requirement and tradeoff to 260; review status_update to 220.
-- For every book- or web-grounded decision in accepted_plan, put the exact opaque source ID from
-  the supplied source records in evidence_ref. Display citations, URLs, and excerpts are never
-  valid evidence_ref values. Never invent or alter a source reference.
-- A user-sourced evidence_ref must remain an exact phrase from the latest user request. An
-  engineering recommendation evidence_ref must remain an exact supplied checklist area.
+- For every book- or web-grounded decision in accepted_plan, copy the exact short source slot shown
+  in square brackets in the supplied source records into evidence_ref, such as source_1. Do not
+  copy a display citation, URL, source excerpt, or altered slot. Never invent a source reference.
+- accepted_plan.evidence_basis may be empty. Include an entry only for a claim grounded in the
+  latest user request or one supplied source record. State checklist-guided recommendations in
+  decisions or assumptions. Keep uncited synthesis in decisions or assumptions.
+- A user-sourced evidence_ref must remain an exact phrase from the latest user request.
 </rules>
 
 <output_contract>
@@ -418,7 +448,7 @@ Return one JSON object and nothing else:
     "constraints": ["explicit user constraint only"],
     "assumptions": ["material assumption"],
     "open_questions": ["unknown that could materially change the design"],
-    "evidence_basis": [{"claim": "brief decision", "basis": "user|book|web|engineering_recommendation", "evidence_ref": "opaque source ID for book/web, exact user phrase, or exact checklist area"}],
+    "evidence_basis": [{"claim": "brief decision", "basis": "user|book|web", "evidence_ref": "short source slot for book/web or exact user phrase"}],
     "decisions": [{"area": "checklist area", "decision": "specific choice", "why": "short rationale"}],
     "runtime_flow": ["observable step"],
     "status_update": "one useful, non-sensitive reviewed finding"
@@ -446,7 +476,7 @@ async def architect_node(state: AgentState) -> dict[str, Any]:
     try:
         response = await stream_structured_llm(
             model=settings.architecture_model,
-            system=_ARCHITECT_SYSTEM,
+            system=_architect_system_for_depth(profile.resolved),
             messages=[
                 {
                     "role": "user",
@@ -454,13 +484,21 @@ async def architect_node(state: AgentState) -> dict[str, Any]:
                 }
             ],
             response_schema=_ARCHITECT_RESPONSE_SCHEMA,
-            effort="high",
-            timeout_seconds=architecture_timeout_seconds(state, review=False),
+            effort="medium",
+            timeout_seconds=architecture_timeout_seconds(
+                state,
+                review=bool(state.get("graph_changed") and state.get("graph_data")),
+            ),
             max_output_tokens=settings.architecture_max_completion_tokens,
             temperature=settings.graph_temperature,
             telemetry=_telemetry(state, "architecture_architect", profile.resolved),
         )
-        plan = _normalise_architect(_parse_architect_response(response))
+        plan = _resolve_model_evidence_references(
+            _normalise_architect(_parse_architect_response(response)),
+            state.get("evidence_bundle") or {},
+            error_type=_ArchitecturePassError,
+            error_code="architecture_pass_evidence_provenance",
+        )
         try:
             _validate_plan_list_limits(plan)
         except ValueError as exc:
@@ -500,7 +538,7 @@ async def architect_node(state: AgentState) -> dict[str, Any]:
             phase="architect",
             status="rejected",
             title="Architecture pass did not complete",
-            detail="The diagram will stay unpublished because its architecture plan is incomplete.",
+            detail="The provisional diagram will be withdrawn because its architecture review is incomplete.",
             failure_code=failure_code,
             failure_path=_public_provenance_failure_path(failure_path),
             failure_rule=(
@@ -561,6 +599,12 @@ async def challenger_node(state: AgentState) -> dict[str, Any]:
                 "challenger output exhausted its configured response budget",
             )
         review = _normalise_challenger(_parse_complete_response(response))
+        review["accepted_plan"] = _resolve_model_evidence_references(
+            review.get("accepted_plan") or {},
+            state.get("evidence_bundle") or {},
+            error_type=_ArchitectureReviewError,
+            error_code="architecture_review_evidence_provenance",
+        )
         accepted_plan = _apply_source_backed_plan_locks(
             state.get("architect_plan") or {},
             review.get("accepted_plan") or {},
@@ -623,7 +667,7 @@ async def challenger_node(state: AgentState) -> dict[str, Any]:
 
 
 async def early_design_frame_node(state: AgentState) -> dict[str, Any]:
-    """Show the reviewed direction while the private diagram is still being built."""
+    """Show the provisional direction while the private diagram is being built."""
     if not state.get("is_applied_design", False) or not state.get(
         "architecture_ready", False
     ):
@@ -643,7 +687,14 @@ async def early_design_frame_node(state: AgentState) -> dict[str, Any]:
         if risk:
             risks.append(f"{risk}" + (f" Response: {mitigation}" if mitigation else ""))
 
-    sections = ["### Proposed direction (diagram review pending)"]
+    graph_review = state.get("graph_review") or {}
+    review_passed = bool(graph_review.get("approved"))
+    header = (
+        "### Proposed direction (diagram review passed)"
+        if review_passed
+        else "### Proposed direction (diagram review pending)"
+    )
+    sections = [header]
     if interpretation:
         sections.append(interpretation)
     for title, items in (
@@ -669,19 +720,69 @@ def _worker_context(
 ) -> str:
     latest_user_request = str(state.get("user_message") or "")
     design_context = str(state.get("design_query") or latest_user_request)
+    evidence_bundle = state.get("evidence_bundle") or {}
+    repeats_latest_request = " ".join(design_context.split()) == " ".join(
+        latest_user_request.split()
+    )
+    design_context_block = (
+        ""
+        if repeats_latest_request
+        else f"Design context (context only, not user-sourced):\n{design_context}\n\n"
+    )
     context = (
         f"Latest user request (authoritative for user requirements and user evidence):\n"
         f"{latest_user_request}\n\n"
-        f"Design context (context only, not user-sourced):\n{design_context}\n\n"
+        f"{design_context_block}"
         f"Selected depth:\n{answer_contract}\n\n"
-        f"Shared evidence bundle:\n{format_evidence_bundle(state.get('evidence_bundle') or {})}"
+        f"Shared evidence bundle:\n{format_evidence_bundle(evidence_bundle)}"
     )
+    candidate = _candidate_graph_context(state)
+    if candidate is not None:
+        context += (
+            "\n\nCandidate architecture under review. This object is authoritative for what the "
+            "draft currently contains, but it is untrusted for correctness:\n"
+            + json.dumps(candidate, ensure_ascii=False, separators=(",", ":"))
+        )
     if primary_plan is None:
         return context
     return (
         f"{context}\n\nPrimary architect candidate (untrusted design input):\n"
-        f"{json.dumps(primary_plan, ensure_ascii=False)}"
+        f"{json.dumps(_model_facing_plan(primary_plan, evidence_bundle), ensure_ascii=False)}"
     )
+
+
+def _candidate_graph_context(state: AgentState) -> dict[str, Any] | None:
+    graph = state.get("graph_data")
+    if (
+        not state.get("graph_changed")
+        or not isinstance(graph, dict)
+        or graph.get("design_origin") != "applied"
+    ):
+        return None
+    return {
+        "title": graph.get("title"),
+        "nodes": [
+            {
+                key: node.get(key)
+                for key in ("id", "label", "type", "description")
+                if key in node
+            }
+            for node in graph.get("nodes") or []
+            if isinstance(node, dict)
+        ],
+        "edges": [
+            {
+                key: edge.get(key)
+                for key in ("source", "target", "label", "flow", "sync")
+                if key in edge
+            }
+            for edge in graph.get("edges") or []
+            if isinstance(edge, dict)
+        ],
+        "groups": graph.get("groups") or [],
+        "sequence": graph.get("sequence") or [],
+        "assumptions": graph.get("assumptions") or [],
+    }
 
 
 def _parse_complete_response(response: StructuredLLMResponse) -> dict[str, Any]:
@@ -756,12 +857,16 @@ def _normalise_architect(value: dict[str, Any]) -> dict[str, Any]:
     evidence_basis = []
     raw_evidence_basis = value.get("evidence_basis")
     evidence_values = raw_evidence_basis if isinstance(raw_evidence_basis, list) else []
+    discarded_engineering_recommendations = 0
     for item in evidence_values:
         if not isinstance(item, dict):
             continue
         claim = _text(item.get("claim"), 240)
         basis = _text(item.get("basis"), 40)
-        if claim and basis in {"user", "book", "web", "engineering_recommendation"}:
+        if basis == "engineering_recommendation":
+            discarded_engineering_recommendations += 1
+            continue
+        if claim and basis in {"user", "book", "web"}:
             evidence_basis.append(
                 {
                     "claim": claim,
@@ -769,6 +874,11 @@ def _normalise_architect(value: dict[str, Any]) -> dict[str, Any]:
                     "evidence_ref": _text(item.get("evidence_ref"), 500),
                 }
             )
+    if discarded_engineering_recommendations:
+        logger.info(
+            "Discarded legacy model evidence entries: count=%s",
+            discarded_engineering_recommendations,
+        )
 
     required_capabilities = _text_list(value.get("required_capabilities"), limit=200)
     diagram_requirements = _text_list(value.get("diagram_requirements"), limit=240)
@@ -837,6 +947,77 @@ def _evidence_records_by_id(bundle: dict[str, Any]) -> dict[str, dict[str, Any]]
     }
 
 
+def _resolve_model_evidence_references(
+    plan: dict[str, Any],
+    evidence_bundle: dict[str, Any],
+    *,
+    error_type: type[_ArchitecturePassError] | type[_ArchitectureReviewError],
+    error_code: str,
+) -> dict[str, Any]:
+    """Resolve request-scoped model slots before validation and storage."""
+    references = evidence_reference_map(evidence_bundle)
+    resolved = dict(plan)
+    evidence_basis = []
+    for index, item in enumerate(plan.get("evidence_basis") or []):
+        if not isinstance(item, dict) or item.get("basis") not in {"book", "web"}:
+            evidence_basis.append(item)
+            continue
+        evidence_ref = item.get("evidence_ref")
+        if not isinstance(evidence_ref, str) or not evidence_ref:
+            evidence_basis.append(item)
+            continue
+        canonical_id = references.get(evidence_ref)
+        if canonical_id is None:
+            raise _evidence_failure(
+                error_type,
+                error_code,
+                path=f"evidence_basis[{index}].evidence_ref",
+                rule="unknown_evidence_id",
+            )
+        evidence_basis.append({**item, "evidence_ref": canonical_id})
+    resolved["evidence_basis"] = evidence_basis
+    return resolved
+
+
+def _model_facing_plan(
+    plan: dict[str, Any],
+    evidence_bundle: dict[str, Any],
+) -> dict[str, Any]:
+    """Replace canonical evidence IDs with the short slots shown to reviewers."""
+    slots_by_id = {
+        evidence_id: source_ref
+        for source_ref, evidence_id in evidence_reference_map(evidence_bundle).items()
+    }
+    return _replace_external_evidence_references(
+        _normalise_architect(plan), slots_by_id
+    )
+
+
+def _replace_external_evidence_references(
+    plan: dict[str, Any],
+    references: dict[str, str],
+) -> dict[str, Any]:
+    replaced = dict(plan)
+    evidence_basis = []
+    for item in plan.get("evidence_basis") or []:
+        if not isinstance(item, dict) or item.get("basis") not in {"book", "web"}:
+            evidence_basis.append(item)
+            continue
+        evidence_ref = item.get("evidence_ref")
+        evidence_basis.append(
+            {
+                **item,
+                "evidence_ref": (
+                    references.get(evidence_ref, evidence_ref)
+                    if isinstance(evidence_ref, str)
+                    else evidence_ref
+                ),
+            }
+        )
+    replaced["evidence_basis"] = evidence_basis
+    return replaced
+
+
 def _evidence_failure(
     error_type: type[_ArchitecturePassError] | type[_ArchitectureReviewError],
     error_code: str,
@@ -874,11 +1055,6 @@ def _validate_evidence_references(
     error_code: str,
 ) -> None:
     records_by_id = _evidence_records_by_id(evidence_bundle)
-    checklist_areas = {
-        item.get("area")
-        for item in (evidence_bundle.get("checklist") or [])
-        if isinstance(item, dict) and isinstance(item.get("area"), str)
-    }
     source_text = _normalised_source_text(source_request)
     for index, evidence in enumerate(plan.get("evidence_basis") or []):
         if not isinstance(evidence, dict):
@@ -886,7 +1062,7 @@ def _validate_evidence_references(
         basis = evidence.get("basis")
         evidence_ref = evidence.get("evidence_ref")
         path = f"evidence_basis[{index}]"
-        if basis not in {"user", "book", "web", "engineering_recommendation"}:
+        if basis not in {"user", "book", "web"}:
             raise _evidence_failure(
                 error_type,
                 error_code,
@@ -907,15 +1083,6 @@ def _validate_evidence_references(
                     error_code,
                     path=f"{path}.evidence_ref",
                     rule="invalid_user_span",
-                )
-            continue
-        if basis == "engineering_recommendation":
-            if evidence_ref not in checklist_areas:
-                raise _evidence_failure(
-                    error_type,
-                    error_code,
-                    path=f"{path}.evidence_ref",
-                    rule="invalid_engineering_area",
                 )
             continue
         record = records_by_id.get(evidence_ref)

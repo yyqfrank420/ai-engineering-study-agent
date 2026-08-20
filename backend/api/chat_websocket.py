@@ -18,6 +18,7 @@ from pydantic import ValidationError
 from adapters.supabase_auth_adapter import get_current_user
 from agent.deadlines import WorkflowDeadlineExceeded
 from agent.graph import run_agent
+from agent.graph_review_budget import GraphReviewBudget
 from agent.state import AgentState
 from analytics.events import enqueue_analytics_event
 from api.chat_guards import (
@@ -32,7 +33,12 @@ from api.chat_guards import (
 from api.diagram_evaluation_channel import DiagramEvaluationChannel, DiagramWaiter
 from api.sse_handler import ChatRequest, _make_agent_tools
 from config import settings
-from observability import change_active_chat_streams, record_agent_duration, record_cancel, record_timeout
+from observability import (
+    change_active_chat_streams,
+    record_agent_duration,
+    record_cancel,
+    record_timeout,
+)
 from storage import message_store, runtime_state_store, thread_store
 from storage.errors import ThreadMessageLimitExceeded
 from storage.profile_store import upsert_profile
@@ -54,18 +60,23 @@ class _SingleWaitDiagramEvaluationChannel(DiagramEvaluationChannel):
         evaluation_id = str(uuid.uuid4())
         graph_version_text = str(graph.get("version") or "").strip()
         graph_version = graph_version_text or None
-        future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
-        self._waiters[evaluation_id] = DiagramWaiter(
+        future: asyncio.Future[dict[str, Any]] = (
+            asyncio.get_running_loop().create_future()
+        )
+        waiter = DiagramWaiter(
             graph_version=graph_version,
             future=future,
         )
+        self._waiters[evaluation_id] = waiter
         try:
-            await send({
-                "type": "graph_candidate",
-                "evaluation_id": evaluation_id,
-                "graph_version": graph_version,
-                "data": graph,
-            })
+            await send(
+                self.graph_candidate_event(
+                    evaluation_id=evaluation_id,
+                    graph_version=graph_version,
+                    graph=graph,
+                    criteria=waiter.criteria,
+                )
+            )
             return await asyncio.wait_for(future, timeout=self._timeout_s)
         finally:
             self._waiters.pop(evaluation_id, None)
@@ -95,7 +106,9 @@ async def chat_websocket(websocket: WebSocket) -> None:
     session_started_at = time.perf_counter()
 
     try:
-        auth_message = await asyncio.wait_for(_receive_object(websocket), timeout=_AUTH_TIMEOUT_S)
+        auth_message = await asyncio.wait_for(
+            _receive_object(websocket), timeout=_AUTH_TIMEOUT_S
+        )
         if auth_message.get("type") != "auth":
             await _send_error(websocket, "Authentication must be the first message")
             await websocket.close(code=1008)
@@ -109,13 +122,17 @@ async def chat_websocket(websocket: WebSocket) -> None:
             return
 
         await websocket.send_json({"type": "ready"})
-        start_message = await asyncio.wait_for(_receive_object(websocket), timeout=_START_TIMEOUT_S)
+        start_message = await asyncio.wait_for(
+            _receive_object(websocket), timeout=_START_TIMEOUT_S
+        )
         if start_message.get("type") != "start":
             await _send_error(websocket, "Expected a start message")
             await websocket.close(code=1008)
             return
         try:
-            body = ChatRequest.model_validate({key: value for key, value in start_message.items() if key != "type"})
+            body = ChatRequest.model_validate(
+                {key: value for key, value in start_message.items() if key != "type"}
+            )
         except ValidationError:
             await _send_error(websocket, "Invalid chat request")
             await websocket.close(code=1008)
@@ -140,7 +157,9 @@ async def chat_websocket(websocket: WebSocket) -> None:
             )
         except RuntimeError:
             logger.exception("Stored idempotent turn is incomplete")
-            await _send_error(websocket, "Previous request is incomplete — start a new request")
+            await _send_error(
+                websocket, "Previous request is incomplete — start a new request"
+            )
             await websocket.send_json({"type": "done"})
             return
         if completed_turn is not None:
@@ -153,10 +172,18 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 client_request_id=body.client_request_id,
                 properties={"stream_type": "websocket"},
             )
-            await websocket.send_json({
-                "type": "response_delta",
-                "content": completed_turn["assistant_content"],
-            })
+            await websocket.send_json(
+                {
+                    "type": "response_delta",
+                    "content": completed_turn["assistant_content"],
+                }
+            )
+            await websocket.send_json(
+                {
+                    "type": "graph_data",
+                    "data": thread_store.get_graph(user_id, body.thread_id),
+                }
+            )
             await websocket.send_json({"type": "done"})
             return
 
@@ -174,7 +201,10 @@ async def chat_websocket(websocket: WebSocket) -> None:
             scope_id=internal_test_stream_scope(user, body.thread_id),
         )
         if stream_id is None:
-            await _send_error(websocket, "Another response is already running. Stop it or wait for it to finish.")
+            await _send_error(
+                websocket,
+                "Another response is already running. Stop it or wait for it to finish.",
+            )
             await websocket.send_json({"type": "done"})
             return
 
@@ -182,11 +212,17 @@ async def chat_websocket(websocket: WebSocket) -> None:
             await _send_error(websocket, "Thread not found")
             return
         rag_tools, graph_tools, node_detail_tools = _make_agent_tools(websocket)
-        history = message_store.get_history(user_id, body.thread_id, limit=settings.max_messages_per_thread)
-        base_graph = thread_store.get_graph(user_id, body.thread_id)
+        history = message_store.get_history(
+            user_id, body.thread_id, limit=settings.max_messages_per_thread
+        )
+        base_graph, base_graph_contract = thread_store.get_graph_artifact(
+            user_id, body.thread_id
+        )
         approved_graph_at_request_start = copy.deepcopy(base_graph)
+        approved_graph_contract_at_request_start = copy.deepcopy(base_graph_contract)
         content = body.content
         latest_graph = base_graph
+        graph_preview_sent = False
         command_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=8)
         send_lock = asyncio.Lock()
         diagram_channel = _SingleWaitDiagramEvaluationChannel(
@@ -194,24 +230,41 @@ async def chat_websocket(websocket: WebSocket) -> None:
             max_screenshot_bytes=settings.max_diagram_screenshot_bytes,
         )
         steer_count = 0
+        graph_review_budget = GraphReviewBudget()
         started_at = session_started_at
 
         async def send(event: dict) -> None:
-            nonlocal latest_graph
+            nonlocal graph_preview_sent
             # ``done`` belongs to the transport: it is sent only after durable
             # persistence. This also prevents a cancelled draft from ending the UI.
             if event.get("type") == "done":
                 return
-            if event.get("type") == "graph_data":
-                latest_graph = event.get("data")
+            if event.get("type") in {"graph_preview", "graph_data"}:
+                graph_preview_sent = True
+                event = {"type": "graph_preview", "data": event.get("data")}
             async with send_lock:
                 await websocket.send_json(event)
+
+        async def send_authoritative_graph(graph: dict | None) -> None:
+            nonlocal latest_graph
+            latest_graph = copy.deepcopy(graph)
+            async with send_lock:
+                await websocket.send_json({"type": "graph_data", "data": latest_graph})
+
+        async def restore_graph_preview() -> None:
+            nonlocal graph_preview_sent
+            if not graph_preview_sent:
+                return
+            await send_authoritative_graph(approved_graph_at_request_start)
+            graph_preview_sent = False
 
         async def send_done() -> None:
             async with send_lock:
                 await websocket.send_json({"type": "done"})
 
-        async def await_search_tool_request(search_request_id: str, timeout_s: float) -> bool:
+        async def await_search_tool_request(
+            search_request_id: str, timeout_s: float
+        ) -> bool:
             expires_at = time.time() + timeout_s
             runtime_state_store.prune_search_tool_requests(older_than_epoch=time.time())
             runtime_state_store.create_search_tool_request(
@@ -223,7 +276,9 @@ async def chat_websocket(websocket: WebSocket) -> None:
             try:
                 deadline = asyncio.get_running_loop().time() + timeout_s
                 while asyncio.get_running_loop().time() < deadline:
-                    if runtime_state_store.is_search_tool_requested(search_request_id, user_id, body.thread_id):
+                    if runtime_state_store.is_search_tool_requested(
+                        search_request_id, user_id, body.thread_id
+                    ):
                         return True
                     await asyncio.sleep(0.1)
                 return False
@@ -248,14 +303,18 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         diagram_channel.accept(command)
                     elif command.get("type") in {"steer", "stop"}:
                         if command.get("client_request_id") != body.client_request_id:
-                            await send({
-                                "type": "command_rejected",
-                                "reason": "Command does not match the active request",
-                            })
+                            await send(
+                                {
+                                    "type": "command_rejected",
+                                    "reason": "Command does not match the active request",
+                                }
+                            )
                             continue
                         await command_queue.put(command)
                     else:
-                        await send({"type": "command_rejected", "reason": "Unknown command"})
+                        await send(
+                            {"type": "command_rejected", "reason": "Unknown command"}
+                        )
             except WebSocketDisconnect:
                 enqueue_disconnect()
             except Exception as exc:
@@ -281,16 +340,32 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 "retrieval_notice": "",
                 "graph_data": latest_graph,
                 "approved_graph_data": copy.deepcopy(approved_graph_at_request_start),
+                "graph_contract": copy.deepcopy(
+                    approved_graph_contract_at_request_start
+                ),
+                "approved_graph_contract": copy.deepcopy(
+                    approved_graph_contract_at_request_start
+                ),
                 "graph_changed": False,
                 "graph_notice_sent": False,
                 "graph_revision_count": 0,
+                "_graph_review_budget": graph_review_budget,
                 "research_context": "",
                 "response_text": "",
                 "send": send,
                 "await_search_tool_request": await_search_tool_request,
-                "await_diagram_evaluation": lambda graph: diagram_channel.request(graph, send),
+                "await_diagram_evaluation": lambda graph: diagram_channel.request(
+                    graph, send
+                ),
                 "workflow_started_at_s": workflow_started_at,
                 "terminal_deadline_s": terminal_deadline,
+                "graph_preview_deadline_s": (
+                    min(
+                        asyncio.get_running_loop().time()
+                        + settings.graph_preview_timeout_s,
+                        terminal_deadline,
+                    )
+                ),
             }
 
         enqueue_analytics_event(
@@ -302,11 +377,13 @@ async def chat_websocket(websocket: WebSocket) -> None:
             client_request_id=body.client_request_id,
             properties={"stream_type": "websocket", "steerable": True},
         )
-        await send({
-            "type": "worker_status",
-            "worker": "orchestrator",
-            "status": "Question received — preparing the steerable workflow…",
-        })
+        await send(
+            {
+                "type": "worker_status",
+                "worker": "orchestrator",
+                "status": "Question received — preparing the steerable workflow…",
+            }
+        )
         receiver_task = asyncio.create_task(receive_commands())
         change_active_chat_streams(1)
         active_metric_counted = True
@@ -316,11 +393,19 @@ async def chat_websocket(websocket: WebSocket) -> None:
 
         while True:
             if asyncio.get_running_loop().time() >= terminal_deadline:
-                await send({"type": "error", "content": "Response timed out — please try again"})
+                await restore_graph_preview()
+                await send(
+                    {
+                        "type": "error",
+                        "content": "Response timed out — please try again",
+                    }
+                )
                 record_timeout()
                 break
 
-            agent_task = asyncio.create_task(run_agent(make_state(), rag_tools, graph_tools, node_detail_tools))
+            agent_task = asyncio.create_task(
+                run_agent(make_state(), rag_tools, graph_tools, node_detail_tools)
+            )
             restart_requested = False
             final_state: AgentState | None = None
 
@@ -345,7 +430,13 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     agent_task.cancel()
                     with suppress(asyncio.CancelledError):
                         await agent_task
-                    await send({"type": "error", "content": "Response timed out — please try again"})
+                    await restore_graph_preview()
+                    await send(
+                        {
+                            "type": "error",
+                            "content": "Response timed out — please try again",
+                        }
+                    )
                     record_timeout()
                     break
 
@@ -364,10 +455,14 @@ async def chat_websocket(websocket: WebSocket) -> None:
                             user_id=user_id,
                             thread_id=body.thread_id,
                             request_id=request_id,
-                            properties={"stream_type": "websocket", "reason": command_type},
+                            properties={
+                                "stream_type": "websocket",
+                                "reason": command_type,
+                            },
                         )
                         record_cancel()
                         if command_type == "stop":
+                            await restore_graph_preview()
                             await send({"type": "stopped"})
                         return
 
@@ -378,10 +473,12 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         or not check_prompt_injection(steering)
                         or steer_count >= _MAX_STEERS_PER_RUN
                     ):
-                        await send({
-                            "type": "command_rejected",
-                            "reason": "Steering command was empty, unsafe, too large, or over the limit",
-                        })
+                        await send(
+                            {
+                                "type": "command_rejected",
+                                "reason": "Steering command was empty, unsafe, too large, or over the limit",
+                            }
+                        )
                         # Invalid commands do not disturb the active model call.
                         continue
 
@@ -389,14 +486,25 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     with suppress(asyncio.CancelledError):
                         await agent_task
                     steer_count += 1
-                    content = f"{content}\n\nUser steering update {steer_count}:\n{steering}"
+                    content = (
+                        f"{content}\n\nUser steering update {steer_count}:\n{steering}"
+                    )
+                    await restore_graph_preview()
                     await send({"type": "response_reset"})
-                    await send({"type": "steer_applied", "content": steering, "steer_count": steer_count})
-                    await send({
-                        "type": "worker_status",
-                        "worker": "orchestrator",
-                        "status": "Steering received — rebuilding the answer around your correction…",
-                    })
+                    await send(
+                        {
+                            "type": "steer_applied",
+                            "content": steering,
+                            "steer_count": steer_count,
+                        }
+                    )
+                    await send(
+                        {
+                            "type": "worker_status",
+                            "worker": "orchestrator",
+                            "status": "Steering received — rebuilding the answer around your correction…",
+                        }
+                    )
                     enqueue_analytics_event(
                         event_name="chat_steered",
                         event_category="stream",
@@ -411,7 +519,13 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 try:
                     final_state = agent_task.result()
                 except WorkflowDeadlineExceeded:
-                    await send({"type": "error", "content": "Response timed out — please try again"})
+                    await restore_graph_preview()
+                    await send(
+                        {
+                            "type": "error",
+                            "content": "Response timed out — please try again",
+                        }
+                    )
                     record_timeout()
                     final_state = None
                 break
@@ -424,7 +538,9 @@ async def chat_websocket(websocket: WebSocket) -> None:
             try:
                 title = thread["title"]
                 if title == "New chat":
-                    title = truncate_utf8(body.content, min(60, settings.max_thread_title_bytes))
+                    title = truncate_utf8(
+                        body.content, min(60, settings.max_thread_title_bytes)
+                    )
                 graph_saved = thread_store.persist_turn(
                     user_id,
                     body.thread_id,
@@ -432,19 +548,41 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     user_content=content,
                     assistant_content=final_state["response_text"],
                     graph_data=final_state.get("graph_data"),
+                    graph_contract=final_state.get("graph_contract"),
                     client_request_id=body.client_request_id,
                 )
                 if not graph_saved:
-                    await send({
-                        "type": "error",
-                        "content": "Graph is displayed but was too large to save.",
-                    })
+                    await restore_graph_preview()
+                    await send(
+                        {
+                            "type": "error",
+                            "content": "Graph is displayed but was too large to save.",
+                        }
+                    )
+                else:
+                    persisted_graph = final_state.get("graph_data")
+                    if persisted_graph is None:
+                        persisted_graph = approved_graph_at_request_start
+                    await send_authoritative_graph(persisted_graph)
+                    graph_preview_sent = False
             except ThreadMessageLimitExceeded:
-                await send({"type": "error", "content": "Thread message limit reached. Start a new chat to continue."})
+                await restore_graph_preview()
+                await send(
+                    {
+                        "type": "error",
+                        "content": "Thread message limit reached. Start a new chat to continue.",
+                    }
+                )
                 break
             except Exception:
                 logger.exception("WebSocket chat persistence failed")
-                await send({"type": "error", "content": "Response could not be saved — please try again"})
+                await restore_graph_preview()
+                await send(
+                    {
+                        "type": "error",
+                        "content": "Response could not be saved — please try again",
+                    }
+                )
                 break
 
             enqueue_analytics_event(
@@ -498,8 +636,13 @@ def _request_error(body: ChatRequest, thread: dict | None) -> str | None:
         return f"Message too large (max {settings.max_message_bytes} bytes)"
 
 
-def _new_turn_preflight_error(websocket: WebSocket, user_id: str, body: ChatRequest) -> str | None:
-    if message_store.count_messages(user_id, body.thread_id) + 2 > settings.max_messages_per_thread:
+def _new_turn_preflight_error(
+    websocket: WebSocket, user_id: str, body: ChatRequest
+) -> str | None:
+    if (
+        message_store.count_messages(user_id, body.thread_id) + 2
+        > settings.max_messages_per_thread
+    ):
         return "Thread message limit reached. Start a new chat to continue."
     limit_error = check_rate_limit(user_id)
     if limit_error:

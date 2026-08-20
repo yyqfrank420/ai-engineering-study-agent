@@ -14,19 +14,24 @@ import { graphStructureKey } from '../../utils/graphStructureKey';
 import { TYPE_STYLE, FALLBACK_STYLE } from '../../utils/graphColors';
 import {
   boundLabelCenter,
+  BOTTOM_NODE_GAP,
+  COMPACT_NODE_GAP,
+  COMPACT_NODE_PITCH,
   filterRenderableEdges,
   GRAPH_LAYOUT_VERSION,
   H_PAD,
   INITIAL_FIT_PADDING,
   initialFitScale,
   MIN_COL_W,
+  MIN_PUBLISHED_TITLE_PX,
   NODE_H,
   NODE_RX,
   NODE_W,
   overviewEdgeLabelOpacity,
+  planCompactLayout,
   planVerticalLayout,
+  selectGraphLayout,
   selectOverviewEdgeIndices,
-  selectGraphOrientation,
   VERTICAL_LEVEL_H,
   VERTICAL_NODE_GAP,
   VERTICAL_PAD,
@@ -143,6 +148,7 @@ interface D3GraphProps {
   initialViewState?: GraphViewState;
   onViewStateChange?: (state: GraphViewState) => void;
   onLayoutReady?: (structureKey: string) => void;
+  minimumTitlePx?: number;
 }
 
 type RenderNode = GraphNode & {
@@ -153,6 +159,8 @@ type RenderNode = GraphNode & {
   trackDirection: 1 | -1;
   trackX: number;
   trackWidth: number;
+  compactRow: number;
+  compactColumn: number;
 };
 
 type RenderLink = {
@@ -203,6 +211,7 @@ export function D3Graph({
   initialViewState,
   onViewStateChange,
   onLayoutReady,
+  minimumTitlePx = MIN_PUBLISHED_TITLE_PX,
 }: D3GraphProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const renderStateRef = useRef<GraphRenderState | null>(null);
@@ -369,6 +378,8 @@ export function D3Graph({
       trackDirection: 1,
       trackX: 0,
       trackWidth: 0,
+      compactRow: 0,
+      compactColumn: 0,
     }));
     const nodeById: Record<string, RenderNode> = {};
     for (const n of nodes) nodeById[n.id] = n;
@@ -384,8 +395,6 @@ export function D3Graph({
       if (!colBuckets.has(c)) colBuckets.set(c, []);
       colBuckets.get(c)!.push(n);
     }
-    const widestLevel = Math.max(1, ...Array.from(colBuckets.values(), bucket => bucket.length));
-    const orientation = selectGraphOrientation(width, numCols, widestLevel);
     const isNewStructure = renderedStructureRef.current !== structureKey;
     const restoreViewState = isNewStructure
       && renderInitialViewState?.layoutVersion === GRAPH_LAYOUT_VERSION
@@ -474,7 +483,6 @@ export function D3Graph({
     // MIN_ROW_H: guaranteed minimum spacing between node centres in a column.
     // If the densest column needs more height than the canvas, the layout expands
     // beyond the visible area. The auto-fit zoom below brings everything into view.
-    const BOTTOM_BAND_H = 108;
     const MIN_ROW_H     = NODE_H + 64;   // slightly looser spacing without blowing out the layout
 
     const ungroupedRank = (renderGraphData.groups ?? []).length;
@@ -496,10 +504,22 @@ export function D3Graph({
       1,
       mainGroupRanks.reduce((total, rank) => total + (maxNodesPerGroupInColumn.get(rank) ?? 1), 0),
     );
+    const maximumBottomNodesInColumn = Math.max(
+      0,
+      ...Array.from(colBuckets.values(), bucket => bucket.filter(node => node.lane === 'bottom').length),
+    );
+    const bottomBandHeight = maximumBottomNodesInColumn === 0
+      ? 0
+      : maximumBottomNodesInColumn * NODE_H
+        + (maximumBottomNodesInColumn - 1) * BOTTOM_NODE_GAP;
     // effectiveMainH is the actual height used for main-band Y calculation.
     // It's at least the canvas main band, but expands to fit all nodes.
-    const canvasMainH    = height - 2 * V_PAD - BOTTOM_BAND_H;
+    const canvasMainH    = height - 2 * V_PAD - bottomBandHeight;
     const effectiveMainH = Math.max(canvasMainH, totalMainSlots * MIN_ROW_H);
+    const horizontalLayoutW = numCols * colWidth + 2 * H_PAD;
+    const horizontalLayoutH = V_PAD + effectiveMainH + bottomBandHeight + V_PAD;
+    const horizontalCollisionFree = colWidth >= NODE_W
+      && effectiveMainH / totalMainSlots >= NODE_H;
 
     // Choose wrapping and virtual width together so wide levels can use both
     // viewport dimensions without forcing every level into the same narrow row.
@@ -512,11 +532,53 @@ export function D3Graph({
     const verticalPlacementByColumn = new Map(
       sortedColumns.map((columnIndex, index) => [columnIndex, verticalPlan.levels[index]]),
     );
+    const compactOrderedNodes = sortedColumns.flatMap(
+      columnIndex => colBuckets.get(columnIndex) ?? [],
+    );
+    const compactBottomNodes = compactOrderedNodes.filter(node => node.lane === 'bottom');
+    const compactMainNodes = compactOrderedNodes.filter(node => node.lane !== 'bottom');
+    const compactPlan = planCompactLayout(
+      width,
+      height,
+      nodes.length,
+      compactBottomNodes.length,
+    );
+    const orientation = selectGraphLayout(
+      horizontalCollisionFree
+        ? initialFitScale(width, height, horizontalLayoutW, horizontalLayoutH)
+        : 0,
+      verticalPlan.scale,
+      minimumTitlePx,
+    );
+    const compactIndexByNodeId = new Map(
+      [
+        ...compactMainNodes.map((node, index) => [node.id, index] as const),
+        ...compactBottomNodes.map((node, index) => (
+          [node.id, compactPlan.bottomStartIndex + index] as const
+        )),
+      ],
+    );
 
     for (const [c, bucket] of colBuckets) {
       bucket.forEach((node: RenderNode) => {
         node.topologyRank = c;
       });
+      if (orientation === 'compact') {
+        bucket.forEach((node: RenderNode) => {
+          const compactIndex = compactIndexByNodeId.get(node.id) ?? 0;
+          node.x = H_PAD + NODE_W / 2
+            + (compactIndex % compactPlan.columns) * (NODE_W + COMPACT_NODE_GAP);
+          node.y = V_PAD + NODE_H / 2
+            + Math.floor(compactIndex / compactPlan.columns) * COMPACT_NODE_PITCH;
+          node.track = 0;
+          node.trackDirection = 1;
+          node.trackX = H_PAD;
+          node.trackWidth = compactPlan.layoutWidth - 2 * H_PAD;
+          node.compactRow = Math.floor(compactIndex / compactPlan.columns);
+          node.compactColumn = compactIndex % compactPlan.columns;
+        });
+        continue;
+      }
       if (orientation === 'vertical') {
         const placement = verticalPlacementByColumn.get(c);
         if (!placement) continue;
@@ -562,7 +624,8 @@ export function D3Graph({
 
       bottomNodes.forEach((node: RenderNode, index: number) => {
         node.x = x;
-        node.y = V_PAD + effectiveMainH + (BOTTOM_BAND_H / Math.max(bottomNodes.length, 1)) * (index + 0.5);
+        node.y = V_PAD + effectiveMainH + NODE_H / 2
+          + index * (NODE_H + BOTTOM_NODE_GAP);
       });
     }
 
@@ -576,10 +639,14 @@ export function D3Graph({
     // Total layout dimensions (used for auto-fit zoom below)
     const layoutW = orientation === 'vertical'
       ? verticalLayoutW
-      : numCols * colWidth + 2 * H_PAD;
+      : orientation === 'compact'
+        ? compactPlan.layoutWidth
+        : horizontalLayoutW;
     const layoutH = orientation === 'vertical'
       ? verticalPlan.layoutHeight
-      : V_PAD + effectiveMainH + BOTTOM_BAND_H + V_PAD;
+      : orientation === 'compact'
+        ? compactPlan.layoutHeight
+        : horizontalLayoutH;
 
     // ── Resolve edges to node object references ───────────────────────────────
     // Also attach the sequence step number for each edge so we can badge it.
@@ -646,7 +713,7 @@ export function D3Graph({
 
     const isForward = (d: RenderLink): boolean => {
       if (d.flow === 'feedback' || d.edgeType === 'loop') return false;
-      return orientation === 'vertical'
+      return orientation === 'vertical' || orientation === 'compact'
         ? d.target.topologyRank > d.source.topologyRank
         : d.target.x > d.source.x + 4;
     };
@@ -656,20 +723,57 @@ export function D3Graph({
       anchorY: number;
     }
 
+    const cardBorderPoint = (
+      from: RenderNode,
+      toward: RenderNode,
+    ): { x: number; y: number } => {
+      const dx = toward.x - from.x;
+      const dy = toward.y - from.y;
+      if (dx === 0 && dy === 0) return { x: from.x, y: from.y };
+      const distanceToBorder = 1 / Math.max(
+        Math.abs(dx) / (NODE_W / 2),
+        Math.abs(dy) / (NODE_H / 2),
+      );
+      return {
+        x: from.x + dx * distanceToBorder,
+        y: from.y + dy * distanceToBorder,
+      };
+    };
+
     const routeLink = (d: RenderLink): EdgeRoute => {
       const laneOffset = parallelLaneOffset(d.parallelIndex, d.parallelCount);
       if (orientation === 'horizontal') {
         const forward = isForward(d);
-        const x1 = forward ? d.source.x + NODE_W / 2 : d.source.x;
-        const y1 = forward ? d.source.y : d.source.y - NODE_H / 2;
-        const x2 = forward ? d.target.x - NODE_W / 2 : d.target.x;
-        const y2 = forward ? d.target.y : d.target.y - NODE_H / 2;
         if (forward) {
-          if (d.parallelCount === 1) {
+          const x1 = d.source.x + NODE_W / 2;
+          const y1 = d.source.y;
+          const x2 = d.target.x - NODE_W / 2;
+          const y2 = d.target.y;
+          if (
+            d.target.topologyRank === d.source.topologyRank + 1
+            && d.parallelCount === 1
+          ) {
             return {
               path: `M${x1},${y1} L${x2},${y2}`,
               anchorX: (x1 + x2) / 2,
               anchorY: (y1 + y2) / 2,
+            };
+          }
+          if (d.target.topologyRank > d.source.topologyRank + 1) {
+            const sourceGutterX = d.source.x + colWidth / 2 + laneOffset;
+            const targetGutterX = d.target.x - colWidth / 2 + laneOffset;
+            const corridorY = V_PAD / 2 + laneOffset / 2;
+            return {
+              path: [
+                `M${x1},${y1}`,
+                `L${sourceGutterX},${y1}`,
+                `L${sourceGutterX},${corridorY}`,
+                `L${targetGutterX},${corridorY}`,
+                `L${targetGutterX},${y2}`,
+                `L${x2},${y2}`,
+              ].join(' '),
+              anchorX: (sourceGutterX + targetGutterX) / 2,
+              anchorY: corridorY,
             };
           }
           const centerX = (x1 + x2) / 2;
@@ -679,11 +783,99 @@ export function D3Graph({
             anchorY: (y1 + y2) / 2 + 0.75 * laneOffset,
           };
         }
-        const returnY = RETURN_ARC_OFFSET + laneOffset;
+        const sameColumn = d.source.topologyRank === d.target.topologyRank;
+        const sourceIsRight = d.source.x > d.target.x;
+        const sourceDirection = sameColumn || sourceIsRight ? -1 : 1;
+        const targetDirection = sameColumn || sourceIsRight ? 1 : -1;
+        const sourceBorderX = d.source.x + sourceDirection * NODE_W / 2;
+        const targetBorderX = d.target.x + targetDirection * NODE_W / 2;
+        const sourceGutterX = sameColumn
+          ? H_PAD / 2 + laneOffset
+          : d.source.x + sourceDirection * colWidth / 2 + laneOffset;
+        const targetGutterX = sameColumn
+          ? H_PAD / 2 + laneOffset
+          : d.target.x + targetDirection * colWidth / 2 + laneOffset;
+        const returnY = V_PAD / 2 + laneOffset / 2;
         return {
-          path: `M${x1},${y1} C${x1},${returnY} ${x2},${returnY} ${x2},${y2}`,
-          anchorX: (x1 + x2) / 2,
-          anchorY: (y1 + y2 + 6 * returnY) / 8,
+          path: [
+            `M${sourceBorderX},${d.source.y}`,
+            `L${sourceGutterX},${d.source.y}`,
+            `L${sourceGutterX},${returnY}`,
+            `L${targetGutterX},${returnY}`,
+            `L${targetGutterX},${d.target.y}`,
+            `L${targetBorderX},${d.target.y}`,
+          ].join(' '),
+          anchorX: (sourceGutterX + targetGutterX) / 2,
+          anchorY: returnY,
+        };
+      }
+
+      if (orientation === 'compact') {
+        const sameRow = d.source.compactRow === d.target.compactRow;
+        const adjacent = Math.abs(d.source.compactRow - d.target.compactRow)
+          + Math.abs(d.source.compactColumn - d.target.compactColumn) === 1;
+        const sourceBorder = cardBorderPoint(d.source, d.target);
+        const targetBorder = cardBorderPoint(d.target, d.source);
+        if (adjacent && d.parallelCount === 1) {
+          return {
+            path: `M${sourceBorder.x},${sourceBorder.y} L${targetBorder.x},${targetBorder.y}`,
+            anchorX: (sourceBorder.x + targetBorder.x) / 2,
+            anchorY: (sourceBorder.y + targetBorder.y) / 2,
+          };
+        }
+
+        const compactLaneOffset = parallelLaneOffset(d.parallelIndex, d.parallelCount) / 6;
+        const rowGutterY = (row: number, below: boolean): number => {
+          if (below) {
+            if (row < compactPlan.rows - 1) {
+              return V_PAD + NODE_H + row * COMPACT_NODE_PITCH + COMPACT_NODE_GAP / 4;
+            }
+            return compactPlan.layoutHeight - V_PAD / 2;
+          }
+          if (row > 0) {
+            return V_PAD + (row - 1) * COMPACT_NODE_PITCH + NODE_H + COMPACT_NODE_GAP / 4;
+          }
+          return V_PAD / 2;
+        };
+        const sourceBelow = sameRow
+          ? d.source.compactRow < compactPlan.rows - 1
+          : d.target.compactRow > d.source.compactRow;
+        const targetBelow = sameRow
+          ? sourceBelow
+          : d.source.compactRow > d.target.compactRow;
+        const sourceBorderY = d.source.y + (sourceBelow ? NODE_H / 2 : -NODE_H / 2);
+        const targetBorderY = d.target.y + (targetBelow ? NODE_H / 2 : -NODE_H / 2);
+        const sourceLaneY = rowGutterY(d.source.compactRow, sourceBelow) + compactLaneOffset;
+        const targetLaneY = rowGutterY(d.target.compactRow, targetBelow) + compactLaneOffset;
+
+        if (sameRow) {
+          return {
+            path: [
+              `M${d.source.x},${sourceBorderY}`,
+              `L${d.source.x},${sourceLaneY}`,
+              `L${d.target.x},${targetLaneY}`,
+              `L${d.target.x},${targetBorderY}`,
+            ].join(' '),
+            anchorX: (d.source.x + d.target.x) / 2,
+            anchorY: sourceLaneY,
+          };
+        }
+
+        const routeRight = d.target.compactColumn >= d.source.compactColumn;
+        const outerGutterX = routeRight
+          ? compactPlan.layoutWidth - H_PAD / 2
+          : H_PAD / 2;
+        return {
+          path: [
+            `M${d.source.x},${sourceBorderY}`,
+            `L${d.source.x},${sourceLaneY}`,
+            `L${outerGutterX},${sourceLaneY}`,
+            `L${outerGutterX},${targetLaneY}`,
+            `L${d.target.x},${targetLaneY}`,
+            `L${d.target.x},${targetBorderY}`,
+          ].join(' '),
+          anchorX: outerGutterX,
+          anchorY: (sourceLaneY + targetLaneY) / 2,
         };
       }
 
@@ -709,30 +901,13 @@ export function D3Graph({
       const targetDirection = d.target.trackDirection;
       const sourceBorderY = d.source.y + sourceDirection * NODE_H / 2;
       const targetBorderY = d.target.y - targetDirection * NODE_H / 2;
-      if (
-        d.source.track === d.target.track
-        && d.target.topologyRank === d.source.topologyRank + 1
-      ) {
-        if (d.parallelCount === 1) {
-          return {
-            path: `M${d.source.x},${sourceBorderY} L${d.target.x},${targetBorderY}`,
-            anchorX: (d.source.x + d.target.x) / 2,
-            anchorY: (sourceBorderY + targetBorderY) / 2,
-          };
-        }
-        const centerY = (sourceBorderY + targetBorderY) / 2;
-        return {
-          path: `M${d.source.x},${sourceBorderY} C${d.source.x + laneOffset},${centerY} ${d.target.x + laneOffset},${centerY} ${d.target.x},${targetBorderY}`,
-          anchorX: (d.source.x + d.target.x) / 2 + 0.75 * laneOffset,
-          anchorY: centerY,
-        };
-      }
-
       const sourceLaneY = sourceBorderY + sourceDirection * 6;
       const targetLaneY = targetBorderY - targetDirection * 6;
       if (d.source.track === d.target.track) {
-        const gutterX = d.source.trackX + d.source.trackWidth
-          + VERTICAL_TRACK_GAP / 2 + laneOffset;
+        const gutterX = Math.min(
+          layoutW - VERTICAL_PAD / 2,
+          d.source.trackX + d.source.trackWidth + VERTICAL_TRACK_GAP / 2 + laneOffset,
+        );
         return {
           path: [
             `M${d.source.x},${sourceBorderY}`,
@@ -747,9 +922,14 @@ export function D3Graph({
         };
       }
 
-      const sourceGutterX = d.source.trackX + d.source.trackWidth
-        + VERTICAL_TRACK_GAP / 2 + laneOffset;
-      const targetGutterX = d.target.trackX - VERTICAL_TRACK_GAP / 2 + laneOffset;
+      const sourceGutterX = Math.min(
+        layoutW - VERTICAL_PAD / 2,
+        d.source.trackX + d.source.trackWidth + VERTICAL_TRACK_GAP / 2 + laneOffset,
+      );
+      const targetGutterX = Math.max(
+        VERTICAL_PAD / 2,
+        d.target.trackX - VERTICAL_TRACK_GAP / 2 + laneOffset,
+      );
       const corridorY = sourceDirection === 1
         ? layoutH - VERTICAL_PAD / 2 + laneOffset / 2
         : VERTICAL_PAD / 2 - laneOffset / 2;
@@ -1293,14 +1473,18 @@ export function D3Graph({
         if (!textEl) return;
 
         const textBox = textEl.getBBox();
+        const labelWidth = textBox.width + 6;
+        const labelHeight = textBox.height + 2;
+        const localLabelCenter = {
+          x: textBox.x + textBox.width / 2,
+          y: textBox.y + textBox.height / 2,
+        };
         grp.select('rect')
           .attr('x', textBox.x - 3)
           .attr('y', textBox.y - 1)
-          .attr('width', textBox.width + 6)
-          .attr('height', textBox.height + 2);
+          .attr('width', labelWidth)
+          .attr('height', labelHeight);
 
-        const labelWidth = textBox.width + 6;
-        const labelHeight = textBox.height + 2;
         const verticalForward = orientation === 'vertical' && isForward(d);
         const centerX = midX(d);
         const centerY = midY(d);
@@ -1358,7 +1542,10 @@ export function D3Graph({
           }
         }
 
-        grp.attr('transform', `translate(${placement.x},${placement.y})`);
+        grp.attr(
+          'transform',
+          `translate(${placement.x - localLabelCenter.x},${placement.y - localLabelCenter.y})`,
+        );
       });
     }
 
@@ -1415,7 +1602,7 @@ export function D3Graph({
       window.cancelAnimationFrame(secondFrame);
       renderStateRef.current = null;
     };
-  }, [structureKey, viewportRevision]);
+  }, [minimumTitlePx, structureKey, viewportRevision]);
 
   useEffect(() => {
     const renderState = renderStateRef.current;
