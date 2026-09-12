@@ -147,7 +147,7 @@ _GRAPH_ARTIFACT_FIELD = re.compile(
     r"\b(?:diagrams?|graphs?)\s+(?:components?|connections?|labels?|titles?)\b"
 )
 _NON_MUTATING_QUESTION = re.compile(
-    r"^(?:what|when|where|why|how|should|do(?!\s+not\b)|does|is|are|"
+    r"^(?:what|when|where|why|how|which|whether|who|should|do(?!\s+not\b)|does|is|are|"
     r"can\s+i|could\s+i|would\s+i)\b"
 )
 _NEW_GRAPH_ACTION = re.compile(
@@ -174,8 +174,8 @@ _GRAPH_ARTIFACT_CHANGE_FORBIDDEN = re.compile(
     r"\b(?:architectures?|diagrams?|graphs?)\b"
 )
 _EXPLANATION_REQUEST = re.compile(
-    r"^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?"
-    r"(?:explain|describe|tell\s+me\s+how)\b"
+    r"^(?:please\s+)?(?:(?:can|could|would)\s+you(?:\s+please)?\s+)?"
+    r"(?P<action>explain|describe|summari[sz]e|restate|rephrase|tell\s+me\s+how)\b"
 )
 _TOPIC_SWITCH_REQUEST = re.compile(
     r"^(?:change\s+the\s+(?:subject|topic)|move\s+on|switch\s+to|talk\s+about)\b"
@@ -267,6 +267,14 @@ def is_existing_graph_edit_request(query: str, graph_data: dict | None) -> bool:
     return resolve_graph_operation(query, graph_data) == "edit"
 
 
+def _intent_clauses(text: str) -> list[str]:
+    return [
+        clause.strip()
+        for clause in re.split(r"[,;\n]|\b(?:and|but|then)\b", text)
+        if clause.strip()
+    ]
+
+
 def resolve_graph_operation(
     query: str,
     graph_data: dict | None,
@@ -276,11 +284,7 @@ def resolve_graph_operation(
     if not text:
         return None
     applied_design_requested = is_applied_system_design_request(query)
-    clauses = [
-        clause.strip()
-        for clause in re.split(r"[,;\n]|\b(?:and|but|then)\b", text)
-        if clause.strip()
-    ]
+    clauses = _intent_clauses(text)
     authored_terms = tuple(
         term
         for collection in (
@@ -323,8 +327,26 @@ def resolve_graph_operation(
         clause
         for clause in clauses
         if requests_graph_design(clause)
+        and not _EXPLANATION_REQUEST.match(clause)
+        and (
+            not _NON_MUTATING_QUESTION.match(clause) or _NEW_GRAPH_ACTION.match(clause)
+        )
+        and not _NEGATED_GRAPH_EDIT_CLAUSE.match(clause)
         and not _GRAPH_ARTIFACT_CHANGE_FORBIDDEN.search(clause)
     ]
+    mutation_clauses = [
+        clause
+        for clause in clauses
+        if _GRAPH_EDIT_ACTION.search(clause)
+        and not _EXPLANATION_REQUEST.match(clause)
+        and not _NON_MUTATING_QUESTION.match(clause)
+        and not _NEGATED_GRAPH_EDIT_CLAUSE.match(clause)
+        and not _GRAPH_ARTIFACT_CHANGE_FORBIDDEN.search(clause)
+    ]
+    explicit_edit_requested = any(
+        references_current_design(clause) or _GRAPH_EDIT_TARGET.search(clause)
+        for clause in mutation_clauses
+    )
     new_graph_requested = applied_design_requested and any(
         not references_current_design(clause) for clause in design_clauses
     )
@@ -332,8 +354,8 @@ def resolve_graph_operation(
         _TOPIC_SWITCH_REQUEST.match(text)
         or _NON_MUTATING_QUESTION.match(text)
         or _CONCEPT_QUESTION.match(text)
-        or _EXPLANATION_REQUEST.match(text)
-    ) and not new_graph_requested:
+        or any(_EXPLANATION_REQUEST.match(clause) for clause in clauses)
+    ) and not (design_clauses or explicit_edit_requested):
         return None
     if new_graph_requested:
         return "create"
@@ -346,17 +368,7 @@ def resolve_graph_operation(
     ):
         return "create"
 
-    mutation_clauses = [
-        clause
-        for clause in clauses
-        if _GRAPH_EDIT_ACTION.search(clause)
-        and not _NEGATED_GRAPH_EDIT_CLAUSE.match(clause)
-        and not _GRAPH_ARTIFACT_CHANGE_FORBIDDEN.search(clause)
-    ]
-    if any(
-        references_current_design(clause) or _GRAPH_EDIT_TARGET.search(clause)
-        for clause in mutation_clauses
-    ):
+    if explicit_edit_requested:
         return "edit"
     return None
 
@@ -370,7 +382,25 @@ def is_applied_system_design_request(query: str) -> bool:
     """Distinguish a requested system design from a book-concept explanation."""
     text = " ".join(query.lower().split())
     intent_text = _routing_intent_text(text)
+    clauses = [
+        clause
+        for clause in _intent_clauses(intent_text)
+        if not _NEGATED_GRAPH_EDIT_CLAUSE.match(clause)
+        and not _GRAPH_ARTIFACT_CHANGE_FORBIDDEN.search(clause)
+    ]
+    intent_text = " ".join(clauses)
     if not intent_text:
+        return False
+    explanatory_request = any(
+        (match := _EXPLANATION_REQUEST.match(clause))
+        and match.group("action") != "describe"
+        for clause in clauses
+    )
+    explicit_design_requested = any(
+        _NEW_GRAPH_ACTION.match(clause) or _REPLACEMENT_GRAPH_ACTION.match(clause)
+        for clause in clauses
+    )
+    if explanatory_request and not explicit_design_requested:
         return False
     design_verb_present = any(
         re.search(rf"\b{verb}\w*\b", intent_text) for verb in _DESIGN_VERBS
@@ -483,11 +513,9 @@ def resolve_complexity(requested: str, query: str) -> ComplexityProfile:
             resolved=resolved,
             thinking_budget=settings.production_thinking_budget_tokens,
             answer_contract=(
-                "Production depth: give an implementable design, including component boundaries, "
-                "data contracts, the decision/feedback loop, safety controls, approval where "
-                "external writes exist, failure "
-                "handling, observability, and a staged rollout. Aim for 600-900 useful words when "
-                "the request warrants it; density matters more than length."
+                "Production depth: give detailed reasoning and evidence for the requested task, "
+                "including material assumptions, limitations, and trade-offs where relevant. "
+                "Depth does not expand the requested scope or override its format or length."
             ),
         )
     if resolved == "prototype":
@@ -496,9 +524,9 @@ def resolve_complexity(requested: str, query: str) -> ComplexityProfile:
             resolved=resolved,
             thinking_budget=settings.thinking_budget_tokens,
             answer_contract=(
-                "Prototype depth: produce a concrete buildable design with responsibilities, key "
-                "interfaces, the main data/control loop, important assumptions, and the first "
-                "trade-offs to test. Aim for 350-600 useful words when the request warrants it."
+                "Prototype depth: give enough detail to understand the requested subject and "
+                "its important assumptions and trade-offs. Depth does not expand the requested "
+                "scope or override its format or length."
             ),
         )
     return ComplexityProfile(
@@ -506,9 +534,7 @@ def resolve_complexity(requested: str, query: str) -> ComplexityProfile:
         resolved="low",
         thinking_budget=None,
         answer_contract=(
-            "Low depth: answer the user's actual question directly and concisely. For an explanation "
-            "or safety lesson, stop after the requested concept and necessary evidence; do not add "
-            "an unrequested architecture, operations plan, or rollout. For an actual design request, "
-            "cover the main design and one important trade-off without a production review."
+            "Low depth: answer the requested task directly and concisely, with only the "
+            "explanation and evidence needed to answer it."
         ),
     )

@@ -28,6 +28,7 @@ create table if not exists public.chat_threads (
 
 create table if not exists public.chat_messages (
   id uuid primary key,
+  message_sequence bigint generated always as identity (cache 1 no cycle) not null,
   thread_id uuid not null references public.chat_threads(id) on delete cascade,
   user_id uuid not null references public.profiles(id) on delete cascade,
   role text not null check (role in ('user', 'assistant')),
@@ -131,6 +132,12 @@ create index if not exists idx_chat_threads_user_last_seen
 
 create index if not exists idx_chat_messages_thread_created
   on public.chat_messages(thread_id, created_at desc);
+
+create unique index if not exists uq_chat_messages_sequence
+  on public.chat_messages(message_sequence);
+
+create index if not exists idx_chat_messages_thread_sequence
+  on public.chat_messages(thread_id, message_sequence);
 
 create unique index if not exists uq_chat_messages_client_turn_role
   on public.chat_messages(user_id, thread_id, client_request_id, role)

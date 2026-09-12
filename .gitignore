@@ -26,6 +26,8 @@ frontend/coverage/
 # data/faiss/ intentionally NOT ignored — bundled into Docker image (7MB static index)
 data/*.db
 *.db
+*.db-wal
+*.db-shm
 backend/eval/results/staging-*.json
 artifacts/
 

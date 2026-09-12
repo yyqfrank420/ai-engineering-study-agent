@@ -227,7 +227,11 @@ async def test_eval_telemetry_is_thread_scoped_bounded_and_sanitized(monkeypatch
                 "cache_creation_input_tokens": 1_024,
                 "cache_read_input_tokens": 2_048,
                 "output_tokens": 5,
+                "system_chars": 120,
+                "message_chars": 56,
+                "schema_chars": 0,
                 "queue_wait_ms": 23,
+                "effort": "high",
                 "request_id": "request-1",
                 "client_request_id": "secret/path",
                 "attempts": [
@@ -242,6 +246,8 @@ async def test_eval_telemetry_is_thread_scoped_bounded_and_sanitized(monkeypatch
                         "output_tokens": 5,
                         "queue_wait_ms": 23,
                         "duration_ms": 100,
+                        "first_reasoning_delta_ms": 37,
+                        "first_text_delta_ms": None,
                         "secret": "never-return",
                     }
                 ],
@@ -267,12 +273,19 @@ async def test_eval_telemetry_is_thread_scoped_bounded_and_sanitized(monkeypatch
                 "provider": "anthropic",
                 "model": "claude",
                 "status": "success",
+                "effort": "high",
                 "latency_ms": 100,
+                "allocated_timeout_s": None,
+                "output_chars": 0,
+                "error_type": None,
                 "fallback": False,
                 "input_tokens": 12,
                 "cache_creation_input_tokens": 1_024,
                 "cache_read_input_tokens": 2_048,
                 "output_tokens": 5,
+                "system_chars": 120,
+                "message_chars": 56,
+                "schema_chars": 0,
                 "provider_attempts": 1,
                 "queue_wait_ms": 23,
                 "attempts": [
@@ -287,6 +300,11 @@ async def test_eval_telemetry_is_thread_scoped_bounded_and_sanitized(monkeypatch
                         "output_tokens": 5,
                         "queue_wait_ms": 23,
                         "duration_ms": 100,
+                        "first_reasoning_delta_ms": 37,
+                        "first_text_delta_ms": None,
+                        "accepted": None,
+                        "usage_complete": None,
+                        "error_type": None,
                     }
                 ],
                 "request_id": "request-1",
@@ -300,6 +318,90 @@ async def test_eval_telemetry_is_thread_scoped_bounded_and_sanitized(monkeypatch
         thread_id=[str(index) for index in range(41)],
         _user={"email": "admin@example.com"},
     ) == {"calls": []}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "timeout",
+        "accepted",
+        "usage_complete",
+        "error_type",
+        "expected_timeout",
+        "expected_accepted",
+        "expected_usage",
+        "expected_error",
+    ),
+    [
+        (
+            129.875,
+            True,
+            False,
+            "CancelledError",
+            129.875,
+            True,
+            False,
+            "CancelledError",
+        ),
+        (10, False, True, None, 10, False, True, None),
+        (None, None, None, None, None, None, None, None),
+        ("129.875", "false", 1, 123, None, None, None, None),
+        (True, 0, "true", [], None, None, None, None),
+        (float("nan"), None, None, None, None, None, None, None),
+        (float("inf"), None, None, None, None, None, None, None),
+        (-1, None, None, None, None, None, None, None),
+        (0, True, False, "E" * 200, 0, True, False, "E" * 128),
+    ],
+)
+async def test_eval_telemetry_preserves_timeout_and_incomplete_usage_types(
+    monkeypatch,
+    timeout,
+    accepted,
+    usage_complete,
+    error_type,
+    expected_timeout,
+    expected_accepted,
+    expected_usage,
+    expected_error,
+):
+    row = _llm(
+        "staged_graph_components",
+        "moonshot",
+        "kimi-k3",
+        status="cancelled_incomplete_usage",
+        metadata={
+            "allocated_timeout_s": timeout,
+            "attempts": [
+                {
+                    "accepted": accepted,
+                    "usage_complete": usage_complete,
+                    "error_type": error_type,
+                    "first_reasoning_delta_ms": 4000,
+                    "first_text_delta_ms": 70000,
+                }
+            ],
+        },
+    ) | {"thread_id": "thread-1", "output_chars": 4957, "error_type": error_type}
+    monkeypatch.setattr(
+        dashboard, "list_recent_llm_telemetry", lambda since_epoch: [row]
+    )
+
+    payload = await dashboard.dashboard_eval_telemetry(
+        since_epoch=900,
+        thread_id=["thread-1"],
+        _user={"email": "admin@example.com"},
+    )
+
+    call = payload["calls"][0]
+    assert call["allocated_timeout_s"] == expected_timeout
+    assert call["output_chars"] == 4957
+    assert call["error_type"] == expected_error
+    attempt = call["attempts"][0]
+    assert attempt["accepted"] is expected_accepted
+    assert attempt["usage_complete"] is expected_usage
+    assert attempt["error_type"] == expected_error
+    assert attempt["first_reasoning_delta_ms"] == 4000
+    assert attempt["first_text_delta_ms"] == 70000
 
 
 @pytest.mark.asyncio

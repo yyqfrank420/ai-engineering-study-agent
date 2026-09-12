@@ -1,0 +1,536 @@
+{
+  "request": "Expand the Serving Monitor component while preserving the original graph topic and existing components. Add exactly one directly connected responsibility.",
+  "base_graph": {
+    "graph_type": "architecture",
+    "title": "Model-Serving Stack with Serving Monitor (Prototype)",
+    "nodes": [
+      {
+        "id": "n1",
+        "label": "Client App",
+        "type": "client",
+        "technology": "Client",
+        "description": "Sends prediction requests with input payloads to the serving endpoint and renders returned predictions to the end user.",
+        "tier": null,
+        "lane": "main",
+        "detail": null,
+        "layer": "architecture",
+        "design_origin": "applied"
+      },
+      {
+        "id": "n2",
+        "label": "Inference Service",
+        "type": "service",
+        "technology": "Application service",
+        "description": "Accepts prediction requests, loads the active model version, runs inference, and returns predictions; emits request and prediction logs for monitoring.",
+        "tier": null,
+        "lane": "main",
+        "detail": null,
+        "layer": "architecture",
+        "design_origin": "applied"
+      },
+      {
+        "id": "n3",
+        "label": "Model Registry",
+        "type": "datastore",
+        "technology": "Data store",
+        "description": "Stores versioned trained model artifacts and metadata; serves the requested model version to the Inference Service on load.",
+        "tier": null,
+        "lane": "main",
+        "detail": null,
+        "layer": "architecture",
+        "design_origin": "applied"
+      },
+      {
+        "id": "n4",
+        "label": "Prediction Log Store",
+        "type": "datastore",
+        "technology": "Data store",
+        "description": "Persists request/response logs, latency timings, and error records emitted by the Inference Service for later inspection.",
+        "tier": null,
+        "lane": "bottom",
+        "detail": null,
+        "layer": "architecture",
+        "design_origin": "applied"
+      },
+      {
+        "id": "n5",
+        "label": "Serving Monitor",
+        "type": "service",
+        "technology": "Application service",
+        "description": "Reads serving logs and computes latency, throughput, error-rate, and drift metrics; exposes dashboards and raises alerts on threshold breaches.",
+        "tier": null,
+        "lane": "bottom",
+        "detail": null,
+        "layer": "architecture",
+        "design_origin": "applied"
+      },
+      {
+        "id": "n6",
+        "label": "Metrics Store",
+        "type": "datastore",
+        "technology": "Data store",
+        "description": "Holds aggregated serving metrics and alert history produced by Serving Monitor for dashboards and review.",
+        "tier": null,
+        "lane": "bottom",
+        "detail": null,
+        "layer": "architecture",
+        "design_origin": "applied"
+      }
+    ],
+    "edges": [
+      {
+        "source": "n1",
+        "target": "n2",
+        "label": "prediction request",
+        "technology": "Runtime flow",
+        "sync": "sync",
+        "description": "prediction request",
+        "flow": "runtime",
+        "edge_id": "applied:n1__prediction_request_b2699fbf3d474b87c0749e98__n2",
+        "relation": "prediction_request_b2699fbf3d474b87c0749e98"
+      },
+      {
+        "source": "n2",
+        "target": "n1",
+        "label": "prediction response",
+        "technology": "Runtime flow",
+        "sync": "sync",
+        "description": "prediction response",
+        "flow": "runtime",
+        "edge_id": "applied:n2__prediction_response_3b618bf02ea297463faf6b5f__n1",
+        "relation": "prediction_response_3b618bf02ea297463faf6b5f"
+      },
+      {
+        "source": "n2",
+        "target": "n3",
+        "label": "load active model version by id request",
+        "technology": "Runtime flow",
+        "sync": "sync",
+        "description": "load active model version by id request",
+        "flow": "runtime",
+        "edge_id": "applied:n2__load_active_model_version_by_id_request_4d6ba093437fe4708139f985__n3",
+        "relation": "load_active_model_version_by_id_request_4d6ba093437fe4708139f985"
+      },
+      {
+        "source": "n3",
+        "target": "n2",
+        "label": "versioned model artifact response",
+        "technology": "Runtime flow",
+        "sync": "sync",
+        "description": "versioned model artifact response",
+        "flow": "runtime",
+        "edge_id": "applied:n3__versioned_model_artifact_response_e3e9c07c460bfa9296fb6b87__n2",
+        "relation": "versioned_model_artifact_response_e3e9c07c460bfa9296fb6b87"
+      },
+      {
+        "source": "n2",
+        "target": "n4",
+        "label": "emit request prediction latency and error logs",
+        "technology": "Feedback flow",
+        "sync": "async",
+        "description": "emit request prediction latency and error logs",
+        "flow": "feedback",
+        "edge_id": "applied:n2__emit_request_prediction_latency_and_err_c50458370f63b6c5f22f3588__n4",
+        "relation": "emit_request_prediction_latency_and_err_c50458370f63b6c5f22f3588"
+      },
+      {
+        "source": "n5",
+        "target": "n4",
+        "label": "serving log read request",
+        "technology": "Feedback flow",
+        "sync": "sync",
+        "description": "serving log read request",
+        "flow": "feedback",
+        "edge_id": "applied:n5__serving_log_read_request_df989101636ecbe58fa9872b__n4",
+        "relation": "serving_log_read_request_df989101636ecbe58fa9872b"
+      },
+      {
+        "source": "n4",
+        "target": "n5",
+        "label": "serving log records response",
+        "technology": "Feedback flow",
+        "sync": "sync",
+        "description": "serving log records response",
+        "flow": "feedback",
+        "edge_id": "applied:n4__serving_log_records_response_9c873280177a9e82e5345d86__n5",
+        "relation": "serving_log_records_response_9c873280177a9e82e5345d86"
+      },
+      {
+        "source": "n5",
+        "target": "n6",
+        "label": "write aggregated metrics and alert history",
+        "technology": "Feedback flow",
+        "sync": "async",
+        "description": "write aggregated metrics and alert history",
+        "flow": "feedback",
+        "edge_id": "applied:n5__write_aggregated_metrics_and_alert_hist_30021329a87e8cb829722db9__n6",
+        "relation": "write_aggregated_metrics_and_alert_hist_30021329a87e8cb829722db9"
+      }
+    ],
+    "sequence": [
+      {
+        "step": 1,
+        "nodes": [
+          "n1"
+        ],
+        "description": "Primary flow stage 1"
+      },
+      {
+        "step": 2,
+        "nodes": [
+          "n2"
+        ],
+        "description": "Primary flow stage 2"
+      },
+      {
+        "step": 3,
+        "nodes": [
+          "n3"
+        ],
+        "description": "Primary flow stage 3"
+      }
+    ],
+    "groups": [
+      {
+        "id": "group_runtime",
+        "label": "Runtime",
+        "kind": "runtime",
+        "nodeIds": [
+          "n1",
+          "n2"
+        ]
+      },
+      {
+        "id": "group_data",
+        "label": "Data",
+        "kind": "data",
+        "nodeIds": [
+          "n3"
+        ]
+      },
+      {
+        "id": "group_operations",
+        "label": "Operations",
+        "kind": "operations",
+        "nodeIds": [
+          "n4",
+          "n5",
+          "n6"
+        ]
+      }
+    ],
+    "design_origin": "applied",
+    "resolved_complexity": "prototype",
+    "assumptions": [
+      "Goal is a prototype stack that serves model predictions to a client application and observes serving health and quality via a component named Serving Monitor.",
+      "Requests are synchronous: the client calls the serving endpoint and waits for a prediction response.",
+      "Models are pre-trained artifacts stored in a registry; no training or fine-tuning is in scope.",
+      "Serving Monitor is read-only: it observes logs and metrics and surfaces dashboards and alerts, but does not mutate models, prompts, rankings, or external systems.",
+      "'Production' in the request is superseded by the selected prototype maturity; no production-only controls are added."
+    ],
+    "version": "d16f33c5-9080-4452-99c8-8383d8b245b4"
+  },
+  "initial_candidate": {
+    "graph_type": "architecture",
+    "title": "Model-Serving Stack with Serving Monitor (Prototype)",
+    "nodes": [
+      {
+        "id": "n1",
+        "label": "Client App",
+        "type": "client",
+        "technology": "Client",
+        "description": "Sends prediction requests with input payloads to the serving endpoint and renders returned predictions to the end user.",
+        "tier": null,
+        "lane": "main",
+        "detail": null,
+        "layer": "architecture",
+        "design_origin": "applied"
+      },
+      {
+        "id": "n2",
+        "label": "Inference Service",
+        "type": "service",
+        "technology": "Application service",
+        "description": "Accepts prediction requests, loads the active model version, runs inference, and returns predictions; emits request and prediction logs for monitoring.",
+        "tier": null,
+        "lane": "main",
+        "detail": null,
+        "layer": "architecture",
+        "design_origin": "applied"
+      },
+      {
+        "id": "n3",
+        "label": "Model Registry",
+        "type": "datastore",
+        "technology": "Data store",
+        "description": "Stores versioned trained model artifacts and metadata; serves the requested model version to the Inference Service on load.",
+        "tier": null,
+        "lane": "main",
+        "detail": null,
+        "layer": "architecture",
+        "design_origin": "applied"
+      },
+      {
+        "id": "n4",
+        "label": "Prediction Log Store",
+        "type": "datastore",
+        "technology": "Data store",
+        "description": "Persists request/response logs, latency timings, and error records emitted by the Inference Service for later inspection.",
+        "tier": null,
+        "lane": "bottom",
+        "detail": null,
+        "layer": "architecture",
+        "design_origin": "applied"
+      },
+      {
+        "id": "n5",
+        "label": "Serving Monitor",
+        "type": "service",
+        "technology": "Application service",
+        "description": "Reads serving logs and computes latency, throughput, error-rate, and drift metrics; exposes dashboards and raises alerts on threshold breaches.",
+        "tier": null,
+        "lane": "bottom",
+        "detail": null,
+        "layer": "architecture",
+        "design_origin": "applied"
+      },
+      {
+        "id": "n6",
+        "label": "Metrics Store",
+        "type": "datastore",
+        "technology": "Data store",
+        "description": "Holds aggregated serving metrics and alert history produced by Serving Monitor for dashboards and review.",
+        "tier": null,
+        "lane": "bottom",
+        "detail": null,
+        "layer": "architecture",
+        "design_origin": "applied"
+      },
+      {
+        "id": "n7",
+        "label": "Drift Baseline Store",
+        "type": "datastore",
+        "technology": "Data store",
+        "description": "Holds reference feature distributions and metric baselines that Serving Monitor reads to compare live serving traffic against and compute drift metrics.",
+        "tier": null,
+        "lane": "bottom",
+        "detail": null,
+        "layer": "architecture",
+        "design_origin": "applied"
+      }
+    ],
+    "edges": [
+      {
+        "source": "n1",
+        "target": "n2",
+        "label": "prediction request",
+        "technology": "Runtime flow",
+        "sync": "sync",
+        "description": "prediction request",
+        "flow": "runtime",
+        "edge_id": "applied:n1__prediction_request_b2699fbf3d474b87c0749e98__n2",
+        "relation": "prediction_request_b2699fbf3d474b87c0749e98"
+      },
+      {
+        "source": "n2",
+        "target": "n1",
+        "label": "prediction response",
+        "technology": "Runtime flow",
+        "sync": "sync",
+        "description": "prediction response",
+        "flow": "runtime",
+        "edge_id": "applied:n2__prediction_response_3b618bf02ea297463faf6b5f__n1",
+        "relation": "prediction_response_3b618bf02ea297463faf6b5f"
+      },
+      {
+        "source": "n2",
+        "target": "n3",
+        "label": "load active model version by id request",
+        "technology": "Runtime flow",
+        "sync": "sync",
+        "description": "load active model version by id request",
+        "flow": "runtime",
+        "edge_id": "applied:n2__load_active_model_version_by_id_request_4d6ba093437fe4708139f985__n3",
+        "relation": "load_active_model_version_by_id_request_4d6ba093437fe4708139f985"
+      },
+      {
+        "source": "n3",
+        "target": "n2",
+        "label": "versioned model artifact response",
+        "technology": "Runtime flow",
+        "sync": "sync",
+        "description": "versioned model artifact response",
+        "flow": "runtime",
+        "edge_id": "applied:n3__versioned_model_artifact_response_e3e9c07c460bfa9296fb6b87__n2",
+        "relation": "versioned_model_artifact_response_e3e9c07c460bfa9296fb6b87"
+      },
+      {
+        "source": "n2",
+        "target": "n4",
+        "label": "emit request prediction latency and error logs",
+        "technology": "Feedback flow",
+        "sync": "async",
+        "description": "emit request prediction latency and error logs",
+        "flow": "feedback",
+        "edge_id": "applied:n2__emit_request_prediction_latency_and_err_c50458370f63b6c5f22f3588__n4",
+        "relation": "emit_request_prediction_latency_and_err_c50458370f63b6c5f22f3588"
+      },
+      {
+        "source": "n5",
+        "target": "n4",
+        "label": "serving log read request",
+        "technology": "Feedback flow",
+        "sync": "sync",
+        "description": "serving log read request",
+        "flow": "feedback",
+        "edge_id": "applied:n5__serving_log_read_request_df989101636ecbe58fa9872b__n4",
+        "relation": "serving_log_read_request_df989101636ecbe58fa9872b"
+      },
+      {
+        "source": "n4",
+        "target": "n5",
+        "label": "serving log records response",
+        "technology": "Feedback flow",
+        "sync": "sync",
+        "description": "serving log records response",
+        "flow": "feedback",
+        "edge_id": "applied:n4__serving_log_records_response_9c873280177a9e82e5345d86__n5",
+        "relation": "serving_log_records_response_9c873280177a9e82e5345d86"
+      },
+      {
+        "source": "n5",
+        "target": "n6",
+        "label": "write aggregated metrics and alert history",
+        "technology": "Feedback flow",
+        "sync": "async",
+        "description": "write aggregated metrics and alert history",
+        "flow": "feedback",
+        "edge_id": "applied:n5__write_aggregated_metrics_and_alert_hist_30021329a87e8cb829722db9__n6",
+        "relation": "write_aggregated_metrics_and_alert_hist_30021329a87e8cb829722db9"
+      },
+      {
+        "source": "n5",
+        "target": "n7",
+        "label": "drift baseline lookup request",
+        "technology": "Feedback flow",
+        "sync": "sync",
+        "description": "drift baseline lookup request",
+        "flow": "feedback",
+        "edge_id": "applied:n5__drift_baseline_lookup_request_f3153dc5de60c752ed2026e1__n7",
+        "relation": "drift_baseline_lookup_request_f3153dc5de60c752ed2026e1"
+      }
+    ],
+    "sequence": [
+      {
+        "step": 1,
+        "nodes": [
+          "n1"
+        ],
+        "description": "Primary flow stage 1"
+      },
+      {
+        "step": 2,
+        "nodes": [
+          "n2"
+        ],
+        "description": "Primary flow stage 2"
+      },
+      {
+        "step": 3,
+        "nodes": [
+          "n3"
+        ],
+        "description": "Primary flow stage 3"
+      }
+    ],
+    "design_origin": "applied",
+    "resolved_complexity": "prototype",
+    "assumptions": [
+      "Goal is a prototype stack that serves model predictions to a client application and observes serving health and quality via a component named Serving Monitor.",
+      "Requests are synchronous: the client calls the serving endpoint and waits for a prediction response.",
+      "Models are pre-trained artifacts stored in a registry; no training or fine-tuning is in scope.",
+      "Serving Monitor is read-only: it observes logs and metrics and surfaces dashboards and alerts, but does not mutate models, prompts, rankings, or external systems.",
+      "'Production' in the request is superseded by the selected prototype maturity; no production-only controls are added."
+    ],
+    "groups": [
+      {
+        "id": "group_runtime",
+        "label": "Runtime",
+        "kind": "runtime",
+        "nodeIds": [
+          "n1",
+          "n2"
+        ]
+      },
+      {
+        "id": "group_data",
+        "label": "Data",
+        "kind": "data",
+        "nodeIds": [
+          "n3"
+        ]
+      },
+      {
+        "id": "group_operations",
+        "label": "Operations",
+        "kind": "operations",
+        "nodeIds": [
+          "n4",
+          "n5",
+          "n6",
+          "n7"
+        ]
+      }
+    ],
+    "version": "1a8f9da7-6a90-4c42-8a7f-7b0cdfc15398"
+  },
+  "initial_connection_delta": {
+    "additions": [
+      {
+        "flow": 402,
+        "label": "drift baseline lookup request",
+        "source_index": 4,
+        "sync": 500,
+        "target_index": 6
+      }
+    ],
+    "updates": {}
+  },
+  "connection_review": {
+    "approved": false,
+    "checked_rules": [
+      "runtime_completeness",
+      "safe_action_boundary",
+      "edge_semantics",
+      "gate_preserving_reuse"
+    ],
+    "findings": [
+      {
+        "rule_code": "edge_semantics",
+        "reason": "The new edge n5->n7 'drift baseline lookup request' has no paired response contract returning baseline data to Serving Monitor, unlike the analogous n5<->n4 log read/response pair; the directed edge is incomplete.",
+        "record_indexes": [
+          8
+        ]
+      },
+      {
+        "rule_code": "runtime_completeness",
+        "reason": "Serving Monitor's declared responsibility to compute drift metrics depends on baseline data from the Drift Baseline Store, but no response edge delivers that baseline data back to Serving Monitor, leaving the drift computation outcome unreachable.",
+        "record_indexes": [
+          8
+        ]
+      }
+    ]
+  },
+  "correction_delta": {
+    "additions": [
+      {
+        "flow": 402,
+        "label": "drift baseline records response",
+        "source_index": 6,
+        "sync": 500,
+        "target_index": 4
+      }
+    ],
+    "updates": {}
+  }
+}

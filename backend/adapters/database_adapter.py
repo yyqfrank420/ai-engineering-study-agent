@@ -47,7 +47,8 @@ POSTGRES_REQUIRED_POLICIES = {
 }
 
 POSTGRES_REQUIRED_COLUMNS = {
-    "chat_messages": {"client_request_id"},
+    "chat_threads": {"graph_contract"},
+    "chat_messages": {"client_request_id", "message_sequence"},
     "rate_limit_events": {
         "key_hash",
         "event_type",
@@ -58,9 +59,25 @@ POSTGRES_REQUIRED_COLUMNS = {
 
 POSTGRES_REQUIRED_INDEXES = {
     "uq_chat_messages_client_turn_role",
+    "uq_chat_messages_sequence",
+    "idx_chat_messages_thread_sequence",
     "idx_rate_limit_key_type_expiry",
     "idx_rate_limit_expiry",
 }
+
+
+_SQLITE_CHAT_MESSAGES_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS chat_messages (
+        message_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE,
+        thread_id TEXT NOT NULL REFERENCES chat_threads(id),
+        user_id TEXT NOT NULL REFERENCES profiles(id),
+        role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+        content TEXT NOT NULL,
+        client_request_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+"""
 
 
 def init_db() -> None:
@@ -85,25 +102,14 @@ def init_db() -> None:
                 user_id TEXT NOT NULL REFERENCES profiles(id),
                 title TEXT NOT NULL DEFAULT 'New chat',
                 graph_data TEXT,
+                graph_contract TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now')),
                 last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
-            CREATE TABLE IF NOT EXISTS chat_messages (
-                id TEXT PRIMARY KEY,
-                thread_id TEXT NOT NULL REFERENCES chat_threads(id),
-                user_id TEXT NOT NULL REFERENCES profiles(id),
-                role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
-                content TEXT NOT NULL,
-                client_request_id TEXT,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-
             CREATE INDEX IF NOT EXISTS idx_chat_threads_user_last_seen
                 ON chat_threads(user_id, last_seen_at);
-            CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_created
-                ON chat_messages(thread_id, created_at);
 
             CREATE TABLE IF NOT EXISTS request_events (
                 id TEXT PRIMARY KEY,
@@ -236,11 +242,42 @@ def init_db() -> None:
                 ON rate_limit_events(expires_at_epoch);
             """
         )
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(_SQLITE_CHAT_MESSAGES_SCHEMA)
         message_columns = {
-            row["name"] for row in conn.execute("PRAGMA table_info(chat_messages)").fetchall()
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(chat_messages)").fetchall()
         }
+        thread_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(chat_threads)").fetchall()
+        }
+        if "graph_contract" not in thread_columns:
+            conn.execute("ALTER TABLE chat_threads ADD COLUMN graph_contract TEXT")
         if "client_request_id" not in message_columns:
             conn.execute("ALTER TABLE chat_messages ADD COLUMN client_request_id TEXT")
+        if "message_sequence" not in message_columns:
+            # SQLite rowid retains the local insertion order even when timestamps tie.
+            conn.execute("ALTER TABLE chat_messages RENAME TO chat_messages_legacy")
+            conn.execute(_SQLITE_CHAT_MESSAGES_SCHEMA)
+            conn.execute(
+                """
+                INSERT INTO chat_messages (
+                    id, thread_id, user_id, role, content, client_request_id, created_at
+                )
+                SELECT id, thread_id, user_id, role, content, client_request_id, created_at
+                FROM chat_messages_legacy ORDER BY rowid
+                """
+            )
+            conn.execute("DROP TABLE chat_messages_legacy")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_created "
+            "ON chat_messages(thread_id, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_sequence "
+            "ON chat_messages(thread_id, message_sequence)"
+        )
         conn.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_messages_client_turn_role

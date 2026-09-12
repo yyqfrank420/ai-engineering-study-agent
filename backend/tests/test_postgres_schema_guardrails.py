@@ -130,8 +130,11 @@ def test_init_db_in_postgres_mode_fails_when_durable_boundaries_are_missing(monk
     message = str(exc_info.value)
     assert "missing columns" in message
     assert "chat_messages.client_request_id" in message
+    assert "chat_messages.message_sequence" in message
     assert "missing indexes" in message
     assert "uq_chat_messages_client_turn_role" in message
+    assert "uq_chat_messages_sequence" in message
+    assert "idx_chat_messages_thread_sequence" in message
 
 
 def test_postgres_schema_error_points_to_alembic(monkeypatch):

@@ -1,4 +1,4 @@
-"""Validate and derive browser evidence for selective semantic replay."""
+"""Validate browser evidence for calibration and selective semantic replay."""
 
 from __future__ import annotations
 
@@ -21,7 +21,9 @@ ARTIFACT_NAME_PATTERN = re.compile(
 SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 IMAGE_DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
-GRAPH_OPERATION_PREFIXES = ("graph_", "architecture_", "node_selected_")
+GRAPH_OPERATION_PREFIXES = (
+    "graph_", "staged_graph_", "architecture_", "node_selected_"
+)
 
 
 class EvidenceReplayError(ValueError):
@@ -131,6 +133,80 @@ def _raw_items_by_id(
     if len(case_ids) != len(set(case_ids)):
         raise EvidenceReplayError(f"source capture {label} contains duplicate case IDs")
     return items, case_ids, dict(zip(case_ids, items, strict=True))
+
+
+def validate_calibration_capture(
+    capture: Mapping[str, Any], corpus: Mapping[str, Any]
+) -> None:
+    """Accept complete observations, including product failures, for human calibration.
+
+    Callers authenticate the original capture bytes and source commit separately.
+    Source provider accounting does not determine whether an answer is reviewable.
+    """
+    if (
+        capture.get("format_version") != 1
+        or capture.get("kind") != "browser_capture"
+        or capture.get("suite") != "full"
+        or capture.get("status") != "complete"
+    ):
+        raise EvidenceReplayError("calibration requires a complete full browser capture")
+    for key in ("corpus_version", "release_identity"):
+        if not corpus.get(key) or capture.get(key) != corpus[key]:
+            raise EvidenceReplayError(f"calibration capture {key} does not match")
+    cases, expected_ids, _ = _raw_items_by_id(corpus, "cases", "corpus cases")
+    results, actual_ids, _ = _raw_items_by_id(capture, "results", "results")
+    states, state_ids, _ = _raw_items_by_id(capture, "case_states", "case states")
+    if not expected_ids or actual_ids != expected_ids or state_ids != expected_ids:
+        raise EvidenceReplayError("calibration requires the exact ordered full corpus")
+    if (capture.get("dashboard_smoke") or {}).get("passed") is not True:
+        raise EvidenceReplayError("calibration browser dashboard smoke did not pass")
+    for case, result, state in zip(cases, results, states, strict=True):
+        case_id = case["id"]
+        if result.get("execution_state") != "completed" or state.get("state") != "completed":
+            raise EvidenceReplayError(f"calibration case {case_id} did not complete")
+        failures = result.get("deterministic_failures")
+        details = result.get("failure_details")
+        if (
+            type(result.get("passed")) is not bool
+            or not isinstance(failures, list)
+            or any(not isinstance(failure, str) or not failure for failure in failures)
+            or not isinstance(details, list)
+            or any(not isinstance(detail, Mapping) or detail.get("kind") != "quality" for detail in details)
+            or result["passed"] != (not failures)
+            or bool(failures) != bool(details)
+        ):
+            raise EvidenceReplayError(f"calibration case {case_id} has invalid or infrastructure failure evidence")
+        turns = result.get("turns")
+        steps = case.get("steps")
+        events = result.get("events")
+        if (
+            not isinstance(steps, list) or not steps
+            or not isinstance(turns, list) or len(turns) != len(steps)
+            or not isinstance(events, list)
+            or any(not isinstance(event, Mapping) for event in events)
+        ):
+            raise EvidenceReplayError(f"calibration case {case_id} has incomplete turn evidence")
+        completed_turns = {
+            event.get("eval_turn") for event in events
+            if event.get("type") == "done" and type(event.get("eval_turn")) is int
+        }
+        if completed_turns != set(range(1, len(steps) + 1)):
+            raise EvidenceReplayError(f"calibration case {case_id} is missing terminal turn events")
+        for index, (turn, step) in enumerate(zip(turns, steps, strict=True), start=1):
+            if (
+                not isinstance(turn, Mapping) or not isinstance(step, Mapping)
+                or type(turn.get("turn")) is not int or turn["turn"] != index
+                or turn.get("prompt") != step.get("prompt")
+                or not isinstance(turn.get("answer"), str) or not turn["answer"].strip()
+            ):
+                raise EvidenceReplayError(f"calibration case {case_id} turn {index} has missing or mismatched evidence")
+        for field in ("screenshot", "trace"):
+            reference = result.get(field)
+            if (
+                not isinstance(reference, str) or not reference
+                or Path(reference).is_absolute() or ".." in Path(reference).parts
+            ):
+                raise EvidenceReplayError(f"calibration case {case_id} has invalid {field} evidence")
 
 
 def _collect_thread_ids(value: Any) -> set[str]:

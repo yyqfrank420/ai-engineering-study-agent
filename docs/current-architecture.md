@@ -1,6 +1,6 @@
 # Current Architecture
 
-Last updated: 2026-08-07
+Last updated: 2026-09-12
 
 This is the current runtime contract for the production-quality demo.
 
@@ -12,8 +12,8 @@ This is the current runtime contract for the production-quality demo.
   - private candidate rendering, typed progress events, and progressive explanation cards
 - `backend/`
   - FastAPI
-  - request-scoped LangGraph orchestration
-  - sequential applied-design enrichment and challenge roles, plus a screenshot-aware critic with one bounded semantic revision
+  - LangGraph routing with staged applied graph creation and editing by default
+  - server-owned graph contracts, progressive previews, and deterministic maturity and render checks
   - Supabase-backed user/thread/message persistence
   - FAISS-backed book retrieval loaded by a non-blocking readiness task
 - `ingestion/`
@@ -31,38 +31,76 @@ This is the current runtime contract for the production-quality demo.
    product UI enables web grounding by default while retaining an explicit book-only control. Their
    results are combined with the stable review frame covering platform boundaries, model lifecycle,
    data/memory, evaluation, safety, idempotent writes, latency/cost, reliability, and deployment.
-5. The Architect enriches a terse seed into one explicit product brief: actors, authoritative inputs,
-   controlled decisions/actions, outputs, measures, assumptions, evidence provenance, and runtime.
-   The Challenger then audits that exact interpretation before the graph worker integrates it into
-   domain responsibilities and directional flows.
-6. Deterministic architecture checks run first. A surviving candidate is sent as `graph_candidate`
-   and rendered off-screen at the user's real graph-pane dimensions. The browser returns a bounded,
-   version-checked screenshot and layout report over idempotent WebSocket chunks.
-7. The critic judges four disjoint artifact layers: components, connections, composition, and the
-   rendered artifact. Each layer has its own hard pass gate. Sonnet returns a fixed scorecard of
-   rubric codes and record indexes; the server expands them into exact selectors and read-only
-   context. A local semantic rejection can receive at most two successful Kimi K3 high typed repair
-   rounds against the exact failed records, including non-adjacent records in the connected
-   candidate. Uncited records stay locked.
-   Component changes reopen component, connection, and composition review. Edge changes reopen
-   connection and composition review. Composition-only changes reopen composition review. An invalid
-   patch may receive one error-informed critic-contract correction before the patch is retried. A
-   graph-caused render failure can share the patch when an editable layer identifies the cause. A
-   render-only failure, global design failure, or failed post-patch review suppresses the diagram.
-   The entire turn has a four-call Sonnet critic ceiling, including schema corrections.
-   Published user refinements use the same typed patch boundary. The model chooses graph
-   size, groups, and runtime sequence from the design. Node and edge safety ceilings protect
-   persistence and rendering, stay out of the prompt, and reject malformed output without deleting
-   authored responsibilities or paths. Browser capture or geometry failure stops publication.
-8. The accepted graph remains private while one Opus 5 low-effort call completes its explanation cards. The
-   server then emits `graph_data` followed by the buffered cards, so an unfinished walkthrough never
-   reveals a new diagram. Pause can still hold card reveal in the browser without another model call.
-9. The transport persists the completed turn before emitting `done`.
+5. `GRAPH_PIPELINE_MODE=staged` is the default for applied create and edit requests.
+   `legacy` remains an explicit rollback. Concept diagrams retain their existing path.
+   Each request uses one graph pipeline. Steering or cancellation ends the request-scoped state
+   machine before a replacement request begins.
+6. Kimi K3 at high effort produces a component wire, then a connection wire. The component wire
+   contains the root index, title, assumptions, capabilities, and each component's label, type,
+   responsibility, group label, group kind, and primary-flow membership. It does not contain a
+   composition layer. Scoped edits instead emit additions and permitted field updates in
+   server-selected slots. The server assembles complete candidates from immutable prior records
+   and authorized removals. Both stages receive the same applicable criteria as their reviewers.
+7. The server owns IDs, group records, breadth-first sequence derivation, projection, graph
+   versions, selected maturity, exact edit admission, validation, state transitions, and
+   persistence. The component-only candidate has no edges. Its render gate emits a reversible
+   preview before one Sonnet medium component gate call. The full candidate follows the same render,
+   reversible-preview, then connection-gate order. These previews remain nonauthoritative until
+   semantic acceptance and persistence. One malformed gate result ends the request. Each layer has at most
+   two candidates. A connection retry cannot reopen an accepted component layer.
+   Primary membership selects the main walkthrough. Reachability traverses all accepted directed
+   runtime and control contracts, including non-primary transit components. Feedback and deployment
+   edges cannot establish reachability. The server groups selected nodes by shortest distance and
+   numbers the emitted stages consecutively; this walkthrough does not claim causal execution order.
+   Initial and corrected connections use the same structural checks. Control behavior is reviewed
+   against accepted responsibilities.
+8. Prototype gates exclude production criteria. Production semantic requirements derive from the
+   component wire's capabilities. There is no Opus root architecture pass and no final full-model
+   gate. Opus low writes the explanation after both gates pass. Deterministic explanation fallback
+   keeps an accepted graph publishable when the explanation call fails.
+   Both gates return only approval, checked rules, and typed findings. Model-authored proof tables
+   and route witnesses are removed. Shared criteria require necessary interactions across component
+   boundaries; compatible internal operations belong in component responsibilities. Internal ordering
+   is checked before those responsibilities freeze. Retryable internal writes retain idempotence and
+   reconciliation requirements even when the design has no external business mutations.
+9. The transport atomically persists graph data and its server-only contract before emitting
+   authoritative `graph_data` and `done`. `auto` edits inherit stored maturity. A legacy graph with
+   no stored contract defaults to prototype. A bounded edit that selects a different maturity
+   fails before model calls with instructions to retain the current maturity or explicitly rebuild.
+   Scoped review includes the prior objective, exact delta, and affected dependencies. Prior approval
+   is trusted only when the stored graph fingerprint, both reviewer identities, and global context
+   still match. Changed maturity, capabilities, assumptions, title, or root require full review.
+   Both gates still inspect current records against their applicable semantic requirements.
+   Reviewer identities bind prompt content, model settings, rubric definitions, and response schema.
+   Scoped projection preserves authored edge presentation and sequence descriptions. Authorized node
+   deletion removes only that node's sequence memberships and incident edges, then renumbers steps.
+   Only an explicit graph rebuild can authorize restaging at another depth. Scoped edits preserve
+   locked assumptions and prior composition records. Capability changes are reviewed against the
+   complete candidate and determine subsequent connection requirements. Adding one responsibility
+   with an unspecified attachment permits one or two directed edges between that responsibility and
+   the named existing anchor. It does not permit unrelated endpoints or baseline changes. Explicit
+   connection counts and directions retain exact authority.
+   The prior durable graph is restored after failure, retry exhaustion, steering, stop, timeout, or
+   persistence failure. The 90-second prototype first-preview target is an SLO. Generation calls
+   reserve 130 seconds, gates reserve 55 seconds, and saved time can extend a generation call to
+   240 seconds while preserving downstream budgets. The request ceiling includes orchestration
+   and private renders.
 
 The model never writes SVG. Its typed graph JSON is an intermediate representation with named
 responsibility zones, ordered sequence steps, and runtime/control/feedback/deployment edge classes.
 The D3 renderer deterministically compiles that structure into responsive branded SVG, preserving
 interaction, accessibility, layout evaluation, and compatibility with previously stored graphs.
+
+The server sends the authoritative 1440 by 960 CSS-pixel evaluation viewport and 11 CSS-pixel
+post-fit node-title floor with each private candidate. The renderer chooses horizontal or ranked vertical placement from the
+resulting fit scale. A rank-ordered compact layout covers the full 60-node backend safety ceiling
+when either ordinary plan would be unreadable. Bottom-lane height is derived from its densest
+column. The browser still measures the real SVG. The server rejects overlapping node cards or
+responsibility-zone boundaries, clipped nodes or edges, missing required labels, and unreadable
+node titles. The non-browser staging client consumes the same criteria from the candidate event,
+and its compact fallback covers the same 60-node ceiling. The browser and staging clients reject a
+candidate that omits or changes the fixed criteria. The capacity correction passes offline tests and a local Chromium replay of
+paid diagnostic `31825436257`; that paid workflow did not emit protected publication success.
 
 FastAPI becomes available after database initialisation, then loads the FAISS artifacts and index in
 a background thread. `GET /api/prepare` reports the current server-owned milestone and completed/total
@@ -78,12 +116,24 @@ capture use shared transactional storage. Rate-limit identifiers are HMAC-derive
 persistence, so Cloud Run scale-out neither resets the limits nor stores raw emails/IPs in the
 limiter table.
 
-The applied-design path gives each role one explicit owner. Opus 5 xhigh writes the primary
-architecture brief. Sonnet 5 medium reconstructs the design from the request and evidence, then
-audits the primary plan. Kimi K3 low creates the initial graph topology. Kimi K3 high applies typed
-patches to local critic failures and published user refinements. Sonnet 5 medium reviews every graph
-candidate and revision. Opus 5 low writes the explanation stream. Renderer-only failures add no
-model calls. Retrieval and the standing checklist do not add model calls.
+The staged path gives each active role one explicit owner. Kimi K3 high authors bounded component
+and connection wires. Sonnet 5 medium gates each candidate once. The server owns graph mutation,
+validation, maturity, and all state transitions. Opus 5 low writes the explanation stream and has a
+deterministic fallback. The no-retry path makes five application model calls. The bounded maximum
+is nine. Renderer infrastructure failures add no model calls. Retrieval and the standing checklist
+do not add model calls.
+
+Text answers use one short scope and evidence contract. UI depth changes detail within the user's
+task; it does not turn a memory, summary, or explanation request into a system design. Prior assistant
+proposals become requirements only when the user adopts them. Graph publication instructions apply
+only to graph answers. Internal evaluation captures the exact book and research strings passed to
+synthesis, including empty context, under the prompt release identity.
+
+The September 12 simplification keeps two authoring stages because a complete graph can be a large
+output. Component review catches responsibility defects while that stage can repair them; connection
+review owns interactions after components freeze. The remaining limitation is explicit: connection
+correction cannot redesign components. A rejected graph stays unpublished. This bounded pipeline
+still makes five calls without correction; prompt simplification does not establish lower live latency.
 
 During steps 4-7 the client may send `steer`. The server cancels the active workflow, emits
 `response_reset`, and restarts with the steering correction folded into the same turn. `stop`
@@ -103,9 +153,13 @@ The distinction is orchestration versus concurrency, not framework versus no fra
 - Durable LangGraph checkpointing is intentionally not enabled yet: live callbacks, tasks, and
   tool bindings are request context rather than persistent graph data. Moving those handles into
   runtime context is the prerequisite for a database checkpointer.
+- `GRAPH_PIPELINE_MODE=staged` is the default for applied create and edit requests.
+  Protected and production deployments explicitly use the versioned backend default.
+  Manual scheduled evaluations may select either mode for diagnostics or full-corpus review.
+  The legacy whole-graph repair loop remains an explicit rollback and cannot mix writes with a staged request.
 - The live staging harness also uses the WebSocket protocol. It submits a bounded contract render
   so deployment model evaluations cannot bypass the diagram gate; the product browser remains the
-  authoritative evaluator of the actual D3 canvas at the user's viewport size.
+  authoritative evaluator of the actual D3 canvas at the fixed server-contract viewport.
 
 ## Primary Code Paths
 

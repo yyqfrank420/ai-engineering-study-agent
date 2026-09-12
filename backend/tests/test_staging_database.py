@@ -40,6 +40,46 @@ def test_db_schema_configuration_is_allowlisted():
         Settings(db_schema="customer_supplied")
 
 
+def test_graph_pipeline_mode_defaults_to_staged_with_explicit_legacy_rollback(
+    monkeypatch,
+):
+    monkeypatch.delenv("GRAPH_PIPELINE_MODE", raising=False)
+    assert Settings(_env_file=None).graph_pipeline_mode == "staged"
+    assert (
+        Settings(_env_file=None, graph_pipeline_mode="legacy").graph_pipeline_mode
+        == "legacy"
+    )
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, graph_pipeline_mode="unsupported")
+
+
+def test_staged_pipeline_timeouts_have_safe_defaults():
+    configured = Settings(_env_file=None)
+
+    assert configured.staged_component_timeout_s == 130
+    assert configured.staged_connection_timeout_s == 130
+    assert configured.staged_gate_timeout_s == 55
+
+
+def test_cloud_run_rejects_a_staged_path_that_exceeds_the_terminal_window():
+    configured = Settings(
+        _env_file=None,
+        supabase_db_url="postgresql://example",
+        anthropic_api_key="anthropic-key",
+        moonshot_api_key="moonshot-key",
+        graph_builder_model="kimi-k3",
+        supabase_url="https://project.supabase.co",
+        supabase_anon_key="anon-key",
+        supabase_jwt_issuer="https://project.supabase.co/auth/v1",
+        turnstile_secret_key="turnstile-key",
+        frontend_origin="https://example.com",
+        staged_component_timeout_s=139,
+    )
+
+    with pytest.raises(RuntimeError, match="complete staged pipeline path"):
+        configured.validate_for_cloud_run()
+
+
 def test_staging_reset_rejects_every_other_schema():
     assert require_staging_schema("staging") == "staging"
     for unsafe in (None, "", "public", "other", "staging; drop schema public"):

@@ -127,6 +127,18 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - name: Install judge dependencies only
         run: pip install -r backend/requirements.txt
+      - name: Validate the complete human approval
+        env:
+          SOURCE_RUN_ID: ${{ steps.evidence.outputs.source_run_id }}
+        run: |
+          PYTHONPATH=backend python - <<'PY'
+          import os
+          from eval.quality_corpus import load_corpus
+
+          corpus = load_corpus(require_approved=True)
+          if any(case.approval.review_run_id != os.environ["SOURCE_RUN_ID"] for case in corpus.cases):
+              raise SystemExit("every case must have human review from the approved evidence run")
+          PY
       - uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -153,14 +165,24 @@ jobs:
             echo "GCS evidence unavailable; authenticating the approved GitHub Actions artifact."
             rm -f artifacts/calibration/browser-results.json artifacts/calibration/promotion.json
             source_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")"
-            [ "$(printf '%s' "$source_json" | jq -r .head_sha)" = "$SOURCE_COMMIT_SHA" ] \
-              || { echo "Source run SHA mismatch." >&2; exit 1; }
-            [ "$(printf '%s' "$source_json" | jq -r .head_branch)" = main ] \
-              || { echo "Reviewed evidence must come from main." >&2; exit 1; }
-            [ "$(printf '%s' "$source_json" | jq -r .conclusion)" = success ] \
-              || { echo "Source run was not successful." >&2; exit 1; }
-            [ "$(printf '%s' "$source_json" | jq -r .path)" = .github/workflows/scheduled-eval.yml ] \
-              || { echo "Source is not a scheduled evaluation." >&2; exit 1; }
+            SOURCE_METADATA="$source_json" python - <<'PY_SOURCE'
+          import json
+          import os
+
+          source = json.loads(os.environ["SOURCE_METADATA"])
+          repository = os.environ["GITHUB_REPOSITORY"]
+          if (
+              str(source.get("id")) != os.environ["SOURCE_RUN_ID"]
+              or source.get("head_sha") != os.environ["SOURCE_COMMIT_SHA"]
+              or (source.get("repository") or {}).get("full_name") != repository
+              or (source.get("head_repository") or {}).get("full_name") != repository
+              or source.get("path") != ".github/workflows/scheduled-eval.yml"
+              or source.get("event") not in {"workflow_dispatch", "schedule"}
+              or source.get("status") != "completed"
+              or source.get("conclusion") not in {"success", "failure"}
+          ):
+              raise SystemExit("source run is not a completed same-repository scheduled evaluation at the approved identity")
+          PY_SOURCE
             rm -rf artifacts/source
             mkdir -p artifacts/source
             if ! gh run download "$SOURCE_RUN_ID" \
@@ -208,18 +230,9 @@ jobs:
               raise SystemExit("source context run does not match the approved identity")
           if context.get("commit_sha") != os.environ["SOURCE_COMMIT_SHA"]:
               raise SystemExit("source context commit does not match the approved identity")
-          if capture.get("kind") != "browser_capture" or capture.get("suite") != "full":
-              raise SystemExit("source is not a full browser capture")
-          if capture.get("status") not in {None, "complete"}:
-              raise SystemExit("source browser capture did not complete")
-          expected_ids = [case["id"] for case in current["cases"]]
-          results = capture.get("results") or []
-          actual_ids = [item.get("id") for item in results]
-          failures = [item.get("id") for item in results if not item.get("passed")]
-          if actual_ids != expected_ids or failures:
-              raise SystemExit(f"source browser evidence is incomplete, reordered, duplicated, or failed: {failures}")
-          if capture.get("corpus_version") != current["corpus_version"]:
-              raise SystemExit("source browser evidence has the wrong corpus version")
+          from backend.eval.evidence_replay import validate_calibration_capture
+
+          validate_calibration_capture(capture, current)
           if capture.get("corpus_sha256") not in {corpus_sha, legacy_digest(source_corpus)}:
               raise SystemExit("source capture corpus digest is not valid for its source revision")
           evidence_sha = hashlib.sha256(capture_path.read_bytes()).hexdigest()
@@ -260,6 +273,10 @@ jobs:
               if str(promotion.get(key) or "") != value:
                   raise SystemExit(f"promotion manifest {key} mismatch")
           capture = json.loads(Path("artifacts/calibration/browser-results.json").read_text(encoding="utf-8"))
+          current = json.loads(Path("backend/eval/corpus/v1/cases.json").read_text(encoding="utf-8"))
+          from backend.eval.evidence_replay import validate_calibration_capture
+
+          validate_calibration_capture(capture, current)
           capture["corpus_sha256"] = expected["corpus_sha256"]
           Path("artifacts/calibration/browser-results-replay.json").write_text(
               json.dumps(capture, indent=2, ensure_ascii=False) + "\n",

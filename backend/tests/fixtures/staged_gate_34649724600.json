@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "evaluation_run_id": "34649724600-1",
+  "stage": "components",
+  "resolved_maturity": "prototype",
+  "candidate_record_count": 9,
+  "finish_reason": "end_turn",
+  "response": {
+    "approved": false,
+    "checked_rules": [
+      "domain_specificity",
+      "objective_fidelity",
+      "selected_depth",
+      "succinctness",
+      "mece_scope",
+      "brief_coverage",
+      "capability_classification"
+    ],
+    "findings": [
+      {
+        "rule_code": "mece_scope",
+        "reason": "Serving Log Explorer (n9) is required by the edit contract to connect only to Metrics Monitor (n6), but its stated responsibility is to query the Serving Log Store (n5) directly for individual request/output/error/latency records. With only one new edge permitted and it anchored at n6, the component's core responsibility of querying stored logs has no valid connection to its actual data source, leaving that responsibility functionally unreachable or duplicating n6's existing telemetry query path to n5 without a clear distinct owner.",
+        "record_indexes": [
+          8
+        ]
+      }
+    ]
+  }
+}

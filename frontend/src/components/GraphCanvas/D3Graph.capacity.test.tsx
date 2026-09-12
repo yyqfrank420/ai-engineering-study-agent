@@ -1,16 +1,24 @@
 import { render, waitFor } from '@testing-library/react';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { GraphData, GraphEdge, GraphNode } from '../../types';
 import { D3Graph } from './D3Graph';
-import { NODE_H, NODE_W } from './graphLayout';
+import { modelServingPaidCandidate } from './__fixtures__/modelServingPaidCandidate';
+import documentProcessingPaidCandidate from './__fixtures__/documentProcessingPaidCandidate.json';
+import {
+  BOTTOM_NODE_GAP,
+  MAX_PUBLISHED_GRAPH_NODES,
+  MIN_PUBLISHED_TITLE_PX,
+  NODE_H,
+  NODE_TITLE_PX,
+  NODE_W,
+} from './graphLayout';
 
 
 const LEGACY_VIEWPORT = { width: 760, height: 500 };
 const DEEP_VIEWPORT = { width: 656, height: 848 };
 const PUBLICATION_VIEWPORT = { width: 1440, height: 960 };
-const NODE_TITLE_PX = 15.36;
-const MIN_PUBLISHED_TITLE_PX = 6;
+const MIN_LEGACY_TITLE_PX = 6;
 let viewport = LEGACY_VIEWPORT;
 
 const originalGetBBox = SVGGraphicsElement.prototype.getBBox;
@@ -274,6 +282,128 @@ function segmentIntersectsNode(
 }
 
 describe('dense production graph rendering', () => {
+  it('places every required label in the captured 30-node document-processing graph', () => {
+    viewport = PUBLICATION_VIEWPORT;
+    const measuredText = vi.spyOn(SVGElement.prototype as SVGGraphicsElement, 'getBBox')
+      .mockImplementation(function(this: SVGElement) {
+        const width = this.textContent === 'ingestion receipt with …'
+          ? 112.8125
+          : (this.textContent?.length ?? 0) * 4.2;
+        return { x: -width / 2, y: -6.421875, width, height: 11 } as DOMRect;
+      });
+    try {
+      const graph = documentProcessingPaidCandidate as unknown as GraphData;
+      expect(graph.nodes).toHaveLength(30);
+      expect(graph.edges).toHaveLength(95);
+      const { container } = render(
+        <D3Graph graphData={graph} minimumTitlePx={11} currentStep={-1} activeNodeIds={new Set()} onNodeClick={() => undefined} />,
+      );
+      const labels = Array.from(container.querySelectorAll<SVGGElement>('g.edge-label[data-overview-required="true"]'));
+      expect(labels).toHaveLength(8);
+      expect(labels.some(label => label.textContent === 'ingestion receipt with …')).toBe(true);
+      const view = parseTransform(container.querySelector('svg > g')!.getAttribute('transform'));
+      const occupied = Array.from(container.querySelectorAll<SVGGElement>('g.node')).map(element => {
+        const point = parsePosition(element.getAttribute('transform'));
+        return { x: point.x - NODE_W / 2 - 14, y: point.y - NODE_H / 2 - 14, width: NODE_W + 28, height: NODE_H + 28 };
+      });
+      for (const label of labels) {
+        expect(label.getAttribute('display'), label.textContent ?? '').not.toBe('none');
+        const point = parsePosition(label.getAttribute('transform'));
+        const rect = label.querySelector('rect')!;
+        const bounds = {
+          x: point.x + Number(rect.getAttribute('x')), y: point.y + Number(rect.getAttribute('y')),
+          width: Number(rect.getAttribute('width')), height: Number(rect.getAttribute('height')),
+        };
+        expect(view.x + bounds.x * view.scale).toBeGreaterThanOrEqual(0);
+        expect(view.y + bounds.y * view.scale).toBeGreaterThanOrEqual(0);
+        expect(view.x + (bounds.x + bounds.width) * view.scale).toBeLessThanOrEqual(viewport.width);
+        expect(view.y + (bounds.y + bounds.height) * view.scale).toBeLessThanOrEqual(viewport.height);
+        for (const other of occupied) {
+          expect(bounds.x + bounds.width < other.x || other.x + other.width < bounds.x
+            || bounds.y + bounds.height < other.y || other.y + other.height < bounds.y).toBe(true);
+        }
+        occupied.push(bounds);
+      }
+    } finally {
+      measuredText.mockRestore();
+    }
+  });
+
+  it('keeps the captured RAG overview labels and entry badges clear of cards', () => {
+    viewport = { width: 724, height: 814 };
+    const measuredText = vi.spyOn(SVGElement.prototype as SVGGraphicsElement, 'getBBox')
+      .mockImplementation(function(this: SVGElement) {
+        // Chromium measures the external ENTRY badge at 25.1 layout pixels.
+        const width = this.textContent === 'ENTRY' ? 25.1 : (this.textContent?.length ?? 0) * 4.2;
+        return { x: -width / 2, y: -6.5, width, height: 11 } as DOMRect;
+      });
+    const nodeIds = ['rag', 'evaluation', 'retrieval', 'agent', 'generation', 'foundation', 'embeddings'];
+    const graph: GraphData = {
+      graph_type: 'concept',
+      title: 'RAG Map',
+      nodes: nodeIds.map(id => node(id, id)),
+      edges: [
+        edge('rag', 'retrieval', 'depends on'),
+        edge('retrieval', 'embeddings', 'depends on'),
+        edge('retrieval', 'generation', 'feeds into'),
+        edge('evaluation', 'foundation', 'evaluates'),
+        edge('evaluation', 'retrieval', 'evaluates'),
+        edge('evaluation', 'generation', 'evaluates'),
+        edge('evaluation', 'agent', 'evaluates'),
+        edge('rag', 'retrieval', 'compares with'),
+        edge('rag', 'embeddings', 'compares with'),
+        edge('rag', 'generation', 'compares with'),
+        edge('generation', 'embeddings', 'compares with'),
+        edge('agent', 'foundation', 'compares with'),
+      ],
+      sequence: nodeIds.slice(0, 6).map((id, index) => ({
+        step: index + 1, nodes: [id], description: id,
+      })),
+    };
+    try {
+      const { container } = render(
+        <D3Graph graphData={graph} currentStep={-1} activeNodeIds={new Set()} onNodeClick={() => undefined} />,
+      );
+      const cards = Array.from(container.querySelectorAll<SVGGElement>('g.node')).map(element => {
+        const position = parsePosition(element.getAttribute('transform'));
+        return { x: position.x - NODE_W / 2, y: position.y - NODE_H / 2, width: NODE_W, height: NODE_H };
+      });
+      const labels = Array.from(container.querySelectorAll<SVGGElement>('g.edge-label[data-overview-required="true"]'));
+      expect(labels.some(label => label.textContent === 'feeds into')).toBe(true);
+      const labelBoxes = labels.map(label => {
+        expect(label.getAttribute('display'), label.textContent ?? '').not.toBe('none');
+        const position = parsePosition(label.getAttribute('transform'));
+        const rect = label.querySelector('rect')!;
+        return {
+          x: position.x + Number(rect.getAttribute('x')),
+          y: position.y + Number(rect.getAttribute('y')),
+          width: Number(rect.getAttribute('width')),
+          height: Number(rect.getAttribute('height')),
+        };
+      });
+      const overlaps = (left: typeof cards[number], right: typeof cards[number]) => (
+        left.x < right.x + right.width && left.x + left.width > right.x
+        && left.y < right.y + right.height && left.y + left.height > right.y
+      );
+      for (const [index, label] of labelBoxes.entries()) {
+        expect(cards.some(card => overlaps(label, card))).toBe(false);
+        expect(labelBoxes.slice(index + 1).some(other => overlaps(label, other))).toBe(false);
+      }
+      const entryBadges = Array.from(container.querySelectorAll<SVGTextElement>('g.node > text'))
+        .filter(text => text.textContent === 'ENTRY');
+      expect(entryBadges.length).toBeGreaterThan(0);
+      for (const badge of entryBadges) {
+        const bounds = badge.getBBox();
+        const left = Number(badge.getAttribute('x')) + bounds.x;
+        // The narrow layout leaves 24 pixels between adjacent cards.
+        expect(left).toBeGreaterThanOrEqual(-NODE_W / 2 - 24);
+        expect(left + bounds.width).toBeLessThanOrEqual(-NODE_W / 2 + 12);
+      }
+    } finally {
+      measuredText.mockRestore();
+    }
+  });
+
   it('renders a realistic 13-node/29-edge control topology at publication readability', () => {
     expect(capacityGraph.nodes).toHaveLength(13);
     expect(capacityGraph.edges).toHaveLength(29);
@@ -302,7 +432,7 @@ describe('dense production graph rendering', () => {
     expect(container.querySelectorAll('text.node-group-label')).toHaveLength(13);
     expect(nodes.every(node => Number(node.getAttribute('opacity')) === 1)).toBe(true);
     expect(paths.every(path => Number(path.getAttribute('opacity')) > 0)).toBe(true);
-    expect(NODE_TITLE_PX * transform.scale).toBeGreaterThanOrEqual(MIN_PUBLISHED_TITLE_PX);
+    expect(NODE_TITLE_PX * transform.scale).toBeGreaterThanOrEqual(MIN_LEGACY_TITLE_PX);
 
     for (const renderedNode of nodes) {
       const position = parsePosition(renderedNode.getAttribute('transform'));
@@ -340,6 +470,339 @@ describe('dense production graph rendering', () => {
     expect(nodeMarkers).toContain('OUTCOME');
   });
 
+  it('keeps the paid model-serving candidate readable, non-overlapping, and in frame', () => {
+    viewport = PUBLICATION_VIEWPORT;
+    expect(modelServingPaidCandidate.nodes).toHaveLength(10);
+    expect(modelServingPaidCandidate.edges).toHaveLength(15);
+
+    const { container } = render(
+      <div style={{ width: viewport.width, height: viewport.height }}>
+        <D3Graph
+          graphData={modelServingPaidCandidate}
+          currentStep={-1}
+          activeNodeIds={new Set<string>()}
+          onNodeClick={() => undefined}
+        />
+      </div>,
+    );
+
+    const transform = parseTransform(
+      container.querySelector('svg > g')?.getAttribute('transform') ?? null,
+    );
+    const renderedNodes = Array.from(container.querySelectorAll<SVGGElement>('g.node'));
+    const paths = Array.from(container.querySelectorAll<SVGPathElement>('path.edge-vis'));
+    const positions = renderedNodes.map(renderedNode => (
+      parsePosition(renderedNode.getAttribute('transform'))
+    ));
+
+    expect(renderedNodes).toHaveLength(10);
+    expect(paths).toHaveLength(15);
+    expect(NODE_TITLE_PX * transform.scale).toBeGreaterThanOrEqual(MIN_PUBLISHED_TITLE_PX);
+
+    for (let left = 0; left < positions.length; left += 1) {
+      for (let right = left + 1; right < positions.length; right += 1) {
+        const horizontalOverlap = Math.abs(positions[left].x - positions[right].x) < NODE_W;
+        const verticalOverlap = Math.abs(positions[left].y - positions[right].y) < NODE_H;
+        expect(horizontalOverlap && verticalOverlap).toBe(false);
+      }
+    }
+
+    for (const position of positions) {
+      expect(transform.x + transform.scale * (position.x - NODE_W / 2)).toBeGreaterThanOrEqual(0);
+      expect(transform.x + transform.scale * (position.x + NODE_W / 2)).toBeLessThanOrEqual(viewport.width);
+      expect(transform.y + transform.scale * (position.y - NODE_H / 2)).toBeGreaterThanOrEqual(0);
+      expect(transform.y + transform.scale * (position.y + NODE_H / 2)).toBeLessThanOrEqual(viewport.height);
+    }
+
+    for (const path of paths) {
+      const points = pathControlPoints(path.getAttribute('d'));
+      expect(points.length).toBeGreaterThanOrEqual(2);
+      for (const point of points) {
+        expect(transform.x + transform.scale * point.x).toBeGreaterThanOrEqual(0);
+        expect(transform.x + transform.scale * point.x).toBeLessThanOrEqual(viewport.width);
+        expect(transform.y + transform.scale * point.y).toBeGreaterThanOrEqual(0);
+        expect(transform.y + transform.scale * point.y).toBeLessThanOrEqual(viewport.height);
+      }
+    }
+  });
+
+  it('keeps horizontal feedback routes outside source and target card interiors', () => {
+    viewport = PUBLICATION_VIEWPORT;
+    const graph: GraphData = {
+      graph_type: 'architecture',
+      design_origin: 'applied',
+      title: 'Serving feedback routes',
+      nodes: ['client', 'api', 'runtime', 'artifacts', 'telemetry', 'monitor', 'console']
+        .map(id => node(id, id)),
+      edges: [
+        edge('client', 'api', 'request'),
+        edge('api', 'client', 'response'),
+        edge('api', 'runtime', 'invoke'),
+        edge('runtime', 'api', 'result'),
+        edge('api', 'artifacts', 'configuration'),
+        edge('artifacts', 'api', 'configuration result'),
+        edge('runtime', 'artifacts', 'model'),
+        edge('artifacts', 'runtime', 'model result'),
+        ...[
+          ['api', 'telemetry'], ['runtime', 'telemetry'],
+          ['monitor', 'telemetry'], ['telemetry', 'monitor'],
+          ['monitor', 'console'], ['monitor', 'client'],
+        ].map(([source, target]) => ({ ...edge(source, target, 'feedback'), flow: 'feedback' as const })),
+      ],
+      sequence: [],
+    };
+    const { container } = render(
+      <D3Graph graphData={graph} currentStep={-1} activeNodeIds={new Set()} onNodeClick={() => undefined} />,
+    );
+    const positions = new Map(
+      Array.from(container.querySelectorAll<SVGGElement>('g.node')).map(element => [
+        element.getAttribute('data-node-id') ?? '',
+        parsePosition(element.getAttribute('transform')),
+      ]),
+    );
+    expect(positions.get('monitor')!.x).toBe(positions.get('console')!.x);
+    expect(positions.get('api')!.x).toBeGreaterThan(positions.get('client')!.x);
+    for (const path of container.querySelectorAll<SVGPathElement>('path.edge-vis')) {
+      const points = pathControlPoints(path.getAttribute('d'));
+      for (const [nodeId, position] of positions) {
+        for (let index = 1; index < points.length; index += 1) {
+          expect(
+            segmentIntersectsNode(points[index - 1], points[index], position),
+            `${path.dataset.sourceId}->${path.dataset.targetId} crosses ${nodeId}`,
+          ).toBe(false);
+        }
+      }
+    }
+  });
+
+  it('routes a horizontal skip edge around unrelated middle-column cards', () => {
+    viewport = PUBLICATION_VIEWPORT;
+    const graph: GraphData = {
+      graph_type: 'architecture',
+      design_origin: 'applied',
+      title: 'Horizontal skip route',
+      nodes: [
+        node('a', 'Source', 'client'),
+        node('b', 'Upper worker'),
+        node('c', 'Middle worker'),
+        node('e', 'Lower worker'),
+        node('d', 'Outcome', 'external'),
+      ],
+      edges: [
+        edge('a', 'b', 'dispatches upper work'),
+        edge('a', 'c', 'dispatches middle work'),
+        edge('a', 'e', 'dispatches lower work'),
+        edge('b', 'd', 'returns upper result'),
+        edge('a', 'd', 'sends direct result'),
+      ],
+      groups: [{
+        id: 'runtime',
+        label: 'Runtime',
+        kind: 'runtime',
+        nodeIds: ['a', 'b', 'c', 'e', 'd'],
+      }],
+      sequence: [],
+    };
+    const { container } = render(
+      <div style={{ width: viewport.width, height: viewport.height }}>
+        <D3Graph
+          graphData={graph}
+          currentStep={-1}
+          activeNodeIds={new Set<string>()}
+          onNodeClick={() => undefined}
+        />
+      </div>,
+    );
+    const positions = new Map(
+      Array.from(container.querySelectorAll<SVGGElement>('g.node')).map(renderedNode => [
+        renderedNode.getAttribute('data-node-id') ?? '',
+        parsePosition(renderedNode.getAttribute('transform')),
+      ]),
+    );
+    const skipPath = container.querySelector<SVGPathElement>(
+      'path.edge-vis[data-source-id="a"][data-target-id="d"]',
+    );
+    const points = pathControlPoints(skipPath?.getAttribute('d') ?? null);
+
+    expect(points.length).toBeGreaterThanOrEqual(6);
+    for (const [nodeId, position] of positions) {
+      if (nodeId === 'a' || nodeId === 'd') continue;
+      for (let index = 1; index < points.length; index += 1) {
+        expect(segmentIntersectsNode(points[index - 1], points[index], position)).toBe(false);
+      }
+    }
+  });
+
+  it('routes adjacent vertical edges without retracing a gutter while retaining skip routes', () => {
+    viewport = DEEP_VIEWPORT;
+    const adjacentPairs = [
+      ['root', 'api'],
+      ['api', 'runtime'],
+      ['runtime', 'artifact'],
+      ['runtime', 'logs'],
+      ['logs', 'monitor'],
+      ['monitor', 'alert'],
+      ['alert', 'dashboard'],
+    ];
+    const graph: GraphData = {
+      graph_type: 'architecture',
+      design_origin: 'applied',
+      title: 'Serving path with telemetry',
+      nodes: ['root', 'api', 'runtime', 'artifact', 'logs', 'monitor', 'alert', 'dashboard']
+        .map(id => node(id, id)),
+      edges: [
+        ...adjacentPairs.map(([source, target]) => edge(source, target, `${source} to ${target}`)),
+        edge('api', 'logs', 'records telemetry'),
+        edge('monitor', 'dashboard', 'returns metrics'),
+        edge('api', 'root', 'returns prediction'),
+      ],
+      groups: [],
+      sequence: [],
+    };
+    const { container } = render(
+      <D3Graph
+        graphData={graph}
+        currentStep={-1}
+        activeNodeIds={new Set<string>()}
+        onNodeClick={() => undefined}
+      />,
+    );
+    const positions = new Map(
+      Array.from(container.querySelectorAll<SVGGElement>('g.node')).map(renderedNode => [
+        renderedNode.getAttribute('data-node-id') ?? '',
+        parsePosition(renderedNode.getAttribute('transform')),
+      ]),
+    );
+
+    for (const [source, target] of adjacentPairs) {
+      const sourcePosition = positions.get(source)!;
+      const targetPosition = positions.get(target)!;
+      expect(targetPosition.y - sourcePosition.y).toBe(NODE_H + 12);
+      const path = container.querySelector<SVGPathElement>(
+        `path.edge-vis[data-source-id="${source}"][data-target-id="${target}"]`,
+      );
+      const points = pathControlPoints(path?.getAttribute('d') ?? null);
+      expect(points.length).toBeGreaterThanOrEqual(2);
+      for (const point of points) {
+        expect(point.x).toBeGreaterThanOrEqual(Math.min(sourcePosition.x, targetPosition.x));
+        expect(point.x).toBeLessThanOrEqual(Math.max(sourcePosition.x, targetPosition.x));
+      }
+      for (const [nodeId, position] of positions) {
+        if (nodeId === source || nodeId === target) continue;
+        for (let index = 1; index < points.length; index += 1) {
+          expect(segmentIntersectsNode(points[index - 1], points[index], position)).toBe(false);
+        }
+      }
+    }
+
+    for (const [source, target] of [['api', 'logs'], ['monitor', 'dashboard'], ['api', 'root']]) {
+      const sourcePosition = positions.get(source)!;
+      const targetPosition = positions.get(target)!;
+      const path = container.querySelector<SVGPathElement>(
+        `path.edge-vis[data-source-id="${source}"][data-target-id="${target}"]`,
+      );
+      const points = pathControlPoints(path?.getAttribute('d') ?? null);
+      expect(points.some(point => (
+        point.x < Math.min(sourcePosition.x, targetPosition.x) - NODE_W / 2
+        || point.x > Math.max(sourcePosition.x, targetPosition.x) + NODE_W / 2
+      ))).toBe(true);
+    }
+  });
+
+  it('routes vertical edges around wrapped cards in an adjacent rank', () => {
+    viewport = PUBLICATION_VIEWPORT;
+    const rankOne = Array.from({ length: 10 }, (_, index) => (
+      node(`worker_${index}`, index === 0 ? 'Anchor worker' : `Worker ${index}`)
+    ));
+    const rankTwo = Array.from({ length: 6 }, (_, index) => (
+      node(`outcome_${index}`, `Outcome ${index}`, 'external')
+    ));
+    const graph: GraphData = {
+      graph_type: 'architecture',
+      design_origin: 'applied',
+      title: 'Wrapped adjacent ranks',
+      nodes: [node('root', 'Root', 'client'), ...rankOne, ...rankTwo],
+      edges: [
+        ...rankOne.map(worker => edge('root', worker.id, `starts ${worker.id}`)),
+        ...rankTwo.map(outcome => edge('worker_0', outcome.id, `produces ${outcome.id}`)),
+      ],
+      groups: [{
+        id: 'runtime',
+        label: 'Runtime',
+        kind: 'runtime',
+        nodeIds: ['root', ...rankOne.map(worker => worker.id), ...rankTwo.map(outcome => outcome.id)],
+      }],
+      sequence: [],
+    };
+    const { container } = render(
+      <div style={{ width: viewport.width, height: viewport.height }}>
+        <D3Graph
+          graphData={graph}
+          currentStep={-1}
+          activeNodeIds={new Set<string>()}
+          onNodeClick={() => undefined}
+        />
+      </div>,
+    );
+    const positions = new Map(
+      Array.from(container.querySelectorAll<SVGGElement>('g.node')).map(renderedNode => [
+        renderedNode.getAttribute('data-node-id') ?? '',
+        parsePosition(renderedNode.getAttribute('transform')),
+      ]),
+    );
+    const path = container.querySelector<SVGPathElement>(
+      'path.edge-vis[data-source-id="worker_0"][data-target-id="outcome_0"]',
+    );
+    const points = pathControlPoints(path?.getAttribute('d') ?? null);
+
+    expect(points.length).toBeGreaterThanOrEqual(6);
+    for (const [nodeId, position] of positions) {
+      if (nodeId === 'worker_0' || nodeId === 'outcome_0') continue;
+      for (let index = 1; index < points.length; index += 1) {
+        expect(segmentIntersectsNode(points[index - 1], points[index], position)).toBe(false);
+      }
+    }
+  });
+
+  it('reserves a full card and gap for bottom nodes in the same column', () => {
+    const graph: GraphData = {
+      graph_type: 'architecture',
+      design_origin: 'applied',
+      title: 'Bottom band boundary',
+      nodes: [
+        node('source', 'Source', 'client'),
+        node('main', 'Main capability'),
+        node('audit_one', 'Audit one', 'datastore', 'bottom'),
+        node('audit_two', 'Audit two', 'datastore', 'bottom'),
+      ],
+      edges: [
+        edge('source', 'main', 'starts work'),
+        edge('source', 'audit_one', 'records one'),
+        edge('source', 'audit_two', 'records two'),
+      ],
+      groups: [],
+      sequence: [],
+    };
+    const { container } = render(
+      <div style={{ width: viewport.width, height: viewport.height }}>
+        <D3Graph
+          graphData={graph}
+          currentStep={-1}
+          activeNodeIds={new Set<string>()}
+          onNodeClick={() => undefined}
+        />
+      </div>,
+    );
+    const bottomPositions = ['audit_one', 'audit_two'].map((nodeId) => {
+      const renderedNode = container.querySelector<SVGGElement>(`g.node[data-node-id="${nodeId}"]`);
+      return parsePosition(renderedNode?.getAttribute('transform') ?? null);
+    });
+
+    expect(bottomPositions[0].x).toBe(bottomPositions[1].x);
+    expect(Math.abs(bottomPositions[0].y - bottomPositions[1].y))
+      .toBeGreaterThanOrEqual(NODE_H + BOTTOM_NODE_GAP);
+  });
+
   it('keeps a 39-node, 65-edge deep architecture readable in the live viewport', () => {
     viewport = DEEP_VIEWPORT;
     const graph = deepCapacityGraph();
@@ -363,7 +826,7 @@ describe('dense production graph rendering', () => {
     expect(nodes).toHaveLength(39);
     expect(paths).toHaveLength(65);
     expect(container.querySelectorAll('text.node-group-label')).toHaveLength(39);
-    expect(NODE_TITLE_PX * transform.scale).toBeGreaterThanOrEqual(MIN_PUBLISHED_TITLE_PX);
+    expect(NODE_TITLE_PX * transform.scale).toBeGreaterThanOrEqual(MIN_LEGACY_TITLE_PX);
     expect(nodes.every(renderedNode => Number(renderedNode.getAttribute('opacity')) === 1)).toBe(true);
     expect(paths.every(path => Boolean(path.getAttribute('d')))).toBe(true);
 
@@ -462,6 +925,91 @@ describe('dense production graph rendering', () => {
       }
     }
 
+  });
+
+  it('renders the 60-node schema boundary through the compact fallback', () => {
+    viewport = PUBLICATION_VIEWPORT;
+    const generated = deepCapacityGraph(
+      Array.from({ length: 10 }, () => [1, 5]).flat(),
+      80,
+    );
+    const bottomIds = new Set(generated.nodes.slice(-6).map(graphNode => graphNode.id));
+    const graph: GraphData = {
+      ...generated,
+      nodes: generated.nodes.map(graphNode => (
+        bottomIds.has(graphNode.id) ? { ...graphNode, lane: 'bottom' as const } : graphNode
+      )),
+    };
+    const { container } = render(
+      <div style={{ width: viewport.width, height: viewport.height }}>
+        <D3Graph
+          graphData={graph}
+          currentStep={-1}
+          activeNodeIds={new Set<string>()}
+          onNodeClick={() => undefined}
+        />
+      </div>,
+    );
+    const transform = parseTransform(
+      container.querySelector('svg > g')?.getAttribute('transform') ?? null,
+    );
+    const renderedNodes = Array.from(container.querySelectorAll<SVGGElement>('g.node'));
+    const positions = new Map(renderedNodes.map(renderedNode => [
+      renderedNode.getAttribute('data-node-id') ?? '',
+      parsePosition(renderedNode.getAttribute('transform')),
+    ]));
+    const paths = Array.from(container.querySelectorAll<SVGPathElement>('path.edge-vis'));
+
+    expect(renderedNodes).toHaveLength(MAX_PUBLISHED_GRAPH_NODES);
+    expect(NODE_TITLE_PX * transform.scale).toBeGreaterThanOrEqual(MIN_PUBLISHED_TITLE_PX);
+    const positionedNodes = [...positions.values()];
+    for (let left = 0; left < positionedNodes.length; left += 1) {
+      for (let right = left + 1; right < positionedNodes.length; right += 1) {
+        const horizontalOverlap = Math.abs(positionedNodes[left].x - positionedNodes[right].x) < NODE_W;
+        const verticalOverlap = Math.abs(positionedNodes[left].y - positionedNodes[right].y) < NODE_H;
+        expect(horizontalOverlap && verticalOverlap).toBe(false);
+      }
+    }
+
+    const mainPositions = graph.nodes
+      .filter(graphNode => graphNode.lane !== 'bottom')
+      .map(graphNode => positions.get(graphNode.id));
+    const bottomPositions = graph.nodes
+      .filter(graphNode => graphNode.lane === 'bottom')
+      .map(graphNode => positions.get(graphNode.id));
+    expect(mainPositions).not.toHaveLength(0);
+    expect(bottomPositions).not.toHaveLength(0);
+    expect(Math.min(...bottomPositions.map(position => position?.y ?? -Infinity)))
+      .toBeGreaterThanOrEqual(
+        Math.max(...mainPositions.map(position => position?.y ?? Infinity))
+          + NODE_H
+          + BOTTOM_NODE_GAP,
+      );
+
+    for (const path of paths) {
+      const points = pathControlPoints(path.getAttribute('d'));
+      for (const point of points) {
+        expect(transform.x + transform.scale * point.x).toBeGreaterThanOrEqual(0);
+        expect(transform.x + transform.scale * point.x).toBeLessThanOrEqual(viewport.width);
+        expect(transform.y + transform.scale * point.y).toBeGreaterThanOrEqual(0);
+        expect(transform.y + transform.scale * point.y).toBeLessThanOrEqual(viewport.height);
+      }
+      const sourceId = path.getAttribute('data-source-id');
+      const targetId = path.getAttribute('data-target-id');
+      for (const [nodeId, position] of positions) {
+        if (nodeId === sourceId || nodeId === targetId) continue;
+        for (let index = 1; index < points.length; index += 1) {
+          expect(segmentIntersectsNode(points[index - 1], points[index], position)).toBe(false);
+        }
+      }
+    }
+
+    const sameRowSkipPath = container.querySelector<SVGPathElement>(
+      'path.edge-vis[data-source-id="level_1_node_1"][data-target-id="level_2_node_5"]',
+    );
+    const sameRowSkipPoints = pathControlPoints(sameRowSkipPath?.getAttribute('d') ?? null);
+    expect(sameRowSkipPoints).toHaveLength(4);
+    expect(sameRowSkipPoints[0].y).not.toBe(sameRowSkipPoints[1].y);
   });
 
   it('keeps required labels inside the frame for a live-shaped multi-track graph', () => {
@@ -578,9 +1126,10 @@ describe('dense production graph rendering', () => {
 
     expect(returnLabel?.getAttribute('data-overview-required')).toBe('true');
     expect(Number(returnLabel?.getAttribute('opacity'))).toBeGreaterThan(0);
-    expect(
-      transform.x + transform.scale * (returnLabelPosition.x - 51),
-    ).toBeGreaterThanOrEqual(0);
+    const returnLabelBackground = returnLabel?.querySelector('rect');
+    expect(transform.x + transform.scale * (
+      returnLabelPosition.x + Number(returnLabelBackground?.getAttribute('x'))
+    )).toBeGreaterThanOrEqual(0);
   });
 
   it('rebinds DOM identities when content changes under the same version', async () => {

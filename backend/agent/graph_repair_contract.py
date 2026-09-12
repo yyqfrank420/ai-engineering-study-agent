@@ -4,6 +4,8 @@ import math
 import re
 from typing import Any
 
+from agent.applied_graph_spec import GRAPH_EDGE_LABEL_CHARS
+
 REPAIR_LAYERS = ("components", "connections", "composition", "render")
 COMPOSITION_FIELDS = ("title", "groups", "sequence", "assumptions")
 REPAIR_LAYER_PATCH_FIELDS = {
@@ -13,6 +15,23 @@ REPAIR_LAYER_PATCH_FIELDS = {
     "render": frozenset(),
 }
 APPROVAL_SCORE = 0.78
+_NODE_LABEL_CHARS = 60
+_NODE_TECHNOLOGY_CHARS = 60
+_NODE_DESCRIPTION_CHARS = 220
+_NODE_TYPES = frozenset(
+    {
+        "client",
+        "service",
+        "datastore",
+        "queue",
+        "gateway",
+        "network",
+        "external",
+        "control",
+        "decision",
+    }
+)
+_NODE_OPERATION_FIELDS = frozenset({"label", "type", "technology", "description"})
 
 _ASSESSMENT_FIELDS = {
     "status",
@@ -29,6 +48,8 @@ _ASSESSMENT_FIELDS = {
     "context_node_ids",
     "addition_count",
     "connection_addition_obligations",
+    "existing_node_operations",
+    "existing_edge_operations",
     "composition_append_counts",
 }
 
@@ -42,6 +63,13 @@ class LocalRepairAdmissionError(ValueError):
         super().__init__(message)
         self.path = path
         self.rule = rule
+
+
+def requires_grouped_component_placement(
+    graph: dict[str, Any], component_additions: int
+) -> bool:
+    """Return whether added components need exact group placement authority."""
+    return component_additions > 0 and bool(graph.get("groups"))
 
 
 def repair_scope_for_layers(layers: dict[str, Any]) -> str:
@@ -192,11 +220,12 @@ def validate_repair_contract(
         )
         layers = {}
 
-    node_ids = {
-        str(node.get("id"))
+    nodes_by_id = {
+        str(node.get("id")): node
         for node in (graph.get("nodes") or [])
         if isinstance(node, dict) and node.get("id")
     }
+    node_ids = set(nodes_by_id)
     edge_selectors = {
         (
             str(edge.get("source") or ""),
@@ -216,6 +245,8 @@ def validate_repair_contract(
     classified_deterministic_ids: list[str] = []
     addition_counts: dict[str, int] = {}
     connection_addition_obligations: list[dict[str, str]] = []
+    existing_node_operations: list[dict[str, Any]] = []
+    existing_edge_operations: list[dict[str, Any]] = []
     composition_append_counts: dict[str, dict[str, int]] = {}
     for layer in REPAIR_LAYERS:
         assessment = layers.get(layer)
@@ -318,6 +349,16 @@ def validate_repair_contract(
                         "non-empty strings"
                     )
                     continue
+                required_contract = obligation["required_contract"]
+                if (
+                    required_contract != " ".join(required_contract.split())
+                    or len(required_contract) > GRAPH_EDGE_LABEL_CHARS
+                ):
+                    failures.append(
+                        f"{layer}.connection_addition_obligations[{index}].required_contract "
+                        "must be normalized and within the edge label limit"
+                    )
+                    continue
                 if obligation["source"] == obligation["target"]:
                     failures.append(
                         f"{layer}.connection_addition_obligations[{index}] must use "
@@ -346,6 +387,186 @@ def validate_repair_contract(
                 )
         elif parsed_connection_obligations:
             failures.append(f"{layer} cannot declare connection addition obligations")
+
+        raw_node_operations = assessment.get("existing_node_operations")
+        parsed_node_operations: list[dict[str, Any]] = []
+        if not isinstance(raw_node_operations, list):
+            failures.append(f"{layer}.existing_node_operations must be an array")
+        else:
+            for index, operation in enumerate(raw_node_operations):
+                operation_path = f"{layer}.existing_node_operations[{index}]"
+                if not isinstance(operation, dict) or set(operation) != {
+                    "kind",
+                    "node_id",
+                    "set",
+                }:
+                    failures.append(
+                        f"{operation_path} must contain exactly kind, node_id, and set"
+                    )
+                    continue
+                if operation.get("kind") != "update":
+                    failures.append(f"{operation_path}.kind is invalid")
+                    continue
+                node_id = operation.get("node_id")
+                changes = operation.get("set")
+                if not isinstance(node_id, str) or not node_id.strip():
+                    failures.append(f"{operation_path}.node_id is invalid")
+                    continue
+                if not isinstance(changes, dict) or not changes:
+                    failures.append(f"{operation_path}.set is invalid")
+                    continue
+                if set(changes) - _NODE_OPERATION_FIELDS:
+                    failures.append(f"{operation_path}.set contains an invalid field")
+                    continue
+                invalid_value = False
+                for field, value in changes.items():
+                    if not isinstance(value, str):
+                        invalid_value = True
+                        break
+                    normalized = " ".join(value.split())
+                    limit = {
+                        "label": _NODE_LABEL_CHARS,
+                        "technology": _NODE_TECHNOLOGY_CHARS,
+                        "description": _NODE_DESCRIPTION_CHARS,
+                    }.get(field)
+                    if (
+                        not normalized
+                        or value != normalized
+                        or (limit is not None and len(value) > limit)
+                        or (field == "type" and value not in _NODE_TYPES)
+                        or (field == "technology" and value.lower().startswith("book "))
+                    ):
+                        invalid_value = True
+                        break
+                if invalid_value:
+                    failures.append(f"{operation_path}.set is invalid")
+                    continue
+                node = nodes_by_id.get(node_id)
+                if node is not None and all(
+                    node.get(field) == value for field, value in changes.items()
+                ):
+                    failures.append(f"{operation_path}.set must change the node")
+                    continue
+                parsed_node_operations.append(operation)
+        operation_node_ids = [
+            operation["node_id"] for operation in parsed_node_operations
+        ]
+        if len(operation_node_ids) != len(set(operation_node_ids)):
+            failures.append(f"{layer}.existing_node_operations must not repeat a node")
+        if layer == "components":
+            existing_node_operations = parsed_node_operations
+        elif parsed_node_operations:
+            failures.append(f"{layer} cannot declare existing node operations")
+
+        raw_edge_operations = assessment.get("existing_edge_operations")
+        parsed_edge_operations: list[dict[str, Any]] = []
+        if not isinstance(raw_edge_operations, list):
+            failures.append(f"{layer}.existing_edge_operations must be an array")
+        else:
+            for index, operation in enumerate(raw_edge_operations):
+                operation_path = f"{layer}.existing_edge_operations[{index}]"
+                if not isinstance(operation, dict) or set(operation) != {
+                    "kind",
+                    "edge_selector",
+                    "set",
+                    "replacement_obligations",
+                }:
+                    failures.append(
+                        f"{operation_path} must contain exactly kind, edge_selector, "
+                        "set, and replacement_obligations"
+                    )
+                    continue
+                kind = operation.get("kind")
+                selector = operation.get("edge_selector")
+                changes = operation.get("set")
+                replacements = operation.get("replacement_obligations")
+                if kind not in {"update", "remove", "replace"}:
+                    failures.append(f"{operation_path}.kind is invalid")
+                    continue
+                if not isinstance(selector, dict) or set(selector) != {
+                    "source",
+                    "target",
+                    "label",
+                }:
+                    failures.append(f"{operation_path}.edge_selector is invalid")
+                    continue
+                selector_values = tuple(
+                    selector.get(field) for field in ("source", "target", "label")
+                )
+                if not all(
+                    isinstance(value, str) and value.strip()
+                    for value in selector_values
+                ):
+                    failures.append(
+                        f"{operation_path}.edge_selector must use non-empty strings"
+                    )
+                    continue
+                if not isinstance(changes, dict) or (
+                    kind == "update"
+                    and (
+                        set(changes) != {"label"}
+                        or not isinstance(changes.get("label"), str)
+                        or not changes["label"].strip()
+                        or changes["label"] != " ".join(changes["label"].split())
+                        or len(changes["label"]) > GRAPH_EDGE_LABEL_CHARS
+                        or changes["label"] == selector["label"]
+                    )
+                ):
+                    failures.append(f"{operation_path}.set is invalid")
+                    continue
+                if kind != "update" and changes:
+                    failures.append(f"{operation_path}.set must be empty")
+                    continue
+                if not isinstance(replacements, list) or not all(
+                    isinstance(item, dict)
+                    and set(item) == {"source", "target", "required_contract"}
+                    and all(
+                        isinstance(item.get(field), str) and item[field].strip()
+                        for field in ("source", "target", "required_contract")
+                    )
+                    for item in replacements
+                ):
+                    failures.append(
+                        f"{operation_path}.replacement_obligations is invalid"
+                    )
+                    continue
+                if kind == "replace" and not replacements:
+                    failures.append(
+                        f"{operation_path}.replacement_obligations must not be empty"
+                    )
+                    continue
+                if kind != "replace" and replacements:
+                    failures.append(
+                        f"{operation_path}.replacement_obligations must be empty"
+                    )
+                    continue
+                parsed_edge_operations.append(operation)
+        operation_selectors = [
+            tuple(
+                operation["edge_selector"][field]
+                for field in ("source", "target", "label")
+            )
+            for operation in parsed_edge_operations
+        ]
+        if len(operation_selectors) != len(set(operation_selectors)):
+            failures.append(f"{layer}.existing_edge_operations must not repeat an edge")
+        replacement_keys = [
+            (
+                replacement["source"],
+                replacement["target"],
+                replacement["required_contract"],
+            )
+            for operation in parsed_edge_operations
+            for replacement in operation["replacement_obligations"]
+        ]
+        if len(replacement_keys) != len(set(replacement_keys)):
+            failures.append(
+                f"{layer}.existing_edge_operations must not reuse a replacement obligation"
+            )
+        if layer == "connections":
+            existing_edge_operations = parsed_edge_operations
+        elif parsed_edge_operations:
+            failures.append(f"{layer} cannot declare existing edge operations")
         append_counts = assessment.get("composition_append_counts")
         if not isinstance(append_counts, dict) or any(
             field not in {"groups", "sequence", "assumptions"}
@@ -420,6 +641,7 @@ def validate_repair_contract(
         irrelevant_values = {
             "components": (
                 selected_edges,
+                parsed_edge_operations,
                 selected_group_ids,
                 selected_fields,
                 selected_sequence_indexes,
@@ -427,15 +649,23 @@ def validate_repair_contract(
             ),
             "connections": (
                 selected_node_ids,
+                parsed_node_operations,
                 selected_group_ids,
                 selected_fields,
                 selected_sequence_indexes,
                 selected_assumption_indexes,
             ),
-            "composition": (selected_node_ids, selected_edges),
+            "composition": (
+                selected_node_ids,
+                selected_edges,
+                parsed_node_operations,
+                parsed_edge_operations,
+            ),
             "render": (
                 selected_node_ids,
                 selected_edges,
+                parsed_node_operations,
+                parsed_edge_operations,
                 selected_group_ids,
                 selected_fields,
                 selected_sequence_indexes,
@@ -509,6 +739,8 @@ def validate_repair_contract(
                     selected_assumption_indexes,
                     context_node_ids,
                     parsed_connection_obligations,
+                    parsed_node_operations,
+                    parsed_edge_operations,
                 )
             ):
                 failures.append(
@@ -564,6 +796,62 @@ def validate_repair_contract(
         for obligation in connection_addition_obligations
         for endpoint in (obligation["source"], obligation["target"])
     }
+    operation_selectors = {
+        tuple(
+            operation["edge_selector"][field] for field in ("source", "target", "label")
+        )
+        for operation in existing_edge_operations
+    }
+    if not operation_selectors.issubset(edge_selectors):
+        failures.append(
+            "existing edge operations contain an edge absent from the graph"
+        )
+    operation_node_ids = {
+        operation["node_id"] for operation in existing_node_operations
+    }
+    if not operation_node_ids.issubset(node_ids):
+        failures.append("existing node operations contain a node absent from the graph")
+    component_selected_node_ids = set(
+        components.get("node_ids", []) if isinstance(components, dict) else []
+    )
+    if not operation_node_ids.issubset(component_selected_node_ids):
+        failures.append(
+            "existing node operations require matching component node selectors"
+        )
+    connection_selected_edges = {
+        tuple(selector.get(field) for field in ("source", "target", "label"))
+        for selector in (
+            connections.get("edge_selectors", [])
+            if isinstance(connections, dict)
+            else []
+        )
+        if isinstance(selector, dict)
+    }
+    if not operation_selectors.issubset(connection_selected_edges):
+        failures.append(
+            "existing edge operations require matching connection edge selectors"
+        )
+    referenced_replacement_keys = {
+        (
+            replacement["source"],
+            replacement["target"],
+            replacement["required_contract"],
+        )
+        for operation in existing_edge_operations
+        for replacement in operation["replacement_obligations"]
+    }
+    addition_obligation_keys = {
+        (
+            obligation["source"],
+            obligation["target"],
+            obligation["required_contract"],
+        )
+        for obligation in connection_addition_obligations
+    }
+    if not referenced_replacement_keys.issubset(addition_obligation_keys):
+        failures.append(
+            "existing edge replacements must reference declared connection additions"
+        )
     unknown_obligation_endpoints = obligation_endpoints - (
         node_ids | allowed_new_node_references
     )
@@ -596,7 +884,7 @@ def validate_repair_contract(
             failures.append(
                 "component additions require connection addition permission"
             )
-        if graph.get("groups") and not (
+        if requires_grouped_component_placement(graph, component_additions) and not (
             isinstance(composition, dict)
             and composition.get("status") == "fail"
             and "groups" in (composition.get("composition_fields") or [])
@@ -604,7 +892,7 @@ def validate_repair_contract(
             failures.append(
                 "component additions in a grouped graph require editable groups"
             )
-        elif graph.get("groups") and not (
+        elif requires_grouped_component_placement(graph, component_additions) and not (
             composition.get("group_ids")
             or composition_append_counts.get("composition", {}).get("groups", 0)
         ):

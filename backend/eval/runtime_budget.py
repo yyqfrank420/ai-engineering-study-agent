@@ -32,6 +32,13 @@ def _live_budgets() -> dict[str, int]:
         raise ValueError(
             "live evaluation budgets must be positive integers; retry count may be zero"
         )
+    if (
+        budgets.get("staging_request_concurrency", 0)
+        < 2 * budgets["browser_case_concurrency"]
+    ):
+        raise ValueError(
+            "staging request concurrency must be at least twice browser case concurrency"
+        )
     return budgets
 
 
@@ -43,6 +50,11 @@ def application_turn_timeout_seconds() -> int:
 def browser_case_concurrency() -> int:
     """Return the number of isolated browser journeys allowed to run at once."""
     return _live_budgets()["browser_case_concurrency"]
+
+
+def staging_request_concurrency() -> int:
+    """Reserve HTTP capacity alongside each browser's long-lived WebSocket."""
+    return _live_budgets()["staging_request_concurrency"]
 
 
 def browser_graph_case_concurrency() -> int:

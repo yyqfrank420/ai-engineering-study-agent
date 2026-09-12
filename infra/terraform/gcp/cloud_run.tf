@@ -95,10 +95,9 @@ resource "google_cloud_run_v2_service" "backend_staging" {
   template {
     service_account = google_service_account.backend_staging.email
     timeout         = "${var.request_timeout_seconds}s"
-    # One long-lived eval WebSocket must not starve thread, telemetry, and
-    # readiness requests. Global workflow serialization and max instances = 1
-    # still guarantee that only one staging evaluation mutates the schema.
-    max_instance_request_concurrency = var.container_concurrency
+    # Browser WebSockets need HTTP headroom for thread, telemetry, and readiness
+    # requests. Workflow serialization protects the single staging schema.
+    max_instance_request_concurrency = local.live_budgets.staging_request_concurrency
 
     scaling {
       min_instance_count = 0

@@ -34,6 +34,17 @@ def calculate_calibration(
     if live_report.get("corpus_sha256") != corpus_sha256():
         raise ValueError("calibration report corpus digest does not match")
     calibration_identity = corpus.approval.calibration
+    if not all(
+        (
+            calibration_identity.judge_model,
+            calibration_identity.evidence_run_id,
+            calibration_identity.evidence_commit_sha,
+            calibration_identity.evidence_sha256,
+        )
+    ):
+        raise ValueError(
+            "calibration requires pinned judge and browser evidence identity"
+        )
     if calibration_identity.judge_release != JUDGE_PROMPT_RELEASE:
         raise ValueError("approved judge release is not the active judge release")
     candidate_provider = str(judge_selection.get("provider") or "")
@@ -46,9 +57,15 @@ def calculate_calibration(
         raise ValueError("candidate judge selection is missing its model")
     if evidence_sha256 != calibration_identity.evidence_sha256:
         raise ValueError("calibration evidence digest does not match approved identity")
-    if str(source_context.get("source_run_id") or "") != calibration_identity.evidence_run_id:
+    if (
+        str(source_context.get("source_run_id") or "")
+        != calibration_identity.evidence_run_id
+    ):
         raise ValueError("calibration evidence run does not match approved identity")
-    if source_context.get("source_commit_sha") != calibration_identity.evidence_commit_sha:
+    if (
+        source_context.get("source_commit_sha")
+        != calibration_identity.evidence_commit_sha
+    ):
         raise ValueError("calibration evidence commit does not match approved identity")
     raw_evaluations = live_report.get("evaluations") or []
     evaluation_ids = [item.get("id") for item in raw_evaluations]
@@ -68,6 +85,10 @@ def calculate_calibration(
     for case in corpus.cases:
         if case.approval.status != "approved":
             raise ValueError(f"case {case.id} has not completed human review")
+        if case.approval.review_run_id != calibration_identity.evidence_run_id:
+            raise ValueError(
+                f"case {case.id} human review does not match calibration evidence run"
+            )
         evaluation = evaluations[case.id]
         if evaluation.get("decision") == "infrastructure":
             raise ValueError(f"case {case.id} has an infrastructure-failed judgment")
@@ -76,22 +97,32 @@ def calculate_calibration(
             raise ValueError(f"case {case.id} has no semantic judgment")
         for judgment in judgments:
             if judgment.get("prompt_release") != calibration_identity.judge_release:
-                raise ValueError(f"case {case.id} judge release does not match calibration identity")
+                raise ValueError(
+                    f"case {case.id} judge release does not match calibration identity"
+                )
             if judgment.get("provider") != candidate_provider:
-                raise ValueError(f"case {case.id} judge provider does not match candidate selection")
+                raise ValueError(
+                    f"case {case.id} judge provider does not match candidate selection"
+                )
             if judgment.get("model") != candidate_model:
-                raise ValueError(f"case {case.id} judge model does not match candidate selection")
+                raise ValueError(
+                    f"case {case.id} judge model does not match candidate selection"
+                )
         first_judgment = judgments[0]
         provider = str(first_judgment.get("provider") or "")
         model = str(first_judgment.get("model") or "")
         judge_providers.add(provider)
         judge_models.add(model)
         raw_dimensions = first_judgment.get("dimensions") or []
-        proposed = {dimension["dimension"]: dimension["grade"] for dimension in raw_dimensions}
+        proposed = {
+            dimension["dimension"]: dimension["grade"] for dimension in raw_dimensions
+        }
         if len(proposed) != len(raw_dimensions):
             raise ValueError(f"case {case.id} judgment contains duplicate dimensions")
         if set(proposed) != set(case.rubric_dimensions):
-            raise ValueError(f"case {case.id} judgment dimensions do not match its rubric")
+            raise ValueError(
+                f"case {case.id} judgment dimensions do not match its rubric"
+            )
         for dimension in case.rubric_dimensions:
             critical = corpus.rubrics[dimension].critical
             expected_grade = case.approval.reviewed_grades[dimension]
@@ -103,12 +134,14 @@ def calculate_calibration(
             if expected_grade == actual_grade:
                 dimension_totals[dimension][0] += 1
             else:
-                disagreements.append({
-                    "case_id": case.id,
-                    "dimension": dimension,
-                    "expected": expected_grade,
-                    "actual": actual_grade,
-                })
+                disagreements.append(
+                    {
+                        "case_id": case.id,
+                        "dimension": dimension,
+                        "expected": expected_grade,
+                        "actual": actual_grade,
+                    }
+                )
             if expected_grade == "fail" and actual_grade == "pass" and critical:
                 critical_false_pass_case_ids.add(case.id)
 
@@ -154,21 +187,38 @@ def calculate_calibration(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Compare judge proposals with the reviewed corpus labels")
+    parser = argparse.ArgumentParser(
+        description="Compare judge proposals with the reviewed corpus labels"
+    )
     parser.add_argument("--input", required=True, help="Full-suite live-results.json")
-    parser.add_argument("--evidence", required=True, help="Immutable browser-results.json used for replay")
-    parser.add_argument("--context", required=True, help="Replay context JSON identifying source run and commit")
-    parser.add_argument("--judge-selection", required=True, help="Frozen calibration judge provider/model JSON")
+    parser.add_argument(
+        "--evidence",
+        required=True,
+        help="Immutable browser-results.json used for replay",
+    )
+    parser.add_argument(
+        "--context",
+        required=True,
+        help="Replay context JSON identifying source run and commit",
+    )
+    parser.add_argument(
+        "--judge-selection",
+        required=True,
+        help="Frozen calibration judge provider/model JSON",
+    )
     parser.add_argument("--output", default="artifacts/live-eval/calibration.json")
     args = parser.parse_args()
     evidence_sha256 = hashlib.sha256(Path(args.evidence).read_bytes()).hexdigest()
     source_context = json.loads(Path(args.context).read_text(encoding="utf-8"))
     report = calculate_calibration(
-        load_corpus(require_approved=True),
+        # Aggregate approval depends on this result; case reviews remain mandatory.
+        load_corpus(),
         json.loads(Path(args.input).read_text(encoding="utf-8")),
         evidence_sha256=evidence_sha256,
         source_context=source_context,
-        judge_selection=json.loads(Path(args.judge_selection).read_text(encoding="utf-8")),
+        judge_selection=json.loads(
+            Path(args.judge_selection).read_text(encoding="utf-8")
+        ),
     )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

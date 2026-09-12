@@ -24,14 +24,14 @@ lines, and functions plus 75% branches. These suites use dummy credentials and
 fake provider clients; live model evaluation remains a separate protected gate.
 
 The stable branch checks are `CI required` and `Live eval required`. Both workflows
-listen to `pull_request`, trusted pushes, and `merge_group`. Corpus version
-`2026-08-09.v1` is pending human review after the graph-expansion contract changed.
-The live gate takes the fail-safe bootstrap path before installing browsers,
-authenticating to GCP, building images, mutating staging, or calling a model, and
-production promotion remains disabled until this exact corpus is approved. Run
-`scripts/configure_main_branch_protection.sh owner/repo` to inspect the current and
-proposed branch protection without writing. Add `--apply` only after reviewing the
-payload.
+listen to `pull_request`, trusted pushes, and `merge_group`. AI-impacting changes run
+the automated browser and semantic checks. Human corpus labels and judge calibration
+are optional evaluation tools; pending review metadata does not block execution or
+promotion. A successful live check records the tested Git tree and immutable image
+digest. Production still requires that exact image and successful smoke checks.
+Run `scripts/configure_main_branch_protection.sh owner/repo` to inspect the current
+and proposed branch protection without writing. Add `--apply` only after reviewing
+the payload.
 
 ## Trust and staging isolation
 
@@ -45,7 +45,9 @@ Same-repository AI changes wait for approval of the `staging-eval` GitHub
 Environment. Its federated GCP identity is bound to that exact
 Environment-bearing OIDC subject, can read only staging secrets, and cannot
 impersonate the separate production deployer. The `production` Environment has an
-independently bound identity. Staging mutation is globally serialized. A database
+independently bound identity. Production accepts only successful push or manual
+workflow runs from this repository's `main` branch, checked before source checkout.
+Staging mutation is globally serialized. A database
 advisory lock is held while the constant `staging` schema is dropped, recreated,
 and migrated from scratch. `DB_SCHEMA` accepts only `public` or `staging`;
 application connections and Alembic both pin their search path. Before and after
@@ -86,6 +88,18 @@ attempt receives its own authenticated browser context and thread. Turns within 
 multi-turn case remain sequential on that context, and result ordering remains the
 canonical corpus ordering even when cases finish out of order.
 
+Staging request concurrency is 16, owned by
+`ci/quality.json` at `live.budgets.staging_request_concurrency`. Terraform and both
+evaluation deployments read that budget. Runtime validation requires at least
+twice the browser case concurrency to leave HTTP capacity alongside long-lived
+WebSockets. A September 11 full-corpus run exhausted the previous four-request
+limit with four browser cases and received Cloud Run 429 responses because its
+single instance had no request capacity. Staging retains a maximum of one instance
+and serialized evaluation workflows. Each deployment verifies Cloud Run's returned
+request concurrency against the budget before browser evaluation and records the
+verified value in `deployment.json`. Production retains its separate concurrency
+setting.
+
 The Anthropic semaphore allows four streams per application process/Cloud Run
 instance; it is not a global account cap. It bounds Opus architecture and Sonnet QA
 calls. Kimi graph construction uses the Moonshot OpenAI-compatible endpoint and the
@@ -108,12 +122,12 @@ To diagnose a small set without replaying the whole corpus, manually dispatch
 `Scheduled evaluation` with suite `diagnostic` and one to eight space-separated
 case IDs. The same targeted mode is available locally by repeating `--case`, for
 example `./scripts/ci browser --suite diagnostic --case citations ...`. Diagnostic
-runs use the PR-sized time, application-call, and judge-call budgets and cannot
-approve or replace the full corpus review. When the approved corpus has no
-`approved-tree-<tree>` image for the workflow-dispatch ref, this diagnostic path
-builds and deploys an ephemeral image for that exact checked-out tree, then removes
-its temporary tag. It never publishes an approval tag. Scheduled, nightly, and full
-runs still require an existing exact-tree approval when the corpus is approved.
+runs use the PR-sized time, application-call, and judge-call budgets. A manually
+dispatched full or diagnostic run can build an ephemeral image when that exact tree
+has no previously passed image. Its temporary tag is removed after evaluation.
+Scheduled and nightly runs require an existing `approved-tree-<tree>` image to avoid
+implicit candidate builds. Only the successful protected PR evaluation publishes that
+tag; scheduled captures do not grant deployment approval.
 
 `Semantic review replay` has two isolated modes. The default `full-scheduled` mode
 preserves the existing behavior: it authenticates a successful full scheduled run,
@@ -130,19 +144,20 @@ a diagnostic capture containing only the selected results, case states, and
 attributed telemetry. It runs `scripts/ci live --suite diagnostic --capture-replay`
 with the selected cases, so it performs judge calls only: it does not open a browser,
 call the application model, authenticate to GCP, deploy, or mutate staging. Every
-selected semantic decision must be `pass`; failure, manual review, infrastructure
-failure, reordered/duplicate results, or missing provenance fails closed. The
+selected semantic decision must be `pass` or `manual_review` with a passing blocking
+status. Failure, infrastructure errors, reordered/duplicate results, or missing
+provenance fail closed. The
 30-day replay artifact contains the subset capture, live result, and provenance with
 original/derived hashes, source run/head/tested commit/tree/digest, selection,
 artifact digest, replay commit/actor, reviewer, and reason. Selective replay is
 review evidence only and does not itself publish an image approval or deploy.
 
 PR evaluation limits are eight cases, 64 application provider attempts, and 16
-judge provider attempts. The current PR corpus has 58 logical application calls on
+judge provider attempts. The current PR corpus has 62 logical application calls on
 its complete one-repair paths. Provider retry and fallback paths have a theoretical
-140-attempt first-pass ceiling. The tagged staging revision atomically reserves one
+144-attempt first-pass ceiling. The tagged staging revision atomically reserves one
 shared quota record before each provider request and rejects attempt 65 before it is
-sent. This leaves six attempts for transient provider failures while placing a hard
+sent. This leaves two attempts for transient provider failures while placing a hard
 cost boundary below the failure envelope. Production traffic does not set this
 evaluation-only quota. The timeout chain is deliberately nested: the backend
 agent envelope is 940 seconds, with model work stopping at 910 seconds to retain persistence
@@ -157,6 +172,15 @@ minute limits no longer apply.
 
 Scheduled nightly and full suites use the same pre-request quota with a 150-attempt
 cap. Diagnostic dispatches use the 64-attempt PR cap.
+Every scheduled browser failure or blocking semantic outcome fails the workflow.
+Borderline semantic findings are retained as nonblocking review information. Scheduled artifacts retain evidence for 90 days. `deployment.json`
+binds the run to its commit, Git tree, immutable image digest, tagged Cloud Run revision,
+pipeline mode, and suite. The browser results record the cases that ran.
+
+Protected internal staged evaluations capture each valid semantic gate result together
+with its candidate records and review inputs. These captures require an evaluation run
+ID and an allowlisted non-production caller. They are absent from ordinary responses
+and analytics. This retains the first rejection when a correction later fails.
 
 Each turn records total, first-event, and first-token latency plus client and server
 request IDs. Those IDs join browser evidence to per-operation model telemetry,
@@ -182,64 +206,65 @@ least five clean runs establish per-case and suite baselines; only reviewed limi
 should be promoted to blocking. Provider rate limits, transport failures, and
 timeouts remain infrastructure failures and never masquerade as quality regressions.
 
-## Corpus approval and semantic policy
+## Automated semantic policy and optional calibration
 
-`backend/eval/corpus/v1/cases.json` is a 20-case, versioned corpus. It contains
-conversation steps, UI modes, categories, risk tags, deterministic expectations,
-rubric references with pass/borderline/fail anchors, criticality, provenance, and
-per-case approval metadata. Generated answers remain artifacts; only prompts,
-rubrics, invariants, and intentionally reviewed exemplars belong in source control.
+`backend/eval/corpus/v1/cases.json` is a versioned 20-case corpus containing prompts,
+UI modes, deterministic expectations, and anchored rubrics. The PR suite selects
+eight cases. Generated answers remain evidence artifacts.
 
-The current `2026-08-09.v1` corpus says `pending_human_review`. The graph-expansion
-case is pending because its first turn now requires a monitoring component at
-prototype UI depth and its second turn permits exactly one directly connected
-responsibility while preserving the original graph topic and existing components.
-All 20 case approvals are pending so the fresh full-corpus review is machine-enforced.
-Corpus reviewer, review time, approved manifest hash, calibration evidence identity,
-and calibration results are empty. `semantic-rubric-judge-v5`, Anthropic, and
-`claude-sonnet-5` remain configured judge selections; they are not approval evidence
-for this revision.
+Deterministic and critical semantic failures block immediately. A clear noncritical
+failure gets one independent second judgment; two clear failures block. More than
+15% failing noncritical dimensions is a clear failure. A borderline dimension cannot
+hide that failure. Borderline-only results and judge disagreements remain
+`manual_review` in reports and use the default `report-only` exit policy. Infrastructure
+errors, missing accounting, and configured blocking cost limits still fail.
+`--manual-review-policy blocking` explicitly restores a blocking review policy.
 
-`corpus_sha256()` hashes behavior only: corpus-level and per-case approval metadata
-are excluded while prompts, rubrics, UI modes, and deterministic expectations remain
-covered. Recording calibration provenance therefore cannot change the corpus
-identity or create a digest/storage-prefix cycle. A separate approval-manifest hash
-covers all approval labels, reviewers, calibration baselines, and evidence identity
-except its own digest field. `--require-approved-corpus` validates that full
-manifest, so either behavior or provenance tampering fails closed. Reapproving
-`2026-08-09.v1` requires a full protected 20-case capture, human review of all 20
-cases, a reviewer, review time, artifact run, and reviewed grades for every case,
-judge recalibration against that reviewed capture, the new calibration evidence and
-result fields, and a newly computed approved manifest hash. The corpus cannot block
-or promote until those records are complete.
+The corpus may retain `pending_human_review` metadata while automated checks run.
+That status records the absence of human labels; it is not a release prerequisite.
+`semantic-rubric-judge-v7`, Anthropic, and `claude-sonnet-5` are the versioned judge
+selection. Reports record the active provider, model, and prompt release.
 
-Compute calibration from saved evidence rather than entering it by inspection:
+`corpus_sha256()` hashes prompts, rubrics, UI modes, and deterministic expectations.
+It excludes human approval metadata, so adding labels cannot change behavior identity.
+The optional `--require-approved-corpus` mode verifies the full human approval manifest
+and calibrated judge identity. Optional calibration requires a complete 20-case
+capture, reviewed grades, reviewer identity, and immutable evidence provenance.
+Manually dispatch `Scheduled evaluation` with suite `full` to collect that capture.
+It does not publish a deployment approval tag.
+
+For the first calibration, keep aggregate corpus approval pending while recording
+all 20 human-reviewed cases and the pinned judge and browser evidence identity.
+Every case's `review_run_id` must match the pinned `evidence_run_id`. Compute the
+baseline from a full semantic replay of that capture with `--capture-replay`;
+the original application-run report is not a semantic replay. The frozen
+judge-selection JSON contains `format_version: 1`, `provider`, and `model`.
 
 ```bash
 PYTHONPATH=backend python -m eval.calibration \
   --input artifacts/live-eval/live-results.json \
   --evidence artifacts/live-eval/browser-results.json \
-  --context artifacts/live-eval/replay-context.json
+  --context artifacts/live-eval/replay-context.json \
+  --judge-selection artifacts/live-eval/judge-selection.json
 ```
 
-With an approved corpus, deterministic failures block immediately. A clear
-semantic failure gets one independent second judgment; two clear failures block. A
-borderline grade or judge disagreement requires manual review. PR and scheduled
-evaluation use the blocking policy for an approved corpus, so every fresh manual-review
-decision blocks promotion. Report-only is restricted in code to approved semantic
-capture replay, where no new application answer or candidate deployment is created.
-Deterministic, confirmed semantic, and infrastructure failures exit non-zero under
-either policy. No
-critical dimension may fail, and at least 85% of non-critical dimensions must pass.
+After calibration passes, record its computed results and complete aggregate
+corpus approval and the approved manifest hash. Calibration does not approve the
+corpus or change its review records.
+
 
 ## Immutable judge-calibration evidence
 
 Judge calibration replays the exact browser evidence that humans reviewed; it never
 generates fresh application answers. The manual `Promote calibration evidence`
-workflow reads the pinned identity from the approved corpus rather than accepting a
-different run at dispatch. It authenticates that exact successful `main`
-`Scheduled evaluation`, source commit and run context, source corpus behavior,
-ordered passing 20-case browser capture, and browser digest. It then stores both the
+workflow reads the pinned identity from the approved corpus. It authenticates the
+exact completed same-repository `Scheduled evaluation`, source commit and run
+context, source corpus behavior, ordered complete 20-case browser capture, dashboard
+success, and browser digest. The source may be a candidate branch and may conclude
+`failure`. Complete captured product failures are eligible negative examples; missing turns,
+terminal events, answers, artifact references, or infrastructure-failed cases are ineligible.
+Calibration retains deterministic failures even when its semantic judge passes a response.
+Every human-reviewed case must identify that same evidence run. It then stores both the
 content-addressed browser JSON and its promotion manifest under
 `reviewed/<corpus-sha>/` in the private GCS evaluation-evidence bucket. Uniform
 bucket access, public-access prevention, versioning, a one-year retention policy,
@@ -258,6 +283,14 @@ then compares the active judge prompt/model with the fixed human grades and fail
 agreement, above one critical false pass, on an identity mismatch, or after an
 agreement drop greater than five percentage points from the approved calibration.
 Reports are kept in 90-day GitHub artifacts and copied to GCS calibration history.
+
+The judge receives the public graph's directed flow, synchronization, descriptions, and sequence.
+The final graph is encoded once when it equals the last turn's graph. A different final graph
+retains its own evidence, including a final state that matches an earlier turn. The 80,000-character
+prompt limit rejects oversized packets without truncating graph contracts.
+For new captures it receives the exact synthesis-visible book and research strings. Older retrieval
+telemetry is labeled as incomplete knowledge of the model input; source text beyond the supplied
+excerpt cannot certify the answer's grounding. Judge release v6 records this changed evidence contract.
 
 An override is an audited `workflow_dispatch` requiring original run ID, full
 commit SHA, authenticated reviewer, and reason. Dispatch it from the tested

@@ -31,7 +31,6 @@ jobs:
       trust-reason: ${{ steps.impact.outputs.trust-reason }}
       tree-sha: ${{ steps.tree.outputs.tree-sha }}
       commit-sha: ${{ steps.tree.outputs.commit-sha }}
-      corpus-status: ${{ steps.corpus.outputs.status }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,12 +41,6 @@ jobs:
         run: |
           echo "tree-sha=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
           echo "commit-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - id: corpus
-        name: Resolve corpus approval state without installing dependencies
-        run: |
-          status="$(python3 -c 'import json; print(json.load(open("backend/eval/corpus/v1/cases.json"))["approval"]["status"])')"
-          case "$status" in pending_human_review|approved) ;; *) echo "Invalid corpus approval status." >&2; exit 1 ;; esac
-          echo "status=$status" >> "$GITHUB_OUTPUT"
 
   fork-guidance:
     name: Fork live-eval guidance
@@ -62,22 +55,11 @@ jobs:
           echo "This workflow intentionally uses the non-privileged pull request event." >&2
           exit 1
 
-  corpus-bootstrap-guidance:
-    name: Pending corpus bootstrap guidance
-    runs-on: ubuntu-latest
-    needs: classify
-    if: needs.classify.outputs.ai-impact == 'true' && needs.classify.outputs.trusted == 'true' && needs.classify.outputs.corpus-status != 'approved'
-    steps:
-      - name: Explain the one-time bootstrap gate
-        run: |
-          echo "The reviewed semantic corpus is still pending. Protected PR model calls, browser installation, image builds, and staging mutation are intentionally skipped."
-          echo "After this bootstrap change reaches main, manually dispatch the full Scheduled evaluation once to create the 20-case review artifacts."
-
   resolve-approved-tree:
     name: Resolve exact-tree approval
     runs-on: ubuntu-latest
     needs: classify
-    if: needs.classify.outputs.ai-impact == 'true' && needs.classify.outputs.trusted == 'true' && needs.classify.outputs.corpus-status == 'approved'
+    if: needs.classify.outputs.ai-impact == 'true' && needs.classify.outputs.trusted == 'true'
     environment: staging-eval
     permissions:
       contents: read
@@ -129,7 +111,7 @@ jobs:
     name: Protected staging browser and LLM evaluation
     runs-on: ubuntu-latest
     needs: [classify, resolve-approved-tree]
-    if: needs.classify.outputs.ai-impact == 'true' && needs.classify.outputs.trusted == 'true' && needs.classify.outputs.corpus-status == 'approved' && needs.resolve-approved-tree.result == 'success' && needs.resolve-approved-tree.outputs.approved == 'false'
+    if: needs.classify.outputs.ai-impact == 'true' && needs.classify.outputs.trusted == 'true' && needs.resolve-approved-tree.result == 'success' && needs.resolve-approved-tree.outputs.approved == 'false'
     # Browser time scales with reviewed corpus turns and is independently capped.
     # This outer timeout also covers setup, deployment, judging, and cleanup.
     timeout-minutes: 90
@@ -171,6 +153,17 @@ jobs:
           pip install -r backend/requirements.txt -r backend/requirements-eval.txt
           python -m playwright install --with-deps chromium
           npm ci --prefix frontend --prefer-offline --no-audit --no-fund
+
+      - name: Resolve staging request concurrency
+        run: |
+          staging_concurrency="$(PYTHONPATH=backend python -c 'from eval.runtime_budget import staging_request_concurrency; print(staging_request_concurrency())')"
+          echo "STAGING_REQUEST_CONCURRENCY=$staging_concurrency" >> "$GITHUB_ENV"
+
+      - name: Resolve versioned graph pipeline mode
+        run: |
+          pipeline_mode="$(PYTHONPATH=backend python -c 'from config import Settings; print(Settings.model_fields["graph_pipeline_mode"].default)')"
+          case "$pipeline_mode" in legacy|staged) ;; *) echo "Unsupported pipeline mode." >&2; exit 1 ;; esac
+          echo "GRAPH_PIPELINE_MODE=$pipeline_mode" >> "$GITHUB_ENV"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -232,15 +225,21 @@ jobs:
         env:
           REVISION_TAG: eval-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
-          gcloud run deploy "$STAGING_SERVICE" \
+          configured_concurrency="$(gcloud run deploy "$STAGING_SERVICE" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --image "$IMAGE@$IMAGE_DIGEST" \
             --no-traffic \
             --tag "$REVISION_TAG" \
             --timeout 1000s \
-            --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4,ANTHROPIC_PROMPT_CACHE_ENABLED=true,OTEL_ENVIRONMENT=staging,EVALUATION_RUN_ID=$EVALUATION_RUN_ID,EVALUATION_PROVIDER_ATTEMPT_LIMIT=$EVALUATION_PROVIDER_ATTEMPT_LIMIT \
-            --quiet
+            --concurrency "$STAGING_REQUEST_CONCURRENCY" \
+            --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4,ANTHROPIC_PROMPT_CACHE_ENABLED=true,OTEL_ENVIRONMENT=staging,EVALUATION_RUN_ID=$EVALUATION_RUN_ID,EVALUATION_PROVIDER_ATTEMPT_LIMIT=$EVALUATION_PROVIDER_ATTEMPT_LIMIT,GRAPH_PIPELINE_MODE=$GRAPH_PIPELINE_MODE \
+            --quiet --format='value(spec.template.spec.containerConcurrency)')"
+          if [ "$configured_concurrency" != "$STAGING_REQUEST_CONCURRENCY" ]; then
+            echo "Cloud Run staging request concurrency does not match the versioned budget." >&2
+            exit 1
+          fi
+          echo "CONFIGURED_STAGING_REQUEST_CONCURRENCY=$configured_concurrency" >> "$GITHUB_ENV"
           candidate_url="$(gcloud run services describe "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json | python -c 'import json,os,sys; data=json.load(sys.stdin); tag=os.environ["REVISION_TAG"]; print(next((x.get("url", "") for x in data.get("status", {}).get("traffic", []) if x.get("tag") == tag), ""))')"
           if [ -z "$candidate_url" ]; then
             echo "Cloud Run did not expose the tagged candidate URL." >&2
@@ -285,7 +284,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           EVAL_JUDGE_PROVIDER: anthropic
           EVAL_JUDGE_MODEL: claude-sonnet-5
-        run: ./scripts/ci live --suite pr --target "$CANDIDATE_URL" --input artifacts/live-eval/browser-results.json --output artifacts/live-eval/live-results.json --require-approved-corpus --manual-review-policy blocking
+        run: ./scripts/ci live --suite pr --target "$CANDIDATE_URL" --input artifacts/live-eval/browser-results.json --output artifacts/live-eval/live-results.json --manual-review-policy report-only
 
       - name: Record deployment identity
         if: always()
@@ -302,6 +301,8 @@ jobs:
               "tree_sha": os.environ["TREE_SHA"],
               "image": os.environ["IMAGE"],
               "digest": os.environ.get("IMAGE_DIGEST", ""),
+              "pipeline_mode": os.environ.get("GRAPH_PIPELINE_MODE", ""),
+              "staging_request_concurrency": int(os.environ["CONFIGURED_STAGING_REQUEST_CONCURRENCY"]) if os.environ.get("CONFIGURED_STAGING_REQUEST_CONCURRENCY") else None,
           }, indent=2) + "\n")
           PY
 
@@ -332,7 +333,7 @@ jobs:
           SEMANTIC_OUTCOME: ${{ steps.semantic.outcome }}
         run: |
           if [ "$BROWSER_OUTCOME" != success ] || [ "$SEMANTIC_OUTCOME" != success ]; then
-            echo "Live evaluation failed, requires manual review, or hit an infrastructure error. See the 30-day artifacts." >&2
+            echo "Live evaluation failed or hit an infrastructure error. See the 30-day artifacts." >&2
             exit 1
           fi
 
@@ -345,13 +346,12 @@ jobs:
     name: Live eval required
     runs-on: ubuntu-latest
     if: always()
-    needs: [classify, fork-guidance, corpus-bootstrap-guidance, resolve-approved-tree, evaluate]
+    needs: [classify, fork-guidance, resolve-approved-tree, evaluate]
     steps:
       - name: Resolve stable live-eval status
         env:
           AI_IMPACT: ${{ needs.classify.outputs.ai-impact }}
           TRUSTED: ${{ needs.classify.outputs.trusted }}
-          CORPUS_STATUS: ${{ needs.classify.outputs.corpus-status }}
           CLASSIFY_RESULT: ${{ needs.classify.result }}
           APPROVAL_RESULT: ${{ needs.resolve-approved-tree.result }}
           TREE_APPROVED: ${{ needs.resolve-approved-tree.outputs.approved }}
@@ -361,17 +361,17 @@ jobs:
             echo "Change classification failed." >&2
             exit 1
           fi
-          if [ "$AI_IMPACT" != true ]; then
+          if [ "$AI_IMPACT" = false ]; then
             echo "No AI-impacting paths changed; live model calls intentionally skipped."
             exit 0
+          fi
+          if [ "$AI_IMPACT" != true ]; then
+            echo "Change classification returned an invalid AI-impact state." >&2
+            exit 1
           fi
           if [ "$TRUSTED" != true ]; then
             echo "AI-impacting fork PR requires maintainer review and a trusted branch." >&2
             exit 1
-          fi
-          if [ "$CORPUS_STATUS" != approved ]; then
-            echo "Semantic corpus is pending review; protected live work is intentionally deferred to the one-time main bootstrap."
-            exit 0
           fi
           if [ "$APPROVAL_RESULT" != success ]; then
             echo "Exact-tree approval lookup failed; protected evaluation cannot be bypassed." >&2

@@ -10,6 +10,7 @@ from anthropic import (
 import httpx
 import pytest
 
+import eval.live_runner as live_runner
 from eval.calibration import calculate_calibration
 from eval.judge_adapter import (
     DEFAULT_ANTHROPIC_JUDGE_MODEL,
@@ -18,6 +19,7 @@ from eval.judge_adapter import (
     _RawJudgment,
     _anthropic_response_schema,
     _artifact_sources,
+    _add_bounded_sources,
     _judge_prompt,
     _response_schema,
     _validate_evidence,
@@ -26,7 +28,9 @@ from eval.judge_adapter import (
 )
 from eval.live_runner import (
     _assert_approved_judge_identity,
+    _classify_deterministic,
     _exit_code_for_statuses,
+    _graph_review_diagnostics_from_events,
     _judge_payload,
     _load_resume_evaluations,
     _write_outputs,
@@ -72,8 +76,25 @@ def test_two_clear_critical_failures_block():
     assert decide_semantic_gate(first, second).status == "fail"
 
 
-def test_judge_disagreement_requires_manual_review():
-    first = result(("safety", "fail", True), ("relevance", "pass", False))
+def test_critical_failure_takes_precedence_over_borderline_dimension():
+    judgment = result(("safety", "fail", True), ("relevance", "borderline", False))
+
+    first = decide_semantic_gate(judgment)
+    assert first.status == "fail"
+    assert (
+        decide_semantic_gate(
+            judgment, result(("relevance", "borderline", False))
+        ).status
+        == "fail"
+    )
+    assert (
+        decide_semantic_gate(result(("safety", "pass", True)), judgment).status
+        == "fail"
+    )
+
+
+def test_noncritical_judge_disagreement_requires_manual_review():
+    first = result(("safety", "pass", True), ("relevance", "fail", False))
     second = result(("safety", "pass", True), ("relevance", "pass", False))
 
     assert decide_semantic_gate(first, second).status == "manual_review"
@@ -94,16 +115,656 @@ def test_report_only_review_never_masks_clear_or_infrastructure_failures():
     )
 
 
-@pytest.mark.asyncio
-async def test_report_only_policy_is_replay_only():
-    args = SimpleNamespace(
-        manual_review_policy="report-only",
-        require_approved_corpus=True,
-        capture_replay=False,
+def test_typed_browser_failure_details_override_legacy_error_text():
+    assert (
+        _classify_deterministic(
+            ["provider timed out"],
+            [{"kind": "quality"}],
+        )
+        == "quality"
+    )
+    assert (
+        _classify_deterministic(
+            ["graph data was withheld"],
+            [{"kind": "infrastructure"}],
+        )
+        == "infrastructure"
     )
 
-    with pytest.raises(RuntimeError, match="approved semantic replay"):
-        await evaluate(args)
+
+def test_legacy_deterministic_failure_without_details_uses_text_classification():
+    assert _classify_deterministic(["provider timed out"]) == "infrastructure"
+
+
+def test_invalid_typed_browser_failure_details_are_rejected():
+    with pytest.raises(RuntimeError, match="invalid kind"):
+        _classify_deterministic(["provider timed out"], [{"kind": "unknown"}])
+
+
+def test_graph_review_diagnostics_project_only_allowlisted_metadata():
+    fingerprint = "a" * 64
+    events = [
+        {
+            "type": "workflow_progress",
+            "diagnostic": {
+                "schema_version": 1,
+                "repair_round": 1,
+                "critic_call_count": 2,
+                "protocol_correction_count": 0,
+                "contract_correction_count": 1,
+                "depth": "prototype",
+                "locked_layers": ["render"],
+                "reopened_layers": ["composition", "connections"],
+                "finding_codes": ["edge_semantics"],
+                "blocker_ids": ["rubric:connections:edge_semantics"],
+                "selector_fingerprints": [fingerprint],
+                "prior_blocker_dispositions": [
+                    {"prior_obligation_id": "blocker-1", "status": "resolved"}
+                ],
+                "review_disposition": "rejected",
+                "validation_rule": "locked_record_changed",
+                "validation_path_fingerprint": fingerprint,
+                "raw_prompt": "discard this",
+            },
+        },
+        {
+            "type": "workflow_progress",
+            "diagnostic": {
+                "schema_version": 1,
+                "repair_round": 1,
+                "critic_call_count": 2,
+                "protocol_correction_count": 0,
+                "contract_correction_count": 1,
+                "depth": "prototype",
+                "locked_layers": ["render"],
+                "reopened_layers": ["composition", "connections"],
+                "finding_codes": ["edge_semantics"],
+                "blocker_ids": ["rubric:connections:edge_semantics"],
+                "selector_fingerprints": [fingerprint],
+                "prior_blocker_dispositions": [
+                    {"prior_obligation_id": "blocker-1", "status": "resolved"}
+                ],
+                "review_disposition": "rejected",
+                "validation_rule": "locked_record_changed",
+                "validation_path_fingerprint": fingerprint,
+            },
+        },
+    ]
+
+    assert _graph_review_diagnostics_from_events(events) == [
+        {
+            "schema_version": 1,
+            "repair_round": 1,
+            "critic_call_count": 2,
+            "protocol_correction_count": 0,
+            "contract_correction_count": 1,
+            "depth": "prototype",
+            "locked_layers": ["render"],
+            "reopened_layers": ["composition", "connections"],
+            "finding_codes": ["edge_semantics"],
+            "blocker_ids": ["rubric:connections:edge_semantics"],
+            "selector_fingerprints": [fingerprint],
+            "prior_blocker_dispositions": [
+                {"prior_obligation_id": "blocker-1", "status": "resolved"}
+            ],
+            "review_disposition": "rejected",
+            "validation_rule": "locked_record_changed",
+            "validation_path_fingerprint": fingerprint,
+        }
+    ]
+
+
+def test_staged_gate_diagnostic_projects_only_fixed_safe_metadata():
+    fingerprint = "c" * 64
+    diagnostic = {
+        "schema_version": 1,
+        "kind": "staged_gate",
+        "stage": "components",
+        "attempt": 2,
+        "code": "gate_rejected",
+        "candidate_fingerprint": fingerprint,
+        "findings": [
+            {
+                "rule_code": "domain_specificity",
+                "record_paths": ["components", "components.0"],
+            },
+            {
+                "rule_code": "capability_classification",
+                "record_paths": ["components.3"],
+            },
+        ],
+    }
+    events = [
+        {
+            "type": "workflow_progress",
+            "diagnostic": {
+                **diagnostic,
+                "extra": "discarded",
+            },
+        },
+        {
+            "type": "workflow_progress",
+            "diagnostic": {**diagnostic, "kind": "staged_generation"},
+        },
+        {"type": "workflow_progress", "diagnostic": diagnostic},
+    ]
+    projected = {
+        "schema_version": 1,
+        "kind": "staged_gate",
+        "stage": "components",
+        "attempt": 2,
+        "code": "gate_rejected",
+        "candidate_fingerprint": fingerprint,
+        "findings": [
+            {
+                "rule_code": "domain_specificity",
+                "record_paths": ["components", "components.0"],
+            },
+            {
+                "rule_code": "capability_classification",
+                "record_paths": ["components.3"],
+            },
+        ],
+    }
+
+    assert _graph_review_diagnostics_from_events(events) == [projected]
+
+
+def test_staged_generation_diagnostic_projects_only_fixed_safe_metadata():
+    fingerprint = "f" * 64
+    diagnostic = {
+        "schema_version": 1,
+        "kind": "staged_generation",
+        "stage": "components",
+        "attempt": 2,
+        "code": "contract_rejected",
+        "path": "components.0.label",
+        "path_fingerprint": fingerprint,
+        "candidate_fingerprint": fingerprint,
+        "fingerprint_disposition": "rejected_before_render",
+    }
+    events = [
+        {"type": "workflow_progress", "diagnostic": {**diagnostic, "prompt": "drop"}},
+        {
+            "type": "workflow_progress",
+            "diagnostic": {**diagnostic, "path": "components/0/label"},
+        },
+        {"type": "workflow_progress", "diagnostic": diagnostic},
+    ]
+
+    assert _graph_review_diagnostics_from_events(events) == [diagnostic]
+
+
+def test_staged_gate_diagnostic_rejects_malformed_payloads():
+    fingerprint = "d" * 64
+    finding = {
+        "rule_code": "domain_specificity",
+        "record_paths": ["components.0"],
+    }
+    diagnostic = {
+        "schema_version": 1,
+        "kind": "staged_gate",
+        "stage": "components",
+        "attempt": 2,
+        "code": "gate_rejected",
+        "candidate_fingerprint": fingerprint,
+        "findings": [finding],
+    }
+    invalid_diagnostics = [
+        {**diagnostic, "stage": "composition"},
+        {**diagnostic, "attempt": True},
+        {**diagnostic, "code": "raw_provider_error"},
+        {**diagnostic, "candidate_fingerprint": "short"},
+        {**diagnostic, "prompt": "raw prompt"},
+        {
+            **diagnostic,
+            "findings": [{**finding, "reason": "raw model reason"}],
+        },
+        {
+            **diagnostic,
+            "findings": [
+                {"rule_code": "safe_action_boundary", "record_paths": ["components"]}
+            ],
+        },
+        {
+            **diagnostic,
+            "findings": [{**finding, "record_paths": ["components.-1"]}],
+        },
+        {
+            **diagnostic,
+            "findings": [{**finding, "record_paths": ["components.01"]}],
+        },
+        {
+            **diagnostic,
+            "findings": [{**finding, "record_paths": ["components.0", "components.0"]}],
+        },
+    ]
+    events = [
+        {"type": "workflow_progress", "diagnostic": value}
+        for value in invalid_diagnostics
+    ]
+
+    assert _graph_review_diagnostics_from_events(events) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selection", ["empty", "subset", "duplicate", "unknown"])
+async def test_nightly_evaluation_rejects_incomplete_case_selection(
+    monkeypatch, selection
+):
+    case_ids = live_runner._manifest()["live"]["suites"]["full"][:4]
+    selected = {
+        "empty": [],
+        "subset": case_ids[:3],
+        "duplicate": [*case_ids[:3], case_ids[0]],
+        "unknown": [*case_ids[:3], "unknown-case"],
+    }[selection]
+    capture = {"results": [{"id": case_id} for case_id in selected]}
+    monkeypatch.setattr(live_runner, "_load_capture", lambda _args: capture)
+
+    def unexpected_judge():
+        pytest.fail("invalid nightly selections must fail before judge initialization")
+
+    monkeypatch.setattr(live_runner, "SemanticJudge", unexpected_judge)
+    with pytest.raises(RuntimeError, match="exactly four unique full-suite cases"):
+        await evaluate(
+            SimpleNamespace(
+                manual_review_policy="blocking",
+                require_approved_corpus=False,
+                capture_replay=False,
+                suite="nightly",
+                case=[],
+                target="https://candidate.example",
+                resume_input=None,
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_nightly_evaluation_accepts_saved_case_selection(monkeypatch):
+    case_ids = live_runner._manifest()["live"]["suites"]["full"][:4]
+    capture = {
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "results": [
+            {
+                "id": case_id,
+                "deterministic_failures": ["provider unavailable"],
+                "failure_details": [{"kind": "infrastructure"}],
+            }
+            for case_id in case_ids
+        ],
+        "application_telemetry": [],
+    }
+    monkeypatch.setattr(live_runner, "_load_capture", lambda _args: capture)
+    report, exit_code = await evaluate(
+        SimpleNamespace(
+            manual_review_policy="blocking",
+            require_approved_corpus=False,
+            capture_replay=False,
+            suite="nightly",
+            case=[],
+            target="https://candidate.example",
+            resume_input=None,
+        )
+    )
+
+    assert exit_code == 2
+    assert [evaluation["id"] for evaluation in report["evaluations"]] == case_ids
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("telemetry_count", [0, 1, 2])
+@pytest.mark.parametrize(
+    ("failure_kinds", "expected_exit"),
+    [(("quality", "infrastructure"), 1), (("infrastructure", "infrastructure"), 2)],
+)
+async def test_live_evaluation_preserves_failures_when_telemetry_is_missing(
+    monkeypatch, telemetry_count, failure_kinds, expected_exit
+):
+    cases = load_corpus().cases[:2]
+    diagnostic = {
+        "schema_version": 1,
+        "kind": "staged_gate",
+        "stage": "components",
+        "attempt": 1,
+        "code": "gate_rejected",
+        "candidate_fingerprint": "a" * 64,
+        "findings": [],
+    }
+    capture = {
+        "results": [
+            {
+                "id": case.id,
+                "thread_id": f"thread-{index}",
+                "deterministic_failures": [f"failure-{index}"],
+                "failure_details": [{"kind": failure_kinds[index]}],
+                "events": [{"type": "workflow_progress", "diagnostic": diagnostic}],
+            }
+            for index, case in enumerate(cases)
+        ],
+        "application_telemetry": [
+            {
+                "thread_id": f"thread-{index}",
+                "operation": "synthesis",
+                "model": "claude-sonnet-5",
+                "input_tokens": 10,
+                "output_tokens": 2,
+            }
+            for index in range(telemetry_count)
+        ],
+    }
+    monkeypatch.setattr(live_runner, "_load_capture", lambda _args: capture)
+
+    def unexpected_judge():
+        pytest.fail("deterministic failures must not initialize a semantic judge")
+
+    monkeypatch.setattr(live_runner, "SemanticJudge", unexpected_judge)
+    report, exit_code = await evaluate(
+        SimpleNamespace(
+            manual_review_policy="blocking",
+            require_approved_corpus=False,
+            capture_replay=False,
+            suite="diagnostic",
+            case=[case.id for case in cases],
+            target="https://candidate.example",
+            resume_input=None,
+        )
+    )
+
+    assert exit_code == expected_exit
+    assert [item["decision"] for item in report["evaluations"]] == [
+        "fail" if kind == "quality" else "infrastructure" for kind in failure_kinds
+    ]
+    for index, evaluation in enumerate(report["evaluations"]):
+        assert evaluation["deterministic_failures"] == [f"failure-{index}"]
+        assert evaluation["graph_review_diagnostics"] == [diagnostic]
+        assert evaluation["judgments"] == []
+    assert report["budget"]["judge_calls"] == 0
+    assert report["cost_accounting"]["application"]["status"] == (
+        "pass" if telemetry_count == 2 else "infrastructure"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("thread_id", [None, "thread-1"])
+async def test_live_evaluation_rejects_success_without_telemetry(
+    monkeypatch, thread_id
+):
+    case = load_corpus().cases[0]
+    capture = {
+        "results": [
+            {
+                "id": case.id,
+                "thread_id": thread_id,
+                "deterministic_failures": [],
+                "events": [],
+                "answer": "successful-looking answer",
+            }
+        ],
+        "application_telemetry": [],
+    }
+    monkeypatch.setattr(live_runner, "_load_capture", lambda _args: capture)
+
+    def unexpected_judge():
+        pytest.fail("missing application telemetry must not trigger judge spending")
+
+    monkeypatch.setattr(live_runner, "SemanticJudge", unexpected_judge)
+    report, exit_code = await evaluate(
+        SimpleNamespace(
+            manual_review_policy="blocking",
+            require_approved_corpus=False,
+            capture_replay=False,
+            suite="diagnostic",
+            case=[case.id],
+            target="https://candidate.example",
+            resume_input=None,
+        )
+    )
+
+    assert exit_code == 2
+    assert report["status"] == "infrastructure"
+    assert report["evaluations"][0]["decision"] == "infrastructure"
+    assert "no application model-call telemetry" in report["reason"]
+    assert report["evaluations"][0]["reason"] == report["reason"]
+    assert report["budget"]["judge_calls"] == 0
+
+
+@pytest.mark.asyncio
+async def test_live_evaluation_records_projected_graph_review_diagnostics(monkeypatch):
+    case = load_corpus().cases[0]
+    fingerprint = "b" * 64
+    capture = {
+        "results": [
+            {
+                "id": case.id,
+                "deterministic_failures": ["graph was withheld"],
+                "failure_details": [{"kind": "quality"}],
+                "events": [
+                    {
+                        "type": "workflow_progress",
+                        "diagnostic": {
+                            "schema_version": 1,
+                            "repair_round": 0,
+                            "critic_call_count": 1,
+                            "protocol_correction_count": 0,
+                            "contract_correction_count": 0,
+                            "depth": "prototype",
+                            "locked_layers": [],
+                            "reopened_layers": [
+                                "components",
+                                "connections",
+                                "composition",
+                            ],
+                            "finding_codes": ["edge_semantics"],
+                            "blocker_ids": ["rubric:connections:edge_semantics"],
+                            "selector_fingerprints": [fingerprint],
+                            "prior_blocker_dispositions": [],
+                            "review_disposition": "rejected",
+                        },
+                    }
+                ],
+            }
+        ],
+        "application_telemetry": [{"provider_attempts": 1}],
+    }
+    monkeypatch.setattr(live_runner, "_load_capture", lambda _args: capture)
+    monkeypatch.setattr(
+        live_runner,
+        "_manifest",
+        lambda: {
+            "live": {
+                "budgets": {
+                    "application_calls": 2,
+                    "application_full_calls": 2,
+                    "judge_calls": 2,
+                    "pr_cases": 2,
+                },
+                "cost_policy": {},
+                "suites": {},
+            }
+        },
+    )
+    monkeypatch.setattr(
+        live_runner,
+        "account_application_cost",
+        lambda *_args: {"total": {"estimated_usd": 0}, "price_release": "test"},
+    )
+    monkeypatch.setattr(
+        live_runner,
+        "evaluate_cost_policy",
+        lambda *_args: {
+            "status": "pass",
+            "blocking_status": "pass",
+            "reason": "within budget",
+        },
+    )
+    monkeypatch.setattr(
+        live_runner,
+        "SemanticJudge",
+        lambda: SimpleNamespace(provider="anthropic", model="claude-sonnet-5"),
+    )
+
+    report, exit_code = await evaluate(
+        SimpleNamespace(
+            manual_review_policy="blocking",
+            require_approved_corpus=False,
+            capture_replay=False,
+            suite="diagnostic",
+            case=[case.id],
+            target="https://candidate.example",
+            resume_input=None,
+        )
+    )
+
+    assert exit_code == 1
+    assert report["evaluations"][0]["graph_review_diagnostics"] == [
+        {
+            "schema_version": 1,
+            "repair_round": 0,
+            "critic_call_count": 1,
+            "protocol_correction_count": 0,
+            "contract_correction_count": 0,
+            "depth": "prototype",
+            "locked_layers": [],
+            "reopened_layers": ["components", "composition", "connections"],
+            "finding_codes": ["edge_semantics"],
+            "blocker_ids": ["rubric:connections:edge_semantics"],
+            "selector_fingerprints": [fingerprint],
+            "prior_blocker_dispositions": [],
+            "review_disposition": "rejected",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_live_evaluation_records_projected_staged_gate_diagnostics(monkeypatch):
+    case = load_corpus().cases[0]
+    fingerprint = "e" * 64
+    capture = {
+        "results": [
+            {
+                "id": case.id,
+                "deterministic_failures": ["graph was withheld"],
+                "failure_details": [{"kind": "quality"}],
+                "events": [
+                    {
+                        "type": "workflow_progress",
+                        "diagnostic": {
+                            "schema_version": 1,
+                            "kind": "staged_gate",
+                            "stage": "connections",
+                            "attempt": 1,
+                            "code": "gate_unavailable",
+                            "candidate_fingerprint": fingerprint,
+                            "findings": [
+                                {
+                                    "rule_code": "runtime_completeness",
+                                    "record_paths": ["connections", "connections.0"],
+                                },
+                                {
+                                    "rule_code": "authorization_and_compensation",
+                                    "record_paths": ["connections.1", "connections.11"],
+                                },
+                                {
+                                    "rule_code": "safe_action_boundary",
+                                    "record_paths": ["connections.2", "connections.3"],
+                                },
+                            ],
+                        },
+                    }
+                ],
+            }
+        ],
+        "application_telemetry": [{"provider_attempts": 1}],
+    }
+    monkeypatch.setattr(live_runner, "_load_capture", lambda _args: capture)
+    monkeypatch.setattr(
+        live_runner,
+        "_manifest",
+        lambda: {
+            "live": {
+                "budgets": {
+                    "application_calls": 2,
+                    "application_full_calls": 2,
+                    "judge_calls": 2,
+                    "pr_cases": 2,
+                },
+                "cost_policy": {},
+                "suites": {},
+            }
+        },
+    )
+    monkeypatch.setattr(
+        live_runner,
+        "account_application_cost",
+        lambda *_args: {"total": {"estimated_usd": 0}, "price_release": "test"},
+    )
+    monkeypatch.setattr(
+        live_runner,
+        "evaluate_cost_policy",
+        lambda *_args: {
+            "status": "pass",
+            "blocking_status": "pass",
+            "reason": "within budget",
+        },
+    )
+    monkeypatch.setattr(
+        live_runner,
+        "SemanticJudge",
+        lambda: SimpleNamespace(provider="anthropic", model="claude-sonnet-5"),
+    )
+
+    report, exit_code = await evaluate(
+        SimpleNamespace(
+            manual_review_policy="blocking",
+            require_approved_corpus=False,
+            capture_replay=False,
+            suite="diagnostic",
+            case=[case.id],
+            target="https://candidate.example",
+            resume_input=None,
+        )
+    )
+
+    assert exit_code == 1
+    assert report["evaluations"][0]["graph_review_diagnostics"] == [
+        {
+            "schema_version": 1,
+            "kind": "staged_gate",
+            "stage": "connections",
+            "attempt": 1,
+            "code": "gate_unavailable",
+            "candidate_fingerprint": fingerprint,
+            "findings": [
+                {
+                    "rule_code": "runtime_completeness",
+                    "record_paths": ["connections", "connections.0"],
+                },
+                {
+                    "rule_code": "authorization_and_compensation",
+                    "record_paths": ["connections.1", "connections.11"],
+                },
+                {
+                    "rule_code": "safe_action_boundary",
+                    "record_paths": ["connections.2", "connections.3"],
+                },
+            ],
+        }
+    ]
+
+
+def test_live_defaults_allow_automated_evaluation_without_corpus_approval():
+    args = live_runner.build_parser().parse_args([
+        "--suite", "full", "--target", "https://candidate.example",
+    ])
+    assert args.manual_review_policy == "report-only"
+    assert args.require_approved_corpus is False
+    explicit = live_runner.build_parser().parse_args([
+        "--suite", "full", "--target", "https://candidate.example",
+        "--require-approved-corpus", "--manual-review-policy", "blocking",
+    ])
+    assert explicit.require_approved_corpus is True
+    assert explicit.manual_review_policy == "blocking"
 
 
 def test_noncritical_pass_threshold_is_enforced():
@@ -423,7 +1084,20 @@ async def test_anthropic_judge_prefers_eval_judge_api_key(monkeypatch):
     assert constructor_calls == [{"api_key": "anthropic-fallback-key"}]
 
 
-def test_semantic_replay_reuses_only_identity_bound_valid_judgments(tmp_path):
+@pytest.mark.parametrize(
+    ("saved_failures", "capture_failures", "decision", "valid"),
+    [
+        ([], [], "pass", True),
+        (["graph missing"], ["graph missing"], "fail", True),
+        (["graph missing"], ["graph missing"], "pass", False),
+        ([], ["graph missing"], "pass", False),
+        (["graph missing"], [], "fail", False),
+        (["old failure"], ["graph missing"], "fail", False),
+    ],
+)
+def test_semantic_replay_reuses_only_identity_bound_valid_judgments(
+    tmp_path, saved_failures, capture_failures, decision, valid
+):
     corpus = load_corpus()
     case = corpus.cases[0]
     target = "https://approved-evidence.example"
@@ -459,9 +1133,9 @@ def test_semantic_replay_reuses_only_identity_bound_valid_judgments(tmp_path):
                 "evaluations": [
                     {
                         "id": case.id,
-                        "decision": "pass",
+                        "decision": decision,
                         "reason": "judge passed every dimension",
-                        "deterministic_failures": [],
+                        "deterministic_failures": saved_failures,
                         "judgments": [judgment],
                     }
                 ],
@@ -476,12 +1150,20 @@ def test_semantic_replay_reuses_only_identity_bound_valid_judgments(tmp_path):
         target=target,
     )
 
-    resumed = _load_resume_evaluations(
-        args,
-        corpus,
-        SimpleNamespace(provider="anthropic", model="claude-sonnet-5"),
-        [case.id],
-    )
+    def load_resume():
+        return _load_resume_evaluations(
+            args,
+            corpus,
+            SimpleNamespace(provider="anthropic", model="claude-sonnet-5"),
+            [case.id],
+            deterministic_failures_by_case={case.id: capture_failures},
+        )
+
+    if not valid:
+        with pytest.raises(RuntimeError, match="resume"):
+            load_resume()
+        return
+    resumed = load_resume()
 
     assert list(resumed) == [case.id]
     assert resumed[case.id]["judgments"] == [judgment]
@@ -691,10 +1373,149 @@ def test_judge_payload_bounds_and_preserves_retrieval_evidence():
         {
             "query": "current practice",
             "result": "Report — <https://example.com/report>: current evidence",
+            "provenance": "legacy_telemetry_not_exact_synthesis_input",
             "eval_turn": 2,
         }
     ]
     assert payload["events"] == []
+
+
+def test_judge_payload_preserves_public_graph_semantics():
+    graph = {
+        "capabilities": {"external_effects": False},
+        "root_node_id": "a",
+        "sequence": [{"step": 1, "nodes": ["a"], "description": "Start"}],
+        "nodes": [{"id": "a", "lane": "main", "primary_flow_member": True}],
+        "edges": [
+            {
+                "source": "a",
+                "target": "b",
+                "label": "Read",
+                "description": "Read baseline",
+                "flow": "runtime",
+                "sync": "sync",
+            }
+        ],
+    }
+    projected = _judge_payload({"graph": graph})["graph"]
+    for field in ("capabilities", "root_node_id", "sequence", "nodes", "edges"):
+        assert projected[field] == graph[field]
+    assert (
+        "capabilities"
+        not in _judge_payload({"graph": {"nodes": [], "edges": []}})["graph"]
+    )
+
+
+def test_exact_answer_evidence_excludes_hidden_retrieval_tail_and_stale_memory():
+    payload = _judge_payload(
+        {
+            "turns": [{"answer": "First answer"}, {"answer": "Memory answer"}],
+            "events": [
+                {
+                    "type": "retrieval_evidence",
+                    "eval_turn": 1,
+                    "chunks": [{"text": "visible excerpt HIDDEN TAIL"}],
+                },
+                {
+                    "type": "research_evidence",
+                    "eval_turn": 1,
+                    "results": ["UNUSED SEARCH RESULT"],
+                },
+                {
+                    "type": "answer_evidence",
+                    "schema_version": 1,
+                    "source": "synthesis_input",
+                    "prompt_version": "answer-v1",
+                    "eval_turn": 1,
+                    "book_context": "[1] Chapter 1, p.26\nvisible excerpt",
+                    "research_context": "exact research snippet",
+                },
+                {
+                    "type": "retrieval_evidence",
+                    "eval_turn": 2,
+                    "chunks": [{"text": "STALE MEMORY EVIDENCE"}],
+                },
+                {
+                    "type": "answer_evidence",
+                    "schema_version": 1,
+                    "source": "synthesis_input",
+                    "prompt_version": "answer-v1",
+                    "eval_turn": 2,
+                    "book_context": "",
+                    "research_context": "",
+                },
+            ],
+        }
+    )
+    assert payload["retrieval_evidence"] == []
+    assert payload["research_evidence"] == []
+    assert payload["answer_evidence"][0]["book_context"].endswith("visible excerpt")
+    assert payload["answer_evidence"][1]["book_context"] == ""
+    sources = _artifact_sources(payload)
+    combined = " ".join(sources.values())
+    assert "visible excerpt" in combined and "exact research snippet" in combined
+    assert "HIDDEN TAIL" not in combined
+    assert "STALE MEMORY" not in combined
+    assert "UNUSED SEARCH" not in combined
+    assert [item["status"] for item in payload["evidence_provenance"]] == [
+        "exact_synthesis_input",
+        "exact_synthesis_input",
+    ]
+
+
+def test_mixed_capture_retains_legacy_turn_with_explicit_visibility_limit():
+    payload = _judge_payload(
+        {
+            "turns": [{"answer": "Historical"}, {"answer": "Current"}],
+            "events": [
+                {
+                    "type": "retrieval_evidence",
+                    "eval_turn": 1,
+                    "chunks": [{"text": "legacy raw passage"}],
+                },
+                {
+                    "type": "answer_evidence",
+                    "schema_version": 1,
+                    "source": "synthesis_input",
+                    "prompt_version": "answer-v1",
+                    "eval_turn": 2,
+                    "book_context": "current excerpt",
+                    "research_context": "",
+                },
+            ],
+        }
+    )
+    assert payload["retrieval_evidence"][0]["text"] == "legacy raw passage"
+    assert (
+        payload["retrieval_evidence"][0]["provenance"]
+        == "legacy_telemetry_not_exact_synthesis_input"
+    )
+    assert (
+        payload["evidence_provenance"][0]["status"]
+        == "legacy_capture_exact_synthesis_input_unavailable"
+    )
+    _, prompt = _judge_prompt(
+        load_corpus(), load_corpus().by_id["rag-grounding"], _artifact_sources(payload)
+    )
+    assert "legacy_capture_exact_synthesis_input_unavailable" in prompt
+
+
+@pytest.mark.parametrize(
+    "change", [{"schema_version": 2}, {"book_context": None}, {"eval_turn": 3}]
+)
+def test_invalid_exact_answer_evidence_is_not_silently_treated_as_legacy(change):
+    packet = {
+        "type": "answer_evidence",
+        "schema_version": 1,
+        "source": "synthesis_input",
+        "prompt_version": "answer-v1",
+        "eval_turn": 1,
+        "book_context": "",
+        "research_context": "",
+        **change,
+    }
+    with pytest.raises(ValueError, match="answer_evidence"):
+        _judge_payload({"answer": "Answer", "events": [packet]})
 
 
 @pytest.mark.asyncio
@@ -808,7 +1629,7 @@ def test_calibration_report_uses_every_reviewed_case_and_dimension():
         case.approval.status = "approved"
         case.approval.reviewer = "reviewer"
         case.approval.reviewed_at = "2026-07-18T12:00:00Z"
-        case.approval.review_run_id = "github-run-123"
+        case.approval.review_run_id = "123"
         case.approval.reviewed_grades = {
             dimension: "pass" for dimension in case.rubric_dimensions
         }
@@ -995,3 +1816,437 @@ def test_report_only_manual_review_is_visible_but_not_a_junit_failure(tmp_path):
     assert 'skipped="1"' in junit
     assert "<skipped" in junit
     assert "borderline dimension" in junit
+
+
+@pytest.fixture
+def complete_calibration_capture():
+    corpus = load_corpus()
+    results = []
+    for case in corpus.cases:
+        results.append(
+            {
+                "id": case.id,
+                "execution_state": "completed",
+                "passed": True,
+                "deterministic_failures": [],
+                "failure_details": [],
+                "turns": [
+                    {"turn": index, "prompt": step.prompt, "answer": "Captured answer."}
+                    for index, step in enumerate(case.steps, start=1)
+                ],
+                "events": [
+                    {"type": "done", "eval_turn": index}
+                    for index in range(1, len(case.steps) + 1)
+                ],
+                "screenshot": f"{case.id}.png",
+                "trace": f"{case.id}.zip",
+            }
+        )
+    return {
+        "format_version": 1,
+        "kind": "browser_capture",
+        "suite": "full",
+        "status": "complete",
+        "corpus_version": corpus.corpus_version,
+        "release_identity": corpus.release_identity,
+        "dashboard_smoke": {"passed": True},
+        "results": results,
+        "case_states": [{"id": case.id, "state": "completed"} for case in corpus.cases],
+        "application_telemetry": [],
+    }
+
+
+def _full_replay_args(*, replay=True):
+    return SimpleNamespace(
+        manual_review_policy="blocking",
+        require_approved_corpus=False,
+        capture_replay=replay,
+        suite="full",
+        case=[],
+        target="https://candidate.example",
+        resume_input=None,
+    )
+
+
+def _passing_replay_judge(monkeypatch, *, critical_failure=False):
+    calls = []
+
+    async def judge(_judge, _corpus, case, _payload, *, on_attempt):
+        calls.append(case.id)
+        on_attempt()
+        return replace(
+            result(
+                *(
+                    (
+                        dimension,
+                        "fail" if critical_failure and index == 0 else "pass",
+                        critical_failure and index == 0,
+                    )
+                    for index, dimension in enumerate(case.rubric_dimensions)
+                )
+            ),
+            provider="anthropic",
+            model="claude-sonnet-5",
+        )
+
+    monkeypatch.setattr(live_runner, "SemanticJudge", lambda: object())
+    monkeypatch.setattr(live_runner, "judge_with_transport_retry", judge)
+    return calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replay", [False, True])
+async def test_calibration_grades_complete_product_failures_without_overriding_them(
+    monkeypatch, tmp_path, complete_calibration_capture, replay
+):
+    capture = complete_calibration_capture
+    failed = capture["results"][0]
+    failed.update(
+        passed=False,
+        deterministic_failures=["graph missing"],
+        failure_details=[{"kind": "quality"}],
+    )
+    monkeypatch.setattr(live_runner, "_load_capture", lambda _args: capture)
+    calls = _passing_replay_judge(monkeypatch)
+
+    report, code = await evaluate(_full_replay_args(replay=replay))
+
+    assert code == 1
+    evaluation = report["evaluations"][0]
+    assert evaluation["decision"] == "fail"
+    assert evaluation["deterministic_failures"] == ["graph missing"]
+    assert len(evaluation["judgments"]) == int(replay)
+    assert len(calls) == (len(capture["results"]) if replay else 0)
+    assert report["cost_accounting"]["application"]["status"] == "infrastructure"
+    if replay:
+        assert all(item["decision"] == "pass" for item in report["evaluations"][1:])
+        assert report["budget"]["application_calls"] == 0
+        assert report["cost_accounting"]["policy"]["scope"] == "source_capture"
+        path = tmp_path / "report.json"
+        _write_outputs(path, report)
+        import xml.etree.ElementTree as ET
+
+        tree = ET.parse(path.parent / "live-junit.xml")
+        cost = tree.find(".//testcase[@name='application-cost-policy']")
+        assert cost.find("failure") is None
+        assert cost.find("skipped") is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["infrastructure", "missing_answer", "missing_done"])
+async def test_calibration_rejects_incomplete_or_infrastructure_capture_before_judging(
+    monkeypatch, complete_calibration_capture, fault
+):
+    capture = complete_calibration_capture
+    first = capture["results"][0]
+    if fault == "infrastructure":
+        first.update(
+            passed=False,
+            deterministic_failures=["transport failure"],
+            failure_details=[{"kind": "infrastructure"}],
+        )
+    elif fault == "missing_answer":
+        first["turns"][0]["answer"] = ""
+    else:
+        first["events"] = []
+    monkeypatch.setattr(live_runner, "_load_capture", lambda _args: capture)
+    calls = _passing_replay_judge(monkeypatch)
+    with pytest.raises(ValueError):
+        await evaluate(_full_replay_args())
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_replay_critical_failure_uses_one_judgment_per_case(
+    monkeypatch, complete_calibration_capture
+):
+    monkeypatch.setattr(
+        live_runner, "_load_capture", lambda _args: complete_calibration_capture
+    )
+    calls = _passing_replay_judge(monkeypatch, critical_failure=True)
+    report, code = await evaluate(_full_replay_args())
+    assert code == 1
+    assert len(calls) == len(complete_calibration_capture["results"])
+    assert all(
+        item["decision"] == "fail" and len(item["judgments"]) == 1
+        for item in report["evaluations"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_replay_source_accounting_does_not_hide_new_judge_failure(
+    monkeypatch, complete_calibration_capture
+):
+    monkeypatch.setattr(
+        live_runner, "_load_capture", lambda _args: complete_calibration_capture
+    )
+    _passing_replay_judge(monkeypatch)
+
+    async def unavailable(*_args, **_kwargs):
+        raise RuntimeError("judge unavailable")
+
+    monkeypatch.setattr(live_runner, "judge_with_transport_retry", unavailable)
+    report, code = await evaluate(_full_replay_args())
+    assert code == 2
+    assert report["status"] == "infrastructure"
+    assert all("judge unavailable" in item["reason"] for item in report["evaluations"])
+
+
+@pytest.mark.asyncio
+async def test_replay_retains_priced_source_usage_without_spending_application_budget(
+    monkeypatch, complete_calibration_capture
+):
+    capture = complete_calibration_capture
+    for row in capture["results"]:
+        row["thread_id"] = row["id"]
+        capture["application_telemetry"].append(
+            {
+                "thread_id": row["id"],
+                "operation": "synthesis",
+                "model": "claude-sonnet-5",
+                "status": "success",
+                "provider_attempts": 100,
+                "input_tokens": 100,
+                "output_tokens": 10,
+            }
+        )
+    monkeypatch.setattr(live_runner, "_load_capture", lambda _args: capture)
+    _passing_replay_judge(monkeypatch)
+    report, code = await evaluate(_full_replay_args())
+    assert code == 0
+    assert report["budget"]["application_calls"] == 0
+    assert report["budget"]["source_application_calls"] == 100 * len(capture["results"])
+    assert report["estimated_cost"]["application_usd"] == 0
+    assert report["estimated_cost"]["source_application_usd"] > 0
+    assert report["cost_accounting"]["application"]["status"] == "pass"
+
+
+@pytest.mark.parametrize("final_packet", [False, True])
+def test_response_reset_discards_abandoned_exact_and_legacy_evidence(final_packet):
+    packet = {
+        "type": "answer_evidence",
+        "schema_version": 1,
+        "source": "synthesis_input",
+        "prompt_version": "test",
+        "eval_turn": 1,
+        "book_context": "OLD EXACT",
+        "research_context": "OLD RESEARCH",
+    }
+    events = [
+        packet,
+        {
+            "type": "retrieval_evidence",
+            "eval_turn": 1,
+            "chunks": [{"text": "OLD LEGACY"}],
+        },
+        {"type": "response_reset", "eval_turn": 1},
+    ]
+    if final_packet:
+        events.append({**packet, "book_context": "", "research_context": ""})
+    payload = _judge_payload(
+        {
+            "events": events,
+            "turns": [{"prompt": "Question", "answer": "Final answer"}],
+        }
+    )
+    assert len(payload["answer_evidence"]) == int(final_packet)
+    assert payload["retrieval_evidence"] == []
+    assert "OLD" not in str(_artifact_sources(payload))
+    if final_packet:
+        assert payload["answer_evidence"][0]["book_context"] == ""
+
+
+def test_artifact_source_chunks_preserve_code_and_paragraph_whitespace():
+    original = (
+        "First paragraph.\n\n```python\nif ready:\n    run()\n```\n\nNext paragraph.\n"
+        * 20
+    )
+    sources = {}
+    _add_bounded_sources(sources, "answer", original)
+    assert "".join(sources.values()) == original
+    assert all(len(chunk) <= 500 for chunk in sources.values())
+    packet = {
+        "eval_turn": 1,
+        "source": "synthesis_input",
+        "prompt_version": "test",
+        "book_context": original,
+        "research_context": "",
+    }
+    exact = _artifact_sources({"answer_evidence": [packet]})
+    assert (
+        "".join(
+            value
+            for key, value in exact.items()
+            if key.startswith("turn-1-synthesis-1-book-")
+        )
+        == original
+    )
+
+
+@pytest.mark.parametrize("matching_turn", [0, 1])
+def test_judge_sources_omit_only_equal_top_level_graph(matching_turn):
+    import copy
+
+    first = {"version": "first", "nodes": [{"id": "first"}], "edges": []}
+    second = {"version": "second", "nodes": [{"id": "second"}], "edges": []}
+    turns = [
+        {"answer": "First answer.", "graph": first, "rendered_graph_version": "first"},
+        {"answer": "Second answer.", "graph": second, "rendered_graph_version": "second"},
+    ]
+    sources = _artifact_sources({
+        "turns": turns, "graph": copy.deepcopy(turns[matching_turn]["graph"]),
+    })
+    assert any(key.startswith("graph-") for key in sources) == (matching_turn == 0)
+    assert sources["turn-1-answer-1"] == "First answer."
+    assert sources["turn-2-answer-1"] == "Second answer."
+    assert '"first"' in sources["turn-1-graph-node-1-1"]
+    assert '"second"' in sources["turn-2-graph-node-1-1"]
+    assert "first" in sources["turn-1-render-1"]
+    assert "second" in sources["turn-2-render-1"]
+
+
+@pytest.mark.parametrize("turns", [None, [], [{"answer": "No turn graph."}], [
+    {"answer": "Earlier graph.", "graph": {"nodes": [{"id": "earlier"}], "edges": []}}
+]])
+def test_judge_sources_preserve_legacy_or_distinct_final_graph(turns):
+    graph = {"nodes": [{"id": "final"}], "edges": []}
+    sources = _artifact_sources({"answer": "Answer.", "turns": turns, "graph": graph})
+    assert sources["graph-node-1-1"] == '{"id": "final"}'
+
+
+def test_judge_prompt_preserves_large_graph_once_below_existing_limit():
+    import copy
+    import json
+    from eval.judge_adapter import _add_graph_sources
+
+    # Reproduce the retained 34700167991 case's 20-node/92-edge scale with synthetic content.
+    nodes = [{
+        "id": f"node-{index}", "label": f"Service {index}", "type": "service",
+        "technology": "Application service", "description": "Owns the declared operation and records its outcome.",
+        "tier": "core", "layer": "runtime", "lane": "runtime",
+        "primary_flow_member": index < 5, "is_root": index == 0,
+    } for index in range(20)]
+    edges = [{
+        "source": f"node-{index % 20}", "target": f"node-{(index + 1) % 20}",
+        "label": f"Submit request contract {index}", "technology": "HTTPS JSON",
+        "description": "Transfers the operation identifier, validated request and caller context. The receiver checks ownership, records the result and returns an acknowledgement for reconciliation.",
+        "flow": "runtime", "sync": "sync", "type": "smoothstep", "relation": f"contract-{index}",
+    } for index in range(92)]
+    graph = {
+        "graph_type": "applied", "title": "Synthetic operations system", "version": "v1",
+        "root_node_id": "node-0", "resolved_complexity": "production",
+        "capabilities": {"retrieval": False, "external_effects": True, "learning_or_release": False},
+        "nodes": nodes, "edges": edges, "assumptions": ["Every write requires caller authorization."],
+        "groups": [{"id": "runtime", "label": "Runtime", "nodeIds": [n["id"] for n in nodes]}],
+        "sequence": [{"step": 1, "nodeIds": ["node-0"], "description": "Accept the authorized request."}],
+    }
+    answer = "The proposed system processes authorized operations. " * 100
+    render = {
+        "rendered_graph_version": "v1", "rendered_node_ids": [n["id"] for n in nodes],
+        "rendered_edge_identities": [{k: edge[k] for k in ("source", "target", "label")} for edge in edges],
+    }
+    evidence = _judge_payload({
+        "graph": copy.deepcopy(graph), "turns": [{"answer": answer, "graph": graph, **render}],
+        "events": [{"type": "answer_evidence", "schema_version": 1, "source": "synthesis_input",
+                    "prompt_version": "test", "book_context": "Current evidence. " * 200,
+                    "research_context": "", "eval_turn": 1}],
+    })
+    sources = _artifact_sources(evidence)
+    corpus = load_corpus()
+    _, prompt = _judge_prompt(corpus, corpus.by_id["applied-domain"], sources)
+    assert len(prompt) < 80000
+    duplicated = dict(sources)
+    _add_graph_sources(duplicated, "graph", evidence["graph"])
+    with pytest.raises(RuntimeError, match="bounded prompt size"):
+        _judge_prompt(corpus, corpus.by_id["applied-domain"], duplicated)
+    assert not any(key.startswith("graph-") for key in sources)
+    assert "".join(value for key, value in sources.items() if key.startswith("turn-1-answer-")) == answer
+    assert json.loads("".join(value for key, value in sources.items() if key.startswith("turn-1-render-"))) == render
+    for index, edge in enumerate(evidence["turns"][0]["graph"]["edges"], start=1):
+        prefix = f"turn-1-graph-edge-{index}-"
+        assert json.loads("".join(value for key, value in sources.items() if key.startswith(prefix))) == edge
+    for index, node in enumerate(evidence["turns"][0]["graph"]["nodes"], start=1):
+        prefix = f"turn-1-graph-node-{index}-"
+        assert json.loads("".join(value for key, value in sources.items() if key.startswith(prefix))) == node
+
+
+@pytest.mark.parametrize("failure_count,expected", [(2, "manual_review"), (3, "manual_review"), (4, "fail")])
+def test_noncritical_failures_are_counted_before_borderline(failure_count, expected):
+    judgment = result(*(
+        (f"d{index}", "fail" if index < failure_count else "borderline" if index == 19 else "pass", False)
+        for index in range(20)
+    ))
+    first = decide_semantic_gate(judgment)
+    if expected == "fail":
+        assert first.status == "infrastructure"
+        assert "second independent" in first.reason
+    else:
+        assert first.status == "manual_review"
+    assert decide_semantic_gate(judgment, judgment).status == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome,expected_exit,expected_status,judge_calls", [
+    ("borderline", 0, "manual_review", 1),
+    ("explicit_blocking", 3, "manual_review", 1),
+    ("critical", 1, "fail", 1),
+    ("mixed_confirmed", 1, "fail", 2),
+    ("deterministic", 1, "fail", 0),
+    ("infrastructure", 2, "infrastructure", 1),
+    ("cost_block", 1, "fail", 1),
+])
+async def test_pending_corpus_automated_outcomes_keep_failure_boundaries(
+    monkeypatch, outcome, expected_exit, expected_status, judge_calls
+):
+    corpus = load_corpus()
+    assert corpus.approval.status == "pending_human_review"
+    case = corpus.by_id["memory"]
+    capture = {
+        "results": [{"id": case.id, "answer": "Answer.", "events": [],
+                     "deterministic_failures": ["missing required output"] if outcome == "deterministic" else [],
+                     **({"failure_details": [{"kind": "quality"}]} if outcome == "deterministic" else {})}],
+        "application_telemetry": [{"provider_attempts": 1}],
+    }
+    calls = []
+
+    async def judge(*_args, **kwargs):
+        calls.append(True)
+        kwargs["on_attempt"]()
+        if outcome == "infrastructure":
+            raise RuntimeError("provider unavailable")
+        if outcome == "critical":
+            return replace(result(("safety", "fail", True), ("relevance", "borderline", False)), provider="anthropic", model="claude-sonnet-5")
+        if outcome == "mixed_confirmed":
+            return replace(result(("correctness", "fail", False), ("relevance", "borderline", False)), provider="anthropic", model="claude-sonnet-5")
+        return replace(result(("safety", "pass", True), ("relevance", "borderline", False)), provider="anthropic", model="claude-sonnet-5")
+
+    monkeypatch.setattr(live_runner, "_load_capture", lambda _args: capture)
+    monkeypatch.setattr(live_runner, "SemanticJudge", lambda: SimpleNamespace(provider="anthropic", model="claude-sonnet-5"))
+    monkeypatch.setattr(live_runner, "judge_with_transport_retry", judge)
+    monkeypatch.setattr(live_runner, "account_application_cost", lambda *_args: {"total": {"estimated_usd": 0}, "price_release": "test"})
+    monkeypatch.setattr(live_runner, "evaluate_cost_policy", lambda *_args: {
+        "status": "fail" if outcome == "cost_block" else "pass",
+        "blocking_status": "fail" if outcome == "cost_block" else "pass", "reason": "test policy",
+    })
+    args = live_runner.build_parser().parse_args([
+        "--suite", "diagnostic", "--case", "memory", "--target", "https://candidate.example",
+        *(["--manual-review-policy", "blocking"] if outcome == "explicit_blocking" else []),
+    ])
+    report, exit_code = await evaluate(args)
+    assert exit_code == expected_exit
+    assert report["status"] == expected_status
+    assert report["corpus_approval"] == "pending_human_review"
+    assert len(calls) == judge_calls
+    if outcome in {"borderline", "explicit_blocking", "cost_block"}:
+        assert report["evaluations"][0]["decision"] == "manual_review"
+    if outcome == "borderline":
+        assert report["blocking_status"] == "pass"
+
+
+@pytest.mark.asyncio
+async def test_optional_approved_corpus_flag_still_rejects_pending_before_judging():
+    args = live_runner.build_parser().parse_args([
+        "--suite", "full", "--target", "https://candidate.example", "--require-approved-corpus",
+    ])
+    with pytest.raises(RuntimeError, match="pending human review"):
+        await evaluate(args)

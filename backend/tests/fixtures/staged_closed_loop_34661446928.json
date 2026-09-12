@@ -1,0 +1,494 @@
+{
+  "source": {
+    "run_id": "34661446928",
+    "trace_id": "ae34b674",
+    "component_output": 0,
+    "initial_connection_output": 2,
+    "corrected_connection_output": 3
+  },
+  "candidate": {
+    "title": "Closed-Loop Feedback Evaluation System",
+    "assumptions": [
+      "Raw feedback arrives via push from product surfaces (in-app ratings, comments, support tickets); sources are push-only and the system does not solicit them.",
+      "The loop terminates at publishing versioned evaluation dataset updates; downstream model training or prompt changes are owned by other systems and are passive consumers.",
+      "Scoring combines automated rubric/AI-judge scoring with sampled human review; reviewers can override scores before dataset promotion.",
+      "Feedback may contain PII, so validation includes privacy screening before any scoring or storage in curated datasets.",
+      "Production maturity: each stage is owned, auditable, and supports reprocessing of rejected or contested records."
+    ],
+    "root_index": 0,
+    "capabilities": {
+      "external_effects": false,
+      "retrieval_or_reuse": true,
+      "learning_or_release": false
+    },
+    "components": [
+      {
+        "label": "Feedback Intake Service",
+        "type": 101,
+        "responsibility": "Accepts pushed raw feedback from product surfaces, authenticates submissions, normalizes formats, assigns lineage IDs, persists to the raw store, and initiates the validation pipeline.",
+        "group_label": "Runtime Pipeline",
+        "group_kind": 600,
+        "primary_flow_member": true
+      },
+      {
+        "label": "Raw Feedback Store",
+        "type": 102,
+        "responsibility": "Canonical, immutable store of raw feedback with source, timestamp, and lineage metadata; supports replay for reprocessing and audit.",
+        "group_label": "Data Platform",
+        "group_kind": 601,
+        "primary_flow_member": true
+      },
+      {
+        "label": "Validation Service",
+        "type": 101,
+        "responsibility": "Validates schema completeness, deduplicates submissions, screens for PII and policy violations, and routes records as accepted, quarantined, or rejected with reasons.",
+        "group_label": "Runtime Pipeline",
+        "group_kind": 600,
+        "primary_flow_member": true
+      },
+      {
+        "label": "Scoring Service",
+        "type": 101,
+        "responsibility": "Applies rubric and AI-judge scoring with confidence estimates to validated feedback, selects low-confidence or high-impact samples for human review, and writes score records.",
+        "group_label": "Runtime Pipeline",
+        "group_kind": 600,
+        "primary_flow_member": true
+      },
+      {
+        "label": "Score & Evidence Store",
+        "type": 102,
+        "responsibility": "Stores scores, judge rationales, confidence values, and reviewer decisions per feedback record for traceability and dataset curation queries.",
+        "group_label": "Data Platform",
+        "group_kind": 601,
+        "primary_flow_member": true
+      },
+      {
+        "label": "Human Review Workspace",
+        "type": 100,
+        "responsibility": "Reviewer UI for inspecting sampled or contested records, confirming or overriding automated scores, and approving records for dataset promotion.",
+        "group_label": "Runtime Pipeline",
+        "group_kind": 600,
+        "primary_flow_member": true
+      },
+      {
+        "label": "Dataset Update Service",
+        "type": 101,
+        "responsibility": "Promotes reviewed, approved records into new evaluation dataset versions, manages reuse lifecycle and invalidation of superseded records, and publishes updates to the registry.",
+        "group_label": "Runtime Pipeline",
+        "group_kind": 600,
+        "primary_flow_member": true
+      },
+      {
+        "label": "Evaluation Dataset Registry",
+        "type": 102,
+        "responsibility": "Versioned registry of curated evaluation datasets with provenance back to source feedback, scores, and review decisions; serves downstream consumers.",
+        "group_label": "Data Platform",
+        "group_kind": 601,
+        "primary_flow_member": true
+      },
+      {
+        "label": "Product Feedback Sources",
+        "type": 106,
+        "responsibility": "External product surfaces (app UI, support channels) that push user ratings and free-text feedback to the intake service.",
+        "group_label": "External Actors",
+        "group_kind": 604,
+        "primary_flow_member": false
+      },
+      {
+        "label": "Pipeline Event Bus",
+        "type": 103,
+        "responsibility": "Async handoff between validation, scoring, review, and dataset update stages; buffers bursts and enables per-stage retry and failure isolation.",
+        "group_label": "Operations",
+        "group_kind": 602,
+        "primary_flow_member": false
+      },
+      {
+        "label": "Audit & Reconciliation Log",
+        "type": 102,
+        "responsibility": "Append-only record of stage transitions, rejections, overrides, and dataset publications; supports reconciliation of intake counts against curated output.",
+        "group_label": "Operations",
+        "group_kind": 602,
+        "primary_flow_member": false
+      }
+    ]
+  },
+  "initial_connections": {
+    "edges": [
+      {
+        "source_index": 8,
+        "target_index": 0,
+        "label": "push raw feedback with source context",
+        "flow": 402,
+        "sync": 501
+      },
+      {
+        "source_index": 0,
+        "target_index": 1,
+        "label": "persist immutable raw feedback with lineage",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 0,
+        "target_index": 9,
+        "label": "initiate validation pipeline after intake",
+        "flow": 400,
+        "sync": 501
+      },
+      {
+        "source_index": 0,
+        "target_index": 10,
+        "label": "audit intake lineage and authentication outcome",
+        "flow": 400,
+        "sync": 501
+      },
+      {
+        "source_index": 9,
+        "target_index": 2,
+        "label": "deliver validation task with retry isolation",
+        "flow": 400,
+        "sync": 501
+      },
+      {
+        "source_index": 2,
+        "target_index": 1,
+        "label": "fetch raw record by lineage for validation",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 1,
+        "target_index": 2,
+        "label": "return raw record and metadata",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 2,
+        "target_index": 9,
+        "label": "route accepted records toward scoring",
+        "flow": 400,
+        "sync": 501
+      },
+      {
+        "source_index": 2,
+        "target_index": 10,
+        "label": "audit rejected and quarantined records with reasons",
+        "flow": 402,
+        "sync": 501
+      },
+      {
+        "source_index": 9,
+        "target_index": 3,
+        "label": "deliver accepted record for scoring",
+        "flow": 400,
+        "sync": 501
+      },
+      {
+        "source_index": 3,
+        "target_index": 4,
+        "label": "write scores rationales and confidence",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 3,
+        "target_index": 9,
+        "label": "select low-confidence high-impact samples for review",
+        "flow": 401,
+        "sync": 501
+      },
+      {
+        "source_index": 3,
+        "target_index": 10,
+        "label": "audit scoring outcome and sample selection",
+        "flow": 400,
+        "sync": 501
+      },
+      {
+        "source_index": 9,
+        "target_index": 5,
+        "label": "deliver review task with lineage",
+        "flow": 400,
+        "sync": 501
+      },
+      {
+        "source_index": 5,
+        "target_index": 4,
+        "label": "query score evidence for contested record",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 4,
+        "target_index": 5,
+        "label": "return score evidence and rationale",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 5,
+        "target_index": 1,
+        "label": "fetch raw context for reviewer inspection",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 1,
+        "target_index": 5,
+        "label": "return raw context to reviewer",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 5,
+        "target_index": 9,
+        "label": "submit confirmed override and approval decisions",
+        "flow": 402,
+        "sync": 501
+      },
+      {
+        "source_index": 5,
+        "target_index": 10,
+        "label": "audit review decisions including non-promoted records",
+        "flow": 402,
+        "sync": 501
+      },
+      {
+        "source_index": 9,
+        "target_index": 6,
+        "label": "deliver approved decisions for dataset update",
+        "flow": 400,
+        "sync": 501
+      },
+      {
+        "source_index": 6,
+        "target_index": 4,
+        "label": "read approved evidence and reuse versions",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 4,
+        "target_index": 6,
+        "label": "return approved evidence for curation",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 6,
+        "target_index": 1,
+        "label": "replay raw for reprocessing and supersede checks",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 1,
+        "target_index": 6,
+        "label": "return raw replay for curation",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 6,
+        "target_index": 7,
+        "label": "promote reviewed approved dataset version",
+        "flow": 403,
+        "sync": 501
+      },
+      {
+        "source_index": 6,
+        "target_index": 10,
+        "label": "audit promotion invalidation and terminal outcome",
+        "flow": 401,
+        "sync": 501
+      },
+      {
+        "source_index": 7,
+        "target_index": 10,
+        "label": "audit dataset version provenance for reconciliation",
+        "flow": 403,
+        "sync": 501
+      }
+    ]
+  },
+  "corrected_connections": {
+    "edges": [
+      {
+        "source_index": 8,
+        "target_index": 0,
+        "label": "Push raw feedback from product surfaces",
+        "flow": 400,
+        "sync": 501
+      },
+      {
+        "source_index": 0,
+        "target_index": 1,
+        "label": "Persist raw feedback with lineage metadata",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 1,
+        "target_index": 0,
+        "label": "Confirm raw feedback persistence",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 0,
+        "target_index": 9,
+        "label": "Publish raw-available validation event",
+        "flow": 400,
+        "sync": 501
+      },
+      {
+        "source_index": 0,
+        "target_index": 10,
+        "label": "Audit intake acceptance and lineage assignment",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 9,
+        "target_index": 2,
+        "label": "Deliver validation work",
+        "flow": 400,
+        "sync": 501
+      },
+      {
+        "source_index": 2,
+        "target_index": 1,
+        "label": "Fetch raw record by lineage for validation",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 1,
+        "target_index": 2,
+        "label": "Return raw record by lineage",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 2,
+        "target_index": 9,
+        "label": "Route accepted records to scoring",
+        "flow": 400,
+        "sync": 501
+      },
+      {
+        "source_index": 2,
+        "target_index": 10,
+        "label": "Record rejected and quarantined validation outcomes",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 9,
+        "target_index": 3,
+        "label": "Deliver scoring work",
+        "flow": 400,
+        "sync": 501
+      },
+      {
+        "source_index": 3,
+        "target_index": 4,
+        "label": "Write scores rationales and confidence",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 4,
+        "target_index": 3,
+        "label": "Confirm score record persistence",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 3,
+        "target_index": 9,
+        "label": "Route low-confidence high-impact samples to review",
+        "flow": 400,
+        "sync": 501
+      },
+      {
+        "source_index": 3,
+        "target_index": 10,
+        "label": "Audit scoring decisions confidence and sampling",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 9,
+        "target_index": 5,
+        "label": "Deliver human review tasks",
+        "flow": 400,
+        "sync": 501
+      },
+      {
+        "source_index": 5,
+        "target_index": 9,
+        "label": "Submit confirmation override and promotion approval",
+        "flow": 401,
+        "sync": 501
+      },
+      {
+        "source_index": 5,
+        "target_index": 10,
+        "label": "Audit reviewer overrides and approvals",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 9,
+        "target_index": 6,
+        "label": "Deliver approved dataset promotion work",
+        "flow": 400,
+        "sync": 501
+      },
+      {
+        "source_index": 6,
+        "target_index": 4,
+        "label": "Query approved score and evidence records",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 4,
+        "target_index": 6,
+        "label": "Return approved score and evidence records",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 6,
+        "target_index": 7,
+        "label": "Publish new evaluation dataset version",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 7,
+        "target_index": 6,
+        "label": "Confirm dataset version publication",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 6,
+        "target_index": 10,
+        "label": "Audit publication invalidation and request reconciliation read-back",
+        "flow": 400,
+        "sync": 500
+      },
+      {
+        "source_index": 10,
+        "target_index": 6,
+        "label": "Return reconciliation status for publication",
+        "flow": 400,
+        "sync": 500
+      }
+    ]
+  }
+}

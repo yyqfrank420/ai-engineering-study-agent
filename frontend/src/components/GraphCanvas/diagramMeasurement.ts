@@ -38,14 +38,15 @@ export function measureDiagram(svg: SVGSVGElement): DiagramLayoutReport {
   // The node title is the essential scan target. Type/tier/entry badges are
   // deliberately secondary metadata and should not fail an otherwise readable
   // architecture merely because their decorative text is smaller.
-  const fontSizes = Array.from(svg.querySelectorAll<SVGTextElement>('g.node text.node-title'))
-    .map(text => {
+  const fontSizes = nodes.map(node => {
+      const text = node.querySelector<SVGTextElement>('text.node-title');
+      if (!text || !isVisibleInViewport(text, viewport)) return null;
       const declaredSize = Number.parseFloat(window.getComputedStyle(text).fontSize);
       const transform = text.getScreenCTM();
       const screenScale = transform ? Math.hypot(transform.a, transform.b) : 1;
       return declaredSize * screenScale;
     })
-    .filter(value => Number.isFinite(value) && value > 0);
+    .filter((value): value is number => value !== null && Number.isFinite(value) && value > 0);
   return {
     viewport_width: Math.round(viewport.width),
     viewport_height: Math.round(viewport.height),
@@ -54,7 +55,9 @@ export function measureDiagram(svg: SVGSVGElement): DiagramLayoutReport {
     overlap_count: overlapCount,
     clipped_nodes: clippedNodes,
     clipped_edges: clippedEdges,
-    minimum_text_px: fontSizes.length ? Math.min(...fontSizes) : 0,
+    minimum_text_px: fontSizes.length === nodes.length && nodes.length > 0
+      ? Math.min(...fontSizes)
+      : 0,
     overview_required_edge_labels: overviewRequiredEdgeLabels.length,
     visible_overview_required_edge_labels: overviewRequiredEdgeLabels.filter(
       label => isVisibleInViewport(label, viewport),

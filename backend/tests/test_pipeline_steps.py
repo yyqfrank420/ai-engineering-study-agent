@@ -69,8 +69,9 @@ def test_should_run_graph_worker_modes():
 async def test_apply_graph_worker_preserves_existing_graph_when_worker_returns_none(
     monkeypatch,
 ):
-    existing_graph = {"nodes": [{"id": "n1"}], "edges": []}
-    state, events = _state(graph_data=existing_graph)
+    existing_graph = {"version": "approved-v1", "nodes": [{"id": "n1"}], "edges": []}
+    contract = {"graph_version": "approved-v1", "source": "staged"}
+    state, events = _state(graph_data=existing_graph, graph_contract=contract)
 
     async def fake_graph_worker_node(incoming_state, tools):
         assert tools == ["graph-tool"]
@@ -83,6 +84,7 @@ async def test_apply_graph_worker_preserves_existing_graph_when_worker_returns_n
     result = await apply_graph_worker(state, ["graph-tool"])
 
     assert result["graph_data"] == existing_graph
+    assert result["graph_contract"] == contract
     assert result["graph_changed"] is False
     assert events == []
 
@@ -95,7 +97,8 @@ async def test_apply_graph_worker_treats_version_only_reuse_as_unchanged(monkeyp
         "edges": [],
         "sequence": [],
     }
-    state, _events = _state(graph_data=existing_graph)
+    contract = {"graph_version": "approved-v1", "source": "staged"}
+    state, _events = _state(graph_data=existing_graph, graph_contract=contract)
 
     async def fake_graph_worker_node(incoming_state, _tools):
         return {
@@ -110,7 +113,8 @@ async def test_apply_graph_worker_treats_version_only_reuse_as_unchanged(monkeyp
     result = await apply_graph_worker(state, [])
 
     assert result["graph_data"] is not existing_graph
-    assert result["graph_data"]["version"] == "generated-v2"
+    assert result["graph_data"]["version"] == "approved-v1"
+    assert result["graph_contract"] == contract
     assert result["graph_data"]["nodes"] == existing_graph["nodes"]
     assert result["graph_changed"] is False
 
@@ -175,6 +179,9 @@ async def test_applied_graph_failure_notice_does_not_misreport_weak_grounding(
 
     assert result["graph_notice_sent"] is True
     assert "structural quality checks" in events[0]["message"]
+    assert "no new diagram was published" in events[0]["message"]
+    assert "Ask me to redraw it as a simpler diagram" in events[0]["message"]
+    assert "available below" not in events[0]["message"]
     assert "grounded detail from the book" not in events[0]["message"]
 
 

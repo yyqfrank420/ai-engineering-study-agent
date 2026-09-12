@@ -18,6 +18,11 @@ describe('HiddenGraphEvaluator accessibility boundary', () => {
         candidate={{
           evaluationId: 'eval-1',
           graphVersion: 'candidate-1',
+          criteria: {
+            viewport_width: 1440,
+            viewport_height: 960,
+            minimum_text_px: 11,
+          },
           data: {
             graph_type: 'concept',
             title: 'Private candidate',

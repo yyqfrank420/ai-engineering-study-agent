@@ -10,12 +10,18 @@ from pathlib import Path
 import re
 from typing import Any, Literal
 
+from agent.architecture_rubric import (
+    RUBRIC_CODES,
+    RUBRIC_CODE_OWNERS,
+    TOPOLOGY_PROOF_REQUIREMENTS,
+)
 from eval.cost_gate import (
     CostPolicy,
     account_application_cost,
     account_judge_cost,
     evaluate_cost_policy,
 )
+from eval.evidence_replay import validate_calibration_capture
 from eval.judge_adapter import (
     JUDGE_PROMPT_RELEASE,
     SemanticJudge,
@@ -34,6 +40,304 @@ PROVIDER_FAILURE = re.compile(
     r"(?:rate.?limit|429|provider.*unavailable|timed?\s*out|connection.*failed)", re.I
 )
 ManualReviewPolicy = Literal["blocking", "report-only"]
+_FAILURE_KINDS = frozenset({"infrastructure", "quality"})
+_GRAPH_REVIEW_DIAGNOSTIC_FIELDS = frozenset(
+    {
+        "schema_version",
+        "repair_round",
+        "critic_call_count",
+        "protocol_correction_count",
+        "contract_correction_count",
+        "depth",
+        "locked_layers",
+        "reopened_layers",
+        "finding_codes",
+        "blocker_ids",
+        "selector_fingerprints",
+        "prior_blocker_dispositions",
+        "review_disposition",
+        "validation_rule",
+        "validation_path_fingerprint",
+    }
+)
+_STAGED_GRAPH_DIAGNOSTIC_FIELDS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "stage",
+        "attempt",
+        "code",
+        "candidate_fingerprint",
+        "findings",
+    }
+)
+_STAGED_GENERATION_DIAGNOSTIC_FIELDS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "stage",
+        "attempt",
+        "code",
+        "path",
+        "path_fingerprint",
+        "candidate_fingerprint",
+        "fingerprint_disposition",
+    }
+)
+_STAGED_GRAPH_STAGES = frozenset({"components", "connections"})
+_STAGED_GATE_CODES = frozenset({"gate_rejected", "gate_unavailable"})
+_STAGED_GRAPH_FINGERPRINT_DISPOSITIONS = frozenset(
+    {"matches_prior_candidate", "rejected_before_render"}
+)
+_STAGED_GATE_RULE_CODES = {
+    "components": frozenset(
+        code for code in RUBRIC_CODES if RUBRIC_CODE_OWNERS[code] == "components"
+    )
+    | {"capability_classification"},
+    "connections": frozenset(
+        code for code in RUBRIC_CODES if RUBRIC_CODE_OWNERS[code] == "connections"
+    )
+    | frozenset(TOPOLOGY_PROOF_REQUIREMENTS),
+}
+_GRAPH_REVIEW_COUNTER_FIELDS = (
+    "repair_round",
+    "critic_call_count",
+    "protocol_correction_count",
+    "contract_correction_count",
+)
+_GRAPH_REVIEW_LAYERS = frozenset({"components", "connections", "composition", "render"})
+_GRAPH_REVIEW_DEPTHS = frozenset({"low", "prototype", "production"})
+_GRAPH_REVIEW_DISPOSITIONS = frozenset({"approved", "rejected", "unavailable"})
+_GRAPH_REVIEW_PRIOR_STATUSES = frozenset({"resolved", "still_fail"})
+_SAFE_GRAPH_REVIEW_TEXT = re.compile(r"[A-Za-z0-9_.:-]{1,160}")
+_SAFE_GRAPH_REVIEW_RULE = re.compile(r"[a-z][a-z0-9_]{0,95}")
+_SHA256_FINGERPRINT = re.compile(r"[0-9a-f]{64}")
+
+
+def _is_nonnegative_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _safe_graph_review_texts(value: object) -> list[str] | None:
+    if not isinstance(value, list) or len(value) > 64:
+        return None
+    if not all(
+        isinstance(item, str) and _SAFE_GRAPH_REVIEW_TEXT.fullmatch(item)
+        for item in value
+    ):
+        return None
+    if len(value) != len(set(value)):
+        return None
+    return sorted(value)
+
+
+def _safe_graph_review_dispositions(value: object) -> list[dict[str, str]] | None:
+    if not isinstance(value, list) or len(value) > 64:
+        return None
+    dispositions: list[dict[str, str]] = []
+    prior_ids: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"prior_obligation_id", "status"}:
+            return None
+        prior_id = item.get("prior_obligation_id")
+        status = item.get("status")
+        if (
+            not isinstance(prior_id, str)
+            or not _SAFE_GRAPH_REVIEW_TEXT.fullmatch(prior_id)
+            or status not in _GRAPH_REVIEW_PRIOR_STATUSES
+            or prior_id in prior_ids
+        ):
+            return None
+        prior_ids.add(prior_id)
+        dispositions.append({"prior_obligation_id": prior_id, "status": status})
+    return sorted(dispositions, key=lambda item: item["prior_obligation_id"])
+
+
+def _safe_staged_gate_record_path(value: object, *, stage: str) -> str | None:
+    if not isinstance(value, str):
+        return None
+    if value == stage:
+        return value
+    prefix = f"{stage}."
+    if not value.startswith(prefix):
+        return None
+    suffix = value[len(prefix) :]
+    if re.fullmatch(r"(?:0|[1-9][0-9]*)", suffix) is None:
+        return None
+    return value
+
+
+def _safe_staged_gate_findings(
+    value: object, *, stage: str
+) -> list[dict[str, Any]] | None:
+    if not isinstance(value, list) or len(value) > 24:
+        return None
+    findings: list[dict[str, Any]] = []
+    for finding in value:
+        if not isinstance(finding, dict) or set(finding) != {
+            "rule_code",
+            "record_paths",
+        }:
+            return None
+        rule_code = finding.get("rule_code")
+        if (
+            not isinstance(rule_code, str)
+            or rule_code not in _STAGED_GATE_RULE_CODES[stage]
+        ):
+            return None
+        record_paths = finding.get("record_paths")
+        if not isinstance(record_paths, list) or len(record_paths) > 32:
+            return None
+        safe_paths = []
+        seen_paths: set[str] = set()
+        for record_path in record_paths:
+            path = _safe_staged_gate_record_path(record_path, stage=stage)
+            if path is None or path in seen_paths:
+                return None
+            seen_paths.add(path)
+            safe_paths.append(path)
+        findings.append({"rule_code": rule_code, "record_paths": safe_paths})
+    return findings
+
+
+def _project_graph_review_diagnostic(value: object) -> dict[str, Any] | None:
+    """Copy only fixed-shape review metadata from internal evaluation events."""
+    if isinstance(value, dict) and value.get("kind") == "staged_gate":
+        if (
+            set(value) != _STAGED_GRAPH_DIAGNOSTIC_FIELDS
+            or value.get("schema_version") != 1
+            or value.get("stage") not in _STAGED_GRAPH_STAGES
+            or not isinstance(value.get("attempt"), int)
+            or isinstance(value.get("attempt"), bool)
+            or not 1 <= value["attempt"] <= 2
+            or value.get("code") not in _STAGED_GATE_CODES
+            or not isinstance(value.get("candidate_fingerprint"), str)
+            or not _SHA256_FINGERPRINT.fullmatch(value["candidate_fingerprint"])
+        ):
+            return None
+        findings = _safe_staged_gate_findings(
+            value.get("findings"), stage=value["stage"]
+        )
+        if findings is None:
+            return None
+        return {
+            "schema_version": 1,
+            "kind": "staged_gate",
+            "stage": value["stage"],
+            "attempt": value["attempt"],
+            "code": value["code"],
+            "candidate_fingerprint": value["candidate_fingerprint"],
+            "findings": findings,
+        }
+    if isinstance(value, dict) and value.get("kind") == "staged_generation":
+        if (
+            set(value) != _STAGED_GENERATION_DIAGNOSTIC_FIELDS
+            or value.get("schema_version") != 1
+            or value.get("stage") not in _STAGED_GRAPH_STAGES
+            or not isinstance(value.get("attempt"), int)
+            or isinstance(value.get("attempt"), bool)
+            or not 1 <= value["attempt"] <= 2
+            or not isinstance(value.get("code"), str)
+            or not _SAFE_GRAPH_REVIEW_RULE.fullmatch(value["code"])
+            or not isinstance(value.get("path"), str)
+            or not _SAFE_GRAPH_REVIEW_TEXT.fullmatch(value.get("path"))
+            or value.get("fingerprint_disposition")
+            not in _STAGED_GRAPH_FINGERPRINT_DISPOSITIONS
+            or not all(
+                isinstance(value.get(field), str)
+                and _SHA256_FINGERPRINT.fullmatch(value[field])
+                for field in ("path_fingerprint", "candidate_fingerprint")
+            )
+        ):
+            return None
+        return {field: value[field] for field in _STAGED_GENERATION_DIAGNOSTIC_FIELDS}
+    if not isinstance(value, dict) or set(value) - _GRAPH_REVIEW_DIAGNOSTIC_FIELDS:
+        return None
+    required_fields = _GRAPH_REVIEW_DIAGNOSTIC_FIELDS - {
+        "validation_rule",
+        "validation_path_fingerprint",
+    }
+    if not required_fields.issubset(value) or value.get("schema_version") != 1:
+        return None
+    if not all(
+        _is_nonnegative_int(value.get(field)) for field in _GRAPH_REVIEW_COUNTER_FIELDS
+    ):
+        return None
+    if value.get("depth") not in _GRAPH_REVIEW_DEPTHS:
+        return None
+    if value.get("review_disposition") not in _GRAPH_REVIEW_DISPOSITIONS:
+        return None
+
+    layers = {}
+    for field in ("locked_layers", "reopened_layers"):
+        layer_values = _safe_graph_review_texts(value.get(field))
+        if layer_values is None or not set(layer_values).issubset(_GRAPH_REVIEW_LAYERS):
+            return None
+        layers[field] = layer_values
+    if set(layers["locked_layers"]) & set(layers["reopened_layers"]):
+        return None
+
+    lists = {}
+    for field in ("finding_codes", "blocker_ids"):
+        field_values = _safe_graph_review_texts(value.get(field))
+        if field_values is None:
+            return None
+        lists[field] = field_values
+    fingerprints = value.get("selector_fingerprints")
+    if (
+        not isinstance(fingerprints, list)
+        or len(fingerprints) > 64
+        or not all(
+            isinstance(item, str) and _SHA256_FINGERPRINT.fullmatch(item)
+            for item in fingerprints
+        )
+        or len(fingerprints) != len(set(fingerprints))
+    ):
+        return None
+    dispositions = _safe_graph_review_dispositions(
+        value.get("prior_blocker_dispositions")
+    )
+    if dispositions is None:
+        return None
+
+    projected = {
+        "schema_version": 1,
+        **{field: value[field] for field in _GRAPH_REVIEW_COUNTER_FIELDS},
+        "depth": value["depth"],
+        **layers,
+        **lists,
+        "selector_fingerprints": sorted(fingerprints),
+        "prior_blocker_dispositions": dispositions,
+        "review_disposition": value["review_disposition"],
+    }
+    validation_rule = value.get("validation_rule")
+    if validation_rule is not None:
+        if not isinstance(
+            validation_rule, str
+        ) or not _SAFE_GRAPH_REVIEW_RULE.fullmatch(validation_rule):
+            return None
+        projected["validation_rule"] = validation_rule
+    validation_path_fingerprint = value.get("validation_path_fingerprint")
+    if validation_path_fingerprint is not None:
+        if not isinstance(
+            validation_path_fingerprint, str
+        ) or not _SHA256_FINGERPRINT.fullmatch(validation_path_fingerprint):
+            return None
+        projected["validation_path_fingerprint"] = validation_path_fingerprint
+    return projected
+
+
+def _graph_review_diagnostics_from_events(events: object) -> list[dict[str, Any]]:
+    if not isinstance(events, list):
+        return []
+    diagnostics = []
+    for event in events:
+        if not isinstance(event, dict) or event.get("type") != "workflow_progress":
+            continue
+        diagnostic = _project_graph_review_diagnostic(event.get("diagnostic"))
+        if diagnostic is not None:
+            diagnostics.append(diagnostic)
+    return diagnostics
 
 
 def _assert_approved_judge_identity(corpus: Any, judge: Any) -> None:
@@ -50,7 +354,7 @@ def _assert_approved_judge_identity(corpus: Any, judge: Any) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Apply deterministic and reviewed semantic gates"
+        description="Apply deterministic and automated semantic gates"
     )
     parser.add_argument("--suite", required=True)
     parser.add_argument("--target", required=True, help="Backend candidate URL")
@@ -60,10 +364,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--manual-review-policy",
         choices=("blocking", "report-only"),
-        default="blocking",
+        default="report-only",
         help=(
             "Whether an otherwise healthy manual-review result blocks the command. "
-            "Report-only is restricted to an approved corpus and never masks clear "
+            "Report-only retains uncertain judgments without masking clear "
             "quality or infrastructure failures."
         ),
     )
@@ -113,6 +417,8 @@ def _load_resume_evaluations(
     corpus: Any,
     judge: Any,
     actual_ids: list[str],
+    *,
+    deterministic_failures_by_case: dict[str, list[str]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     if not args.resume_input:
         return {}
@@ -147,9 +453,16 @@ def _load_resume_evaluations(
         case = corpus.by_id[case_id]
         if evaluation.get("decision") not in {"pass", "manual_review", "fail"}:
             raise RuntimeError(f"resume report has an invalid decision for {case_id}")
-        if evaluation.get("deterministic_failures"):
+        expected_failures = (deterministic_failures_by_case or {}).get(case_id, [])
+        if evaluation.get("deterministic_failures") != expected_failures:
             raise RuntimeError(
-                f"resume judgment for {case_id} has deterministic failures"
+                f"resume deterministic failures do not match the capture for {case_id}"
+            )
+        if expected_failures and (
+            args.suite != "full" or evaluation["decision"] != "fail"
+        ):
+            raise RuntimeError(
+                f"resume judgment for failed capture {case_id} must remain failed"
             )
         for judgment in judgments:
             if judgment.get("provider") != judge.provider:
@@ -185,6 +498,8 @@ def _compact_judge_graph(graph: Any) -> dict[str, Any] | None:
                 "title",
                 "design_origin",
                 "resolved_complexity",
+                "capabilities",
+                "root_node_id",
                 "assumptions",
                 "groups",
                 "sequence",
@@ -204,6 +519,9 @@ def _compact_judge_graph(graph: Any) -> dict[str, Any] | None:
                     "description",
                     "tier",
                     "layer",
+                    "lane",
+                    "primary_flow_member",
+                    "is_root",
                 )
                 if node.get(key) is not None
             }
@@ -213,7 +531,17 @@ def _compact_judge_graph(graph: Any) -> dict[str, Any] | None:
         compact_graph["edges"] = [
             {
                 key: edge[key]
-                for key in ("source", "target", "label", "technology")
+                for key in (
+                    "source",
+                    "target",
+                    "label",
+                    "technology",
+                    "description",
+                    "flow",
+                    "sync",
+                    "type",
+                    "relation",
+                )
                 if edge.get(key) is not None
             }
             for edge in graph.get("edges") or []
@@ -264,16 +592,68 @@ def _judge_payload(result: dict[str, Any]) -> dict[str, Any]:
         max(1, 40_000 // len(captured_turn_records)) if captured_turn_records else 0
     )
 
+    turn_count = max(1, len(captured_turn_records))
+    events = result.get("events") or []
+    last_reset_by_turn = {
+        event.get("eval_turn", 1 if turn_count == 1 else None): index
+        for index, event in enumerate(events)
+        if event.get("type") == "response_reset"
+    }
+    evidence_events = [
+        event
+        for index, event in enumerate(events)
+        if index
+        > last_reset_by_turn.get(
+            event.get("eval_turn", 1 if turn_count == 1 else None), -1
+        )
+    ]
+    answer_evidence_by_turn: dict[int, dict[str, Any]] = {}
+    for event in evidence_events:
+        if event.get("type") != "answer_evidence":
+            continue
+        eval_turn = event.get("eval_turn", 1 if turn_count == 1 else None)
+        if (
+            type(event.get("schema_version")) is not int
+            or event["schema_version"] != 1
+            or event.get("source") != "synthesis_input"
+            or not isinstance(event.get("prompt_version"), str)
+            or not event["prompt_version"].strip()
+            or not isinstance(event.get("book_context"), str)
+            or not isinstance(event.get("research_context"), str)
+            or not isinstance(eval_turn, int)
+            or isinstance(eval_turn, bool)
+            or not 1 <= eval_turn <= turn_count
+        ):
+            raise ValueError(
+                "answer_evidence has an invalid schema or turn attribution"
+            )
+        answer_evidence_by_turn[eval_turn] = {
+            "eval_turn": eval_turn,
+            "source": "synthesis_input",
+            "prompt_version": event["prompt_version"],
+            "book_context": event["book_context"],
+            "research_context": event["research_context"],
+        }
+    answer_evidence = list(answer_evidence_by_turn.values())
+    exact_turns = set(answer_evidence_by_turn)
+
     retrieval_chunks: list[dict[str, Any]] = []
     research_results: list[dict[str, Any]] = []
-    for event in result.get("events") or []:
+    for event in evidence_events:
+        eval_turn = event.get("eval_turn", 1 if turn_count == 1 else None)
+        if eval_turn in exact_turns or len(exact_turns) == turn_count:
+            continue
         if event.get("type") == "research_evidence":
             query = str(event.get("query") or "")[:500]
             eval_turn = event.get("eval_turn")
             event_results = event.get("results")
             if isinstance(event_results, list):
                 for item in event_results[:6]:
-                    result_record = {"query": query, "result": str(item)[:1_000]}
+                    result_record = {
+                        "query": query,
+                        "result": str(item)[:1_000],
+                        "provenance": "legacy_telemetry_not_exact_synthesis_input",
+                    }
                     if eval_turn is not None:
                         result_record["eval_turn"] = eval_turn
                     research_results.append(result_record)
@@ -287,6 +667,7 @@ def _judge_payload(result: dict[str, Any]) -> dict[str, Any]:
                 continue
             chunk_record = {
                 "query": query,
+                "provenance": "legacy_telemetry_not_exact_synthesis_input",
                 **{
                     key: chunk.get(key)
                     for key in (
@@ -311,6 +692,18 @@ def _judge_payload(result: dict[str, Any]) -> dict[str, Any]:
 
     payload = {
         "graph": compact_graph,
+        "answer_evidence": answer_evidence,
+        "evidence_provenance": [
+            {
+                "eval_turn": turn,
+                "status": (
+                    "exact_synthesis_input"
+                    if turn in exact_turns
+                    else "legacy_capture_exact_synthesis_input_unavailable"
+                ),
+            }
+            for turn in range(1, turn_count + 1)
+        ],
         "retrieval_evidence": retrieval_chunks,
         "research_evidence": research_results[:12],
         "events": [
@@ -358,7 +751,27 @@ def _result_to_json(result) -> dict[str, Any]:
     }
 
 
-def _classify_deterministic(failures: list[str]) -> str:
+def _classify_deterministic(
+    failures: list[str],
+    failure_details: object = None,
+) -> str:
+    if failure_details is not None:
+        if not isinstance(failure_details, list) or not failure_details:
+            raise RuntimeError(
+                "browser capture failure_details must be a non-empty list"
+            )
+        failure_kinds = []
+        for detail in failure_details:
+            if not isinstance(detail, dict) or detail.get("kind") not in _FAILURE_KINDS:
+                raise RuntimeError(
+                    "browser capture failure_details contains an invalid kind"
+                )
+            failure_kinds.append(detail["kind"])
+        return (
+            "infrastructure"
+            if all(kind == "infrastructure" for kind in failure_kinds)
+            else "quality"
+        )
     return (
         "infrastructure"
         if any(PROVIDER_FAILURE.search(failure) for failure in failures)
@@ -382,16 +795,13 @@ def _exit_code_for_statuses(
 
 async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     manual_review_policy: ManualReviewPolicy = args.manual_review_policy
-    if manual_review_policy == "report-only" and (
-        not args.require_approved_corpus or not args.capture_replay
-    ):
-        raise RuntimeError(
-            "report-only manual review is restricted to approved semantic replay"
-        )
     manifest = _manifest()
     limits = manifest["live"]["budgets"]
     corpus = load_corpus(require_approved=args.require_approved_corpus)
     capture = _load_capture(args)
+    calibration_replay = args.capture_replay and args.suite == "full"
+    if calibration_replay:
+        validate_calibration_capture(capture, corpus.model_dump(mode="json"))
     expected_ids = manifest["live"]["suites"].get(args.suite)
     if args.suite == "diagnostic":
         expected_ids = args.case
@@ -411,6 +821,15 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     elif expected_ids is None and args.suite != "nightly":
         raise RuntimeError(f"unknown live suite: {args.suite}")
     actual_ids = [result["id"] for result in capture["results"]]
+    if args.suite == "nightly" and (
+        len(actual_ids) != 4
+        or len(set(actual_ids)) != 4
+        or not set(actual_ids).issubset(manifest["live"]["suites"]["full"])
+        or not set(actual_ids).issubset(corpus.by_id)
+    ):
+        raise RuntimeError(
+            "nightly browser capture must contain exactly four unique full-suite cases"
+        )
     if expected_ids is not None and actual_ids != expected_ids:
         raise RuntimeError(
             f"browser capture cases do not match suite: expected {expected_ids}, got {actual_ids}"
@@ -428,14 +847,28 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         judge_calls=limits["judge_calls"] if is_pr_budget else 40,
     )
     app_telemetry = capture.get("application_telemetry") or []
-    if capture.get("results") and not app_telemetry:
-        raise RuntimeError(
-            "browser capture contains no application model-call telemetry"
-        )
-    budget.record_application_calls(
-        sum(max(1, int(call.get("provider_attempts") or 1)) for call in app_telemetry)
+    telemetry_failure = (
+        "browser capture contains no application model-call telemetry"
+        if capture.get("results") and not app_telemetry
+        else None
     )
+    source_application_calls = sum(
+        max(1, int(call.get("provider_attempts") or 1)) for call in app_telemetry
+    )
+    if not args.capture_replay:
+        budget.record_application_calls(source_application_calls)
     application_cost = account_application_cost(capture["results"], app_telemetry)
+    if telemetry_failure:
+        application_cost = {
+            **application_cost,
+            "status": "infrastructure",
+            "reason": telemetry_failure,
+            "total": {**application_cost["total"], "estimated_usd": None},
+            "cases": [
+                {**case_cost, "estimated_usd": None}
+                for case_cost in application_cost["cases"]
+            ],
+        }
     cost_policy_config = manifest["live"].get("cost_policy") or {}
     if not isinstance(cost_policy_config, dict):
         raise RuntimeError("live cost policy must be an object")
@@ -448,30 +881,41 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             baseline_min_runs=int(cost_policy_config.get("baseline_min_runs", 5)),
         ),
     )
-    judge = SemanticJudge()
-    if args.require_approved_corpus:
-        _assert_approved_judge_identity(corpus, judge)
-    resume_evaluations = _load_resume_evaluations(
-        args,
-        corpus,
-        judge,
-        actual_ids,
-    )
+    # Replay spends only on judging. Preserve source accounting as evidence even
+    # when the historical provider omitted usage for a cancelled attempt.
+    if args.capture_replay:
+        cost_policy = {**cost_policy, "scope": "source_capture"}
+    judge = None
+    resume_evaluations = {}
+    if args.resume_input:
+        judge = SemanticJudge()
+        if args.require_approved_corpus:
+            _assert_approved_judge_identity(corpus, judge)
+        resume_evaluations = _load_resume_evaluations(
+            args,
+            corpus,
+            judge,
+            actual_ids,
+            deterministic_failures_by_case={
+                item["id"]: item.get("deterministic_failures") or []
+                for item in capture["results"]
+            },
+        )
     evaluations: list[dict[str, Any]] = []
 
     for browser_result in capture["results"]:
         case = corpus.by_id[browser_result["id"]]
-        resumed = resume_evaluations.get(case.id)
-        if resumed is not None:
-            for _judgment in resumed["judgments"]:
-                budget.record_judge_call()
-            evaluations.append(resumed)
-            continue
+        graph_review_diagnostics = _graph_review_diagnostics_from_events(
+            browser_result.get("events")
+        )
         deterministic_failures = tuple(
             browser_result.get("deterministic_failures") or []
         )
-        if deterministic_failures:
-            classification = _classify_deterministic(list(deterministic_failures))
+        if deterministic_failures and not calibration_replay:
+            classification = _classify_deterministic(
+                list(deterministic_failures),
+                browser_result.get("failure_details"),
+            )
             decision = GateDecision(
                 "infrastructure" if classification == "infrastructure" else "fail",
                 "; ".join(deterministic_failures),
@@ -483,13 +927,41 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
                     "reason": decision.reason,
                     "deterministic_failures": list(deterministic_failures),
                     "judgments": [],
+                    "graph_review_diagnostics": graph_review_diagnostics,
                 }
             )
             continue
 
-        payload = _judge_payload(browser_result)
+        if telemetry_failure and not args.capture_replay:
+            evaluations.append(
+                {
+                    "id": case.id,
+                    "decision": "infrastructure",
+                    "reason": telemetry_failure,
+                    "deterministic_failures": [],
+                    "judgments": [],
+                    "graph_review_diagnostics": graph_review_diagnostics,
+                }
+            )
+            continue
+
+        resumed = resume_evaluations.get(case.id)
+        if resumed is not None:
+            for _judgment in resumed["judgments"]:
+                budget.record_judge_call()
+            evaluations.append(
+                {**resumed, "graph_review_diagnostics": graph_review_diagnostics}
+            )
+            continue
+
         judgments = []
         try:
+            payload = _judge_payload(browser_result)
+            if judge is None:
+                candidate_judge = SemanticJudge()
+                if args.require_approved_corpus:
+                    _assert_approved_judge_identity(corpus, candidate_judge)
+                judge = candidate_judge
             first = await judge_with_transport_retry(
                 judge,
                 corpus,
@@ -512,6 +984,10 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
                 )
                 judgments.append(second)
                 decision = decide_semantic_gate(first, second)
+            if deterministic_failures and decision.status != "infrastructure":
+                decision = decide_semantic_gate(
+                    first, deterministic_failures=deterministic_failures
+                )
         except Exception as exc:
             decision = GateDecision(
                 "infrastructure",
@@ -522,16 +998,18 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
                 "id": case.id,
                 "decision": decision.status,
                 "reason": decision.reason,
-                "deterministic_failures": [],
+                "deterministic_failures": list(deterministic_failures),
                 "judgments": [_result_to_json(item) for item in judgments],
+                "graph_review_diagnostics": graph_review_diagnostics,
             }
         )
 
     statuses = {item["decision"] for item in evaluations}
-    if cost_policy["status"] == "infrastructure":
-        statuses.add("infrastructure")
-    elif cost_policy["blocking_status"] == "fail":
-        statuses.add("fail")
+    if not args.capture_replay:
+        if telemetry_failure or cost_policy["status"] == "infrastructure":
+            statuses.add("infrastructure")
+        elif cost_policy["blocking_status"] == "fail":
+            statuses.add("fail")
     # Quality failures retain their higher-priority exit even when accounting is
     # also unavailable, so telemetry health never hides a product regression.
     semantic_exit_code = _exit_code_for_statuses(statuses, "blocking")
@@ -560,9 +1038,15 @@ async def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         ),
         "manual_review_policy": manual_review_policy,
         "blocking_status": "pass" if exit_code == 0 else "fail",
-        "reason": cost_policy["reason"],
+        "reason": (
+            "Source capture accounting: "
+            + (telemetry_failure or cost_policy["reason"] or "complete")
+            if args.capture_replay
+            else telemetry_failure or cost_policy["reason"]
+        ),
         "budget": {
             "application_calls": budget.application_calls,
+            "source_application_calls": source_application_calls,
             "application_limit": budget.application_limit,
             "judge_calls": budget.judge_calls,
             "judge_limit": budget.judge_limit,
@@ -616,11 +1100,14 @@ def _write_outputs(path: Path, report: dict[str, Any]) -> None:
     if cost_policy:
         cost_status = str(cost_policy.get("status") or "infrastructure")
         cost_reason = str(cost_policy.get("reason") or cost_status)
-        cost_is_failure = (
+        source_only = cost_policy.get("scope") == "source_capture"
+        cost_is_failure = not source_only and (
             cost_status == "infrastructure"
             or cost_policy.get("blocking_status") == "fail"
         )
-        cost_is_skipped = cost_status == "over_budget" and not cost_is_failure
+        cost_is_skipped = source_only or (
+            cost_status == "over_budget" and not cost_is_failure
+        )
         if cost_is_failure:
             cost_outcome = (
                 f'<failure message="{html.escape(cost_reason, quote=True)}" />'

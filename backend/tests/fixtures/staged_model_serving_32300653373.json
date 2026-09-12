@@ -1,0 +1,194 @@
+{
+  "graph_type": "architecture",
+  "title": "Prototype model-serving stack with monitoring",
+  "nodes": [
+    {
+      "id": "n1",
+      "label": "User Client",
+      "type": "client",
+      "technology": "Authenticated client",
+      "description": "End-user interface that collects input, sends requests to the application service, and renders model responses.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n2",
+      "label": "Application Service",
+      "type": "service",
+      "technology": "Bounded application service",
+      "description": "Builds prompts from user input, invokes the model endpoint, and returns responses; the single integration point with the model at prototype stage.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n3",
+      "label": "Model Endpoint",
+      "type": "external",
+      "technology": "External system boundary",
+      "description": "External or self-hosted model API that performs inference and returns generated output for each request.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n4",
+      "label": "Metrics Store",
+      "type": "datastore",
+      "technology": "Versioned durable store",
+      "description": "Persists emitted monitoring data such as latency measurements, token volumes, and request counts for later inspection.",
+      "tier": null,
+      "lane": "bottom",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n5",
+      "label": "Monitoring Service",
+      "type": "service",
+      "technology": "Bounded application service",
+      "description": "Collects per-request metrics (time to first token, per-token time, total latency, token usage, request rate) from the application service and surfaces issues detectable from external outputs.",
+      "tier": null,
+      "lane": "bottom",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    }
+  ],
+  "edges": [
+    {
+      "source": "n1",
+      "target": "n2",
+      "label": "submit user request",
+      "technology": "Validated runtime contract",
+      "sync": "sync",
+      "description": "submit user request",
+      "flow": "runtime",
+      "edge_id": "applied:n1__submit_user_request__n2",
+      "relation": "submit_user_request"
+    },
+    {
+      "source": "n2",
+      "target": "n1",
+      "label": "deliver model response",
+      "technology": "Validated runtime contract",
+      "sync": "sync",
+      "description": "deliver model response",
+      "flow": "runtime",
+      "edge_id": "applied:n2__deliver_model_response__n1",
+      "relation": "deliver_model_response"
+    },
+    {
+      "source": "n2",
+      "target": "n3",
+      "label": "invoke inference request",
+      "technology": "Validated runtime contract",
+      "sync": "sync",
+      "description": "invoke inference request",
+      "flow": "runtime",
+      "edge_id": "applied:n2__invoke_inference_request__n3",
+      "relation": "invoke_inference_request"
+    },
+    {
+      "source": "n3",
+      "target": "n2",
+      "label": "return inference result",
+      "technology": "Validated runtime contract",
+      "sync": "sync",
+      "description": "return inference result",
+      "flow": "runtime",
+      "edge_id": "applied:n3__return_inference_result__n2",
+      "relation": "return_inference_result"
+    },
+    {
+      "source": "n2",
+      "target": "n5",
+      "label": "emit request telemetry",
+      "technology": "Versioned feedback event",
+      "sync": "async",
+      "description": "emit request telemetry",
+      "flow": "feedback",
+      "edge_id": "applied:n2__emit_request_telemetry__n5",
+      "relation": "emit_request_telemetry"
+    },
+    {
+      "source": "n5",
+      "target": "n4",
+      "label": "persist metrics to store",
+      "technology": "Versioned feedback event",
+      "sync": "async",
+      "description": "persist metrics to store",
+      "flow": "feedback",
+      "edge_id": "applied:n5__persist_metrics_to_store__n4",
+      "relation": "persist_metrics_to_store"
+    }
+  ],
+  "sequence": [
+    {
+      "step": 1,
+      "nodes": [
+        "n1"
+      ],
+      "description": "Primary flow stage 1"
+    },
+    {
+      "step": 2,
+      "nodes": [
+        "n2"
+      ],
+      "description": "Primary flow stage 2"
+    },
+    {
+      "step": 3,
+      "nodes": [
+        "n3"
+      ],
+      "description": "Primary flow stage 3"
+    }
+  ],
+  "groups": [
+    {
+      "id": "group_runtime_request_path",
+      "label": "Runtime request path",
+      "kind": "runtime",
+      "nodeIds": [
+        "n1",
+        "n2"
+      ]
+    },
+    {
+      "id": "group_external_model_provider",
+      "label": "External model provider",
+      "kind": "external",
+      "nodeIds": [
+        "n3"
+      ]
+    },
+    {
+      "id": "group_observability",
+      "label": "Observability",
+      "kind": "operations",
+      "nodeIds": [
+        "n4",
+        "n5"
+      ]
+    }
+  ],
+  "design_origin": "applied",
+  "resolved_complexity": "prototype",
+  "assumptions": [
+    "Maturity is prototype, so the stack follows the simplest viable architecture: an application calling a model API, plus the requested monitoring component.",
+    "The model may be a third-party API or a self-hosted model; both are treated as a single external model endpoint at this stage.",
+    "Monitoring tracks latency (time to first token, per-token time, total latency), token volumes, and request rates per source guidance, but no automated retraining or release loop exists yet.",
+    "No guardrails, routers, caching, or write actions are included; those are later additions and out of scope for a prototype."
+  ],
+  "version": "c18aeeea-d1bd-4e66-b9ab-3ec930fc94e5"
+}

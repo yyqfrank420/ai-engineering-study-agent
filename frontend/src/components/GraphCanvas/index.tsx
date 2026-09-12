@@ -26,6 +26,7 @@ interface GraphCanvasProps {
   selectedNode: SelectedNode | null;
   onClosePopup: () => void;
   sourceTexts: string[];
+  isPreview?: boolean;
   isBuilding?: boolean;
   workflowProgress?: WorkflowProgress[];
   graphCandidate?: GraphCandidate | null;
@@ -57,6 +58,7 @@ export function GraphCanvas({
   selectedNode,
   onClosePopup,
   sourceTexts,
+  isPreview = false,
   isBuilding = false,
   workflowProgress = [],
   graphCandidate = null,
@@ -64,7 +66,10 @@ export function GraphCanvas({
   const { currentStep, totalSteps, hasSequence, activeNodeIds, stepDescription, goToStep } = useGraph(graphData, animateSequence);
   const [sequenceDismissal, setSequenceDismissal] = useState<{ key: string; dismissed: boolean } | null>(null);
   const [viewStateCache, setViewStateCache] = useState<Record<string, GraphViewState>>({});
-  const [pendingPersistViewState, setPendingPersistViewState] = useState<GraphViewState | null>(null);
+  const [pendingPersistViewState, setPendingPersistViewState] = useState<{
+    graphKey: string;
+    viewState: GraphViewState;
+  } | null>(null);
   const graphContentKey = useMemo(() => graphStructureKey(graphData), [graphData]);
   const sequenceDismissed = sequenceDismissal?.key === graphContentKey && sequenceDismissal.dismissed;
   const graphViewKey = useMemo(() => {
@@ -83,14 +88,21 @@ export function GraphCanvas({
   const persistedViewState = graphViewKey ? viewStateCache[graphViewKey] ?? graphData?.view_state ?? null : null;
 
   useEffect(() => {
-    if (!authSession || !activeThreadId || !graphData || !pendingPersistViewState) {
+    if (
+      isPreview
+      || !authSession
+      || !activeThreadId
+      || !graphData
+      || !graphViewKey
+      || pendingPersistViewState?.graphKey !== graphViewKey
+    ) {
       return;
     }
 
     const timer = window.setTimeout(() => {
       void updateThreadGraph(authSession, activeThreadId, {
         ...graphData,
-        view_state: pendingPersistViewState,
+        view_state: pendingPersistViewState.viewState,
       }).catch((error) => {
         console.error('[graph] Failed to persist graph view state:', error);
       });
@@ -99,7 +111,7 @@ export function GraphCanvas({
     return () => {
       window.clearTimeout(timer);
     };
-  }, [activeThreadId, authSession, graphData, pendingPersistViewState]);
+  }, [activeThreadId, authSession, graphData, graphViewKey, isPreview, pendingPersistViewState]);
 
   if (!graphData) {
     const latest = workflowProgress.at(-1);
@@ -248,13 +260,13 @@ export function GraphCanvas({
             onNodeClick={onNodeClick}
             initialViewState={persistedViewState ?? undefined}
             onViewStateChange={(viewState) => {
-              if (!graphViewKey) return;
+              if (isPreview || !graphViewKey) return;
               const existingViewState = viewStateCache[graphViewKey] ?? graphData.view_state ?? null;
               if (sameGraphViewState(existingViewState, viewState)) {
                 return;
               }
               setViewStateCache(prev => ({ ...prev, [graphViewKey]: viewState }));
-              setPendingPersistViewState(viewState);
+              setPendingPersistViewState({ graphKey: graphViewKey, viewState });
             }}
           />
         </div>
@@ -274,7 +286,9 @@ export function GraphCanvas({
             zIndex: 20,
             whiteSpace: 'nowrap',
           }}>
-            Revising privately · current approved diagram stays visible
+            {isPreview
+              ? 'Draft under review · not saved yet'
+              : 'Revising privately · current approved diagram stays visible'}
           </div>
         )}
 

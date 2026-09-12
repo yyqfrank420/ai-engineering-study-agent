@@ -65,6 +65,8 @@ missing_indexes="$(
 WITH required_indexes(name) AS (
   VALUES
     ('uq_chat_messages_client_turn_role'),
+    ('uq_chat_messages_sequence'),
+    ('idx_chat_messages_thread_sequence'),
     ('idx_rate_limit_key_type_expiry'),
     ('idx_rate_limit_expiry')
 )

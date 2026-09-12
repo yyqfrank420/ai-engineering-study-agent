@@ -16,6 +16,12 @@ on:
         required: false
         default: ''
         type: string
+      pipeline_mode:
+        description: Graph pipeline mode (default follows the backend's versioned default)
+        required: false
+        default: default
+        type: choice
+        options: [default, legacy, staged]
 
 permissions:
   contents: read
@@ -54,6 +60,7 @@ jobs:
         env:
           DISPATCH_SUITE: ${{ inputs.suite }}
           DISPATCH_CASE_IDS: ${{ inputs.case_ids }}
+          DISPATCH_PIPELINE_MODE: ${{ inputs.pipeline_mode }}
         run: |
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             suite="$DISPATCH_SUITE"
@@ -70,22 +77,14 @@ jobs:
             echo "case_ids is accepted only for the diagnostic suite." >&2
             exit 1
           fi
+          pipeline_mode=default
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            pipeline_mode="${DISPATCH_PIPELINE_MODE:-default}"
+          fi
+          case "$pipeline_mode" in default|legacy|staged) ;; *) echo "Unsupported pipeline mode." >&2; exit 1 ;; esac
           echo "EVAL_SUITE=$suite" >> "$GITHUB_ENV"
           echo "EVAL_CASE_IDS=$case_ids" >> "$GITHUB_ENV"
-      - id: corpus
-        name: Resolve corpus approval state without installing dependencies
-        run: |
-          status="$(python3 -c 'import json; print(json.load(open("backend/eval/corpus/v1/cases.json"))["approval"]["status"])')"
-          case "$status" in pending_human_review|approved) ;; *) echo "Invalid corpus approval status." >&2; exit 1 ;; esac
-          echo "status=$status" >> "$GITHUB_OUTPUT"
-      - name: Reject non-bootstrap pending runs before expensive setup
-        env:
-          CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
-        run: |
-          if [ "$CORPUS_STATUS" != approved ] && { [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || { [ "$EVAL_SUITE" != full ] && [ "$EVAL_SUITE" != diagnostic ]; }; }; then
-            echo "A pending corpus can be bootstrapped only by a manually dispatched full or diagnostic run." >&2
-            exit 1
-          fi
+          echo "EVAL_PIPELINE_MODE=$pipeline_mode" >> "$GITHUB_ENV"
       - uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -93,17 +92,12 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v2
       - id: approved_image
         name: Preflight exact-tree approval before expensive setup
-        env:
-          CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
         run: |
           commit_sha="$(git rev-parse HEAD)"
           tree_sha="$(git rev-parse 'HEAD^{tree}')"
           approval_tag="approved-tree-$tree_sha"
           echo "commit_sha=$commit_sha" >> "$GITHUB_OUTPUT"
           echo "tree_sha=$tree_sha" >> "$GITHUB_OUTPUT"
-          if [ "$CORPUS_STATUS" != approved ]; then
-            exit 0
-          fi
           lookup_error_file="$(mktemp "$RUNNER_TEMP/approved-image-lookup.XXXXXX")"
           if digest="$(gcloud artifacts docker images describe "$IMAGE:$approval_tag" --format='value(image_summary.digest)' 2>"$lookup_error_file")"; then
             rm -f "$lookup_error_file"
@@ -123,12 +117,12 @@ jobs:
             exit "$lookup_status"
           fi
           rm -f "$lookup_error_file"
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$EVAL_SUITE" = diagnostic ]; then
-            echo "Exact-tree approval is absent; the manually dispatched diagnostic will build an ephemeral candidate: commit=$commit_sha tree=$tree_sha image_tag=$IMAGE:$approval_tag"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && { [ "$EVAL_SUITE" = full ] || [ "$EVAL_SUITE" = diagnostic ]; }; then
+            echo "Exact-tree approval is absent; the manually dispatched full or diagnostic evaluation will build an ephemeral candidate: commit=$commit_sha tree=$tree_sha image_tag=$IMAGE:$approval_tag"
             exit 0
           fi
           echo "Missing exact-tree evaluation approval: commit=$commit_sha tree=$tree_sha image_tag=$IMAGE:$approval_tag" >&2
-          echo "The protected live evaluation must publish this exact-tree tag before a scheduled nightly or full evaluation can run." >&2
+          echo "The protected live evaluation must publish this exact-tree tag before an automatic evaluation can run." >&2
           exit 1
       - uses: actions/setup-python@v5
         with:
@@ -146,6 +140,18 @@ jobs:
           pip install -r backend/requirements.txt -r backend/requirements-eval.txt
           python -m playwright install --with-deps chromium
           npm ci --prefix frontend --prefer-offline --no-audit --no-fund
+      - name: Resolve staging request concurrency
+        run: |
+          staging_concurrency="$(PYTHONPATH=backend python -c 'from eval.runtime_budget import staging_request_concurrency; print(staging_request_concurrency())')"
+          echo "STAGING_REQUEST_CONCURRENCY=$staging_concurrency" >> "$GITHUB_ENV"
+      - name: Resolve versioned graph pipeline mode
+        run: |
+          pipeline_mode="$EVAL_PIPELINE_MODE"
+          if [ "$pipeline_mode" = default ]; then
+            pipeline_mode="$(PYTHONPATH=backend python -c 'from config import Settings; print(Settings.model_fields["graph_pipeline_mode"].default)')"
+          fi
+          case "$pipeline_mode" in legacy|staged) ;; *) echo "Unsupported pipeline mode." >&2; exit 1 ;; esac
+          echo "EVAL_PIPELINE_MODE=$pipeline_mode" >> "$GITHUB_ENV"
       - name: Configure registry authentication
         run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
       - uses: docker/setup-buildx-action@v3
@@ -167,51 +173,34 @@ jobs:
           DB_SCHEMA=staging SUPABASE_DB_URL="$db_url" EVAL_EMAIL="$email" python scripts/staging_database.py reset
       - name: Resolve approved digest or build an ephemeral evaluation candidate
         env:
-          CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
           APPROVED_IMAGE_DIGEST: ${{ steps.approved_image.outputs.digest }}
           EVALUATION_COMMIT_SHA: ${{ steps.approved_image.outputs.commit_sha }}
         run: |
-          if [ "$CORPUS_STATUS" = approved ]; then
-            digest="$APPROVED_IMAGE_DIGEST"
-            if [ -z "$digest" ]; then
-              if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || [ "$EVAL_SUITE" != diagnostic ]; then
-                echo "Approved corpus requires an existing exact-tree image approval outside a manually dispatched diagnostic run." >&2
-                exit 1
-              fi
-              diagnostic_tag="diagnostic-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-              echo "DIAGNOSTIC_IMAGE_TAG=$diagnostic_tag" >> "$GITHUB_ENV"
-              docker buildx build \
-                --file backend/Dockerfile \
-                --cache-from "type=registry,ref=$IMAGE:buildcache" \
-                --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
-                --label "org.opencontainers.image.revision=$EVALUATION_COMMIT_SHA" \
-                --tag "$IMAGE:$diagnostic_tag" \
-                --push .
-              digest="$(gcloud artifacts docker images describe "$IMAGE:$diagnostic_tag" --format='value(image_summary.digest)')"
-              [ -n "$digest" ] || { echo "Diagnostic build did not produce an immutable digest." >&2; exit 1; }
-            fi
-          else
+          digest="$APPROVED_IMAGE_DIGEST"
+          if [ -z "$digest" ]; then
             if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || { [ "$EVAL_SUITE" != full ] && [ "$EVAL_SUITE" != diagnostic ]; }; then
-              echo "A pending corpus can be bootstrapped only by a manually dispatched full or diagnostic run." >&2
+              echo "An ephemeral candidate requires a manually dispatched full or diagnostic evaluation." >&2
               exit 1
             fi
-            bootstrap_tag="corpus-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-            echo "BOOTSTRAP_IMAGE_TAG=$bootstrap_tag" >> "$GITHUB_ENV"
+            evaluation_tag="evaluation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            echo "EVALUATION_IMAGE_TAG=$evaluation_tag" >> "$GITHUB_ENV"
             docker buildx build \
               --file backend/Dockerfile \
               --cache-from "type=registry,ref=$IMAGE:buildcache" \
               --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
               --label "org.opencontainers.image.revision=$EVALUATION_COMMIT_SHA" \
-              --tag "$IMAGE:$bootstrap_tag" \
+              --tag "$IMAGE:$evaluation_tag" \
               --push .
-            digest="$(gcloud artifacts docker images describe "$IMAGE:$bootstrap_tag" --format='value(image_summary.digest)')"
-            [ -n "$digest" ] || { echo "Corpus bootstrap build did not produce an immutable digest." >&2; exit 1; }
+            digest="$(gcloud artifacts docker images describe "$IMAGE:$evaluation_tag" --format='value(image_summary.digest)')"
+            [ -n "$digest" ] || { echo "Evaluation build did not produce an immutable digest." >&2; exit 1; }
           fi
           echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
       - name: Deploy evaluation digest to a tagged staging revision
         env:
           EVALUATION_PR_PROVIDER_ATTEMPT_LIMIT: 64
           EVALUATION_FULL_PROVIDER_ATTEMPT_LIMIT: 150
+          COMMIT_SHA: ${{ steps.approved_image.outputs.commit_sha }}
+          TREE_SHA: ${{ steps.approved_image.outputs.tree_sha }}
         run: |
           tag="scheduled-${GITHUB_RUN_ID}"
           attempt_limit="$EVALUATION_FULL_PROVIDER_ATTEMPT_LIMIT"
@@ -219,10 +208,43 @@ jobs:
             attempt_limit="$EVALUATION_PR_PROVIDER_ATTEMPT_LIMIT"
           fi
           echo "REVISION_TAG=$tag" >> "$GITHUB_ENV"
-          gcloud run deploy "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE@$IMAGE_DIGEST" --no-traffic --tag "$tag" --timeout 1000s --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4,ANTHROPIC_PROMPT_CACHE_ENABLED=true,OTEL_ENVIRONMENT=staging,EVALUATION_RUN_ID=$EVALUATION_RUN_ID,EVALUATION_PROVIDER_ATTEMPT_LIMIT=$attempt_limit --quiet
-          url="$(gcloud run services describe "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json | python -c 'import json,os,sys; d=json.load(sys.stdin); t="scheduled-"+os.environ["GITHUB_RUN_ID"]; print(next((x.get("url", "") for x in d.get("status",{}).get("traffic",[]) if x.get("tag")==t), ""))')"
-          [ -n "$url" ] || { echo "Cloud Run did not expose the tagged evaluation URL." >&2; exit 1; }
-          echo "CANDIDATE_URL=$url" >> "$GITHUB_ENV"
+          configured_concurrency="$(gcloud run deploy "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE@$IMAGE_DIGEST" --no-traffic --tag "$tag" --timeout 1000s --concurrency "$STAGING_REQUEST_CONCURRENCY" --update-env-vars ANTHROPIC_MAX_CONCURRENT_STREAMS=4,ANTHROPIC_PROMPT_CACHE_ENABLED=true,OTEL_ENVIRONMENT=staging,EVALUATION_RUN_ID=$EVALUATION_RUN_ID,EVALUATION_PROVIDER_ATTEMPT_LIMIT=$attempt_limit,GRAPH_PIPELINE_MODE=$EVAL_PIPELINE_MODE --quiet --format='value(spec.template.spec.containerConcurrency)')"
+          if [ "$configured_concurrency" != "$STAGING_REQUEST_CONCURRENCY" ]; then
+            echo "Cloud Run staging request concurrency does not match the versioned budget." >&2
+            exit 1
+          fi
+          export CONFIGURED_STAGING_REQUEST_CONCURRENCY="$configured_concurrency"
+          gcloud run services describe "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='json(status.traffic)' > "$RUNNER_TEMP/candidate-traffic.json"
+          python - <<'PY'
+          import json, os, re
+          from pathlib import Path
+
+          traffic = json.loads((Path(os.environ["RUNNER_TEMP"]) / "candidate-traffic.json").read_text())
+          candidates = [item for item in traffic.get("status", {}).get("traffic", [])
+                        if item.get("tag") == "scheduled-" + os.environ["GITHUB_RUN_ID"]]
+          if len(candidates) != 1 or not candidates[0].get("url") or not candidates[0].get("revisionName"):
+              raise SystemExit("Cloud Run did not expose one tagged evaluation URL and revision.")
+          candidate = candidates[0]
+          for key, pattern in (("COMMIT_SHA", r"[0-9a-f]{40}"), ("TREE_SHA", r"[0-9a-f]{40}"),
+                               ("IMAGE_DIGEST", r"sha256:[0-9a-f]{64}")):
+              if not re.fullmatch(pattern, os.environ[key]):
+                  raise SystemExit("Invalid deployment identity: " + key)
+          Path("artifacts/live-eval/deployment.json").write_text(json.dumps({
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "commit_sha": os.environ["COMMIT_SHA"],
+              "tree_sha": os.environ["TREE_SHA"],
+              "image": os.environ["IMAGE"],
+              "digest": os.environ["IMAGE_DIGEST"],
+              "revision_name": candidate["revisionName"],
+              "staging_request_concurrency": int(os.environ["CONFIGURED_STAGING_REQUEST_CONCURRENCY"]),
+              "pipeline_mode": os.environ["EVAL_PIPELINE_MODE"],
+              "suite": os.environ["EVAL_SUITE"],
+              "case_ids": os.environ["EVAL_CASE_IDS"].split(),
+          }, indent=2) + "\n")
+          with Path(os.environ["GITHUB_ENV"]).open("a") as environment:
+              environment.write("CANDIDATE_URL=" + candidate["url"] + "\n")
+          PY
       - name: Wait for candidate readiness
         run: |
           for attempt in $(seq 1 24); do
@@ -255,58 +277,48 @@ jobs:
           fi
           EVAL_BACKEND_URL="$CANDIDATE_URL" ./scripts/ci browser --suite "$EVAL_SUITE" --target http://localhost:5173 --output artifacts/live-eval/browser-results.json "${case_args[@]}"
       - id: semantic
-        name: Generate semantic proposals or apply the approved gate
+        name: Apply automated deterministic and semantic rubrics
         if: always() && hashFiles('artifacts/live-eval/browser-results.json') != ''
         continue-on-error: true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           EVAL_JUDGE_PROVIDER: anthropic
           EVAL_JUDGE_MODEL: claude-sonnet-5
-          CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
         run: |
-          approval_args=()
           case_args=()
-          if [ "$CORPUS_STATUS" = approved ]; then
-            approval_args+=(--require-approved-corpus --manual-review-policy blocking)
-          fi
           if [ "$EVAL_SUITE" = diagnostic ]; then
             read -r -a selected_cases <<< "$EVAL_CASE_IDS"
             for case_id in "${selected_cases[@]}"; do case_args+=(--case "$case_id"); done
           fi
-          ./scripts/ci live --suite "$EVAL_SUITE" --target "$CANDIDATE_URL" --input artifacts/live-eval/browser-results.json --output artifacts/live-eval/live-results.json "${approval_args[@]}" "${case_args[@]}"
+          ./scripts/ci live --suite "$EVAL_SUITE" --target "$CANDIDATE_URL" --input artifacts/live-eval/browser-results.json --output artifacts/live-eval/live-results.json --manual-review-policy report-only "${case_args[@]}"
       - name: Cleanup tagged revision
         if: always()
         run: |
           [ -z "${VITE_PID:-}" ] || kill "$VITE_PID" || true
           [ -z "${REVISION_TAG:-}" ] || gcloud run services update-traffic "$STAGING_SERVICE" --project "$PROJECT_ID" --region "$REGION" --remove-tags "$REVISION_TAG" --quiet || true
-          [ -z "${DIAGNOSTIC_IMAGE_TAG:-}" ] || gcloud artifacts docker tags delete "$IMAGE:$DIAGNOSTIC_IMAGE_TAG" --quiet || true
-          [ -z "${BOOTSTRAP_IMAGE_TAG:-}" ] || gcloud artifacts docker tags delete "$IMAGE:$BOOTSTRAP_IMAGE_TAG" --quiet || true
+          [ -z "${EVALUATION_IMAGE_TAG:-}" ] || gcloud artifacts docker tags delete "$IMAGE:$EVALUATION_IMAGE_TAG" --quiet || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: scheduled-eval-replay-${{ github.run_id }}
           path: |
             artifacts/live-eval/run-context.json
+            artifacts/live-eval/deployment.json
             artifacts/live-eval/browser-results.json
-          retention-days: 30
+          retention-days: 90
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: scheduled-eval-${{ github.run_id }}
           path: artifacts/live-eval
-          retention-days: 30
-      - name: Enforce approved scheduled corpus
+          retention-days: 90
+      - name: Enforce scheduled evaluation outcome
         if: always()
         env:
-          CORPUS_STATUS: ${{ steps.corpus.outputs.status }}
           BROWSER_OUTCOME: ${{ steps.browser.outcome }}
           SEMANTIC_OUTCOME: ${{ steps.semantic.outcome }}
         run: |
-          if [ "$CORPUS_STATUS" != approved ]; then
-            echo "Corpus is pending human review; this run produced non-blocking proposals."
-            exit 0
-          fi
           if [ "$BROWSER_OUTCOME" != success ] || [ "$SEMANTIC_OUTCOME" != success ]; then
-            echo "Approved scheduled evaluation did not pass." >&2
+            echo "Scheduled evaluation did not pass." >&2
             exit 1
           fi

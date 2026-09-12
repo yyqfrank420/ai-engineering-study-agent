@@ -37,6 +37,7 @@
             "backend/tests/test_graph_critic.py",
             "backend/tests/test_graph_grounding_prompts.py",
             "backend/tests/test_graph_patch.py",
+            "backend/tests/test_graph_review_budget.py",
             "backend/tests/test_applied_graph_spec.py",
             "backend/tests/test_llm_adapter.py",
             "backend/tests/test_mode_controls.py",
@@ -45,7 +46,14 @@
             "backend/tests/test_pipeline_steps.py",
             "backend/tests/test_rag_retrieval.py",
             "backend/tests/test_rag_worker.py",
-            "backend/tests/test_search_tool_flow.py"
+            "backend/tests/test_search_tool_flow.py",
+            "backend/tests/test_staged_graph_contract.py",
+            "backend/tests/test_staged_graph_generation.py",
+            "backend/tests/test_staged_graph_gate.py",
+            "backend/tests/test_staged_capability_policy.py",
+            "backend/tests/test_staged_clarification.py",
+            "backend/tests/test_graph_identity.py",
+            "backend/tests/test_staged_graph_workflow.py"
           ]
         }
       ]
@@ -62,6 +70,8 @@
             "backend/tests/test_database_adapter_postgres.py",
             "backend/tests/test_faiss_artifact.py",
             "backend/tests/test_faiss_artifact_security.py",
+            "backend/tests/test_message_ordering.py",
+            "backend/tests/test_message_sequence_postgres.py",
             "backend/tests/test_observability_core.py",
             "backend/tests/test_postgres_schema_guardrails.py",
             "backend/tests/test_resource_limits.py",
@@ -82,6 +92,7 @@
           "argv": [
             "python", "-m", "pytest", "--tb=short", "-q",
             "backend/tests/test_canonical_graph.py",
+            "backend/tests/test_calibration.py",
             "backend/tests/test_eval_cost_gate.py",
             "backend/tests/test_eval_metrics.py",
             "backend/tests/test_graph_artifacts_schema.py",
@@ -240,6 +251,7 @@
       "application_full_calls": 150,
       "judge_calls": 16,
       "browser_case_concurrency": 4,
+      "staging_request_concurrency": 16,
       "browser_graph_case_concurrency": 2,
       "browser_infrastructure_retry_count": 0,
       "application_turn_timeout_seconds": 970,

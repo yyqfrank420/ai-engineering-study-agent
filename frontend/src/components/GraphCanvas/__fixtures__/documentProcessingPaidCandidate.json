@@ -1,0 +1,1642 @@
+{
+  "graph_type": "architecture",
+  "title": "Production Document-Processing Agent Components",
+  "nodes": [
+    {
+      "id": "n1",
+      "label": "Document Intake Gateway",
+      "type": "gateway",
+      "technology": "Gateway",
+      "description": "Accept authenticated document submissions, enforce request shape and size limits, attach source key and receipt timestamp, and route each request to idempotent ingestion.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n2",
+      "label": "External Document Sources",
+      "type": "external",
+      "technology": "External system",
+      "description": "Provide read-only inbound documents and metadata through upload, scan, or batch channels; these sources are inputs and are not mutated by this system.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n3",
+      "label": "Idempotent Ingestion Service",
+      "type": "service",
+      "technology": "Application service",
+      "description": "Resolve source key plus content fingerprint, suppress duplicates, create or reuse a document session, and emit exactly one accepted-ingestion outcome per logical document.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n4",
+      "label": "Raw Document Store",
+      "type": "datastore",
+      "technology": "Data store",
+      "description": "Persist immutable original documents, content fingerprints, ingestion receipts, and retention state so prior artifacts can be retrieved for reprocessing or audit.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n5",
+      "label": "Document Metadata Ledger",
+      "type": "datastore",
+      "technology": "Data store",
+      "description": "Own canonical document state, versions, ownership tags, processing attempts, confidence summaries, and current status transitions from intake to final or quarantined.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n6",
+      "label": "Processing Work Queue",
+      "type": "queue",
+      "technology": "Message queue",
+      "description": "Buffer accepted work items with attempt count, visibility timeout, priority class, and idempotency token so processing survives restarts and traffic spikes.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n7",
+      "label": "Retry and Dead-Letter Controller",
+      "type": "control",
+      "technology": "Control component",
+      "description": "Classify transient versus terminal failures, apply bounded backoff, cancel stale attempts, isolate poison documents to dead-letter state, and preserve retry evidence.",
+      "tier": null,
+      "lane": "bottom",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n8",
+      "label": "Agent Orchestration Controller",
+      "type": "control",
+      "technology": "Control component",
+      "description": "Coordinate parsing, extraction, enrichment, validation, review, finalize, and rollback steps as resumable workflow state without embedding business rules in transport.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n9",
+      "label": "Document Parsing Service",
+      "type": "service",
+      "technology": "Application service",
+      "description": "Convert accepted files into normalized pages, text spans, tables, images, and layout hints while recording parser version and per-page warnings.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n10",
+      "label": "Extraction Agent Service",
+      "type": "service",
+      "technology": "Application service",
+      "description": "Select allowed tools and prompts, extract typed fields and entities from normalized content, cite evidence spans, and return structured candidates with confidence.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n11",
+      "label": "Tool Inventory Policy",
+      "type": "control",
+      "technology": "Control component",
+      "description": "Define which retrieval, parsing, calculation, and validation tools the extraction agent may use for each document class, keeping capabilities explicit and bounded.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n12",
+      "label": "Reference and Template Store",
+      "type": "datastore",
+      "technology": "Data store",
+      "description": "Store reusable document templates, field dictionaries, validation examples, and prior approved outputs that extraction may retrieve but not silently overwrite.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n13",
+      "label": "Validation and Risk Rules Service",
+      "type": "service",
+      "technology": "Application service",
+      "description": "Check schema, business invariants, cross-field consistency, sensitivity markers, and risk thresholds; produce pass, repair, review, or reject outcomes.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n14",
+      "label": "Review Routing Decision",
+      "type": "decision",
+      "technology": "Decision component",
+      "description": "Decide auto-finalize, human review, reprocess, or quarantine from confidence, validation outcome, value at risk, and policy thresholds; decision inputs are logged.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n15",
+      "label": "Human Review Console",
+      "type": "client",
+      "technology": "Client",
+      "description": "Present queued documents with evidence spans, extracted fields, confidence, and policy reasons so reviewers can approve, correct, reject, or request reprocessing.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n16",
+      "label": "Human Review Service",
+      "type": "service",
+      "technology": "Application service",
+      "description": "Own review task assignment, locking, decision capture, correction rationale, escalation, and completion events; review decisions are explicit before finalization.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n17",
+      "label": "Review Task Store",
+      "type": "datastore",
+      "technology": "Data store",
+      "description": "Persist review queues, assignments, edits, decisions, rationale, timestamps, and reviewer identity for audit and later bounded evaluation reuse.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n18",
+      "label": "Finalization Service",
+      "type": "service",
+      "technology": "Application service",
+      "description": "Promote approved results to final status only after validation and required human confirmation; writes final output version and closes the workflow idempotently.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n19",
+      "label": "Processed Output Store",
+      "type": "datastore",
+      "technology": "Data store",
+      "description": "Persist immutable final and superseded extraction outputs with lineage to raw document, prompt or model versions, validation results, and review decision.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n20",
+      "label": "Result Access Service",
+      "type": "service",
+      "technology": "Application service",
+      "description": "Serve read-only final results, status, and evidence links to internal consumers; it does not write to downstream business systems.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n21",
+      "label": "Audit Trail Service",
+      "type": "service",
+      "technology": "Application service",
+      "description": "Append tamper-evident events for intake, retries, tool use, decisions, review actions, finalization, release changes, and rollback with correlation across attempts.",
+      "tier": null,
+      "lane": "bottom",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n22",
+      "label": "Audit Log Store",
+      "type": "datastore",
+      "technology": "Data store",
+      "description": "Retain immutable audit events, actor and service identity, before and after state references, policy version, and query indexes for investigations and compliance review.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n23",
+      "label": "Rollback and Recovery Controller",
+      "type": "control",
+      "technology": "Control component",
+      "description": "Restore prior document versions, output versions, or workflow state after processing failures; execute compensating cleanup and prove recovery through audit events.",
+      "tier": null,
+      "lane": "bottom",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n24",
+      "label": "Feedback Capture Service",
+      "type": "service",
+      "technology": "Application service",
+      "description": "Convert reviewer corrections and terminal failures into labeled feedback records linked to raw evidence, outputs, prompts, and rules without changing live behavior directly.",
+      "tier": null,
+      "lane": "bottom",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n25",
+      "label": "Evaluation Dataset Store",
+      "type": "datastore",
+      "technology": "Data store",
+      "description": "Curate golden samples, regression sets, failure-mode cases, and reviewer-labeled corrections for repeatable offline and pre-release evaluation.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n26",
+      "label": "Evaluation and Gate Service",
+      "type": "service",
+      "technology": "Application service",
+      "description": "Run regression and failure-mode checks on candidate prompts, models, parsers, and rules; compare against acceptance thresholds and block unsafe promotion.",
+      "tier": null,
+      "lane": "bottom",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n27",
+      "label": "Prompt and Model Registry",
+      "type": "datastore",
+      "technology": "Data store",
+      "description": "Version prompts, models, parsers, tool policies, and rules with lineage, evaluation results, approval state, and rollback target.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n28",
+      "label": "Release Rollout Controller",
+      "type": "control",
+      "technology": "Control component",
+      "description": "Promote approved prompt, model, ranking, parser, or live configuration versions through guarded rollout, monitor impact, and revert to prior versions when gates fail.",
+      "tier": null,
+      "lane": "bottom",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n29",
+      "label": "Observability and SLO Service",
+      "type": "service",
+      "technology": "Application service",
+      "description": "Expose metrics, traces, queue depth, retry burn, review backlog, accuracy proxies, latency, cost, drift signals, and alerts tied to recovery runbooks.",
+      "tier": null,
+      "lane": "bottom",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n30",
+      "label": "Operational Runbook Console",
+      "type": "client",
+      "technology": "Client",
+      "description": "Let operators inspect stuck documents, replay eligible failures, approve rollback, drain queues, and verify post-recovery state without bypassing audit capture.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    }
+  ],
+  "edges": [
+    {
+      "source": "n2",
+      "target": "n1",
+      "label": "submit document upload",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "submit document upload",
+      "flow": "runtime",
+      "edge_id": "applied:n2__submit_document_upload_4defd8f306105c32af074430__n1",
+      "relation": "submit_document_upload_4defd8f306105c32af074430"
+    },
+    {
+      "source": "n1",
+      "target": "n2",
+      "label": "ingestion receipt with source key",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "ingestion receipt with source key",
+      "flow": "runtime",
+      "edge_id": "applied:n1__ingestion_receipt_with_source_key_75e3a59d6ca2f6dc2efdf5ce__n2",
+      "relation": "ingestion_receipt_with_source_key_75e3a59d6ca2f6dc2efdf5ce"
+    },
+    {
+      "source": "n1",
+      "target": "n3",
+      "label": "route ingestion request",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "route ingestion request",
+      "flow": "runtime",
+      "edge_id": "applied:n1__route_ingestion_request_fe7f1d404438c0a1f6d0907f__n3",
+      "relation": "route_ingestion_request_fe7f1d404438c0a1f6d0907f"
+    },
+    {
+      "source": "n3",
+      "target": "n1",
+      "label": "ingestion acceptance or duplicate outcome",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "ingestion acceptance or duplicate outcome",
+      "flow": "runtime",
+      "edge_id": "applied:n3__ingestion_acceptance_or_duplicate_outco_e9e978e5dc7a37224204837c__n1",
+      "relation": "ingestion_acceptance_or_duplicate_outco_e9e978e5dc7a37224204837c"
+    },
+    {
+      "source": "n3",
+      "target": "n4",
+      "label": "persist immutable raw document and fingerprint",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "persist immutable raw document and fingerprint",
+      "flow": "runtime",
+      "edge_id": "applied:n3__persist_immutable_raw_document_and_fing_d63842e27bb8ea59d189bd4c__n4",
+      "relation": "persist_immutable_raw_document_and_fing_d63842e27bb8ea59d189bd4c"
+    },
+    {
+      "source": "n3",
+      "target": "n5",
+      "label": "register canonical document session",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "register canonical document session",
+      "flow": "runtime",
+      "edge_id": "applied:n3__register_canonical_document_session_95f5df865971413b46abca6a__n5",
+      "relation": "register_canonical_document_session_95f5df865971413b46abca6a"
+    },
+    {
+      "source": "n3",
+      "target": "n6",
+      "label": "enqueue accepted work item",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "enqueue accepted work item",
+      "flow": "runtime",
+      "edge_id": "applied:n3__enqueue_accepted_work_item_bd8860c91decf2c5c3044b96__n6",
+      "relation": "enqueue_accepted_work_item_bd8860c91decf2c5c3044b96"
+    },
+    {
+      "source": "n8",
+      "target": "n6",
+      "label": "dequeue work item",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "dequeue work item",
+      "flow": "runtime",
+      "edge_id": "applied:n8__dequeue_work_item_43adc6a6751cbd0ff567b452__n6",
+      "relation": "dequeue_work_item_43adc6a6751cbd0ff567b452"
+    },
+    {
+      "source": "n6",
+      "target": "n8",
+      "label": "deliver work item payload",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "deliver work item payload",
+      "flow": "runtime",
+      "edge_id": "applied:n6__deliver_work_item_payload_5ac721effba416d4e90cf484__n8",
+      "relation": "deliver_work_item_payload_5ac721effba416d4e90cf484"
+    },
+    {
+      "source": "n8",
+      "target": "n7",
+      "label": "report step failure for classification",
+      "technology": "Control flow",
+      "sync": "sync",
+      "description": "report step failure for classification",
+      "flow": "control",
+      "edge_id": "applied:n8__report_step_failure_for_classification_2c481c9d90ac12bc3b9a614c__n7",
+      "relation": "report_step_failure_for_classification_2c481c9d90ac12bc3b9a614c"
+    },
+    {
+      "source": "n7",
+      "target": "n8",
+      "label": "retry or dead-letter directive",
+      "technology": "Control flow",
+      "sync": "sync",
+      "description": "retry or dead-letter directive",
+      "flow": "control",
+      "edge_id": "applied:n7__retry_or_dead_letter_directive_9f484a5241c325b52053271d__n8",
+      "relation": "retry_or_dead_letter_directive_9f484a5241c325b52053271d"
+    },
+    {
+      "source": "n7",
+      "target": "n6",
+      "label": "requeue attempt with bounded backoff",
+      "technology": "Control flow",
+      "sync": "async",
+      "description": "requeue attempt with bounded backoff",
+      "flow": "control",
+      "edge_id": "applied:n7__requeue_attempt_with_bounded_backoff_28e9d1228d9cc728e958253a__n6",
+      "relation": "requeue_attempt_with_bounded_backoff_28e9d1228d9cc728e958253a"
+    },
+    {
+      "source": "n7",
+      "target": "n5",
+      "label": "record dead-letter status",
+      "technology": "Control flow",
+      "sync": "sync",
+      "description": "record dead-letter status",
+      "flow": "control",
+      "edge_id": "applied:n7__record_dead_letter_status_acf8a8adb1636f3afabae537__n5",
+      "relation": "record_dead_letter_status_acf8a8adb1636f3afabae537"
+    },
+    {
+      "source": "n8",
+      "target": "n9",
+      "label": "request document parsing",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "request document parsing",
+      "flow": "runtime",
+      "edge_id": "applied:n8__request_document_parsing_b9f5d320f41352df5a19a5aa__n9",
+      "relation": "request_document_parsing_b9f5d320f41352df5a19a5aa"
+    },
+    {
+      "source": "n9",
+      "target": "n8",
+      "label": "return normalized content",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "return normalized content",
+      "flow": "runtime",
+      "edge_id": "applied:n9__return_normalized_content_3154e376cb458a9bb8480ab1__n8",
+      "relation": "return_normalized_content_3154e376cb458a9bb8480ab1"
+    },
+    {
+      "source": "n9",
+      "target": "n4",
+      "label": "fetch raw document",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "fetch raw document",
+      "flow": "runtime",
+      "edge_id": "applied:n9__fetch_raw_document_ea138232c941f080a99f2885__n4",
+      "relation": "fetch_raw_document_ea138232c941f080a99f2885"
+    },
+    {
+      "source": "n4",
+      "target": "n9",
+      "label": "raw document payload",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "raw document payload",
+      "flow": "runtime",
+      "edge_id": "applied:n4__raw_document_payload_037dfe87765a186755f1028f__n9",
+      "relation": "raw_document_payload_037dfe87765a186755f1028f"
+    },
+    {
+      "source": "n8",
+      "target": "n10",
+      "label": "request field extraction",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "request field extraction",
+      "flow": "runtime",
+      "edge_id": "applied:n8__request_field_extraction_4474f51dcbe840281e8f6363__n10",
+      "relation": "request_field_extraction_4474f51dcbe840281e8f6363"
+    },
+    {
+      "source": "n10",
+      "target": "n8",
+      "label": "return extraction candidates with confidence",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "return extraction candidates with confidence",
+      "flow": "runtime",
+      "edge_id": "applied:n10__return_extraction_candidates_with_confi_a17ea8fadfac1eda4a42011b__n8",
+      "relation": "return_extraction_candidates_with_confi_a17ea8fadfac1eda4a42011b"
+    },
+    {
+      "source": "n10",
+      "target": "n11",
+      "label": "lookup allowed tools for document class",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "lookup allowed tools for document class",
+      "flow": "runtime",
+      "edge_id": "applied:n10__lookup_allowed_tools_for_document_class_8568d689a0121c4811d66ac4__n11",
+      "relation": "lookup_allowed_tools_for_document_class_8568d689a0121c4811d66ac4"
+    },
+    {
+      "source": "n11",
+      "target": "n10",
+      "label": "allowed tool policy payload",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "allowed tool policy payload",
+      "flow": "runtime",
+      "edge_id": "applied:n11__allowed_tool_policy_payload_d04cad4c02abcb2da6b9ad88__n10",
+      "relation": "allowed_tool_policy_payload_d04cad4c02abcb2da6b9ad88"
+    },
+    {
+      "source": "n10",
+      "target": "n12",
+      "label": "retrieve templates and reference examples",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "retrieve templates and reference examples",
+      "flow": "runtime",
+      "edge_id": "applied:n10__retrieve_templates_and_reference_exampl_01d84a7f51bca68b9dda6f9e__n12",
+      "relation": "retrieve_templates_and_reference_exampl_01d84a7f51bca68b9dda6f9e"
+    },
+    {
+      "source": "n12",
+      "target": "n10",
+      "label": "template and reference payload",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "template and reference payload",
+      "flow": "runtime",
+      "edge_id": "applied:n12__template_and_reference_payload_a2afb270677b7748400ad8ef__n10",
+      "relation": "template_and_reference_payload_a2afb270677b7748400ad8ef"
+    },
+    {
+      "source": "n10",
+      "target": "n27",
+      "label": "fetch approved prompt and model version",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "fetch approved prompt and model version",
+      "flow": "runtime",
+      "edge_id": "applied:n10__fetch_approved_prompt_and_model_version_7ca2e22e55dbfd438d11b60f__n27",
+      "relation": "fetch_approved_prompt_and_model_version_7ca2e22e55dbfd438d11b60f"
+    },
+    {
+      "source": "n27",
+      "target": "n10",
+      "label": "prompt and model version payload",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "prompt and model version payload",
+      "flow": "runtime",
+      "edge_id": "applied:n27__prompt_and_model_version_payload_7ce1f36cd1f3d334694639b3__n10",
+      "relation": "prompt_and_model_version_payload_7ce1f36cd1f3d334694639b3"
+    },
+    {
+      "source": "n8",
+      "target": "n13",
+      "label": "request validation and risk check",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "request validation and risk check",
+      "flow": "runtime",
+      "edge_id": "applied:n8__request_validation_and_risk_check_40beac5d2b3917dcd2349ce0__n13",
+      "relation": "request_validation_and_risk_check_40beac5d2b3917dcd2349ce0"
+    },
+    {
+      "source": "n13",
+      "target": "n8",
+      "label": "validation pass repair review or reject outcome",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "validation pass repair review or reject outcome",
+      "flow": "runtime",
+      "edge_id": "applied:n13__validation_pass_repair_review_or_reject_c8ac2da0732685852cd29c19__n8",
+      "relation": "validation_pass_repair_review_or_reject_c8ac2da0732685852cd29c19"
+    },
+    {
+      "source": "n8",
+      "target": "n14",
+      "label": "request review routing decision",
+      "technology": "Control flow",
+      "sync": "sync",
+      "description": "request review routing decision",
+      "flow": "control",
+      "edge_id": "applied:n8__request_review_routing_decision_a8b07c6fcdc349614440b47d__n14",
+      "relation": "request_review_routing_decision_a8b07c6fcdc349614440b47d"
+    },
+    {
+      "source": "n14",
+      "target": "n8",
+      "label": "routing decision outcome",
+      "technology": "Control flow",
+      "sync": "sync",
+      "description": "routing decision outcome",
+      "flow": "control",
+      "edge_id": "applied:n14__routing_decision_outcome_59a0524b33850281ef278b46__n8",
+      "relation": "routing_decision_outcome_59a0524b33850281ef278b46"
+    },
+    {
+      "source": "n8",
+      "target": "n16",
+      "label": "create review task",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "create review task",
+      "flow": "runtime",
+      "edge_id": "applied:n8__create_review_task_6335d3654b3b919e8c5980e0__n16",
+      "relation": "create_review_task_6335d3654b3b919e8c5980e0"
+    },
+    {
+      "source": "n16",
+      "target": "n17",
+      "label": "persist review task and decision",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "persist review task and decision",
+      "flow": "runtime",
+      "edge_id": "applied:n16__persist_review_task_and_decision_ef8bb3f35b571a8314c3661a__n17",
+      "relation": "persist_review_task_and_decision_ef8bb3f35b571a8314c3661a"
+    },
+    {
+      "source": "n15",
+      "target": "n16",
+      "label": "request review queue",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "request review queue",
+      "flow": "runtime",
+      "edge_id": "applied:n15__request_review_queue_fdd4a7823d2ff0f9a9f70dc2__n16",
+      "relation": "request_review_queue_fdd4a7823d2ff0f9a9f70dc2"
+    },
+    {
+      "source": "n16",
+      "target": "n15",
+      "label": "review queue payload with evidence spans",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "review queue payload with evidence spans",
+      "flow": "runtime",
+      "edge_id": "applied:n16__review_queue_payload_with_evidence_span_721f674a0d4d7957286668b9__n15",
+      "relation": "review_queue_payload_with_evidence_span_721f674a0d4d7957286668b9"
+    },
+    {
+      "source": "n15",
+      "target": "n16",
+      "label": "submit review decision",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "submit review decision",
+      "flow": "runtime",
+      "edge_id": "applied:n15__submit_review_decision_55c9708483c2b4ef186f0a27__n16",
+      "relation": "submit_review_decision_55c9708483c2b4ef186f0a27"
+    },
+    {
+      "source": "n16",
+      "target": "n15",
+      "label": "review decision receipt",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "review decision receipt",
+      "flow": "runtime",
+      "edge_id": "applied:n16__review_decision_receipt_3d82bbfa81120933c164fb80__n15",
+      "relation": "review_decision_receipt_3d82bbfa81120933c164fb80"
+    },
+    {
+      "source": "n16",
+      "target": "n8",
+      "label": "review completion event",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "review completion event",
+      "flow": "runtime",
+      "edge_id": "applied:n16__review_completion_event_b40888fdf69bd3421f9c36c3__n8",
+      "relation": "review_completion_event_b40888fdf69bd3421f9c36c3"
+    },
+    {
+      "source": "n8",
+      "target": "n18",
+      "label": "request finalization",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "request finalization",
+      "flow": "runtime",
+      "edge_id": "applied:n8__request_finalization_2f892555cbc6ac4cd1c6e57a__n18",
+      "relation": "request_finalization_2f892555cbc6ac4cd1c6e57a"
+    },
+    {
+      "source": "n18",
+      "target": "n8",
+      "label": "finalization outcome",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "finalization outcome",
+      "flow": "runtime",
+      "edge_id": "applied:n18__finalization_outcome_a934b412e0e8ddea2fa66d9c__n8",
+      "relation": "finalization_outcome_a934b412e0e8ddea2fa66d9c"
+    },
+    {
+      "source": "n18",
+      "target": "n19",
+      "label": "persist final output version with lineage",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "persist final output version with lineage",
+      "flow": "runtime",
+      "edge_id": "applied:n18__persist_final_output_version_with_linea_02e826b4605dd3ed2afee9bc__n19",
+      "relation": "persist_final_output_version_with_linea_02e826b4605dd3ed2afee9bc"
+    },
+    {
+      "source": "n18",
+      "target": "n5",
+      "label": "commit final document status",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "commit final document status",
+      "flow": "runtime",
+      "edge_id": "applied:n18__commit_final_document_status_2fc05c4cf0c36abdd66583fd__n5",
+      "relation": "commit_final_document_status_2fc05c4cf0c36abdd66583fd"
+    },
+    {
+      "source": "n8",
+      "target": "n5",
+      "label": "update workflow state transitions",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "update workflow state transitions",
+      "flow": "runtime",
+      "edge_id": "applied:n8__update_workflow_state_transitions_721f4f0751fd5817270f1133__n5",
+      "relation": "update_workflow_state_transitions_721f4f0751fd5817270f1133"
+    },
+    {
+      "source": "n1",
+      "target": "n21",
+      "label": "audit intake receipts",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "audit intake receipts",
+      "flow": "runtime",
+      "edge_id": "applied:n1__audit_intake_receipts_d83739c7c1a51653ef3062a1__n21",
+      "relation": "audit_intake_receipts_d83739c7c1a51653ef3062a1"
+    },
+    {
+      "source": "n3",
+      "target": "n21",
+      "label": "audit ingestion outcome",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "audit ingestion outcome",
+      "flow": "runtime",
+      "edge_id": "applied:n3__audit_ingestion_outcome_8b9cd514ee2cba746049aeee__n21",
+      "relation": "audit_ingestion_outcome_8b9cd514ee2cba746049aeee"
+    },
+    {
+      "source": "n7",
+      "target": "n21",
+      "label": "audit retry and dead-letter evidence",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "audit retry and dead-letter evidence",
+      "flow": "runtime",
+      "edge_id": "applied:n7__audit_retry_and_dead_letter_evidence_02edc0cf2dd254c39a4384ba__n21",
+      "relation": "audit_retry_and_dead_letter_evidence_02edc0cf2dd254c39a4384ba"
+    },
+    {
+      "source": "n9",
+      "target": "n21",
+      "label": "audit parser version and warnings",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "audit parser version and warnings",
+      "flow": "runtime",
+      "edge_id": "applied:n9__audit_parser_version_and_warnings_e2b5c3f1ad22344a7bc50a08__n21",
+      "relation": "audit_parser_version_and_warnings_e2b5c3f1ad22344a7bc50a08"
+    },
+    {
+      "source": "n10",
+      "target": "n21",
+      "label": "audit tool use and prompt versions",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "audit tool use and prompt versions",
+      "flow": "runtime",
+      "edge_id": "applied:n10__audit_tool_use_and_prompt_versions_461dc9b564fc0c11de0c0011__n21",
+      "relation": "audit_tool_use_and_prompt_versions_461dc9b564fc0c11de0c0011"
+    },
+    {
+      "source": "n13",
+      "target": "n21",
+      "label": "audit validation outcome",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "audit validation outcome",
+      "flow": "runtime",
+      "edge_id": "applied:n13__audit_validation_outcome_6a71e4085278f65e7d2fe1de__n21",
+      "relation": "audit_validation_outcome_6a71e4085278f65e7d2fe1de"
+    },
+    {
+      "source": "n14",
+      "target": "n21",
+      "label": "audit routing decision inputs",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "audit routing decision inputs",
+      "flow": "runtime",
+      "edge_id": "applied:n14__audit_routing_decision_inputs_7eeea70e4c58e1e657c0ee57__n21",
+      "relation": "audit_routing_decision_inputs_7eeea70e4c58e1e657c0ee57"
+    },
+    {
+      "source": "n16",
+      "target": "n21",
+      "label": "audit review actions",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "audit review actions",
+      "flow": "runtime",
+      "edge_id": "applied:n16__audit_review_actions_04268f4eb2100e3913643961__n21",
+      "relation": "audit_review_actions_04268f4eb2100e3913643961"
+    },
+    {
+      "source": "n18",
+      "target": "n21",
+      "label": "audit finalization",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "audit finalization",
+      "flow": "runtime",
+      "edge_id": "applied:n18__audit_finalization_9b9be3fb160db806e1e36ac7__n21",
+      "relation": "audit_finalization_9b9be3fb160db806e1e36ac7"
+    },
+    {
+      "source": "n21",
+      "target": "n22",
+      "label": "append immutable audit events",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "append immutable audit events",
+      "flow": "runtime",
+      "edge_id": "applied:n21__append_immutable_audit_events_486fb62a6b7df1484329d188__n22",
+      "relation": "append_immutable_audit_events_486fb62a6b7df1484329d188"
+    },
+    {
+      "source": "n8",
+      "target": "n23",
+      "label": "request workflow rollback",
+      "technology": "Control flow",
+      "sync": "sync",
+      "description": "request workflow rollback",
+      "flow": "control",
+      "edge_id": "applied:n8__request_workflow_rollback_a6bbbc98d498f2a13f22b847__n23",
+      "relation": "request_workflow_rollback_a6bbbc98d498f2a13f22b847"
+    },
+    {
+      "source": "n23",
+      "target": "n8",
+      "label": "rollback outcome",
+      "technology": "Control flow",
+      "sync": "sync",
+      "description": "rollback outcome",
+      "flow": "control",
+      "edge_id": "applied:n23__rollback_outcome_418bac39f3c65dd99941750b__n8",
+      "relation": "rollback_outcome_418bac39f3c65dd99941750b"
+    },
+    {
+      "source": "n23",
+      "target": "n4",
+      "label": "retrieve prior raw artifact",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "retrieve prior raw artifact",
+      "flow": "runtime",
+      "edge_id": "applied:n23__retrieve_prior_raw_artifact_ca77c97caf61c0aed33413ad__n4",
+      "relation": "retrieve_prior_raw_artifact_ca77c97caf61c0aed33413ad"
+    },
+    {
+      "source": "n4",
+      "target": "n23",
+      "label": "prior raw artifact payload",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "prior raw artifact payload",
+      "flow": "runtime",
+      "edge_id": "applied:n4__prior_raw_artifact_payload_00e0d1e62514914e8bb7a816__n23",
+      "relation": "prior_raw_artifact_payload_00e0d1e62514914e8bb7a816"
+    },
+    {
+      "source": "n23",
+      "target": "n5",
+      "label": "restore prior document version",
+      "technology": "Control flow",
+      "sync": "sync",
+      "description": "restore prior document version",
+      "flow": "control",
+      "edge_id": "applied:n23__restore_prior_document_version_79d1412a55f7dab9eee4f962__n5",
+      "relation": "restore_prior_document_version_79d1412a55f7dab9eee4f962"
+    },
+    {
+      "source": "n23",
+      "target": "n19",
+      "label": "restore prior output version",
+      "technology": "Control flow",
+      "sync": "sync",
+      "description": "restore prior output version",
+      "flow": "control",
+      "edge_id": "applied:n23__restore_prior_output_version_180d705561079288291dcb5a__n19",
+      "relation": "restore_prior_output_version_180d705561079288291dcb5a"
+    },
+    {
+      "source": "n23",
+      "target": "n21",
+      "label": "audit recovery proof",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "audit recovery proof",
+      "flow": "runtime",
+      "edge_id": "applied:n23__audit_recovery_proof_02595b6cf5faa9036f8539f9__n21",
+      "relation": "audit_recovery_proof_02595b6cf5faa9036f8539f9"
+    },
+    {
+      "source": "n20",
+      "target": "n19",
+      "label": "fetch final outputs",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "fetch final outputs",
+      "flow": "runtime",
+      "edge_id": "applied:n20__fetch_final_outputs_a13b1c9e695b56e75d5b78ae__n19",
+      "relation": "fetch_final_outputs_a13b1c9e695b56e75d5b78ae"
+    },
+    {
+      "source": "n19",
+      "target": "n20",
+      "label": "final output payload",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "final output payload",
+      "flow": "runtime",
+      "edge_id": "applied:n19__final_output_payload_d84a5a0f1224ddedf755fa91__n20",
+      "relation": "final_output_payload_d84a5a0f1224ddedf755fa91"
+    },
+    {
+      "source": "n20",
+      "target": "n5",
+      "label": "lookup document status",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "lookup document status",
+      "flow": "runtime",
+      "edge_id": "applied:n20__lookup_document_status_a514f7a341e183a620fec852__n5",
+      "relation": "lookup_document_status_a514f7a341e183a620fec852"
+    },
+    {
+      "source": "n5",
+      "target": "n20",
+      "label": "document status payload",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "document status payload",
+      "flow": "runtime",
+      "edge_id": "applied:n5__document_status_payload_5c8ad79feb1c640d184505b7__n20",
+      "relation": "document_status_payload_5c8ad79feb1c640d184505b7"
+    },
+    {
+      "source": "n20",
+      "target": "n29",
+      "label": "emit access telemetry",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "emit access telemetry",
+      "flow": "runtime",
+      "edge_id": "applied:n20__emit_access_telemetry_73f4aef397c6e3d39c2dd1f9__n29",
+      "relation": "emit_access_telemetry_73f4aef397c6e3d39c2dd1f9"
+    },
+    {
+      "source": "n16",
+      "target": "n24",
+      "label": "submit reviewer corrections as labeled feedback",
+      "technology": "Feedback flow",
+      "sync": "async",
+      "description": "submit reviewer corrections as labeled feedback",
+      "flow": "feedback",
+      "edge_id": "applied:n16__submit_reviewer_corrections_as_labeled__9301ad692929668c30928ee4__n24",
+      "relation": "submit_reviewer_corrections_as_labeled__9301ad692929668c30928ee4"
+    },
+    {
+      "source": "n7",
+      "target": "n24",
+      "label": "submit terminal failure records",
+      "technology": "Feedback flow",
+      "sync": "async",
+      "description": "submit terminal failure records",
+      "flow": "feedback",
+      "edge_id": "applied:n7__submit_terminal_failure_records_46bfd3ca4fc5a7df9a4391ef__n24",
+      "relation": "submit_terminal_failure_records_46bfd3ca4fc5a7df9a4391ef"
+    },
+    {
+      "source": "n24",
+      "target": "n25",
+      "label": "curate labeled feedback records",
+      "technology": "Feedback flow",
+      "sync": "sync",
+      "description": "curate labeled feedback records",
+      "flow": "feedback",
+      "edge_id": "applied:n24__curate_labeled_feedback_records_3aad946cbb9cc45677dcca4a__n25",
+      "relation": "curate_labeled_feedback_records_3aad946cbb9cc45677dcca4a"
+    },
+    {
+      "source": "n24",
+      "target": "n21",
+      "label": "audit feedback records",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "audit feedback records",
+      "flow": "runtime",
+      "edge_id": "applied:n24__audit_feedback_records_f5f52384fa319f90f8c83f1f__n21",
+      "relation": "audit_feedback_records_f5f52384fa319f90f8c83f1f"
+    },
+    {
+      "source": "n26",
+      "target": "n25",
+      "label": "fetch evaluation datasets",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "fetch evaluation datasets",
+      "flow": "runtime",
+      "edge_id": "applied:n26__fetch_evaluation_datasets_ec888a238b25c0419281e760__n25",
+      "relation": "fetch_evaluation_datasets_ec888a238b25c0419281e760"
+    },
+    {
+      "source": "n25",
+      "target": "n26",
+      "label": "evaluation dataset payload",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "evaluation dataset payload",
+      "flow": "runtime",
+      "edge_id": "applied:n25__evaluation_dataset_payload_d4ab43de141b92903a2f6696__n26",
+      "relation": "evaluation_dataset_payload_d4ab43de141b92903a2f6696"
+    },
+    {
+      "source": "n26",
+      "target": "n27",
+      "label": "fetch candidate release versions",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "fetch candidate release versions",
+      "flow": "runtime",
+      "edge_id": "applied:n26__fetch_candidate_release_versions_5e0aed609f3b238c0a32836e__n27",
+      "relation": "fetch_candidate_release_versions_5e0aed609f3b238c0a32836e"
+    },
+    {
+      "source": "n27",
+      "target": "n26",
+      "label": "candidate version payload",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "candidate version payload",
+      "flow": "runtime",
+      "edge_id": "applied:n27__candidate_version_payload_9ad5689165ae28a459c88d9c__n26",
+      "relation": "candidate_version_payload_9ad5689165ae28a459c88d9c"
+    },
+    {
+      "source": "n26",
+      "target": "n28",
+      "label": "release gate decision",
+      "technology": "Control flow",
+      "sync": "sync",
+      "description": "release gate decision",
+      "flow": "control",
+      "edge_id": "applied:n26__release_gate_decision_054b6cd522f840166d00de30__n28",
+      "relation": "release_gate_decision_054b6cd522f840166d00de30"
+    },
+    {
+      "source": "n28",
+      "target": "n27",
+      "label": "stage canary release",
+      "technology": "Deployment flow",
+      "sync": "sync",
+      "description": "stage canary release",
+      "flow": "deployment",
+      "edge_id": "applied:n28__stage_canary_release_d714e05873ee376873e3fa7f__n27",
+      "relation": "stage_canary_release_d714e05873ee376873e3fa7f"
+    },
+    {
+      "source": "n28",
+      "target": "n27",
+      "label": "promote approved release",
+      "technology": "Deployment flow",
+      "sync": "sync",
+      "description": "promote approved release",
+      "flow": "deployment",
+      "edge_id": "applied:n28__promote_approved_release_9efe1c79697b4a606636d73e__n27",
+      "relation": "promote_approved_release_9efe1c79697b4a606636d73e"
+    },
+    {
+      "source": "n28",
+      "target": "n27",
+      "label": "roll back to prior release",
+      "technology": "Deployment flow",
+      "sync": "sync",
+      "description": "roll back to prior release",
+      "flow": "deployment",
+      "edge_id": "applied:n28__roll_back_to_prior_release_2d5df80e2e0e2ebec540fdac__n27",
+      "relation": "roll_back_to_prior_release_2d5df80e2e0e2ebec540fdac"
+    },
+    {
+      "source": "n28",
+      "target": "n29",
+      "label": "fetch rollout impact metrics",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "fetch rollout impact metrics",
+      "flow": "runtime",
+      "edge_id": "applied:n28__fetch_rollout_impact_metrics_536b32c33701b268c519f0c0__n29",
+      "relation": "fetch_rollout_impact_metrics_536b32c33701b268c519f0c0"
+    },
+    {
+      "source": "n29",
+      "target": "n28",
+      "label": "rollout impact payload",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "rollout impact payload",
+      "flow": "runtime",
+      "edge_id": "applied:n29__rollout_impact_payload_4ceb0eca27d597ae2c3dc92c__n28",
+      "relation": "rollout_impact_payload_4ceb0eca27d597ae2c3dc92c"
+    },
+    {
+      "source": "n26",
+      "target": "n21",
+      "label": "audit evaluation results",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "audit evaluation results",
+      "flow": "runtime",
+      "edge_id": "applied:n26__audit_evaluation_results_5fba653c4cc60d0e2d61b326__n21",
+      "relation": "audit_evaluation_results_5fba653c4cc60d0e2d61b326"
+    },
+    {
+      "source": "n28",
+      "target": "n21",
+      "label": "audit release promotion and rollback",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "audit release promotion and rollback",
+      "flow": "runtime",
+      "edge_id": "applied:n28__audit_release_promotion_and_rollback_b50accdfe0465cc78a276f16__n21",
+      "relation": "audit_release_promotion_and_rollback_b50accdfe0465cc78a276f16"
+    },
+    {
+      "source": "n3",
+      "target": "n29",
+      "label": "emit ingestion metrics",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "emit ingestion metrics",
+      "flow": "runtime",
+      "edge_id": "applied:n3__emit_ingestion_metrics_17b7cca4f26bada7b7db66d9__n29",
+      "relation": "emit_ingestion_metrics_17b7cca4f26bada7b7db66d9"
+    },
+    {
+      "source": "n6",
+      "target": "n29",
+      "label": "emit queue depth metrics",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "emit queue depth metrics",
+      "flow": "runtime",
+      "edge_id": "applied:n6__emit_queue_depth_metrics_117120de4bdcfc30195055e7__n29",
+      "relation": "emit_queue_depth_metrics_117120de4bdcfc30195055e7"
+    },
+    {
+      "source": "n7",
+      "target": "n29",
+      "label": "emit retry burn metrics",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "emit retry burn metrics",
+      "flow": "runtime",
+      "edge_id": "applied:n7__emit_retry_burn_metrics_e878b294a8e271015a514f30__n29",
+      "relation": "emit_retry_burn_metrics_e878b294a8e271015a514f30"
+    },
+    {
+      "source": "n8",
+      "target": "n29",
+      "label": "emit workflow latency metrics",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "emit workflow latency metrics",
+      "flow": "runtime",
+      "edge_id": "applied:n8__emit_workflow_latency_metrics_66b0322eb80e71547c63b80a__n29",
+      "relation": "emit_workflow_latency_metrics_66b0322eb80e71547c63b80a"
+    },
+    {
+      "source": "n13",
+      "target": "n29",
+      "label": "emit validation outcome metrics",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "emit validation outcome metrics",
+      "flow": "runtime",
+      "edge_id": "applied:n13__emit_validation_outcome_metrics_a45b33a7d861f83a2c55d43a__n29",
+      "relation": "emit_validation_outcome_metrics_a45b33a7d861f83a2c55d43a"
+    },
+    {
+      "source": "n16",
+      "target": "n29",
+      "label": "emit review backlog metrics",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "emit review backlog metrics",
+      "flow": "runtime",
+      "edge_id": "applied:n16__emit_review_backlog_metrics_78b3c32e1c7da0f12d152438__n29",
+      "relation": "emit_review_backlog_metrics_78b3c32e1c7da0f12d152438"
+    },
+    {
+      "source": "n18",
+      "target": "n29",
+      "label": "emit finalization metrics",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "emit finalization metrics",
+      "flow": "runtime",
+      "edge_id": "applied:n18__emit_finalization_metrics_d017321d3b11953614407807__n29",
+      "relation": "emit_finalization_metrics_d017321d3b11953614407807"
+    },
+    {
+      "source": "n30",
+      "target": "n5",
+      "label": "inspect stuck documents",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "inspect stuck documents",
+      "flow": "runtime",
+      "edge_id": "applied:n30__inspect_stuck_documents_7c15422a3b4a0d2005ab4f06__n5",
+      "relation": "inspect_stuck_documents_7c15422a3b4a0d2005ab4f06"
+    },
+    {
+      "source": "n5",
+      "target": "n30",
+      "label": "stuck document payload",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "stuck document payload",
+      "flow": "runtime",
+      "edge_id": "applied:n5__stuck_document_payload_e35dcf74fe9b701bec81fba5__n30",
+      "relation": "stuck_document_payload_e35dcf74fe9b701bec81fba5"
+    },
+    {
+      "source": "n30",
+      "target": "n7",
+      "label": "replay eligible failure",
+      "technology": "Control flow",
+      "sync": "sync",
+      "description": "replay eligible failure",
+      "flow": "control",
+      "edge_id": "applied:n30__replay_eligible_failure_1b0aa465236c289b941d9f45__n7",
+      "relation": "replay_eligible_failure_1b0aa465236c289b941d9f45"
+    },
+    {
+      "source": "n7",
+      "target": "n30",
+      "label": "replay outcome",
+      "technology": "Control flow",
+      "sync": "sync",
+      "description": "replay outcome",
+      "flow": "control",
+      "edge_id": "applied:n7__replay_outcome_d2987d98e9895c30a61129fa__n30",
+      "relation": "replay_outcome_d2987d98e9895c30a61129fa"
+    },
+    {
+      "source": "n30",
+      "target": "n23",
+      "label": "approve rollback",
+      "technology": "Control flow",
+      "sync": "sync",
+      "description": "approve rollback",
+      "flow": "control",
+      "edge_id": "applied:n30__approve_rollback_dca5909d0fa95c15f4c7089e__n23",
+      "relation": "approve_rollback_dca5909d0fa95c15f4c7089e"
+    },
+    {
+      "source": "n23",
+      "target": "n30",
+      "label": "rollback verification",
+      "technology": "Control flow",
+      "sync": "sync",
+      "description": "rollback verification",
+      "flow": "control",
+      "edge_id": "applied:n23__rollback_verification_0b0aa837b13ce74426a0f7fc__n30",
+      "relation": "rollback_verification_0b0aa837b13ce74426a0f7fc"
+    },
+    {
+      "source": "n30",
+      "target": "n29",
+      "label": "query operational metrics",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "query operational metrics",
+      "flow": "runtime",
+      "edge_id": "applied:n30__query_operational_metrics_965134fdaaee830cbf69d5d3__n29",
+      "relation": "query_operational_metrics_965134fdaaee830cbf69d5d3"
+    },
+    {
+      "source": "n29",
+      "target": "n30",
+      "label": "operational metrics payload",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "operational metrics payload",
+      "flow": "runtime",
+      "edge_id": "applied:n29__operational_metrics_payload_ef9558cb2f1066710aa3cac9__n30",
+      "relation": "operational_metrics_payload_ef9558cb2f1066710aa3cac9"
+    },
+    {
+      "source": "n30",
+      "target": "n21",
+      "label": "audit operator actions",
+      "technology": "Runtime flow",
+      "sync": "async",
+      "description": "audit operator actions",
+      "flow": "runtime",
+      "edge_id": "applied:n30__audit_operator_actions_d73f510ce5b95450046a5faf__n21",
+      "relation": "audit_operator_actions_d73f510ce5b95450046a5faf"
+    }
+  ],
+  "sequence": [
+    {
+      "step": 1,
+      "nodes": [
+        "n1"
+      ],
+      "description": "Primary flow stage 1"
+    },
+    {
+      "step": 2,
+      "nodes": [
+        "n2",
+        "n3",
+        "n21"
+      ],
+      "description": "Primary flow stage 2"
+    },
+    {
+      "step": 3,
+      "nodes": [
+        "n4",
+        "n5",
+        "n6"
+      ],
+      "description": "Primary flow stage 3"
+    },
+    {
+      "step": 4,
+      "nodes": [
+        "n8",
+        "n9",
+        "n23"
+      ],
+      "description": "Primary flow stage 4"
+    },
+    {
+      "step": 5,
+      "nodes": [
+        "n7",
+        "n10",
+        "n13",
+        "n14",
+        "n16",
+        "n18",
+        "n19"
+      ],
+      "description": "Primary flow stage 5"
+    },
+    {
+      "step": 6,
+      "nodes": [
+        "n11",
+        "n12",
+        "n15",
+        "n17"
+      ],
+      "description": "Primary flow stage 6"
+    }
+  ],
+  "groups": [
+    {
+      "id": "group_intake_runtime",
+      "label": "Intake Runtime",
+      "kind": "runtime",
+      "nodeIds": [
+        "n1",
+        "n3",
+        "n6"
+      ]
+    },
+    {
+      "id": "group_external_inputs",
+      "label": "External Inputs",
+      "kind": "external",
+      "nodeIds": [
+        "n2"
+      ]
+    },
+    {
+      "id": "group_document_data",
+      "label": "Document Data",
+      "kind": "data",
+      "nodeIds": [
+        "n4",
+        "n5"
+      ]
+    },
+    {
+      "id": "group_reliability_operations",
+      "label": "Reliability Operations",
+      "kind": "operations",
+      "nodeIds": [
+        "n7",
+        "n23",
+        "n29"
+      ]
+    },
+    {
+      "id": "group_processing_runtime",
+      "label": "Processing Runtime",
+      "kind": "runtime",
+      "nodeIds": [
+        "n8",
+        "n9",
+        "n10",
+        "n11",
+        "n18"
+      ]
+    },
+    {
+      "id": "group_knowledge_data",
+      "label": "Knowledge Data",
+      "kind": "data",
+      "nodeIds": [
+        "n12"
+      ]
+    },
+    {
+      "id": "group_decisioning",
+      "label": "Decisioning",
+      "kind": "runtime",
+      "nodeIds": [
+        "n13",
+        "n14"
+      ]
+    },
+    {
+      "id": "group_review_delivery",
+      "label": "Review Delivery",
+      "kind": "delivery",
+      "nodeIds": [
+        "n15"
+      ]
+    },
+    {
+      "id": "group_review_runtime",
+      "label": "Review Runtime",
+      "kind": "runtime",
+      "nodeIds": [
+        "n16"
+      ]
+    },
+    {
+      "id": "group_review_data",
+      "label": "Review Data",
+      "kind": "data",
+      "nodeIds": [
+        "n17"
+      ]
+    },
+    {
+      "id": "group_output_data",
+      "label": "Output Data",
+      "kind": "data",
+      "nodeIds": [
+        "n19"
+      ]
+    },
+    {
+      "id": "group_result_delivery",
+      "label": "Result Delivery",
+      "kind": "delivery",
+      "nodeIds": [
+        "n20"
+      ]
+    },
+    {
+      "id": "group_audit_operations",
+      "label": "Audit Operations",
+      "kind": "operations",
+      "nodeIds": [
+        "n21"
+      ]
+    },
+    {
+      "id": "group_audit_data",
+      "label": "Audit Data",
+      "kind": "data",
+      "nodeIds": [
+        "n22"
+      ]
+    },
+    {
+      "id": "group_learning_operations",
+      "label": "Learning Operations",
+      "kind": "operations",
+      "nodeIds": [
+        "n24",
+        "n26",
+        "n28"
+      ]
+    },
+    {
+      "id": "group_evaluation_data",
+      "label": "Evaluation Data",
+      "kind": "data",
+      "nodeIds": [
+        "n25"
+      ]
+    },
+    {
+      "id": "group_release_data",
+      "label": "Release Data",
+      "kind": "data",
+      "nodeIds": [
+        "n27"
+      ]
+    },
+    {
+      "id": "group_operations_delivery",
+      "label": "Operations Delivery",
+      "kind": "delivery",
+      "nodeIds": [
+        "n30"
+      ]
+    }
+  ],
+  "design_origin": "applied",
+  "resolved_complexity": "production",
+  "assumptions": [
+    "Documents arrive from upstream portals, scanners, or batch jobs and are processed inside this system boundary.",
+    "No external business system is mutated by the agent; downstream consumers read final outputs through read-only access.",
+    "Human review is required before finalizing low-confidence or high-impact documents and before costly reprocessing.",
+    "Reviewer corrections can enter bounded evaluation and prompt or model release only after regression gates and approval.",
+    "Duplicate submissions are expected; ingestion must be idempotent by source key plus content fingerprint.",
+    "Failures must be retry-safe, observable, recoverable, and explainable through immutable audit records.",
+    "Rollback covers document versions, extraction outputs, validation results, prompt or model versions, and workflow state.",
+    "Model, prompt, ranking, and parser assets are versioned and separable from document data."
+  ]
+}

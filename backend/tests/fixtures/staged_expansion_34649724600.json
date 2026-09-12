@@ -1,0 +1,231 @@
+{
+  "evaluation_run_id": "34649724600-1",
+  "request": "Expand the monitoring component while preserving the original graph topic and existing components. Add exactly one directly connected responsibility.",
+  "base_graph": {
+    "title": "Prototype Model-Serving Stack with Monitoring",
+    "nodes": [
+      {
+        "id": "n1",
+        "label": "Inference Client",
+        "type": "client",
+        "description": "Sends prediction requests with user inputs and renders returned model outputs or errors."
+      },
+      {
+        "id": "n2",
+        "label": "Model Serving API",
+        "type": "service",
+        "description": "Accepts inference calls, validates request shape, routes to the runtime, and returns predictions within the prototype latency budget."
+      },
+      {
+        "id": "n3",
+        "label": "Model Runtime",
+        "type": "service",
+        "description": "Loads the selected model artifact and executes inference for each validated request."
+      },
+      {
+        "id": "n4",
+        "label": "Model Artifact Store",
+        "type": "datastore",
+        "description": "Stores versioned model files and minimal serving config so the runtime can fetch a known artifact."
+      },
+      {
+        "id": "n5",
+        "label": "Serving Log Store",
+        "type": "datastore",
+        "description": "Persists request metadata, outputs or output summaries, errors, latency, and token or cost counters for inspection."
+      },
+      {
+        "id": "n6",
+        "label": "Metrics Monitor",
+        "type": "service",
+        "description": "Aggregates TTFT, TPOT, total latency, throughput, error rate, and spend signals from serving telemetry."
+      },
+      {
+        "id": "n7",
+        "label": "Operator Dashboard",
+        "type": "client",
+        "description": "Shows current serving health, latency, failures, and cost indicators to a human operator."
+      },
+      {
+        "id": "n8",
+        "label": "Alert Hook",
+        "type": "service",
+        "description": "Flags threshold breaches such as error spikes or latency budget misses for prototype review."
+      }
+    ],
+    "edges": [
+      {
+        "source": "n1",
+        "target": "n2",
+        "label": "prediction request with user inputs",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n2",
+        "target": "n1",
+        "label": "prediction output or error response",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n2",
+        "target": "n3",
+        "label": "validated inference request",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n3",
+        "target": "n2",
+        "label": "prediction result for response",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n3",
+        "target": "n4",
+        "label": "load versioned model artifact request",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n4",
+        "target": "n3",
+        "label": "versioned model artifact and serving config",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n2",
+        "target": "n5",
+        "label": "request response error latency log record",
+        "flow": "runtime",
+        "sync": "async"
+      },
+      {
+        "source": "n3",
+        "target": "n5",
+        "label": "runtime inference telemetry record",
+        "flow": "runtime",
+        "sync": "async"
+      },
+      {
+        "source": "n6",
+        "target": "n5",
+        "label": "serving telemetry query",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n5",
+        "target": "n6",
+        "label": "aggregatable telemetry records response",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n7",
+        "target": "n6",
+        "label": "operator serving health metrics query",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n6",
+        "target": "n7",
+        "label": "latency failure throughput cost indicators response",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n6",
+        "target": "n8",
+        "label": "threshold breach evaluation signal",
+        "flow": "runtime",
+        "sync": "async"
+      },
+      {
+        "source": "n8",
+        "target": "n7",
+        "label": "prototype breach alert for operator review",
+        "flow": "runtime",
+        "sync": "async"
+      }
+    ],
+    "groups": [
+      {
+        "id": "group_request_path",
+        "label": "Request Path",
+        "kind": "runtime",
+        "nodeIds": [
+          "n1",
+          "n2",
+          "n3"
+        ]
+      },
+      {
+        "id": "group_model_assets",
+        "label": "Model Assets",
+        "kind": "data",
+        "nodeIds": [
+          "n4"
+        ]
+      },
+      {
+        "id": "group_telemetry_data",
+        "label": "Telemetry Data",
+        "kind": "data",
+        "nodeIds": [
+          "n5"
+        ]
+      },
+      {
+        "id": "group_monitoring",
+        "label": "Monitoring",
+        "kind": "operations",
+        "nodeIds": [
+          "n6",
+          "n7",
+          "n8"
+        ]
+      }
+    ],
+    "sequence": [
+      {
+        "step": 1,
+        "nodes": [
+          "n2"
+        ],
+        "description": "Primary flow stage 1"
+      },
+      {
+        "step": 2,
+        "nodes": [
+          "n1",
+          "n3"
+        ],
+        "description": "Primary flow stage 2"
+      },
+      {
+        "step": 3,
+        "nodes": [
+          "n4"
+        ],
+        "description": "Primary flow stage 3"
+      }
+    ],
+    "assumptions": [
+      "Prototype maturity overrides the word production: single deployable serving path, no HA, multi-region, canary, drift automation, or CI/CD topology.",
+      "Models are self-hosted or locally loaded; no third-party model dependency is required.",
+      "Monitoring is read-only: it observes serving behavior and does not mutate models, prompts, rankings, or live configuration.",
+      "No external system is mutated; responses are returned only to the requesting client.",
+      "Stored model artifacts and request/response logs are retrieved or reused by the serving and monitoring path."
+    ]
+  },
+  "rejected_addition": {
+    "label": "Serving Log Explorer",
+    "type": "service",
+    "description": "Queries persisted request, output, error, and latency records from the serving log store so operators can inspect individual inference events behind the aggregate metrics."
+  }
+}

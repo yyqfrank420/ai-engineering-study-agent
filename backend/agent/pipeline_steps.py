@@ -48,9 +48,8 @@ async def apply_graph_worker(state: AgentState, graph_tools: list) -> AgentState
                 )
             elif state.get("is_applied_design"):
                 message = (
-                    "The draft architecture did not meet the structural quality checks, so I kept "
-                    "the visual out rather than publishing a misleading graph. The written design "
-                    "is still available below."
+                    "The draft architecture did not meet the structural quality checks, so no new "
+                    "diagram was published. Ask me to redraw it as a simpler diagram."
                 )
             else:
                 message = (
@@ -66,6 +65,7 @@ async def apply_graph_worker(state: AgentState, graph_tools: list) -> AgentState
         return {
             **graph_state,
             "graph_data": existing_graph,
+            "graph_contract": copy.deepcopy(state.get("graph_contract")),
             "graph_changed": False,
             "graph_notice_sent": graph_state.get("graph_notice_sent", False)
             or should_send_graph_notice,
@@ -73,8 +73,6 @@ async def apply_graph_worker(state: AgentState, graph_tools: list) -> AgentState
 
     if existing_graph is not None and _same_graph_artifact(existing_graph, new_graph):
         aligned_graph = copy.deepcopy(existing_graph)
-        if new_graph.get("version") != aligned_graph.get("version"):
-            aligned_graph["version"] = new_graph.get("version")
         operation = graph_state.get("graph_operation")
         if (
             isinstance(operation, dict)
@@ -89,6 +87,7 @@ async def apply_graph_worker(state: AgentState, graph_tools: list) -> AgentState
         return {
             **graph_state,
             "graph_data": aligned_graph,
+            "graph_contract": copy.deepcopy(state.get("graph_contract")),
             "graph_changed": False,
             "graph_notice_sent": graph_state.get("graph_notice_sent", False),
             "graph_operation": operation,
@@ -97,6 +96,8 @@ async def apply_graph_worker(state: AgentState, graph_tools: list) -> AgentState
     return {
         **graph_state,
         "graph_data": new_graph,
+        # Legacy generation cannot carry approval for a prior staged artifact.
+        "graph_contract": None,
         "graph_changed": True,
         "graph_notice_sent": graph_state.get("graph_notice_sent", False),
     }
@@ -184,7 +185,7 @@ async def maybe_expand_with_search_tool(
         "research_context": research_state.get("research_context", ""),
         "research_status": research_state.get("research_status", "unavailable"),
     }
-    # The workflow consumes this evidence before architect/challenger/graph.
+    # The workflow consumes this evidence before the architect and graph stages.
     # Keeping one canonical bundle prevents the critic from auditing a stale
     # book-only allowlist after web evidence changes the design.
     return {

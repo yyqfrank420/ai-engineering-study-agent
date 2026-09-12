@@ -84,7 +84,7 @@ def test_thread_routes_create_list_latest_get_update_and_delete(temp_data_dir):
         }
         updated = client.put(f"/api/threads/{thread_id}/graph", json={"graph_data": stale_graph})
         assert updated.status_code == 204
-        expected_graph = {**current_graph, "view_state": updated_view_state}
+        expected_graph = current_graph
         assert get_graph("user-1", thread_id) == expected_graph
 
         fetched = client.get(f"/api/threads/{thread_id}")
@@ -138,7 +138,12 @@ def test_thread_routes_reject_missing_thread_and_oversized_payloads(temp_data_di
         )
         oversized_graph = client.put(
             f"/api/threads/{thread_with_graph['id']}/graph",
-            json={"graph_data": {"view_state": {"x": "y" * 100}}},
+            json={
+                "graph_data": {
+                    "version": "server-v2",
+                    "view_state": {"x": "y" * 100},
+                }
+            },
         )
 
     assert oversized_title.status_code == 413

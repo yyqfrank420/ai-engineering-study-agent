@@ -1,4 +1,6 @@
 locals {
+  live_budgets = jsondecode(file("${path.module}/../../../ci/quality.json")).live.budgets
+
   required_services = toset([
     "artifactregistry.googleapis.com",
     "cloudbuild.googleapis.com",

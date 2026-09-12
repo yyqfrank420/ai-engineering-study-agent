@@ -1,0 +1,282 @@
+{
+  "graph_type": "architecture",
+  "title": "Prototype model-serving stack with monitoring",
+  "nodes": [
+    {
+      "id": "n1",
+      "label": "Inference Client",
+      "type": "client",
+      "technology": "Client",
+      "description": "Submits user prompts and displays completions, errors, and latency-facing status for the prototype serving flow.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n2",
+      "label": "Model Serving API",
+      "type": "service",
+      "technology": "Application service",
+      "description": "Single request entry: validates input, applies prompt/config from artifacts, calls the model runtime, and returns the response.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n3",
+      "label": "Model Runtime",
+      "type": "service",
+      "technology": "Application service",
+      "description": "Loads the selected model artifact and generates responses within the prototype latency and spend expectations.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n4",
+      "label": "Model & Prompt Artifact Store",
+      "type": "datastore",
+      "technology": "Data store",
+      "description": "Reusable store for versioned model artifacts, prompt templates, and serving configuration consumed by the runtime path.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n5",
+      "label": "Telemetry Log Store",
+      "type": "datastore",
+      "technology": "Data store",
+      "description": "Retains request/response samples plus latency, error, token, and cost events for later inspection and monitoring reads.",
+      "tier": null,
+      "lane": "main",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    },
+    {
+      "id": "n6",
+      "label": "Monitoring & Alerting Service",
+      "type": "service",
+      "technology": "Application service",
+      "description": "Reads telemetry to compute availability, latency, error-rate, token/cost, and sample-quality signals; flags threshold breaches to operators only.",
+      "tier": null,
+      "lane": "bottom",
+      "detail": null,
+      "layer": "architecture",
+      "design_origin": "applied"
+    }
+  ],
+  "edges": [
+    {
+      "source": "n1",
+      "target": "n2",
+      "label": "Submit prompt request",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "Submit prompt request",
+      "flow": "runtime",
+      "edge_id": "applied:n1__submit_prompt_request__n2",
+      "relation": "submit_prompt_request"
+    },
+    {
+      "source": "n2",
+      "target": "n1",
+      "label": "Return completion, error, or latency status response",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "Return completion, error, or latency status response",
+      "flow": "runtime",
+      "edge_id": "applied:n2__return_completion_error_or_latency_status_response__n1",
+      "relation": "return_completion_error_or_latency_status_response"
+    },
+    {
+      "source": "n2",
+      "target": "n3",
+      "label": "Invoke generation request with validated input and applied config",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "Invoke generation request with validated input and applied config",
+      "flow": "runtime",
+      "edge_id": "applied:n2__invoke_generation_request_with_validated_input_and_appli__n3",
+      "relation": "invoke_generation_request_with_validated_input_and_appli"
+    },
+    {
+      "source": "n3",
+      "target": "n2",
+      "label": "Return generated completion result",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "Return generated completion result",
+      "flow": "runtime",
+      "edge_id": "applied:n3__return_generated_completion_result__n2",
+      "relation": "return_generated_completion_result"
+    },
+    {
+      "source": "n2",
+      "target": "n4",
+      "label": "Fetch prompt template and serving config by name and version",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "Fetch prompt template and serving config by name and version",
+      "flow": "runtime",
+      "edge_id": "applied:n2__fetch_prompt_template_and_serving_config_by_name_and_ver__n4",
+      "relation": "fetch_prompt_template_and_serving_config_by_name_and_ver"
+    },
+    {
+      "source": "n4",
+      "target": "n2",
+      "label": "Return prompt template and serving config payload",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "Return prompt template and serving config payload",
+      "flow": "runtime",
+      "edge_id": "applied:n4__return_prompt_template_and_serving_config_payload__n2",
+      "relation": "return_prompt_template_and_serving_config_payload"
+    },
+    {
+      "source": "n3",
+      "target": "n4",
+      "label": "Load selected model artifact by identity and version",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "Load selected model artifact by identity and version",
+      "flow": "runtime",
+      "edge_id": "applied:n3__load_selected_model_artifact_by_identity_and_version__n4",
+      "relation": "load_selected_model_artifact_by_identity_and_version"
+    },
+    {
+      "source": "n4",
+      "target": "n3",
+      "label": "Return selected model artifact payload",
+      "technology": "Runtime flow",
+      "sync": "sync",
+      "description": "Return selected model artifact payload",
+      "flow": "runtime",
+      "edge_id": "applied:n4__return_selected_model_artifact_payload__n3",
+      "relation": "return_selected_model_artifact_payload"
+    },
+    {
+      "source": "n2",
+      "target": "n5",
+      "label": "Emit request and response samples with latency error token cost events",
+      "technology": "Feedback flow",
+      "sync": "async",
+      "description": "Emit request and response samples with latency error token cost events",
+      "flow": "feedback",
+      "edge_id": "applied:n2__emit_request_and_response_samples_with_latency_error_tok__n5",
+      "relation": "emit_request_and_response_samples_with_latency_error_tok"
+    },
+    {
+      "source": "n3",
+      "target": "n5",
+      "label": "Emit generation latency token and cost events",
+      "technology": "Feedback flow",
+      "sync": "async",
+      "description": "Emit generation latency token and cost events",
+      "flow": "feedback",
+      "edge_id": "applied:n3__emit_generation_latency_token_and_cost_events__n5",
+      "relation": "emit_generation_latency_token_and_cost_events"
+    },
+    {
+      "source": "n6",
+      "target": "n5",
+      "label": "Query retained telemetry events by time range and signal scope",
+      "technology": "Feedback flow",
+      "sync": "sync",
+      "description": "Query retained telemetry events by time range and signal scope",
+      "flow": "feedback",
+      "edge_id": "applied:n6__query_retained_telemetry_events_by_time_range_and_signal__n5",
+      "relation": "query_retained_telemetry_events_by_time_range_and_signal"
+    },
+    {
+      "source": "n5",
+      "target": "n6",
+      "label": "Return telemetry samples and event aggregates",
+      "technology": "Feedback flow",
+      "sync": "sync",
+      "description": "Return telemetry samples and event aggregates",
+      "flow": "feedback",
+      "edge_id": "applied:n5__return_telemetry_samples_and_event_aggregates__n6",
+      "relation": "return_telemetry_samples_and_event_aggregates"
+    }
+  ],
+  "sequence": [
+    {
+      "step": 1,
+      "nodes": [
+        "n1"
+      ],
+      "description": "Primary flow stage 1"
+    },
+    {
+      "step": 2,
+      "nodes": [
+        "n2"
+      ],
+      "description": "Primary flow stage 2"
+    },
+    {
+      "step": 3,
+      "nodes": [
+        "n3",
+        "n4"
+      ],
+      "description": "Primary flow stage 3"
+    }
+  ],
+  "groups": [
+    {
+      "id": "group_experience",
+      "label": "Experience",
+      "kind": "runtime",
+      "nodeIds": [
+        "n1"
+      ]
+    },
+    {
+      "id": "group_serving_runtime",
+      "label": "Serving Runtime",
+      "kind": "runtime",
+      "nodeIds": [
+        "n2",
+        "n3"
+      ]
+    },
+    {
+      "id": "group_serving_data",
+      "label": "Serving Data",
+      "kind": "data",
+      "nodeIds": [
+        "n4",
+        "n5"
+      ]
+    },
+    {
+      "id": "group_operations",
+      "label": "Operations",
+      "kind": "operations",
+      "nodeIds": [
+        "n6"
+      ]
+    }
+  ],
+  "design_origin": "applied",
+  "resolved_complexity": "prototype",
+  "assumptions": [
+    "The word production is treated as prototype scope: single environment, no HA, rollout, RBAC, CI/CD, or topology detail.",
+    "Model source is abstracted behind the runtime so a self-hosted or managed model can be swapped without redesigning the serving path.",
+    "No retrieval augmentation, tools, write actions, or guardrail pipeline are included beyond basic request validation.",
+    "Monitoring observes and flags signals for humans; it does not mutate models, prompts, ranking, or live configuration.",
+    "Stored model/prompt artifacts and telemetry are reused, so retrieval_or_reuse is true while learning_or_release remains false."
+  ],
+  "version": "0eed5e7b-116f-4fa6-9aaf-51087c412015"
+}

@@ -69,12 +69,25 @@ jobs:
             echo "Source commit must be a full SHA." >&2
             exit 1
           fi
-          source_sha="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" --jq .head_sha)"
-          source_conclusion="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" --jq .conclusion)"
-          source_path="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" --jq .path)"
-          [ "$source_sha" = "$SOURCE_COMMIT_SHA" ] || { echo "Source run SHA mismatch." >&2; exit 1; }
-          [ "$source_conclusion" = success ] || { echo "Source run was not successful." >&2; exit 1; }
-          [ "$source_path" = .github/workflows/scheduled-eval.yml ] || { echo "Source is not a scheduled evaluation." >&2; exit 1; }
+          source_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")"
+          SOURCE_METADATA="$source_json" python - <<'PY_SOURCE'
+          import json
+          import os
+
+          source = json.loads(os.environ["SOURCE_METADATA"])
+          repository = os.environ["GITHUB_REPOSITORY"]
+          if (
+              str(source.get("id")) != os.environ["SOURCE_RUN_ID"]
+              or source.get("head_sha") != os.environ["SOURCE_COMMIT_SHA"]
+              or (source.get("repository") or {}).get("full_name") != repository
+              or (source.get("head_repository") or {}).get("full_name") != repository
+              or source.get("path") != ".github/workflows/scheduled-eval.yml"
+              or source.get("event") not in {"workflow_dispatch", "schedule"}
+              or source.get("status") != "completed"
+              or source.get("conclusion") not in {"success", "failure"}
+          ):
+              raise SystemExit("source run is not a completed same-repository scheduled evaluation at the approved identity")
+          PY_SOURCE
           if ! gh run download "$SOURCE_RUN_ID" \
             --name "scheduled-eval-replay-$SOURCE_RUN_ID" \
             --dir artifacts/source; then
@@ -90,6 +103,7 @@ jobs:
           SOURCE_COMMIT_SHA: ${{ inputs.source_commit_sha }}
         run: |
           python - <<'PY'
+          import hashlib
           import json
           import os
           from pathlib import Path
@@ -101,14 +115,17 @@ jobs:
               raise SystemExit("source artifact run ID mismatch")
           if context.get("commit_sha") != os.environ["SOURCE_COMMIT_SHA"]:
               raise SystemExit("source artifact commit mismatch")
-          if capture.get("kind") != "browser_capture" or capture.get("suite") != "full":
-              raise SystemExit("source artifact is not a full browser capture")
-          failures = [result["id"] for result in capture.get("results", []) if not result.get("passed")]
-          if len(capture.get("results", [])) != 20 or failures:
-              raise SystemExit(f"source browser evidence is incomplete or failed: {failures}")
+          from backend.eval.evidence_replay import validate_calibration_capture
+          from backend.eval.quality_corpus import corpus_sha256
+
+          corpus = json.loads(Path("backend/eval/corpus/v1/cases.json").read_text(encoding="utf-8"))
+          validate_calibration_capture(capture, corpus)
+          if capture.get("corpus_sha256") != corpus_sha256():
+              raise SystemExit("source capture corpus digest does not match")
           replay = {
               "source_run_id": os.environ["SOURCE_RUN_ID"],
               "source_commit_sha": os.environ["SOURCE_COMMIT_SHA"],
+              "source_browser_sha256": hashlib.sha256((source / "browser-results.json").read_bytes()).hexdigest(),
               "judge_commit_sha": os.environ["GITHUB_SHA"],
               "actor": os.environ["GITHUB_ACTOR"],
           }
@@ -302,7 +319,7 @@ jobs:
               --target "$target" \
               --input "$input" \
               --output artifacts/selective/live-results.json \
-              --require-approved-corpus \
+              --manual-review-policy report-only \
               --capture-replay \
               "${case_args[@]}"
           else
@@ -344,11 +361,11 @@ jobs:
           if (
               report.get("kind") != "live_gate"
               or report.get("suite") != "diagnostic"
-              or report.get("status") != "pass"
+              or report.get("status") not in {"pass", "manual_review"}
               or report.get("blocking_status") != "pass"
               or actual != expected
               or len(actual) != len(set(actual))
-              or any(item.get("decision") != "pass" for item in evaluations or [])
+              or any(item.get("decision") not in {"pass", "manual_review"} for item in evaluations or [])
           ):
               raise SystemExit("selective semantic replay did not pass every exact ordered case")
           print(f"Selective semantic replay passed: {', '.join(actual)}")

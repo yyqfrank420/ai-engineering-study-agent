@@ -35,15 +35,17 @@ class GateDecision:
 def _single_judgment_status(result: JudgeResult) -> GateStatus:
     if not result.dimensions:
         return "infrastructure"
-    if any(item.grade == "borderline" for item in result.dimensions):
-        return "manual_review"
     if any(item.critical and item.grade == "fail" for item in result.dimensions):
         return "fail"
     non_critical = [item for item in result.dimensions if not item.critical]
     if non_critical:
-        pass_ratio = sum(item.grade == "pass" for item in non_critical) / len(non_critical)
-        if pass_ratio < 0.85:
+        failure_ratio = sum(item.grade == "fail" for item in non_critical) / len(
+            non_critical
+        )
+        if failure_ratio > 0.15:
             return "fail"
+    if any(item.grade == "borderline" for item in result.dimensions):
+        return "manual_review"
     return "pass"
 
 
@@ -54,7 +56,18 @@ def decide_semantic_gate(
     deterministic_failures: tuple[str, ...] = (),
 ) -> GateDecision:
     if deterministic_failures:
-        return GateDecision("fail", "deterministic invariant failed: " + "; ".join(deterministic_failures))
+        return GateDecision(
+            "fail",
+            "deterministic invariant failed: " + "; ".join(deterministic_failures),
+        )
+
+    if any(
+        item.critical and item.grade == "fail"
+        for judgment in (first, second)
+        if judgment is not None
+        for item in judgment.dimensions
+    ):
+        return GateDecision("fail", "a critical dimension failed")
 
     first_status = _single_judgment_status(first)
     if first_status == "infrastructure":
@@ -62,16 +75,28 @@ def decide_semantic_gate(
     if first_status == "manual_review":
         return GateDecision("manual_review", "judge returned a borderline dimension")
     if first_status == "pass":
-        return GateDecision("pass", "all critical dimensions passed and at least 85% of non-critical dimensions passed")
+        return GateDecision(
+            "pass",
+            "all critical dimensions passed and at least 85% of non-critical dimensions passed",
+        )
     if second is None:
-        return GateDecision("infrastructure", "a clear semantic failure requires a second independent judgment")
+        return GateDecision(
+            "infrastructure",
+            "a clear semantic failure requires a second independent judgment",
+        )
 
     second_status = _single_judgment_status(second)
     if second_status == "fail":
-        return GateDecision("fail", "two independent judgments found a clear semantic failure")
+        return GateDecision(
+            "fail", "two independent judgments found a clear semantic failure"
+        )
     if second_status == "infrastructure":
-        return GateDecision("infrastructure", "the second judge call returned no dimensions")
-    return GateDecision("manual_review", "the two judgments disagreed or the second was borderline")
+        return GateDecision(
+            "infrastructure", "the second judge call returned no dimensions"
+        )
+    return GateDecision(
+        "manual_review", "the two judgments disagreed or the second was borderline"
+    )
 
 
 def calibration_passes(
@@ -80,13 +105,23 @@ def calibration_passes(
 ) -> tuple[bool, float, int]:
     if not expected or len(expected) != len(actual):
         raise ValueError("calibration labels must be non-empty and aligned")
-    agreements = sum(expected_item[0] == actual_item[0] for expected_item, actual_item in zip(expected, actual, strict=True))
+    agreements = sum(
+        expected_item[0] == actual_item[0]
+        for expected_item, actual_item in zip(expected, actual, strict=True)
+    )
     critical_false_passes = sum(
         expected_grade == "fail" and actual_grade == "pass" and expected_critical
-        for (expected_grade, expected_critical), (actual_grade, _actual_critical) in zip(expected, actual, strict=True)
+        for (expected_grade, expected_critical), (
+            actual_grade,
+            _actual_critical,
+        ) in zip(expected, actual, strict=True)
     )
     agreement = agreements / len(expected)
-    return agreement >= 0.85 and critical_false_passes <= 1, agreement, critical_false_passes
+    return (
+        agreement >= 0.85 and critical_false_passes <= 1,
+        agreement,
+        critical_false_passes,
+    )
 
 
 class EvaluationBudget:
@@ -103,9 +138,13 @@ class EvaluationBudget:
             raise ValueError("call count cannot be negative")
         self.application_calls += count
         if self.application_calls > self.application_limit:
-            raise RuntimeError(f"application model-call budget exceeded ({self.application_calls}/{self.application_limit})")
+            raise RuntimeError(
+                f"application model-call budget exceeded ({self.application_calls}/{self.application_limit})"
+            )
 
     def record_judge_call(self) -> None:
         self.judge_calls += 1
         if self.judge_calls > self.judge_limit:
-            raise RuntimeError(f"judge model-call budget exceeded ({self.judge_calls}/{self.judge_limit})")
+            raise RuntimeError(
+                f"judge model-call budget exceeded ({self.judge_calls}/{self.judge_limit})"
+            )

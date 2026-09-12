@@ -15,6 +15,11 @@ vi.mock('./HiddenGraphEvaluator', () => ({
 const candidate: GraphCandidate = {
   evaluationId: 'evaluation-1',
   graphVersion: 'graph-1',
+  criteria: {
+    viewport_width: 1440,
+    viewport_height: 960,
+    minimum_text_px: 11,
+  },
   data: {
     graph_type: 'architecture',
     design_origin: 'applied',

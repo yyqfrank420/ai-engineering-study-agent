@@ -11,10 +11,19 @@ async def test_one_provider_call_emits_complete_explanation_blocks(monkeypatch):
 
     async def fake_stream_response(**kwargs):
         calls.append(kwargs)
-        yield ("text", '{"block_id":"overview","title":"In one minute","content":"Start here.",')
+        yield (
+            "text",
+            '{"block_id":"overview","title":"In one minute","content":"Start here.",',
+        )
         yield ("text", '"related_node_ids":["input"],"evidence_refs":[]}\n')
-        yield ("text", '{"block_id":"controls","title":"Safety","content":"Approve risky writes.",')
-        yield ("text", '"related_node_ids":["approval","invented"],"evidence_refs":["Chapter 4, p.8"]}')
+        yield (
+            "text",
+            '{"block_id":"controls","title":"Safety","content":"Approve risky writes.",',
+        )
+        yield (
+            "text",
+            '"related_node_ids":["approval","invented"],"evidence_refs":["Chapter 4, p.8"]}',
+        )
         yield ("done", "")
 
     monkeypatch.setattr(explanation_blocks, "stream_response", fake_stream_response)
@@ -34,6 +43,7 @@ async def test_one_provider_call_emits_complete_explanation_blocks(monkeypatch):
         send=send,
         graph_version="v1",
         allowed_node_ids={"input", "approval"},
+        allowed_evidence_refs={"Chapter 4, p.8"},
     )
 
     assert len(calls) == 1
@@ -42,13 +52,15 @@ async def test_one_provider_call_emits_complete_explanation_blocks(monkeypatch):
     assert "<untrusted_context>" in calls[0]["system"]
     blocks = [event for event in events if event["type"] == "explanation_block"]
     assert [block["title"] for block in blocks[:2]] == ["In one minute", "Safety"]
-    assert len(blocks) == 3
+    assert len(blocks) == 2
     assert blocks[1]["related_node_ids"] == ["approval"]
     assert "## Safety" in response
 
 
 @pytest.mark.asyncio
-async def test_stream_timeout_preserves_parsed_block_and_closes_provider_iterator(monkeypatch):
+async def test_stream_timeout_preserves_parsed_block_and_closes_provider_iterator(
+    monkeypatch,
+):
     closed = False
 
     async def stalled_stream_response(**_kwargs):
@@ -85,10 +97,10 @@ async def test_stream_timeout_preserves_parsed_block_and_closes_provider_iterato
 
     assert closed is True
     assert "## Overview\n\nReady" in response
-    assert [event["status"] for event in events if event["type"] == "workflow_progress"] == [
-        "degraded"
-    ]
-    assert len([event for event in events if event["type"] == "explanation_block"]) == 3
+    assert [
+        event["status"] for event in events if event["type"] == "workflow_progress"
+    ] == ["degraded"]
+    assert len([event for event in events if event["type"] == "explanation_block"]) == 1
 
 
 @pytest.mark.asyncio
@@ -122,11 +134,54 @@ async def test_stream_timeout_before_complete_block_emits_bounded_fallback(monke
         allowed_node_ids={"input"},
     )
 
-    fallback = next(event for event in events if event["type"] == "explanation_block")
+    blocks = [event for event in events if event["type"] == "explanation_block"]
+    assert len(blocks) == 1
+    fallback = blocks[0]
     assert closed is True
-    assert fallback["title"] == "Architecture explanation"
-    assert len(fallback["content"]) <= 4000
-    assert "partial" in response
+    assert fallback["title"] == "Explanation unavailable"
+    assert (
+        fallback["content"] == "The explanation response was unavailable. Please retry."
+    )
+    assert "partial" not in response
+    assert fallback["evidence_refs"] == []
+    assert any(
+        event["type"] == "workflow_progress" and event["status"] == "degraded"
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_malformed_model_output_emits_server_authored_fallback(monkeypatch):
+    async def fake_stream_response(**_kwargs):
+        yield ("text", '{"block_id":"overview","content":"unsupported claim"}')
+
+    monkeypatch.setattr(explanation_blocks, "stream_response", fake_stream_response)
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    response = await explanation_blocks.stream_explanation_blocks(
+        model="claude-opus-5",
+        system="system",
+        messages=[{"role": "user", "content": "explain"}],
+        effort="low",
+        max_output_tokens=4500,
+        timeout_seconds=40,
+        telemetry={"operation": "test"},
+        send=send,
+        graph_version="v1",
+        allowed_node_ids=set(),
+    )
+
+    blocks = [event for event in events if event["type"] == "explanation_block"]
+    assert len(blocks) == 1
+    fallback = blocks[0]
+    assert (
+        fallback["content"] == "The explanation response was unavailable. Please retry."
+    )
+    assert fallback["evidence_refs"] == []
+    assert "unsupported claim" not in response
     assert any(
         event["type"] == "workflow_progress" and event["status"] == "degraded"
         for event in events
@@ -174,15 +229,15 @@ async def test_preserved_edit_appends_required_completion_sentence_after_parsing
         allowed_node_ids=set(),
     )
 
-    sentence = (
-        "The requested diagram edit was not approved, so the prior approved diagram remains unchanged."
-    )
-    block = [event for event in events if event["type"] == "explanation_block"][-1]
+    sentence = "The requested diagram edit was not approved, so the prior approved diagram remains unchanged."
+    blocks = [event for event in events if event["type"] == "explanation_block"]
+    assert len(blocks) == 1
+    block = blocks[0]
     assert block["content"].endswith(sentence)
     assert response.endswith(sentence)
 
 
-def test_block_normalisation_rejects_scalar_lists_and_empty_identifiers():
+def test_block_normalisation_rejects_non_array_evidence_refs():
     block = explanation_blocks._normalise_block(
         {
             "block_id": "   ",
@@ -194,13 +249,7 @@ def test_block_normalisation_rejects_scalar_lists_and_empty_identifiers():
         {"input"},
     )
 
-    assert block == {
-        "block_id": "architecture_note",
-        "title": "Architecture note",
-        "content": "Useful detail",
-        "related_node_ids": [],
-        "evidence_refs": [],
-    }
+    assert block is None
 
 
 def test_block_normalisation_requires_exact_contract_keys():
@@ -219,11 +268,27 @@ def test_block_normalisation_requires_exact_contract_keys():
     assert block is None
 
 
+def test_block_normalisation_rejects_unknown_evidence_references():
+    block = explanation_blocks._normalise_block(
+        {
+            "block_id": "overview",
+            "title": "Overview",
+            "content": "Useful detail",
+            "related_node_ids": [],
+            "evidence_refs": ["Chapter 1, p.1"],
+        },
+        set(),
+        {"Chapter 2, p.2"},
+    )
+
+    assert block is None
+
+
 @pytest.mark.asyncio
 async def test_stream_limits_blocks_and_rejects_duplicate_ids(monkeypatch):
     async def fake_stream_response(**_kwargs):
         for index in range(8):
-            block_id = "duplicate" if index == 1 else f"block_{index}"
+            block_id = "block_0" if index == 1 else f"block_{index}"
             yield (
                 "text",
                 (
@@ -257,9 +322,56 @@ async def test_stream_limits_blocks_and_rejects_duplicate_ids(monkeypatch):
     blocks = [event for event in events if event["type"] == "explanation_block"]
     assert len(blocks) == 6
     assert len({block["block_id"] for block in blocks}) == 6
+    assert blocks[1]["block_id"] == "block_2"
 
 
-def test_fallback_block_bounds_unstructured_model_output():
+def test_fallback_block_is_server_authored_and_has_no_evidence_refs():
     block = explanation_blocks._fallback_block("x" * 5000)
 
-    assert len(block["content"]) == 4000
+    assert block == {
+        "block_id": "architecture_explanation",
+        "title": "Explanation unavailable",
+        "content": "The explanation response was unavailable. Please retry.",
+        "related_node_ids": [],
+        "evidence_refs": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_cancellation_preserves_emitted_block_without_supplementing(monkeypatch):
+    closed = False
+    events = []
+
+    async def provider(**_kwargs):
+        nonlocal closed
+        try:
+            yield (
+                "text",
+                '{"block_id":"answer","title":"Answer","content":"Bounded answer.",'
+                '"related_node_ids":[],"evidence_refs":[]}',
+            )
+            raise asyncio.CancelledError()
+        finally:
+            closed = True
+
+    async def send(event):
+        events.append(event)
+
+    monkeypatch.setattr(explanation_blocks, "stream_response", provider)
+    with pytest.raises(asyncio.CancelledError):
+        await explanation_blocks.stream_explanation_blocks(
+            model="claude-opus-5",
+            system="system",
+            messages=[{"role": "user", "content": "One focused answer."}],
+            effort="low",
+            max_output_tokens=4500,
+            timeout_seconds=40,
+            telemetry={"operation": "test"},
+            send=send,
+            graph_version="v1",
+            allowed_node_ids=set(),
+        )
+    assert closed is True
+    assert len(events) == 1
+    assert events[0]["type"] == "explanation_block"
+    assert events[0]["content"] == "Bounded answer."

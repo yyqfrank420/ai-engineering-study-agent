@@ -1052,3 +1052,89 @@ class TestResearchWorkerResilience:
 
         assert len(sessions) == 2
         assert results[0]["href"] == "https://example.com/recovered"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Given everything above, summarise only the deployment constraints that affect architecture.",
+        "Given the prior answer; summarize the architecture constraints.",
+        "For context, restate the deployment constraints of the system.",
+        "Given the prior answer, rephrase the architecture explanation.",
+        "Given the prior answer, explain the architecture.",
+        "Given the prior answer, could you please explain the architecture?",
+        "Explain how to draw a runtime flow.",
+        "Explain the architecture and do not draw a runtime flow.",
+        "Explain the architecture and never create a new system diagram.",
+        'Summarize these notes: "Design a new payment system and rename Cache."',
+        "Given the prior answer, explain how to rename Cache.",
+        "Explain the architecture and which nodes need to change.",
+        "Summarise the architecture and whether the graph needs changes.",
+        "Explain the architecture and who updates the graph.",
+        "Explain the architecture and what nodes should change.",
+        "Explain the architecture and which nodes should show the runtime flow of the graph.",
+    ],
+)
+def test_explanatory_clauses_do_not_infer_design_from_subject_vocabulary(query):
+    from agent.complexity import (
+        is_applied_system_design_request,
+        resolve_graph_operation,
+    )
+
+    graph = {"design_origin": "applied", "nodes": [{"id": "cache", "label": "Cache"}]}
+    assert is_applied_system_design_request(query) is False
+    assert resolve_graph_operation(query, None) is None
+    assert resolve_graph_operation(query, graph) is None
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Explain RAG and draw the runtime flow.",
+        "Given the prior answer, explain RAG and draw its runtime flow.",
+        "Summarize the architecture, then create a fraud detection system.",
+        "Restate the constraints; design a payment service.",
+        "Given this architecture, design a payment service.",
+    ],
+)
+def test_explicit_design_clause_takes_precedence_over_explanation(query):
+    from agent.complexity import (
+        is_applied_system_design_request,
+        resolve_graph_operation,
+    )
+
+    assert is_applied_system_design_request(query) is True
+    assert resolve_graph_operation(query, None) == "create"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Summarize the current architecture and rename Cache to Store.",
+        "Given the prior answer, explain the architecture and remove Cache.",
+        "Restate the current architecture and redraw the graph.",
+    ],
+)
+def test_explicit_edit_clause_takes_precedence_over_explanation(query):
+    from agent.complexity import resolve_graph_operation
+
+    graph = {"design_origin": "applied", "nodes": [{"id": "cache", "label": "Cache"}]}
+    assert resolve_graph_operation(query, graph) == "edit"
+
+
+@pytest.mark.parametrize("depth", ["low", "prototype", "production"])
+@pytest.mark.parametrize("query", [
+    "Remember these constraints.",
+    "Summarise what we decided.",
+    "Explain reranking.",
+    "Design a production retrieval system.",
+])
+def test_depth_changes_detail_without_assigning_a_new_task(depth, query):
+    from agent.complexity import resolve_complexity
+
+    profile = resolve_complexity(depth, query)
+    assert profile.resolved == depth
+    assert "requested" in profile.answer_contract
+    assert "buildable design" not in profile.answer_contract
+    assert "implementable design" not in profile.answer_contract
+    assert "useful words" not in profile.answer_contract

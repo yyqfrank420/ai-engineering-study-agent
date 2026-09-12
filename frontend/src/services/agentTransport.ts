@@ -93,6 +93,7 @@ export class AgentTransport {
   private _chatClientRequestId: string | null = null;
   private _chatCommandsReady = false;
   private _pendingSteers: string[] = [];
+  private _cancelPendingChatRetry: (() => void) | null = null;
   private _nodeAbortController: AbortController | null = null;
   private _nodeClientRequestId: string | null = null;
 
@@ -151,9 +152,23 @@ export class AgentTransport {
           socket.onerror = null;
           socket.onclose = null;
           socket.close(1000, 'Retrying pre-start connection');
-          window.setTimeout(() => {
-            if (!settled) connect(attempt + 1);
+          const retryTimer = window.setTimeout(() => {
+            if (this._cancelPendingChatRetry === cancelRetry) {
+              this._cancelPendingChatRetry = null;
+            }
+            if (!settled && this._chatSocket === socket && this._chatClientRequestId === clientRequestId) {
+              connect(attempt + 1);
+            } else {
+              settle(socket, false);
+            }
           }, PRE_START_RETRY_DELAY_MS);
+          // The failed socket's close handler is detached, so stopping during
+          // the retry delay must settle the request without waiting for close.
+          const cancelRetry = () => {
+            window.clearTimeout(retryTimer);
+            settle(socket, false);
+          };
+          this._cancelPendingChatRetry = cancelRetry;
           return true;
         };
 
@@ -237,10 +252,13 @@ export class AgentTransport {
     if (clientRequestId && this._chatClientRequestId !== clientRequestId) return false;
     const activeRequestId = this._chatClientRequestId;
     const commandsReady = this._chatCommandsReady;
+    const cancelPendingRetry = this._cancelPendingChatRetry;
+    this._cancelPendingChatRetry = null;
     this._chatSocket = null;
     this._chatClientRequestId = null;
     this._chatCommandsReady = false;
     this._pendingSteers = [];
+    cancelPendingRetry?.();
     if (socket.readyState === WebSocket.OPEN && commandsReady) {
       socket.send(JSON.stringify({ type: 'stop', client_request_id: activeRequestId }));
       window.setTimeout(() => socket.close(1000, 'Stopped by user'), 750);

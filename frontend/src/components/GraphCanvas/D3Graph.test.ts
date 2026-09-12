@@ -2,13 +2,21 @@ import { describe, expect, it } from 'vitest';
 import type { GraphEdge } from '../../types';
 import {
   boundLabelCenter,
+  COMPACT_LAYOUT_COLUMNS,
+  COMPACT_LAYOUT_ROWS,
   filterRenderableEdges,
   initialFitScale,
+  isPublishedLayoutScale,
+  labelAxisCandidates,
+  MAX_PUBLISHED_GRAPH_NODES,
+  MIN_PUBLISHED_TITLE_PX,
+  NODE_TITLE_PX,
   overviewEdgeLabelOpacity,
   partitionVerticalLevels,
+  planCompactLayout,
   planVerticalLayout,
+  selectGraphLayout,
   selectOverviewEdgeIndices,
-  selectGraphOrientation,
   VERTICAL_LEVEL_H,
   VERTICAL_PAD,
   wrapNodeLabel,
@@ -17,12 +25,44 @@ import {
 
 
 describe('graph layout policy', () => {
-  it('uses vertical flow when a deep graph would make labels unreadable', () => {
-    expect(selectGraphOrientation(720, 7)).toBe('vertical');
-    expect(selectGraphOrientation(720, 6)).toBe('vertical');
-    expect(selectGraphOrientation(1200, 3)).toBe('horizontal');
-    expect(selectGraphOrientation(1200, 6)).toBe('horizontal');
-    expect(selectGraphOrientation(1200, 3, 8)).toBe('vertical');
+  it('samples a half-pixel free corridor without touching either obstacle', () => {
+    const candidates = labelAxisCandidates(50, 300, 50, [
+      { start: 0, end: 100 }, { start: 150.5, end: 250 },
+    ]);
+    const fitting = candidates.filter(center => center - 25 > 100 && center + 25 < 150.5);
+    expect(fitting).toContain(125.25);
+    expect(candidates.every(center => center >= 29 && center <= 271)).toBe(true);
+  });
+
+  it('includes narrow viewport gaps and rejects labels wider than the viewport', () => {
+    expect(labelAxisCandidates(200, 300, 50, [{ start: 54.5, end: 300 }])).toContain(29.25);
+    expect(labelAxisCandidates(200, 300, 400, [])).toEqual([]);
+  });
+
+  it('selects the first layout that meets the title-size contract', () => {
+    expect(selectGraphLayout(0.75, 0.8)).toBe('horizontal');
+    expect(selectGraphLayout(0.7, 0.75)).toBe('vertical');
+    expect(selectGraphLayout(0.7, 0.7)).toBe('compact');
+  });
+
+  it('falls back to the rank-ordered compact grid when a 60-node vertical plan misses the title gate', () => {
+    const levelSizes = Array.from({ length: 10 }, () => [1, 5]).flat();
+    const verticalPlan = planVerticalLayout(1440, 960, levelSizes);
+    const compactPlan = planCompactLayout(1440, 960, levelSizes.reduce((sum, size) => sum + size, 0));
+
+    expect(levelSizes.reduce((sum, size) => sum + size, 0)).toBe(MAX_PUBLISHED_GRAPH_NODES);
+    expect(NODE_TITLE_PX * verticalPlan.scale).toBeLessThan(MIN_PUBLISHED_TITLE_PX);
+    expect(compactPlan.columns).toBe(COMPACT_LAYOUT_COLUMNS);
+    expect(compactPlan.rows).toBe(COMPACT_LAYOUT_ROWS);
+    expect(isPublishedLayoutScale(compactPlan.scale)).toBe(true);
+    expect(selectGraphLayout(0.7, verticalPlan.scale)).toBe('compact');
+  });
+
+  it('proves compact capacity at the published schema boundary', () => {
+    const compactPlan = planCompactLayout(1440, 960, MAX_PUBLISHED_GRAPH_NODES);
+
+    expect(COMPACT_LAYOUT_COLUMNS * COMPACT_LAYOUT_ROWS).toBeGreaterThanOrEqual(MAX_PUBLISHED_GRAPH_NODES);
+    expect(NODE_TITLE_PX * compactPlan.scale).toBeGreaterThanOrEqual(MIN_PUBLISHED_TITLE_PX);
   });
 
   it('keeps the maximum supported deep graph readable in the evaluation viewport', () => {
@@ -126,10 +166,29 @@ describe('graph layout policy', () => {
   });
 
   it('wraps long domain labels without dropping their distinguishing words', () => {
-    expect(wrapNodeLabel('AI Severity & Narrative Assistant')).toEqual([
+    expect(wrapNodeLabel('AI Severity & Narrative Assistant', text => text.length * 8)).toEqual([
       'AI Severity &',
       'Narrative Assistant',
     ]);
+  });
+
+  it('wraps wide labels even when they contain fewer than 24 characters', () => {
+    const measureTextWidth = (text: string) => text.length * 9;
+    const lines = wrapNodeLabel('Flagged Run Review Queue', measureTextWidth);
+
+    expect(lines).toEqual(['Flagged Run', 'Review Queue']);
+    expect(lines.join(' ')).toBe('Flagged Run Review Queue');
+    expect(lines.every(line => measureTextWidth(line) <= 162)).toBe(true);
+    expect(wrapNodeLabel('iiiiiiiiiiiiiiiiiiiiiiiii', text => text.length * 3))
+      .toEqual(['iiiiiiiiiiiiiiiiiiiiiiiii']);
+  });
+
+  it('truncates unbroken wide labels to measured card width', () => {
+    const measureTextWidth = (text: string) => text.length * 15;
+    const lines = wrapNodeLabel('WWWWWWWWWWWWWWWWWWWW', measureTextWidth);
+
+    expect(lines).toEqual(['WWWWWWWWW…']);
+    expect(measureTextWidth(lines[0])).toBeLessThanOrEqual(162);
   });
 
   it('preserves deployable technology detail across two compact lines', () => {

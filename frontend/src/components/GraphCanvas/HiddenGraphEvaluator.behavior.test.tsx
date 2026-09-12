@@ -4,11 +4,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./D3Graph', async () => {
   const React = await import('react');
   return {
-    D3Graph: ({ onLayoutReady }: { onLayoutReady?: (key: string) => void }) => {
+    D3Graph: ({
+      minimumTitlePx,
+      onLayoutReady,
+    }: {
+      minimumTitlePx?: number;
+      onLayoutReady?: (key: string) => void;
+    }) => {
       const onLayoutReadyRef = React.useRef(onLayoutReady);
       React.useEffect(() => onLayoutReadyRef.current?.('candidate-layout'), []);
       return (
-        <svg width="1440" height="960">
+        <svg width="100%" height="100%" data-minimum-title-px={minimumTitlePx}>
           <text>Candidate graph</text>
         </svg>
       );
@@ -24,7 +30,14 @@ vi.mock('./diagramMeasurement', () => ({
     rendered_edges: 1,
     overlap_count: 0,
     clipped_nodes: 0,
+    clipped_edges: 0,
     minimum_text_px: 12,
+    overview_required_edge_labels: 1,
+    visible_overview_required_edge_labels: 1,
+    grouped_nodes: 0,
+    group_labelled_nodes: 0,
+    visible_group_boundaries: 0,
+    group_boundary_overlap_count: 0,
   })),
 }));
 
@@ -44,6 +57,11 @@ import { DIAGRAM_EVALUATION_VIEWPORT } from './graphLayout';
 const candidate: GraphCandidate = {
   evaluationId: 'evaluation-1',
   graphVersion: 'graph-v1',
+  criteria: {
+    viewport_width: 1440,
+    viewport_height: 960,
+    minimum_text_px: 11,
+  },
   data: {
     graph_type: 'architecture',
     title: 'Private candidate',
@@ -115,6 +133,7 @@ describe('HiddenGraphEvaluator browser boundary', () => {
     expect(hiddenRoot.style.width).toBe(`${DIAGRAM_EVALUATION_VIEWPORT.width}px`);
     expect(hiddenRoot.style.height).toBe(`${DIAGRAM_EVALUATION_VIEWPORT.height}px`);
     expect(rasterizedCanvasSize).toEqual(DIAGRAM_EVALUATION_VIEWPORT);
+    expect(view.container.querySelector('svg')?.getAttribute('data-minimum-title-px')).toBe('11');
     expect(agentTransport.submitDiagramEvaluation).toHaveBeenCalledWith(
       'evaluation-1',
       'graph-v1',

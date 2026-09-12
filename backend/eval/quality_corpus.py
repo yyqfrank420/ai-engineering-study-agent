@@ -66,11 +66,22 @@ class UIMode(BaseModel):
     research_enabled: bool
 
 
+class GraphExpansionExpectation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preserve_prior_graph: Literal[True]
+    added_node_count: Literal[1]
+    new_node_directly_connected_to_prior_graph: Literal[True]
+    new_node_connected_to_prior_label_contains: str = Field(min_length=1)
+
+
 class ConversationStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     prompt: str = Field(min_length=1, max_length=12_000)
     ui: UIMode
+    graph_output_max_latency_ms: int | None = Field(default=None, gt=0)
+    graph_expansion: GraphExpansionExpectation | None = None
 
 
 class DeterministicExpectation(BaseModel):
@@ -88,6 +99,7 @@ class DeterministicExpectation(BaseModel):
     citation_source: Literal["any", "web"] = "any"
     error_expected: bool
     cleanup: bool
+    provider_fallback_allowed: bool = True
 
     @model_validator(mode="after")
     def validate_citation_contract(self) -> "DeterministicExpectation":
@@ -128,38 +140,91 @@ class EvaluationCorpus(BaseModel):
         for case in self.cases:
             unknown = sorted(set(case.rubric_dimensions) - rubric_names)
             if unknown:
-                raise ValueError(f"case {case.id} references unknown rubrics: {unknown}")
+                raise ValueError(
+                    f"case {case.id} references unknown rubrics: {unknown}"
+                )
             if case.deterministic.citation_source == "web":
                 if "research" not in case.deterministic.workers_include:
-                    raise ValueError(f"web-citation case {case.id} must require the research worker")
+                    raise ValueError(
+                        f"web-citation case {case.id} must require the research worker"
+                    )
                 if not any(step.ui.research_enabled for step in case.steps):
-                    raise ValueError(f"web-citation case {case.id} must enable research")
+                    raise ValueError(
+                        f"web-citation case {case.id} must enable research"
+                    )
+            for step_index, step in enumerate(case.steps, start=1):
+                if step.graph_output_max_latency_ms is not None and (
+                    case.deterministic.graph_emitted is not True
+                    or step.ui.graph_mode != "on"
+                ):
+                    raise ValueError(
+                        f"case {case.id} turn {step_index} sets a graph-output latency "
+                        "limit without requiring graph output"
+                    )
+                if step.graph_expansion is None:
+                    continue
+                if step_index == 1:
+                    raise ValueError(
+                        f"case {case.id} turn 1 cannot expand a prior graph"
+                    )
+                previous_step = case.steps[step_index - 2]
+                if (
+                    case.deterministic.graph_emitted is not True
+                    or case.deterministic.graph_renderable is not True
+                    or step.ui.graph_mode != "on"
+                    or previous_step.ui.graph_mode != "on"
+                ):
+                    raise ValueError(
+                        f"case {case.id} turn {step_index} graph expansion requires "
+                        "renderable graph output on consecutive graph-on turns"
+                    )
             if case.approval.status == "approved":
                 if not case.approval.reviewer or not case.approval.reviewed_at:
-                    raise ValueError(f"approved case {case.id} must identify its reviewer and review time")
+                    raise ValueError(
+                        f"approved case {case.id} must identify its reviewer and review time"
+                    )
                 if not case.approval.review_run_id:
-                    raise ValueError(f"approved case {case.id} must identify its reviewed artifact run")
+                    raise ValueError(
+                        f"approved case {case.id} must identify its reviewed artifact run"
+                    )
                 if set(case.approval.reviewed_grades) != set(case.rubric_dimensions):
-                    raise ValueError(f"approved case {case.id} must label every rubric dimension")
+                    raise ValueError(
+                        f"approved case {case.id} must label every rubric dimension"
+                    )
         if self.approval.status == "approved":
-            pending = [case.id for case in self.cases if case.approval.status != "approved"]
+            pending = [
+                case.id for case in self.cases if case.approval.status != "approved"
+            ]
             if pending:
                 raise ValueError("an approved corpus cannot contain pending cases")
             if not self.approval.reviewed_by or not self.approval.reviewed_at:
-                raise ValueError("approved corpus metadata must identify the reviewer and review time")
+                raise ValueError(
+                    "approved corpus metadata must identify the reviewer and review time"
+                )
             calibration = self.approval.calibration
             if calibration.agreement is None or calibration.agreement < 0.85:
-                raise ValueError("approved corpus requires at least 85% judge agreement")
-            if calibration.critical_false_passes is None or calibration.critical_false_passes > 1:
-                raise ValueError("approved corpus permits at most one critical false pass")
+                raise ValueError(
+                    "approved corpus requires at least 85% judge agreement"
+                )
+            if (
+                calibration.critical_false_passes is None
+                or calibration.critical_false_passes > 1
+            ):
+                raise ValueError(
+                    "approved corpus permits at most one critical false pass"
+                )
             if not calibration.evaluated_at:
-                raise ValueError("approved corpus calibration must record its evaluation time")
-            if not all((
-                calibration.judge_model,
-                calibration.evidence_run_id,
-                calibration.evidence_commit_sha,
-                calibration.evidence_sha256,
-            )):
+                raise ValueError(
+                    "approved corpus calibration must record its evaluation time"
+                )
+            if not all(
+                (
+                    calibration.judge_model,
+                    calibration.evidence_run_id,
+                    calibration.evidence_commit_sha,
+                    calibration.evidence_sha256,
+                )
+            ):
                 raise ValueError(
                     "approved corpus calibration must identify its judge and immutable browser evidence"
                 )
@@ -178,18 +243,24 @@ def corpus_sha256(path: Path = CORPUS_PATH) -> str:
     parsed.pop("approval", None)
     for case in parsed.get("cases", []):
         case.pop("approval", None)
-    canonical = json.dumps(parsed, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    canonical = json.dumps(parsed, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
     return hashlib.sha256(canonical).hexdigest()
 
 
 def approval_manifest_sha256(path: Path = CORPUS_PATH) -> str:
     parsed = json.loads(path.read_text(encoding="utf-8"))
     parsed["approval"]["approved_manifest_sha256"] = None
-    canonical = json.dumps(parsed, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    canonical = json.dumps(parsed, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
     return hashlib.sha256(canonical).hexdigest()
 
 
-def load_corpus(*, require_approved: bool = False, path: Path = CORPUS_PATH) -> EvaluationCorpus:
+def load_corpus(
+    *, require_approved: bool = False, path: Path = CORPUS_PATH
+) -> EvaluationCorpus:
     corpus = EvaluationCorpus.model_validate_json(path.read_text(encoding="utf-8"))
     if require_approved:
         digest = approval_manifest_sha256(path)
@@ -198,5 +269,7 @@ def load_corpus(*, require_approved: bool = False, path: Path = CORPUS_PATH) -> 
                 "The semantic corpus is pending human review. Review all 20 cases and record the approved manifest hash before enabling the blocking judge."
             )
         if corpus.approval.approved_manifest_sha256 != digest:
-            raise RuntimeError("The approved corpus hash does not match the current manifest")
+            raise RuntimeError(
+                "The approved corpus hash does not match the current manifest"
+            )
     return corpus
