@@ -728,6 +728,209 @@ def test_websocket_keeps_candidate_private_until_browser_evaluation(
     )
 
 
+def test_websocket_persists_approved_overview_when_explanation_is_unavailable(
+    temp_data_dir, monkeypatch
+):
+    import agent.explanation_blocks as explanation_blocks
+    from agent.nodes.orchestrator_node import orchestrator_synthesise
+    from adapters.supabase_auth_adapter import get_current_user
+    from storage.thread_store import get_graph_artifact
+
+    app, user, thread = _ready_app(temp_data_dir, monkeypatch)
+    app.dependency_overrides[get_current_user] = lambda: user
+    graph = {
+        "graph_type": "architecture",
+        "design_origin": "applied",
+        "version": "approved-overview-v1",
+        "detail_level": "overview",
+        "title": "Payment overview",
+        "nodes": [
+            {
+                "id": "gateway",
+                "label": "Payment gateway",
+                "type": "gateway",
+                "technology": "HTTP",
+                "description": "Accepts payment requests.",
+            }
+        ],
+        "edges": [],
+        "sequence": [],
+    }
+    contract = {
+        "graph_version": graph["version"],
+        "source": "staged",
+        "stage": "accepted",
+        "maturity": "prototype",
+    }
+    provider_calls = []
+
+    async def empty_explanation(**kwargs):
+        provider_calls.append(kwargs)
+        yield ("text", "")
+
+    async def approved_agent(state, *_tools):
+        approved_state = {
+            **state,
+            "graph_data": graph,
+            "graph_contract": contract,
+            "graph_changed": True,
+            "graph_publication": "approved",
+            "graph_operation": {
+                "kind": "create",
+                "status": "applied",
+                "failure_code": None,
+            },
+        }
+        return await orchestrator_synthesise(approved_state)
+
+    monkeypatch.setattr(explanation_blocks, "stream_response", empty_explanation)
+    monkeypatch.setattr(chat_websocket, "run_agent", approved_agent)
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/api/chat/ws", headers={"origin": "http://localhost:5173"}
+        ) as socket:
+            socket.send_json({"type": "auth", "access_token": "test-token"})
+            assert socket.receive_json() == {"type": "ready"}
+            socket.send_json(
+                {
+                    "type": "start",
+                    "thread_id": thread["id"],
+                    "content": "Design a payment request path",
+                    "graph_mode": "on",
+                    "client_request_id": "approved-overview-explanation-fallback",
+                }
+            )
+            events = _receive_until(socket, "done")
+
+        reloaded = client.get(f"/api/threads/{thread['id']}")
+
+    assert len(provider_calls) == 1
+    assert provider_calls[0]["allow_fallback"] is False
+    assert provider_calls[0]["provider_attempt_limit"] == 1
+    assert events[-2:] == [{"type": "graph_data", "data": graph}, {"type": "done"}]
+    assert [event["data"] for event in events if event["type"] == "graph_preview"] == [
+        graph
+    ]
+    assert all("graph_contract" not in event for event in events)
+    fallback = next(event for event in events if event["type"] == "explanation_block")
+    assert fallback["graph_version"] == graph["version"]
+    assert fallback["title"] == "Diagram ready"
+    assert fallback["content"].startswith(
+        "This is an overview of the core workflow, with supporting detail simplified."
+    )
+    assert "The diagram is ready to inspect." in fallback["content"]
+    assert get_graph_artifact(user["id"], thread["id"]) == (graph, contract)
+    assert reloaded.status_code == 200
+    assert reloaded.json()["thread"]["graph_data"] == graph
+    assert "graph_contract" not in reloaded.json()["thread"]
+    assert reloaded.json()["messages"][-1]["content"] == (
+        f"## {fallback['title']}\n\n{fallback['content']}"
+    )
+
+
+def test_websocket_persists_approved_overview_after_explanation_provider_error(
+    temp_data_dir, monkeypatch
+):
+    import agent.explanation_blocks as explanation_blocks
+    import agent.graph as agent_graph
+    from adapters.supabase_auth_adapter import get_current_user
+    from storage.thread_store import get_graph_artifact
+
+    app, user, thread = _ready_app(temp_data_dir, monkeypatch)
+    app.dependency_overrides[get_current_user] = lambda: user
+    monkeypatch.setattr(settings, "graph_pipeline_mode", "staged")
+    graph = {
+        "graph_type": "architecture",
+        "design_origin": "applied",
+        "version": "provider-error-approved-v1",
+        "detail_level": "overview",
+        "title": "Payment overview",
+        "nodes": [{"id": "gateway", "label": "Payment gateway"}],
+        "edges": [],
+        "sequence": [],
+    }
+    contract = {
+        "graph_version": graph["version"],
+        "source": "staged",
+        "stage": "accepted",
+        "maturity": "prototype",
+    }
+    provider_calls = []
+
+    async def route(state):
+        return {**state, "route": "search"}
+
+    async def search(state, _tools):
+        return state, None
+
+    async def staged(state):
+        return {
+            **state,
+            "graph_data": graph,
+            "graph_contract": contract,
+            "graph_changed": True,
+            "graph_publication": "approved",
+            "graph_operation": {"kind": "create", "status": "applied"},
+        }
+
+    async def failed_explanation(**kwargs):
+        provider_calls.append(kwargs)
+        yield ("text", "")
+        raise RuntimeError("explanation provider unavailable")
+
+    monkeypatch.setattr(agent_graph, "orchestrator_route", route)
+    monkeypatch.setattr(agent_graph, "run_search_phase", search)
+    monkeypatch.setattr(agent_graph, "run_staged_graph_pipeline", staged)
+    monkeypatch.setattr(explanation_blocks, "stream_response", failed_explanation)
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/api/chat/ws", headers={"origin": "http://localhost:5173"}
+        ) as socket:
+            socket.send_json({"type": "auth", "access_token": "test-token"})
+            assert socket.receive_json() == {"type": "ready"}
+            socket.send_json(
+                {
+                    "type": "start",
+                    "thread_id": thread["id"],
+                    "content": "Design a payment request path",
+                    "graph_mode": "on",
+                    "diagram_requested": True,
+                    "client_request_id": "approved-overview-provider-error",
+                }
+            )
+            events = _receive_until(socket, "done")
+
+        reloaded = client.get(f"/api/threads/{thread['id']}")
+
+    assert len(provider_calls) == 1
+    assert provider_calls[0]["allow_fallback"] is False
+    assert provider_calls[0]["provider_attempt_limit"] == 1
+    assert events[-2:] == [{"type": "graph_data", "data": graph}, {"type": "done"}]
+    assert [event["data"] for event in events if event["type"] == "graph_preview"] == [
+        graph
+    ]
+    assert [event["data"] for event in events if event["type"] == "graph_data"] == [
+        graph
+    ]
+    assert not any(event["type"] == "error" for event in events)
+    assert all("graph_contract" not in event for event in events)
+    fallback = next(event for event in events if event["type"] == "explanation_block")
+    assert fallback["graph_version"] == graph["version"]
+    assert fallback["title"] == "Architecture overview"
+    assert fallback["content"].startswith(
+        "Your overview is ready, with supporting detail simplified."
+    )
+    assert get_graph_artifact(user["id"], thread["id"]) == (graph, contract)
+    assert reloaded.status_code == 200
+    assert reloaded.json()["thread"]["graph_data"] == graph
+    assert "graph_contract" not in reloaded.json()["thread"]
+    assert reloaded.json()["messages"][-1]["content"] == (
+        f"## {fallback['title']}\n\n{fallback['content']}"
+    )
+
+
 @pytest.mark.parametrize(
     ("first_message", "expected_error"),
     [
@@ -813,10 +1016,15 @@ def test_websocket_rechecks_draft_after_lease_admission(temp_data_dir, monkeypat
             socket.send_json({"type": "auth", "access_token": "test-token"})
             assert socket.receive_json() == {"type": "ready"}
             socket.send_json(
-                {"type": "start", "thread_id": thread["id"], "content": "Explain agents"}
+                {
+                    "type": "start",
+                    "thread_id": thread["id"],
+                    "content": "Explain agents",
+                }
             )
             assert socket.receive_json() == {
-                "type": "error", "content": "Thread not found"
+                "type": "error",
+                "content": "Thread not found",
             }
             assert socket.receive_json() == {"type": "done"}
 

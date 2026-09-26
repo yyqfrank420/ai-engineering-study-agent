@@ -27,7 +27,7 @@ from eval.semantic_gate import DimensionJudgment, JudgeResult
 DEFAULT_JUDGE_PROVIDER = "anthropic"
 DEFAULT_JUDGE_MODEL = "gpt-5.4-mini-2026-03-17"
 DEFAULT_ANTHROPIC_JUDGE_MODEL = "claude-sonnet-5"
-JUDGE_PROMPT_RELEASE = "semantic-rubric-judge-v9"
+JUDGE_PROMPT_RELEASE = "semantic-rubric-judge-v10"
 INPUT_USD_PER_MILLION = 0.75
 OUTPUT_USD_PER_MILLION = 4.50
 _JUDGE_PRICING_USD_PER_MILLION = {
@@ -99,6 +99,7 @@ def _response_schema(
     dimensions: tuple[str, ...],
 ) -> dict[str, Any]:
     return {
+        "$defs": {"dimension": _dimension_schema(source_ids)},
         "type": "object",
         "additionalProperties": False,
         "required": ["dimensions"],
@@ -108,7 +109,7 @@ def _response_schema(
                 "additionalProperties": False,
                 "required": list(dimensions),
                 "properties": {
-                    dimension: _dimension_schema(source_ids) for dimension in dimensions
+                    dimension: {"$ref": "#/$defs/dimension"} for dimension in dimensions
                 },
             }
         },

@@ -78,4 +78,10 @@ describe('graphStructureKey', () => {
       edges: [{ ...base.edges[0], label: 'different edge' }],
     }))).not.toBe(graphStructureKey(base));
   });
+
+  it('treats an omitted detail level as standard and detects an overview promotion', () => {
+    const base = graph();
+    expect(graphStructureKey(graph({ detail_level: 'standard' }))).toBe(graphStructureKey(base));
+    expect(graphStructureKey(graph({ detail_level: 'overview' }))).not.toBe(graphStructureKey(base));
+  });
 });

@@ -1,0 +1,343 @@
+{
+  "capture": {
+    "kind": "accepted_staged_graph_sanitized",
+    "graph_version": "2527df13-9331-47b5-8c51-8a8b1fb12761",
+    "source_edge_count": 34
+  },
+  "graph_data": {
+    "title": "Retail Campaign Assistant with Human-Approved Ad Platform Changes",
+    "assumptions": [
+      "A campaign manager initiates each optimization cycle from a console; the system does not act autonomously.",
+      "The ad platform exposes metrics read APIs and change APIs with uncertain-commit behavior handled by read-back reconciliation.",
+      "Approvals expire after a bounded time; expired or mismatched approvals are treated as stale and denied.",
+      "Rollback is a typed compensation proposal produced by the proposal service and follows the same validation, approval, and execution controls as normal changes.",
+      "Human feedback does not retrain models or change prompts automatically; no learning or release pipeline is included."
+    ],
+    "nodes": [
+      {
+        "id": "n1",
+        "label": "Campaign manager console",
+        "type": "client",
+        "description": "Lets a campaign manager start an optimization cycle, review each exact proposal, approve or deny it, and see denial, stale-approval, write-outcome, and rollback status."
+      },
+      {
+        "id": "n2",
+        "label": "Metrics collection service",
+        "type": "service",
+        "description": "Reads campaign performance metrics from the ad platform, records provenance for each pull, and stores normalized snapshots for proposal generation."
+      },
+      {
+        "id": "n3",
+        "label": "Metrics snapshot store",
+        "type": "datastore",
+        "description": "Durable store of versioned campaign metrics snapshots with source and pull-time provenance used as evidence for proposals."
+      },
+      {
+        "id": "n4",
+        "label": "Proposal service",
+        "type": "service",
+        "description": "Generates typed exact-action ad-copy and audience-targeting proposals from metrics snapshots, and produces rollback compensation proposals for applied changes."
+      },
+      {
+        "id": "n5",
+        "label": "Proposal validator",
+        "type": "service",
+        "description": "Deterministically validates every normal and rollback proposal's structure, allowed fields, and constraint limits before it can be approved or executed; rejects invalid proposals."
+      },
+      {
+        "id": "n6",
+        "label": "Approval service",
+        "type": "service",
+        "description": "Records human approval or denial of each exact validated proposal, enforces approval expiry and proposal-match checks so stale or mismatched approvals are rejected."
+      },
+      {
+        "id": "n7",
+        "label": "Change execution service",
+        "type": "service",
+        "description": "Applies only approved exact changes to the ad platform; reserves a durable operation identity before each write and reconciles uncertain outcomes by read-back as COMMITTED, NOT_FOUND, or STILL_UNKNOWN with bounded retry."
+      },
+      {
+        "id": "n8",
+        "label": "Operation state store",
+        "type": "datastore",
+        "description": "Authoritative lifecycle state for every proposed, approved, denied, applied, uncertain, and rolled-back change, keyed by durable operation identity."
+      },
+      {
+        "id": "n9",
+        "label": "Audit and provenance log",
+        "type": "datastore",
+        "description": "Correlated audit evidence for metric inputs, proposals, validation results, approval and denial decisions, execution outcomes, read-back reconciliation, and rollbacks."
+      },
+      {
+        "id": "n10",
+        "label": "Ad platform",
+        "type": "external",
+        "description": "External advertising platform that serves campaign metrics and applies approved ad-copy and audience-targeting changes; authoritative target for writes and read-back."
+      }
+    ],
+    "edges": [
+      {
+        "source": "n1",
+        "target": "n2",
+        "label": "Start optimization cycle and pull current campaign metrics",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n2",
+        "target": "n1",
+        "label": "Cycle started with pull provenance, or bounded metrics-pull failure notice",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n2",
+        "target": "n10",
+        "label": "Fetch campaign metrics as untrusted input for entailment validation before reuse",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n10",
+        "target": "n2",
+        "label": "Metrics payload validated for entailment before reuse; failure ends in abstention",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n2",
+        "target": "n3",
+        "label": "Store normalized versioned metrics snapshot with source provenance",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n3",
+        "target": "n2",
+        "label": "Persisted snapshot version acknowledged",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n2",
+        "target": "n9",
+        "label": "Record metric input provenance for correlated audit",
+        "flow": "feedback",
+        "sync": "async"
+      },
+      {
+        "source": "n2",
+        "target": "n4",
+        "label": "Trigger proposal generation for stored snapshot version",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n4",
+        "target": "n2",
+        "label": "Proposal generation accepted or snapshot-not-found failure",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n4",
+        "target": "n3",
+        "label": "Read entailment-validated metrics snapshot version as proposal evidence",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n3",
+        "target": "n4",
+        "label": "Validated snapshot with provenance, or miss or stale artifact discarded in abstention",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n4",
+        "target": "n5",
+        "label": "Submit normal or rollback compensation proposal for deterministic validation",
+        "flow": "control",
+        "sync": "sync"
+      },
+      {
+        "source": "n5",
+        "target": "n4",
+        "label": "Valid: eligible for approval; invalid: rejected with constraint violations",
+        "flow": "control",
+        "sync": "sync"
+      },
+      {
+        "source": "n4",
+        "target": "n9",
+        "label": "Record proposal content, evidence, and validation result for audit",
+        "flow": "feedback",
+        "sync": "async"
+      },
+      {
+        "source": "n4",
+        "target": "n1",
+        "label": "Present validated normal or rollback proposal for manager review",
+        "flow": "runtime",
+        "sync": "async"
+      },
+      {
+        "source": "n1",
+        "target": "n6",
+        "label": "Submit approval or denial of the exact validated proposal",
+        "flow": "control",
+        "sync": "sync"
+      },
+      {
+        "source": "n6",
+        "target": "n1",
+        "label": "Recorded; expired or mismatched approval rejected as stale denial",
+        "flow": "control",
+        "sync": "sync"
+      },
+      {
+        "source": "n6",
+        "target": "n8",
+        "label": "Record approval or denial decision under operation identity",
+        "flow": "control",
+        "sync": "sync"
+      },
+      {
+        "source": "n8",
+        "target": "n6",
+        "label": "Decision persisted acknowledged",
+        "flow": "control",
+        "sync": "sync"
+      },
+      {
+        "source": "n6",
+        "target": "n9",
+        "label": "Record approval, denial, and stale-rejection decisions for audit",
+        "flow": "feedback",
+        "sync": "async"
+      },
+      {
+        "source": "n6",
+        "target": "n7",
+        "label": "Dispatch approved exact normal or rollback change for execution",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n7",
+        "target": "n6",
+        "label": "Accepted for execution; stale or mismatched approval rejected",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n7",
+        "target": "n8",
+        "label": "Reserve durable operation identity and lifecycle state before write",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n8",
+        "target": "n7",
+        "label": "Operation identity reserved and fenced",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n7",
+        "target": "n10",
+        "label": "Apply approved exact change to ad platform under operation identity",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n10",
+        "target": "n7",
+        "label": "Committed, rejected, or uncertain-commit outcome",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n7",
+        "target": "n10",
+        "label": "Read back change by operation identity after uncertain commit",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n10",
+        "target": "n7",
+        "label": "COMMITTED: success; NOT_FOUND: same-key retry; STILL_UNKNOWN: bounded escalation",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n7",
+        "target": "n8",
+        "label": "Update lifecycle state with execution, reconciliation, or rollback outcome",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n8",
+        "target": "n7",
+        "label": "Lifecycle state updated acknowledged",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n7",
+        "target": "n9",
+        "label": "Record execution, read-back reconciliation, and rollback outcomes for audit",
+        "flow": "feedback",
+        "sync": "async"
+      },
+      {
+        "source": "n1",
+        "target": "n8",
+        "label": "Read lifecycle state for denial, stale, write-outcome, rollback status",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n8",
+        "target": "n1",
+        "label": "Lifecycle states keyed by operation identity for console display",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n2",
+        "target": "n9",
+        "label": "Record entailment validation result and discarded stale artifacts for audit",
+        "flow": "feedback",
+        "sync": "async"
+      }
+    ]
+  },
+  "graph_contract": {
+    "maturity": "production",
+    "capabilities": {
+      "external_effects": true,
+      "learning_or_release": false,
+      "retrieval_or_reuse": true
+    },
+    "component_gate": {
+      "approved": true
+    },
+    "connection_gate": {
+      "approved": true
+    }
+  },
+  "engineering_annotation": {
+    "finding": "missing_shared_owner_compensation_initiation",
+    "producer_id": "n4",
+    "detail": "The accepted normal snapshot trigger reaches n4, but no rollback trigger carrying the original or applied operation reference or recovery input reaches its rollback proposal behavior. The n3 snapshot return and n5 validation return do not supply that trigger.",
+    "non_findings": [
+      "human approval ownership",
+      "primary walkthrough order"
+    ],
+    "review_origin": "assistant_engineering_review_not_model_gate"
+  }
+}

@@ -23,7 +23,7 @@ RUBRIC_CRITERIA = {
     ),
     "objective_fidelity": (
         "components",
-        "Depict the requested subject system and make its runtime goal and constraints visible in component responsibilities. Establish the user's business domain, goal, and workflow from the request or accepted context. Retrieved examples cannot choose the user's domain or goal. Assumptions may fill implementation details but cannot invent a missing business goal or workflow. An explicit educational subject establishes the system to explain. For new designs, select the initiating primary runtime actor as the root; centrality of an AI service does not determine the root. Primary membership selects components for the main walkthrough. Every primary member must be naturally reachable outward from that root using directed runtime, control, feedback, or deployment contracts, which may pass through non-primary supporting components. Walkthrough order does not establish causal execution order or satisfy required runtime and control behavior. Keep independent ingress and supporting components in the design; mark them non-primary when they do not belong in the walkthrough. Do not invent reverse or control edges to repair an unsuitable root or primary membership. Determine initiation from declared behavior. A component that pulls or requests data may initiate an outward request with a return response; inbound responses and independent inputs do not disqualify that root. Require contracts consistent with the declared responsibilities, without inventing requests for push-only sources. At the component stage, assess whether declared responsibilities and assumptions support a feasible directed path; connections are authored in the next stage. Missing edges or absent peer names in responsibilities are not component defects. Identify a specific incompatible responsibility when rejecting root or primary membership; do not demand connection-stage evidence here. Scoped edits preserve the accepted root and primary membership outside the authorized write set. Instructions to explain, cite or ground the response in sources, or draw its flow govern the response; include those capabilities in the designed runtime only when explicitly requested as system features.",
+        "Depict the requested subject and make its goal and constraints visible in component responsibilities. A named educational, research, or comparison subject establishes diagram scope without an invented business use case; represent its relevant mechanisms or contrasting paths. For an applied system design, establish the user's business domain, goal, and workflow from the request or accepted context. Retrieved examples cannot choose the user's domain or goal. Assumptions may fill implementation details but cannot invent a missing business goal or workflow. The diagram request is already admitted; do not ask whether a diagram is wanted. For new designs, select the initiating primary runtime actor as the root; centrality of an AI service does not determine the root. Primary membership selects components for the main walkthrough. Every primary member must be naturally reachable outward from that root using directed runtime, control, feedback, or deployment contracts, which may pass through non-primary supporting components. Walkthrough order does not establish causal execution order or satisfy required runtime and control behavior. Keep independent ingress and supporting components in the design; mark them non-primary when they do not belong in the walkthrough. Do not invent reverse or control edges to repair an unsuitable root or primary membership. Determine initiation from declared behavior. A component that pulls or requests data may initiate an outward request with a return response; inbound responses and independent inputs do not disqualify that root. Require contracts consistent with the declared responsibilities, without inventing requests for push-only sources. At the component stage, assess whether declared responsibilities and assumptions support a feasible directed path; connections are authored in the next stage. Missing edges or absent peer names in responsibilities are not component defects. Identify a specific incompatible responsibility when rejecting root or primary membership; do not demand connection-stage evidence here. Scoped edits preserve the accepted root and primary membership outside the authorized write set. Instructions to explain, cite or ground the response in sources, or draw its flow govern the response; include those capabilities in the designed runtime only when explicitly requested as system features.",
     ),
     "runtime_completeness": (
         "connections",
@@ -197,9 +197,23 @@ STAGED_PRODUCTION_REQUIREMENTS = {
         "For external mutations, connect authoritative observation, a typed exact-action "
         "proposal, policy and approval, execution, and the authoritative target. Compensation must "
         "use the same policy, approval, execution, reconciliation, and audit controls. "
+        "For each external effect executor, trace the exact approved action payload and "
+        "stable operation identity from canonical proposal or operation ownership into "
+        "execution before the write. A direct or delegated request, an executor pull "
+        "with its authoritative reply, or declared same-owner state can supply them; "
+        "the executor may reserve the identity durably with canonical state. An "
+        "authorization verdict or incidental reachability alone supplies neither "
+        "payload nor identity. "
         "Cover compensation explicitly in the existing validation and approval invocation "
         "and response contracts. Shared controls suffice when those contracts cover both "
         "normal and compensation actions; duplicate control paths are unnecessary. "
+        "Review normal and compensation behavior separately even when one component "
+        "produces both proposals: its normal input does not establish rollback initiation. "
+        "For compensation, identify the initiating operator, incident, event, or explicit "
+        "autonomous responsibility, and trace the original or applied operation reference "
+        "or recovery input to its proposal producer. Direct, delegated, combined, or "
+        "declared same-owner internal paths are valid; do not demand duplicate services "
+        "or edges or an incoming edge for an explicit autonomous action. "
         "Identify the compensation proposal's producer and follow its direct or delegated "
         "invocation to each shared control. A validator's broad responsibility or another "
         "producer's validation path does not establish that invocation."
@@ -297,6 +311,16 @@ def staged_review_requirements(
         if owner == stage and code not in excluded
     }
     if stage == "connections":
+        if "branch_completion" in requirements:
+            requirements["branch_completion"] = (
+                "Route each required or declared normal, denial, failure, alternate, "
+                "and fallback path to a rejoin or observable outcome. A typed response "
+                "carrying the applicable outcomes, or the same executable owner handling "
+                "them, can close those paths without a separate component or edge. Do not "
+                "require a path for an optional exception that the request and accepted "
+                "design do not declare. Block a missing required path or a path that "
+                "bypasses a required control."
+            )
         requirements["edge_semantics"] = (
             "Require contracts compatible with their source, recipient, payload, and "
             "declared behavior. Block a missing required input or answer return, a "
@@ -310,6 +334,15 @@ def staged_review_requirements(
             "for required runtime or control interactions."
         )
     if stage == "components":
+        requirements["mece_scope"] = (
+            "Give each material responsibility a clear executable owner. Block "
+            "conflicting material ownership that makes required behavior or controls "
+            "ambiguous, or mechanics outside the requested subject scope that replace "
+            "or misrepresent the requested system. Redundant decomposition, compatible "
+            "shared ownership, and naming preferences are advisory unless they cause "
+            "concrete behavior or control harm. Mechanics used to author this response "
+            "are not runtime features unless explicitly requested."
+        )
         requirements["capability_classification"] = (
             "Classify capabilities from the candidate responsibilities and assumptions: "
             "external_effects means it can mutate an external system; retrieval_or_reuse "

@@ -329,6 +329,83 @@ async def test_render_gate_withholds_layout_failure_before_review_models_run():
 
 
 @pytest.mark.asyncio
+async def test_interactive_render_gate_keeps_advisories_without_blocking_preview():
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "a"}, {"id": "b"}],
+        "edges": [{"source": "a", "target": "b"}],
+    }
+    events = []
+    render_calls = 0
+
+    async def send(event):
+        events.append(event)
+
+    async def render(_graph):
+        nonlocal render_calls
+        render_calls += 1
+        return _interactive_render_with_presentation_warnings()
+
+    state = {
+        "graph_data": graph,
+        "graph_changed": True,
+        "send": send,
+        "await_diagram_evaluation": render,
+    }
+    interactive = await graph_render_gate_node(state, interactive_presentation=True)
+
+    assert render_calls == 1
+    assert interactive["graph_render_admitted"] is True
+    assert len(interactive["diagram_evaluation"]["advisories"]) == 4
+    assert interactive["diagram_evaluation"]["result"]["report"]["clipped_edges"] == 1
+    assert events[-1] == {"type": "graph_preview", "data": graph}
+
+    prior_event_count = len(events)
+    legacy = await graph_render_gate_node(state)
+    assert render_calls == 2
+    assert legacy["graph_render_admitted"] is False
+    assert len(legacy["graph_review"]["missing"]) == 4
+    assert not any(
+        event["type"] == "graph_preview" for event in events[prior_event_count:]
+    )
+
+
+@pytest.mark.asyncio
+async def test_interactive_render_gate_rejects_hard_failure_with_advisories():
+    graph = {
+        "design_origin": "applied",
+        "nodes": [{"id": "a"}, {"id": "b"}],
+        "edges": [{"source": "a", "target": "b"}],
+    }
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    async def render(_graph):
+        result = _interactive_render_with_presentation_warnings()
+        result["report"]["clipped_nodes"] = 1
+        return result
+
+    result = await graph_render_gate_node(
+        {
+            "graph_data": graph,
+            "graph_changed": True,
+            "send": send,
+            "await_diagram_evaluation": render,
+        },
+        interactive_presentation=True,
+    )
+
+    assert result["graph_render_admitted"] is False
+    assert result["graph_review"]["missing"] == [
+        "Fit every node fully inside the initial viewport."
+    ]
+    assert len(result["graph_review"]["advisories"]) == 4
+    assert not any(event["type"] == "graph_preview" for event in events)
+
+
+@pytest.mark.asyncio
 async def test_render_gate_bounds_preview_transport_by_absolute_deadline():
     graph = _domain_graph()
     graph["design_origin"] = "applied"
@@ -5264,6 +5341,83 @@ def test_render_gate_rejects_missing_overview_and_group_labels_or_overlapping_zo
     assert any("overview-required edge label" in item for item in review["missing"])
     assert any("group label on every node" in item for item in review["missing"])
     assert any("responsibility-zone boundaries" in item for item in review["missing"])
+    assert "advisories" not in review
+
+
+def _interactive_render_with_presentation_warnings():
+    return {
+        "screenshot_base64": "valid-bounded-image",
+        "report": {
+            "rendered_nodes": 2,
+            "rendered_edges": 1,
+            "overlap_count": 0,
+            "clipped_nodes": 0,
+            "clipped_edges": 1,
+            "minimum_text_px": 11,
+            "overview_required_edge_labels": 1,
+            "visible_overview_required_edge_labels": 0,
+            "grouped_nodes": 2,
+            "group_labelled_nodes": 1,
+            "visible_group_boundaries": 2,
+            "group_boundary_overlap_count": 1,
+        },
+    }
+
+
+def test_interactive_render_admits_only_presentation_warnings():
+    graph = {
+        "nodes": [{"id": "a"}, {"id": "b"}],
+        "edges": [{"source": "a", "target": "b"}],
+    }
+    result = _interactive_render_with_presentation_warnings()
+
+    legacy = _deterministic_render_review(graph, result)
+    interactive = _deterministic_render_review(
+        graph, result, interactive_presentation=True
+    )
+
+    assert legacy["approved"] is False
+    assert len(legacy["missing"]) == 4
+    assert "advisories" not in legacy
+    assert interactive["approved"] is True
+    assert interactive["terminal"] is False
+    assert interactive["missing"] == []
+    assert interactive["advisories"] == legacy["missing"]
+    assert "failure_code" not in interactive
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "finding"),
+    [
+        ("screenshot_base64", "", "actual candidate"),
+        ("rendered_nodes", 1, "every architecture node"),
+        ("rendered_edges", 0, "every declared edge"),
+        ("overlap_count", 1, "overlapping node cards"),
+        ("clipped_nodes", 1, "every node fully"),
+        ("minimum_text_px", 10, "readable size"),
+    ],
+)
+def test_interactive_render_preserves_each_hard_failure_with_warnings(
+    field, value, finding
+):
+    graph = {
+        "nodes": [{"id": "a"}, {"id": "b"}],
+        "edges": [{"source": "a", "target": "b"}],
+    }
+    result = _interactive_render_with_presentation_warnings()
+    if field == "screenshot_base64":
+        result[field] = value
+    else:
+        result["report"][field] = value
+
+    review = _deterministic_render_review(graph, result, interactive_presentation=True)
+
+    assert review["approved"] is False
+    assert review["terminal"] is True
+    assert review["failure_code"] == "diagram_evaluation_layout_rejected"
+    assert len(review["missing"]) == 1
+    assert finding in review["missing"][0]
+    assert len(review["advisories"]) == 4
 
 
 def test_render_gate_accepts_legacy_reports_without_new_visual_metrics():

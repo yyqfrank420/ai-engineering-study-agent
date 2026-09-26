@@ -6,7 +6,9 @@ import pytest
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode, expected", [("on", "create"), ("off", None)])
-async def test_composer_diagram_choice_reaches_workflow_admission(monkeypatch, mode, expected):
+async def test_composer_diagram_choice_reaches_workflow_admission(
+    monkeypatch, mode, expected
+):
     from agent import graph as agent_graph
 
     class CaptureWorkflow:
@@ -15,11 +17,20 @@ async def test_composer_diagram_choice_reaches_workflow_admission(monkeypatch, m
             assert state["graph_intent"] == expected
             return state
 
-    monkeypatch.setattr(agent_graph, "build_agent_workflow", lambda *args, **kwargs: CaptureWorkflow())
-    await agent_graph.run_agent({
-        "user_message": "AI trading bot?", "graph_mode": mode,
-        "diagram_requested": True, "graph_data": None,
-    }, [], [], [])
+    monkeypatch.setattr(
+        agent_graph, "build_agent_workflow", lambda *args, **kwargs: CaptureWorkflow()
+    )
+    await agent_graph.run_agent(
+        {
+            "user_message": "AI trading bot?",
+            "graph_mode": mode,
+            "diagram_requested": True,
+            "graph_data": None,
+        },
+        [],
+        [],
+        [],
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -2339,7 +2350,9 @@ async def test_run_agent_preserves_edit_request_without_applied_graph(
     async def fake_expand(incoming_state, _graph_tools, _search_tool_wait_task):
         return incoming_state
 
-    monkeypatch.setattr(agent_graph, "resolve_graph_operation", lambda *_args, **_kwargs: "edit")
+    monkeypatch.setattr(
+        agent_graph, "resolve_graph_operation", lambda *_args, **_kwargs: "edit"
+    )
     monkeypatch.setattr(agent_graph, "orchestrator_route", fake_route)
     monkeypatch.setattr(agent_graph, "run_search_phase", fake_search)
     monkeypatch.setattr(agent_graph, "apply_graph_worker", fake_apply_graph)
@@ -2568,7 +2581,9 @@ async def _run_invalid_patch_contract_correction_workflow(
     async def fake_synth(state):
         return {**state, "response_text": "reviewed answer"}
 
-    monkeypatch.setattr(agent_graph, "resolve_graph_operation", lambda *_args, **_kwargs: "create")
+    monkeypatch.setattr(
+        agent_graph, "resolve_graph_operation", lambda *_args, **_kwargs: "create"
+    )
     monkeypatch.setattr(agent_graph, "orchestrator_route", fake_route)
     monkeypatch.setattr(agent_graph, "run_search_phase", fake_search)
     monkeypatch.setattr(agent_graph, "apply_graph_worker", fake_apply)
@@ -2582,7 +2597,9 @@ async def _run_invalid_patch_contract_correction_workflow(
     monkeypatch.setattr(graph_critic, "_request_critic_scorecard", fake_request_critic)
     monkeypatch.setattr(graph_critic, "_completed_critic_review", fake_completed_review)
     monkeypatch.setattr(
-        graph_critic, "_deterministic_render_review", lambda *_args: {"approved": True}
+        graph_critic,
+        "_deterministic_render_review",
+        lambda *_args, **_kwargs: {"approved": True},
     )
     monkeypatch.setattr(
         graph_critic, "_validate_review_protocol", lambda *_args, **_kwargs: None
@@ -3009,13 +3026,70 @@ async def test_staged_terminal_response_survives_exhausted_synthesis_time(
     monkeypatch.setattr(orchestrator, "stream_llm", unexpected)
     result = await agent_graph.run_agent(_state(send), [], [], [])
     expected = (
-        "The requested new diagram was not approved. No new diagram was published."
+        "I couldn't create the diagram this time."
         if status == "failed"
         else "Which operations should the agent handle?"
     )
     assert result["response_text"] == expected
     assert result["graph_data"] is None
     assert any(event.get("content") == expected for event in events)
+
+
+@pytest.mark.parametrize("detail_level", ["standard", "overview"])
+@pytest.mark.parametrize("has_nodes", [True, False])
+@pytest.mark.asyncio
+async def test_accepted_diagram_survives_explanation_failure(
+    monkeypatch, detail_level, has_nodes
+):
+    from agent import graph as agent_graph
+    from config import settings
+
+    monkeypatch.setattr(settings, "graph_pipeline_mode", "staged")
+    events = []
+    graph = {
+        "graph_type": "architecture",
+        "design_origin": "applied",
+        "version": "accepted-v1",
+        "title": "Support system",
+        "detail_level": detail_level,
+        "nodes": [{"id": "client", "label": "Support client"}] if has_nodes else [],
+        "edges": [],
+        "sequence": [],
+    }
+
+    async def send(event):
+        events.append(event)
+
+    async def search(state, _tools):
+        return state, None
+
+    async def staged(state):
+        return {
+            **state,
+            "graph_data": graph,
+            "graph_changed": True,
+            "graph_publication": "approved",
+            "graph_operation": {"kind": "create", "status": "applied"},
+        }
+
+    async def failed_explanation(_state):
+        raise TimeoutError("explanation unavailable")
+
+    monkeypatch.setattr(agent_graph, "run_search_phase", search)
+    monkeypatch.setattr(agent_graph, "run_staged_graph_pipeline", staged)
+    monkeypatch.setattr(agent_graph, "orchestrator_synthesise", failed_explanation)
+    result = await agent_graph.run_agent(_state(send), [], [], [])
+
+    assert result["graph_data"] == graph
+    assert result["graph_publication"] == "approved"
+    assert "gates" not in result["response_text"]
+    expected = (
+        "Your overview is ready"
+        if detail_level == "overview"
+        else "Your diagram is ready"
+    )
+    assert expected in result["response_text"]
+    assert any(event.get("block_id") == "approved_architecture" for event in events)
 
 
 @pytest.mark.parametrize("continue_design", [True, False])
@@ -3204,7 +3278,9 @@ async def test_top_level_dispatch_preserves_contract_ownership(
         return {**state, "response_text": "Result"}
 
     monkeypatch.setattr(settings, "graph_pipeline_mode", mode)
-    monkeypatch.setattr(agent_graph, "resolve_graph_operation", lambda *_args, **_kwargs: intent)
+    monkeypatch.setattr(
+        agent_graph, "resolve_graph_operation", lambda *_args, **_kwargs: intent
+    )
     monkeypatch.setattr(agent_graph, "orchestrator_route", route)
     monkeypatch.setattr(agent_graph, "run_search_phase", search)
     monkeypatch.setattr(agent_graph, "maybe_expand_with_search_tool", expand)

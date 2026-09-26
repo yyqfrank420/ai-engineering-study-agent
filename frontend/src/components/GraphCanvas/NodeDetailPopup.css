@@ -1,10 +1,15 @@
+.graph-canvas__surface {
+  container: graph-canvas / inline-size;
+}
+
 .node-inspector {
   position: absolute;
-  top: 12px;
+  top: 68px;
   right: 12px;
   z-index: 20;
   width: min(340px, calc(100% - 24px));
-  max-height: calc(100% - 24px);
+  box-sizing: border-box;
+  max-height: calc(100% - 80px);
   overflow-y: auto;
   border: 1px solid #38445e;
   border-top-width: 3px;
@@ -14,6 +19,17 @@
   color: #dce4f0;
   font-size: 12px;
   line-height: 1.5;
+}
+
+@container graph-canvas (max-width: 559px) {
+  .node-inspector {
+    top: auto;
+    bottom: 12px;
+    left: 12px;
+    right: 12px;
+    width: calc(100% - 24px);
+    max-height: 50%;
+  }
 }
 
 .node-inspector__header {

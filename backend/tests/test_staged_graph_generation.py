@@ -518,7 +518,7 @@ async def test_connection_prompt_carries_authoritative_accepted_context(
     prompt = calls[0]["messages"][0]["content"]
     prompt_input = json.loads(prompt.split("\nINPUT\n", 1)[1])
     assert (
-        calls[0]["telemetry"]["metadata"]["prompt_version"] == "staged_connections_v21"
+        calls[0]["telemetry"]["metadata"]["prompt_version"] == "staged_connections_v25"
     )
     assert prompt_input["accepted_context"] == _accepted_context()
     assert "streaming_integrity" not in prompt_input["acceptance_criteria"]
@@ -528,14 +528,44 @@ async def test_connection_prompt_carries_authoritative_accepted_context(
         }
         assert "applicable design guidance, not blocking acceptance criteria" in prompt
         assert "check each effect owner separately" in prompt
+        assert (
+            "trace the exact approved action payload and stable operation identity"
+            in prompt
+        )
+        assert "authorization verdict or incidental reachability alone" in prompt
+        assert "declared metric pull with reply is a valid normal input" in prompt
+        assert "do not add a redundant push or timer" in prompt
         assert "compensation proposal from its producer" in prompt
-        assert "A broad downstream response does not establish upstream submission" in prompt
+        assert (
+            "A broad downstream response does not establish upstream submission"
+            in prompt
+        )
+        assert "Each declared compensation producer needs an initiating" in prompt
+        assert "check each behavior's initiation separately" in prompt
+        assert "its normal input does not initiate rollback" in prompt
+        assert "original or applied operation reference or recovery input" in prompt
+        assert "Combined contracts may cover both behaviors" in prompt
+        assert "explicit autonomous action needs no synthetic incoming edge" in prompt
+        assert "When human review or human approval is requested or declared" in prompt
+        assert (
+            "the exact compensation proposal reaches that human decision boundary "
+            "before approval"
+        ) in prompt
+        assert (
+            "the outcome owner invokes it with stable identity and controls" in prompt
+        )
+        assert "a reply naming retry alone does not invoke it" in prompt
+        assert (
+            "Keep same-owner actions internal and autonomous pollers autonomous"
+            in prompt
+        )
         assert "curated hostile traces and offline evaluation before release" in prompt
         assert "each serving target's canary, distinct promotion and rollback" in prompt
         assert "do not invent extra components or capabilities" in prompt
     else:
         assert "authoring_guidance" not in prompt_input
         assert "check each effect owner separately" not in prompt
+        assert "Each declared compensation producer needs an initiating" not in prompt
     assert prompt_input["accepted_components"] == [
         {
             "index": 0,
@@ -700,7 +730,7 @@ async def test_component_generation_uses_configured_model_low_one_attempt_and_sa
     assert calls[0]["timeout_seconds"] == timeout_seconds
     assert calls[0]["telemetry"]["metadata"]["allocated_timeout_s"] == timeout_seconds
     assert (
-        calls[0]["telemetry"]["metadata"]["prompt_version"] == "staged_components_v24"
+        calls[0]["telemetry"]["metadata"]["prompt_version"] == "staged_components_v28"
     )
     assert "request" not in calls[0]["telemetry"]["metadata"]
 
@@ -1251,6 +1281,7 @@ async def test_connection_delta_matches_original_selector_after_incident_edge_re
         {**base[0], "label": "dispatch", "sync": 501},
         addition,
     ]
+    assert "connection_exchanges" not in result
     assert "Propose canonical edges in the delta" in calls[0]["prompt"]
     assert "Propose exchanges only" not in calls[0]["prompt"]
     assert set(
@@ -2470,6 +2501,406 @@ def test_semantic_correction_rejects_authority_expansion(mutation):
         delta.assemble(json.dumps(response))
 
 
+def _recovery_components():
+    original = _component_wire()
+    original["components"] = [
+        {**original["components"][0], "label": f"Owner {index}"} for index in range(3)
+    ]
+    original["root_index"] = 2
+    return original
+
+
+def _recovery_delta(stage, original, indexes, *, component_limit=4, edge_limit=4):
+    write_set = generation.create_write_set(
+        component_limit=component_limit, edge_limit=edge_limit
+    )
+    return generation._semantic_correction_delta(
+        stage=stage,
+        maturity="prototype",
+        write_set=write_set,
+        attempt=1,
+        rejected_candidate=original,
+        findings=[
+            {
+                "code": "mece_scope" if stage == "components" else "edge_semantics",
+                "path": stage,
+                "rule": "semantic_gate",
+                "record_indexes": indexes,
+            }
+        ],
+        schema=(
+            generation.component_generation_schema(write_set)
+            if stage == "components"
+            else generation.connection_generation_schema(write_set)
+        ),
+        accepted_components=(
+            _accepted_components() if stage == "connections" else None
+        ),
+        accepted_context=(
+            generation._accepted_context(_accepted_context())
+            if stage == "connections"
+            else None
+        ),
+        recovery_mode=True,
+    )
+
+
+def test_recovery_component_removal_reindexes_root_and_preserves_uncited_records():
+    original = _recovery_components()
+    delta = _recovery_delta("components", original, [0])
+    response = {
+        "additions": [],
+        "updates": {"slot_0": None},
+        "capabilities": original["capabilities"],
+        "removals": [0],
+    }
+    assembled = generation._parse_component_wire(
+        json.dumps(delta.assemble(json.dumps(response))), component_limit=4
+    )
+    assert assembled["components"] == original["components"][1:]
+    assert assembled["root_index"] == 1
+    assert assembled["title"] == original["title"]
+    assert assembled["assumptions"] == original["assumptions"]
+    assert delta.schema["properties"]["removals"]["items"]["enum"] == [0]
+
+
+@pytest.mark.asyncio
+async def test_component_recovery_uses_one_provider_call_and_keeps_output_limit(
+    monkeypatch,
+):
+    original = _recovery_components()
+    write_set = generation.create_write_set(component_limit=3, edge_limit=4)
+    calls = []
+
+    async def fake_stream(**kwargs):
+        calls.append(kwargs)
+        return _response(
+            {
+                "candidate": {
+                    "additions": [],
+                    "updates": {"slot_0": None},
+                    "capabilities": original["capabilities"],
+                    "removals": [0],
+                },
+                "clarification_questions": [],
+            }
+        )
+
+    monkeypatch.setattr(generation, "stream_structured_llm", fake_stream)
+    result = await generation.generate_component_candidate(
+        request="Draw the accepted request path.",
+        resolved_maturity="prototype",
+        architecture_context=_architecture_context(),
+        write_set=write_set,
+        upstream_fingerprint="a" * 64,
+        attempt=1,
+        prior_prompt_fingerprint="b" * 64,
+        prior_write_set_fingerprint=generation._fingerprint(write_set),
+        gate_findings=[
+            {
+                "code": "mece_scope",
+                "path": "components",
+                "rule": "semantic_gate",
+                "record_indexes": [0],
+            }
+        ],
+        rejected_candidate=original,
+        recovery_mode=True,
+        max_output_tokens=777,
+    )
+    assert result["wire"]["components"] == original["components"][1:]
+    assert result["wire"]["root_index"] == 1
+    assert len(calls) == 1
+    assert calls[0]["provider_attempt_limit"] == 1
+    assert calls[0]["max_output_tokens"] == 777
+    assert calls[0]["telemetry"]["metadata"]["correction_attempt"] == 1
+    assert calls[0]["telemetry"]["metadata"]["schema_version"] == (
+        "staged_components_recovery_response_v1"
+    )
+
+
+def test_recovery_addition_without_removal_cannot_exceed_original_limit():
+    original = _recovery_components()
+    delta = _recovery_delta("components", original, [0], component_limit=3)
+    response = {
+        "additions": [{**original["components"][0], "label": "Fourth owner"}],
+        "updates": {"slot_0": None},
+        "capabilities": original["capabilities"],
+        "removals": [],
+    }
+    with pytest.raises(
+        generation.StagedGenerationError, match="component_wire_invalid"
+    ):
+        generation._parse_component_wire(
+            json.dumps(delta.assemble(json.dumps(response))), component_limit=3
+        )
+
+
+def test_recovery_component_root_selection_uses_original_or_addition_indexes():
+    original = _recovery_components()
+    delta = _recovery_delta("components", original, [0, 2])
+    response = {
+        "additions": [],
+        "updates": {"slot_0": None, "slot_2": None},
+        "capabilities": original["capabilities"],
+        "removals": [0, 2],
+        "root_index": 1,
+        "root_addition_index": None,
+    }
+    assembled = generation._parse_component_wire(
+        json.dumps(delta.assemble(json.dumps(response))), component_limit=4
+    )
+    assert assembled["components"] == [original["components"][1]]
+    assert assembled["root_index"] == 0
+    response["root_index"] = None
+    response["root_addition_index"] = 0
+    response["additions"] = [
+        {**original["components"][0], "label": "Replacement owner"}
+    ]
+    assembled = generation._parse_component_wire(
+        json.dumps(delta.assemble(json.dumps(response))), component_limit=4
+    )
+    assert assembled["root_index"] == 1
+    assert assembled["components"] == [
+        original["components"][1],
+        response["additions"][0],
+    ]
+
+
+@pytest.mark.parametrize(
+    "removals,update,error",
+    [
+        ([0, 0], None, "recovery_removals_invalid"),
+        ([1], None, "recovery_removals_invalid"),
+        ([True], None, "recovery_removals_invalid"),
+        ([0], "changed", "recovery_removal_update_conflict"),
+    ],
+)
+def test_recovery_rejects_invalid_removals(removals, update, error):
+    original = _recovery_components()
+    delta = _recovery_delta("components", original, [0])
+    response = {
+        "additions": [],
+        "updates": {
+            "slot_0": (
+                {**original["components"][0], "label": update}
+                if update is not None
+                else None
+            )
+        },
+        "capabilities": original["capabilities"],
+        "removals": removals,
+    }
+    with pytest.raises(generation.StagedGenerationError, match=error):
+        delta.assemble(json.dumps(response))
+
+
+@pytest.mark.parametrize(
+    "root_index,root_addition_index",
+    [(None, None), (2, None), (1, 0), (None, 1), (True, None)],
+)
+def test_recovery_rejects_invalid_root_selection(root_index, root_addition_index):
+    original = _recovery_components()
+    delta = _recovery_delta("components", original, [2])
+    response = {
+        "additions": [{**original["components"][2], "label": "New owner"}],
+        "updates": {"slot_2": None},
+        "capabilities": original["capabilities"],
+        "removals": [2],
+        "root_index": root_index,
+        "root_addition_index": root_addition_index,
+    }
+    with pytest.raises(generation.StagedGenerationError, match="recovery_root_invalid"):
+        delta.assemble(json.dumps(response))
+
+
+def test_recovery_global_finding_allows_updates_but_no_deletion():
+    original = _recovery_components()
+    delta = _recovery_delta("components", original, [])
+    assert set(delta.schema["properties"]["updates"]["properties"]) == {
+        "slot_0",
+        "slot_1",
+        "slot_2",
+    }
+    assert delta.schema["properties"]["removals"]["maxItems"] == 0
+    response = {
+        "additions": [],
+        "updates": {f"slot_{index}": None for index in range(3)},
+        "title": original["title"],
+        "assumptions": original["assumptions"],
+        "capabilities": original["capabilities"],
+        "root_index": None,
+        "root_addition_index": None,
+        "removals": [1],
+    }
+    with pytest.raises(
+        generation.StagedGenerationError, match="recovery_removals_invalid"
+    ):
+        delta.assemble(json.dumps(response))
+
+
+def test_recovery_mixed_global_and_local_findings_allow_only_local_deletion():
+    original = _recovery_components()
+    write_set = _write_set()
+    delta = generation._semantic_correction_delta(
+        stage="components",
+        maturity="prototype",
+        write_set=write_set,
+        attempt=1,
+        rejected_candidate=original,
+        findings=[
+            {
+                "code": "mece_scope",
+                "path": "components",
+                "rule": "semantic_gate",
+                "record_indexes": [],
+            },
+            {
+                "code": "mece_scope",
+                "path": "components",
+                "rule": "semantic_gate",
+                "record_indexes": [1],
+            },
+        ],
+        schema=generation.component_generation_schema(write_set),
+        recovery_mode=True,
+    )
+    assert set(delta.schema["properties"]["updates"]["properties"]) == {
+        "slot_0",
+        "slot_1",
+        "slot_2",
+    }
+    assert delta.schema["properties"]["removals"]["items"]["enum"] == [1]
+    assert delta.removal_allowlist == (1,)
+
+
+@pytest.mark.asyncio
+async def test_connection_recovery_removes_only_cited_edge_and_keeps_components(
+    monkeypatch,
+):
+    first = _connection_wire()["edges"][0]
+    second = {**first, "source_index": 1, "target_index": 0, "label": "response"}
+    original = {"edges": [first, second]}
+    write_set = _write_set()
+    finding = {
+        "code": "edge_semantics",
+        "path": "connections",
+        "rule": "semantic_gate",
+        "record_indexes": [0],
+    }
+    calls = []
+
+    async def generate(**kwargs):
+        calls.append(kwargs)
+        return json.dumps(
+            {"additions": [], "updates": {"slot_0": None}, "removals": [0]}
+        )
+
+    monkeypatch.setattr(generation, "_run_generation", generate)
+    accepted = _accepted_components()
+    result = await generation.generate_connection_candidate(
+        request="Preserve the response path.",
+        resolved_maturity="prototype",
+        write_set=write_set,
+        upstream_fingerprint="a" * 64,
+        accepted_components=accepted,
+        accepted_context=_accepted_context(),
+        attempt=1,
+        prior_prompt_fingerprint="b" * 64,
+        prior_write_set_fingerprint=generation._fingerprint(write_set),
+        gate_findings=[finding],
+        rejected_candidate=original,
+        recovery_mode=True,
+    )
+    assert result["wire"] == {"edges": [second]}
+    assert "connection_exchanges" not in result
+    assert accepted == _accepted_components()
+    assert calls[0]["schema"]["properties"]["removals"]["items"]["enum"] == [0]
+    assert generation._generation_schema_version("connections", calls[0]["schema"]) == (
+        "staged_connections_recovery_delta_v1"
+    )
+    assert calls[0]["attempt"] == 1
+    prompt = calls[0]["prompt"]
+    prompt_input = json.loads(prompt.split("\nINPUT\n", 1)[1])
+    assert prompt_input["recovery_mode"] is True
+    assert "simplest complete overview of the original request" in prompt
+    assert "Connections cannot change the accepted components" in prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid",
+    ["initial", "edit_write_set", "base", "edit_permissions"],
+)
+async def test_recovery_mode_rejects_noncreation_authority(monkeypatch, invalid):
+    async def generate(**_kwargs):
+        raise AssertionError("provider must not be called")
+
+    monkeypatch.setattr(generation, "_run_generation", generate)
+    kwargs = dict(
+        request="Draw a request path.",
+        resolved_maturity="prototype",
+        architecture_context=_architecture_context(),
+        write_set=_write_set(),
+        upstream_fingerprint="a" * 64,
+        attempt=1,
+        recovery_mode=True,
+    )
+    if invalid == "initial":
+        kwargs["attempt"] = 0
+    elif invalid == "edit_write_set":
+        kwargs["write_set"] = generation.exact_edit_write_set(
+            component_ids=["n1"], edge_ids=[]
+        )
+    elif invalid == "base":
+        kwargs["base_components"] = _component_wire()
+    else:
+        kwargs["edit_permissions"] = {}
+    with pytest.raises(generation.StagedGenerationError, match="invalid_recovery_mode"):
+        await generation.generate_component_candidate(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_recovery_structural_correction_keeps_complete_candidate_and_call_limit(
+    monkeypatch,
+):
+    calls = []
+
+    async def generate(**kwargs):
+        calls.append(kwargs)
+        return json.dumps(
+            {"candidate": _component_wire(), "clarification_questions": []}
+        )
+
+    monkeypatch.setattr(generation, "_run_generation", generate)
+    write_set = _write_set()
+    result = await generation.generate_component_candidate(
+        request="Draw a request path.",
+        resolved_maturity="prototype",
+        architecture_context=_architecture_context(),
+        write_set=write_set,
+        upstream_fingerprint="a" * 64,
+        attempt=1,
+        prior_prompt_fingerprint="b" * 64,
+        prior_write_set_fingerprint=generation._fingerprint(write_set),
+        structural_findings=[
+            {"code": "component_wire_invalid", "path": "components", "rule": "shape"}
+        ],
+        rejected_candidate=_component_wire(),
+        recovery_mode=True,
+    )
+    assert result["wire"] == _component_wire()
+    assert len(calls) == 1
+    assert calls[0]["attempt"] == 1
+    assert (
+        calls[0]["schema"]["properties"]["candidate"]["anyOf"][0]["properties"].keys()
+        == _component_wire().keys()
+    )
+    prompt_input = json.loads(calls[0]["prompt"].split("\nINPUT\n", 1)[1])
+    assert prompt_input["recovery_mode"] is True
+    assert "correction_slots" not in prompt_input
+
+
 def test_indexless_finding_in_mixed_list_grants_global_updates_without_deletion():
     case = _retained_correction("applied_domain")
     findings = _semantic_findings(case)
@@ -2646,7 +3077,7 @@ def test_create_exchange_expands_explicit_reply_independently_of_timing(
         "response_label": response_label,
     }
     original = dict(exchange)
-    result = generation._parse_connection_response(
+    wire, connection_exchanges = generation._parse_connection_response(
         json.dumps({"exchanges": [exchange]}),
         accepted_components=_accepted_components(),
         edge_limit=2,
@@ -2657,7 +3088,13 @@ def test_create_exchange_expands_explicit_reply_independently_of_timing(
         expected.append(
             {**forward, "source_index": 0, "target_index": 1, "label": response_label}
         )
-    assert result == {"edges": expected}
+    assert wire == {"edges": expected}
+    assert connection_exchanges == [
+        {
+            "request_record_index": 0,
+            "response_record_index": 1 if response_label is not None else None,
+        }
+    ]
     assert exchange == original
 
 
@@ -2665,13 +3102,17 @@ def test_create_exchange_mixed_expansion_preserves_order_and_counts_edges():
     paired = _connection_exchanges()["exchanges"][0]
     one_way = {**paired, "label": "enqueue audit", "sync": 501, "response_label": None}
     text = json.dumps({"exchanges": [paired, one_way]})
-    result = generation._parse_connection_response(
+    wire, connection_exchanges = generation._parse_connection_response(
         text, accepted_components=_accepted_components(), edge_limit=3
     )
-    assert [edge["label"] for edge in result["edges"]] == [
+    assert [edge["label"] for edge in wire["edges"]] == [
         "requests",
         "response",
         "enqueue audit",
+    ]
+    assert connection_exchanges == [
+        {"request_record_index": 0, "response_record_index": 1},
+        {"request_record_index": 2, "response_record_index": None},
     ]
     with pytest.raises(
         generation.StagedGenerationError, match="connection_wire_invalid"
@@ -2679,6 +3120,61 @@ def test_create_exchange_mixed_expansion_preserves_order_and_counts_edges():
         generation._parse_connection_response(
             text, accepted_components=_accepted_components(), edge_limit=2
         )
+
+
+@pytest.mark.asyncio
+async def test_connection_create_returns_pairing_for_each_expanded_exchange(
+    monkeypatch,
+):
+    first = _connection_exchanges()["exchanges"][0]
+    one_way = {
+        **first,
+        "label": "send audit notice",
+        "sync": 501,
+        "response_label": None,
+    }
+    second = {
+        **first,
+        "source_index": 1,
+        "target_index": 0,
+        "label": "read status",
+        "response_label": "status result",
+    }
+
+    async def fake_stream(**_kwargs):
+        return _response({"exchanges": [first, one_way, second]})
+
+    monkeypatch.setattr(generation, "stream_structured_llm", fake_stream)
+    result = await generation.generate_connection_candidate(
+        request="Connect accepted components",
+        resolved_maturity="prototype",
+        write_set=_write_set(),
+        upstream_fingerprint="b" * 64,
+        accepted_components=_accepted_components(),
+        accepted_context=_accepted_context(),
+    )
+
+    assert [edge["label"] for edge in result["wire"]["edges"]] == [
+        "requests",
+        "response",
+        "send audit notice",
+        "read status",
+        "status result",
+    ]
+    assert result["connection_exchanges"] == [
+        {"request_record_index": 0, "response_record_index": 1},
+        {"request_record_index": 2, "response_record_index": None},
+        {"request_record_index": 3, "response_record_index": 4},
+    ]
+    for exchange in result["connection_exchanges"]:
+        request_edge = result["wire"]["edges"][exchange["request_record_index"]]
+        response_index = exchange["response_record_index"]
+        if response_index is not None:
+            response_edge = result["wire"]["edges"][response_index]
+            assert (response_edge["source_index"], response_edge["target_index"]) == (
+                request_edge["target_index"],
+                request_edge["source_index"],
+            )
 
 
 @pytest.mark.parametrize(
@@ -2755,7 +3251,7 @@ def test_create_exchange_empty_graph_uses_canonical_connectivity_policy():
         '{"exchanges": []}',
         accepted_components=_accepted_components(),
         edge_limit=0,
-    ) == {"edges": []}
+    ) == ({"edges": []}, [])
 
 
 @pytest.mark.asyncio
@@ -2804,3 +3300,6 @@ async def test_structural_connection_retry_uses_exchanges_and_returns_canonical_
             },
         ]
     }
+    assert result["connection_exchanges"] == [
+        {"request_record_index": 0, "response_record_index": 1}
+    ]

@@ -128,6 +128,20 @@ function Harness({
 }
 
 describe('useAgentStream', () => {
+  it('publishes an accepted overview when only graph detail level changes', () => {
+    mocks.sendMessage.mockReturnValue(new Promise(() => {}));
+    const { result } = renderHook(() => useAgentStream(session, 'overview-promotion'));
+    act(() => result.current.sendMessage('Draw a system'));
+    const clientRequestId = mocks.sendMessage.mock.calls.at(-1)![4] as string;
+    const emit = (event: ServerEvent) => act(() => mocks.eventHandler?.(event, { kind: 'chat', clientRequestId }));
+
+    emit({ type: 'graph_data', data: graph() });
+    expect(result.current.graphData?.detail_level).toBeUndefined();
+    emit({ type: 'graph_data', data: { ...graph(), detail_level: 'overview' } });
+    expect(result.current.graphData?.detail_level).toBe('overview');
+    expect(result.current.publishedGraphKey).toBe(graphStructureKey(result.current.graphData));
+  });
+
   it('holds the answer through stream completion until the committed graph paints', () => {
     mocks.sendMessage.mockReturnValue(new Promise(() => {}));
     const { result } = renderHook(() => useAgentStream(session, 'ordering'));

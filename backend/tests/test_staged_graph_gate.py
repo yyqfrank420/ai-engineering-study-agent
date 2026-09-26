@@ -161,7 +161,7 @@ def test_component_gate_prompt_includes_capability_metadata_from_evidence(monkey
     }
     assert "capability_classification" in prompt
     assert calls[0]["telemetry"]["metadata"]["prompt_version"] == (
-        "staged_component_gate_v15"
+        "staged_component_gate_v17"
     )
     assert (
         "architecture_context is the same bounded evidence and review frame" in prompt
@@ -224,6 +224,36 @@ def test_invalid_review_timeout_is_rejected_before_provider(
 def test_staged_component_gate_excludes_rules_without_upstream_review():
     assert "independent_risk_coverage" in RUBRIC_CRITERIA
     assert "independent_risk_coverage" not in gate.COMPONENT_RULE_CODES
+
+
+@pytest.mark.parametrize("maturity", ["prototype", "production"])
+def test_component_gate_acceptance_uses_named_subject_scope(maturity):
+    requirements = staged_review_requirements("components", maturity)
+    objective = requirements["objective_fidelity"]
+    assert (
+        "A named educational, research, or comparison subject establishes diagram scope "
+        "without an invented business use case"
+    ) in objective
+    assert (
+        "For an applied system design, establish the user's business domain"
+        in objective
+    )
+    assert "do not ask whether a diagram is wanted" in objective
+    prompt = gate._prompt(
+        gate="components",
+        user_request=(
+            "Research current practical trade-offs between agents and fixed workflows "
+            "for production AI products."
+        ),
+        evidence_bundle={},
+        resolved_maturity=maturity,
+        candidate_records=[],
+        required_production_guarantees=(),
+    )
+    assert objective in prompt
+    assert "objective_fidelity" not in staged_review_requirements(
+        "connections", maturity
+    )
 
 
 def test_unknown_production_guarantee_is_rejected_before_provider_call(monkeypatch):
@@ -322,8 +352,7 @@ def test_initial_generation_and_gate_share_every_applicable_requirement(
         )
     if stage == "components":
         assert (
-            "Depict the requested subject system"
-            in generated_criteria["objective_fidelity"]
+            "Depict the requested subject" in generated_criteria["objective_fidelity"]
         )
         assert (
             "explain, cite or ground the response in sources, or draw its flow"
@@ -338,9 +367,8 @@ def test_initial_generation_and_gate_share_every_applicable_requirement(
             in generated_criteria["brief_coverage"]
         )
         assert (
-            "exclude mechanics used to author this response unless explicitly requested "
-            "as runtime features of the subject system"
-            in generated_criteria["mece_scope"]
+            "Mechanics used to author this response are not runtime features unless "
+            "explicitly requested" in generated_criteria["mece_scope"]
         )
     for code, requirement in generated_criteria.items():
         if (
@@ -367,6 +395,12 @@ def test_initial_generation_and_gate_share_every_applicable_requirement(
             assert "Block a missing required input or answer return" in requirement
             assert "a path that bypasses a required control" in requirement
             assert "duplicate description is advisory unless" in requirement
+        elif stage == "components" and code == "mece_scope":
+            assert "Block conflicting material ownership" in requirement
+            assert "naming preferences are advisory" in requirement
+        elif stage == "connections" and code == "branch_completion":
+            assert "Block a missing required path" in requirement
+            assert "without a separate component or edge" in requirement
         elif code in RUBRIC_CRITERIA:
             assert requirement == RUBRIC_CRITERIA[code][1]
         elif code in TOPOLOGY_PROOF_REQUIREMENTS:
@@ -527,13 +561,233 @@ def test_connection_gate_prompt_scopes_runtime_completeness_to_accepted_context(
     assert result["approved"] is True
     assert (
         calls[0]["telemetry"]["metadata"]["prompt_version"]
-        == "staged_connection_gate_v19"
+        == "staged_connection_gate_v24"
     )
     assert "candidate_context.capabilities" in prompt
     assert "candidate_context.assumptions" in prompt
     assert "candidate component responsibilities" in prompt
     assert "Resolved maturity remains authoritative." in prompt
     assert "a durable telemetry sink is a complete outcome" in prompt
+    assert "An unclassified record has unknown role" in prompt
+    assert "rejecting it for missing pairing metadata" in prompt
+    assert "an actual invocation contract to the retry owner" in prompt
+    assert "autonomous poller or same-owner internal action" in prompt
+    assert "normal input does not initiate rollback" in prompt
+    assert "original or applied operation reference" in prompt
+    assert "Combined contracts can cover both" in prompt
+    assert "when compensation is required or declared" in prompt
+    assert "a satisfied reason must identify both initiation witnesses" in prompt
+    assert "An unsatisfied reason must identify each missing" in prompt
+    assert "declared metric pull with reply is a valid normal input" in prompt
+    assert "do not demand a redundant push or timer" in prompt
+    assert "stable operation identity from canonical proposal" not in prompt
+
+
+@pytest.mark.parametrize(
+    ("maturity", "guarantees", "external_effects", "requires_identity"),
+    [
+        ("prototype", (), True, False),
+        ("production", (), False, False),
+        ("production", ("authorization_and_compensation",), True, True),
+    ],
+)
+def test_executor_identity_proof_applies_only_to_selected_production_guarantee(
+    maturity, guarantees, external_effects, requires_identity
+):
+    prompt = gate._prompt(
+        gate="connections",
+        user_request="Design a service that writes approved ad changes.",
+        evidence_bundle={
+            "candidate_context": {
+                "capabilities": {"external_effects": external_effects}
+            }
+        },
+        resolved_maturity=maturity,
+        candidate_records=[],
+        required_production_guarantees=guarantees,
+    )
+    criteria = json.loads(prompt.split("Acceptance criteria: ", 1)[1].split("\n", 1)[0])
+
+    assert (
+        "For each required action, check its actual trigger or change input" in prompt
+    )
+    assert "declared metric pull with reply is a valid normal input" in prompt
+    if requires_identity:
+        assert "authorization_and_compensation" in criteria
+        assert "exact approved action payload and stable operation identity" in prompt
+        assert "An authorization verdict or incidental reachability alone" in prompt
+        assert (
+            "an unsatisfied reason must name the missing payload or identity" in prompt
+        )
+    else:
+        assert "authorization_and_compensation" not in criteria
+        assert "stable operation identity from canonical proposal" not in prompt
+        assert "both effect-input witnesses per executor" not in prompt
+    if maturity == "prototype":
+        assert (
+            "appropriate authorization before the action"
+            in criteria["safe_action_boundary"]
+        )
+        assert "visible failure or denial handling" in criteria["safe_action_boundary"]
+
+
+def test_connection_gate_receives_request_scoped_exchange_evidence(monkeypatch):
+    calls = _stub_response(monkeypatch, {"approved": True, "findings": []})
+    pairs = [{"request_record_index": 0, "response_record_index": 1}]
+    records = [
+        {"source": "caller", "target": "worker", "label": "requests work"},
+        {"source": "worker", "target": "caller", "label": "returns outcome"},
+    ]
+
+    result = asyncio.run(
+        gate.review_connections(
+            user_request="Design a retryable workflow.",
+            evidence_bundle={"connection_exchanges": pairs},
+            resolved_maturity="prototype",
+            candidate_records=records,
+        )
+    )
+
+    prompt = calls[0]["messages"][0]["content"]
+    evidence = json.loads(prompt.split("Evidence bundle: ", 1)[1].split("\n", 1)[0])
+    assert result["approved"] is True
+    assert len(calls) == 1
+    assert evidence["connection_exchanges"] == pairs
+    assert "A paired reply or incidental reachability cannot invoke" in prompt
+    assert "proposal producer's exact-action presentation" in prompt
+    assert "When human review or human approval is requested or declared" in prompt
+    assert "human review surface or declared human decision boundary" in prompt
+    assert "via a direct or delegated contract" in prompt
+    assert "forward contract (which may be a request, event, or write)" in prompt
+    assert "response_record_index is its explicit paired reply" in prompt
+    assert "Pairing does not prove the forward contract's semantic role" in prompt
+
+
+@pytest.mark.parametrize("maturity", ["prototype", "production"])
+def test_compensation_human_review_prompt_is_conditional(maturity):
+    prompt = gate._prompt(
+        gate="connections",
+        user_request="Design an autonomous guarded rollback without human approval.",
+        evidence_bundle={"candidate_components": [], "candidate_context": {}},
+        resolved_maturity=maturity,
+        candidate_records=[],
+        required_production_guarantees=(
+            ("authorization_and_compensation",) if maturity == "production" else ()
+        ),
+    )
+    criteria = json.loads(prompt.split("Acceptance criteria: ", 1)[1].split("\n", 1)[0])
+
+    assert (
+        "When human review or human approval is requested or declared for compensation"
+    ) in prompt
+    assert "In that case, a returned approval verdict alone" in prompt
+    if maturity == "prototype":
+        assert "authorization_and_compensation" not in criteria
+        assert (
+            "a separate approval stage is not required unless explicitly requested"
+            in criteria["safe_action_boundary"]
+        )
+    else:
+        assert "authorization_and_compensation" in criteria
+
+
+@pytest.mark.parametrize("stage", ["components", "connections"])
+def test_overview_prompt_preserves_maturity_objective_and_required_controls(stage):
+    guarantees = tuple(TOPOLOGY_PROOF_REQUIREMENTS) if stage == "connections" else ()
+    prompt = gate._prompt(
+        gate=stage,
+        user_request="Design a production payment service with exact-action approval.",
+        evidence_bundle={"candidate_context": {"detail_level": "overview"}},
+        resolved_maturity="production",
+        candidate_records=[],
+        required_production_guarantees=guarantees,
+    )
+    requirements = json.loads(
+        prompt.split("Acceptance criteria: ", 1)[1].split("\n", 1)[0]
+    )
+
+    assert "The candidate requests an overview." in prompt
+    assert "Presentation simplification may omit optional detail only." in prompt
+    assert "does not change the resolved maturity, objective" in prompt
+    assert "requested behavior, required directed interactions" in prompt
+    assert "detail_level is presentation context, not evidence" in prompt
+    assert "Resolved maturity: production" in prompt
+    assert requirements == staged_review_requirements(stage, "production", guarantees)
+    if stage == "components":
+        assert {"objective_fidelity", "brief_coverage", "mece_scope"} <= set(
+            requirements
+        )
+    else:
+        assert {
+            "runtime_completeness",
+            "edge_semantics",
+            "safe_action_boundary",
+            "branch_completion",
+            *guarantees,
+        } <= set(requirements)
+
+
+@pytest.mark.parametrize(
+    "evidence_bundle",
+    [
+        {},
+        {"detail_level": "overview"},
+        {"candidate_context": {"detail_level": "detailed"}},
+        {"candidate_context": "overview"},
+    ],
+)
+def test_overview_guidance_requires_exact_candidate_context(evidence_bundle):
+    prompt = gate._prompt(
+        gate="components",
+        user_request="Design the service.",
+        evidence_bundle=evidence_bundle,
+        resolved_maturity="prototype",
+        candidate_records=[],
+        required_production_guarantees=(),
+    )
+
+    assert "The candidate requests an overview." not in prompt
+    assert "brief_coverage" in prompt
+
+
+@pytest.mark.parametrize(
+    ("stage", "rule"),
+    [
+        ("components", "brief_coverage"),
+        ("components", "mece_scope"),
+        ("connections", "branch_completion"),
+        ("connections", "safe_action_boundary"),
+        ("connections", "authorization_and_compensation"),
+    ],
+)
+def test_overview_metadata_cannot_approve_an_unsatisfied_rule(monkeypatch, stage, rule):
+    finding = {
+        "rule_code": rule,
+        "reason": "The required path or responsibility is missing.",
+        "record_indexes": [0],
+    }
+    _stub_response(monkeypatch, {"approved": True, "findings": [finding]})
+    review = (
+        gate.review_components if stage == "components" else gate.review_connections
+    )
+    result = asyncio.run(
+        review(
+            user_request="Design a production payment service.",
+            evidence_bundle={"candidate_context": {"detail_level": "overview"}},
+            resolved_maturity="production",
+            candidate_records=[{"label": "Payment service"}],
+            **(
+                {"required_production_guarantees": tuple(TOPOLOGY_PROOF_REQUIREMENTS)}
+                if stage == "connections"
+                else {}
+            ),
+        )
+    )
+
+    assert result["approved"] is False
+    assert result["terminal"] is False
+    assert result["findings"] == [finding]
+    assert rule in result["checked_rules"]
 
 
 def test_runtime_completeness_allows_observation_only_telemetry_outcome():
@@ -669,10 +923,6 @@ def test_review_identity_invalidates_changed_review_policy(monkeypatch, stage, c
             "brief_coverage",
             "Give every requested responsibility a component owner.",
         ),
-        (
-            "mece_scope",
-            "Give each material responsibility one clear owner, remove needless duplicates, and exclude diagram-authoring mechanics from the designed runtime.",
-        ),
     ],
 )
 def test_subject_runtime_policy_invalidates_previous_component_review_identity(
@@ -681,6 +931,24 @@ def test_subject_runtime_policy_invalidates_previous_component_review_identity(
     current_identity = gate.review_identity("components", maturity)
 
     monkeypatch.setitem(RUBRIC_CRITERIA, rule, ("components", previous_requirement))
+
+    assert gate.review_identity("components", maturity) != current_identity
+
+
+@pytest.mark.parametrize("maturity", ["prototype", "production"])
+def test_staged_mece_policy_invalidates_previous_component_review_identity(
+    monkeypatch, maturity
+):
+    current_identity = gate.review_identity("components", maturity)
+    current_requirements = gate.staged_review_requirements
+
+    def previous_requirements(stage, depth, guarantees=()):
+        requirements = current_requirements(stage, depth, guarantees)
+        if stage == "components":
+            requirements["mece_scope"] = RUBRIC_CRITERIA["mece_scope"][1]
+        return requirements
+
+    monkeypatch.setattr(gate, "staged_review_requirements", previous_requirements)
 
     assert gate.review_identity("components", maturity) != current_identity
 

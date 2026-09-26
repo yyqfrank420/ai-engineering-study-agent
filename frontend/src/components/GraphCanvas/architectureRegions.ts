@@ -11,7 +11,8 @@ const REGION_LABELS: Record<RegionRole, string> = {
 };
 
 function nodeRole(node: GraphNode): RegionRole {
-  if (/\b(audit log|logs?|logging|monitoring|telemetry|metrics)\b/i.test(node.label)) return 'support';
+  if (/\b(audit log|logs?|logging|monitoring|telemetry)\b/i.test(node.label)) return 'support';
+  if (node.lane === 'bottom' && /\bmetrics\b/i.test(node.label)) return 'support';
   if (node.type === 'client') return 'client';
   if (node.type === 'datastore') return 'datastore';
   if (node.type === 'external') return 'external';
@@ -46,6 +47,7 @@ export function architectureRegions(nodes: GraphNode[], groups: GraphGroup[]): G
 
 export function regionRole(nodes: GraphNode[]): RegionRole {
   const roles = nodes.map(nodeRole);
+  if (roles.includes('client') && roles.every(role => role === 'client' || role === 'service')) return 'client';
   if (roles.every(role => role === 'support') || nodes.every(node => node.lane === 'bottom')) return 'support';
   if (roles.every(role => role === 'external')) return 'external';
   if (roles.every(role => role === 'datastore')) return 'datastore';

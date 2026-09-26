@@ -42,7 +42,7 @@ from graph.runtime import select_canonical_graph
 logger = logging.getLogger(__name__)
 _monotonic = time.monotonic
 
-_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v36"
+_APPLIED_GRAPH_PATCH_PROMPT_VERSION = "applied_architecture_patch_v37"
 _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION = "applied_topology_v22"
 _APPLIED_GRAPH_TOPOLOGY_CORRECTION_PROMPT_VERSION = "applied_topology_correction_v1"
 _APPLIED_GRAPH_TOPOLOGY_EFFORT = "high"

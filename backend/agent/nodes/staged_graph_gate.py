@@ -25,8 +25,8 @@ from agent.stream_utils import StructuredLLMResponse, stream_structured_llm
 from config import settings
 
 
-_COMPONENT_GATE_PROMPT_VERSION = "staged_component_gate_v15"
-_CONNECTION_GATE_PROMPT_VERSION = "staged_connection_gate_v19"
+_COMPONENT_GATE_PROMPT_VERSION = "staged_component_gate_v17"
+_CONNECTION_GATE_PROMPT_VERSION = "staged_connection_gate_v24"
 _GATE_EFFORT = "medium"
 _GATE_SYSTEM = (
     "You are a bounded architecture gate. Evaluate only supplied evidence and "
@@ -195,7 +195,32 @@ def _prompt(
     candidate_records: list[dict[str, Any]],
     required_production_guarantees: Sequence[str],
 ) -> str:
+    production_effect_input_instructions = (
+        "For each external effect executor, cite where it obtains the exact approved "
+        "action payload and stable operation identity from canonical proposal or "
+        "operation ownership before the write. A direct or delegated request, executor "
+        "pull with authoritative reply, or declared same-owner state can supply them; "
+        "the executor may reserve the identity durably with canonical state. An "
+        "authorization verdict or incidental reachability alone supplies neither "
+        "payload nor identity. A satisfied reason must cite both effect-input witnesses "
+        "per executor; an unsatisfied reason must name the missing payload or identity. "
+        if gate == "connections"
+        and resolved_maturity == "production"
+        and "authorization_and_compensation" in required_production_guarantees
+        else ""
+    )
     review_scope = evidence_bundle.get("review_scope")
+    candidate_context = evidence_bundle.get("candidate_context")
+    overview_instructions = (
+        "\nThe candidate requests an overview. Presentation simplification may omit "
+        "optional detail only. It does not change the resolved maturity, objective, "
+        "requested behavior, required directed interactions, or safety and production "
+        "controls. Review every applicable criterion normally; detail_level is "
+        "presentation context, not evidence that a required control exists."
+        if isinstance(candidate_context, Mapping)
+        and candidate_context.get("detail_level") == "overview"
+        else ""
+    )
     scope_instructions = ""
     if isinstance(review_scope, Mapping):
         scope_instructions = (
@@ -269,9 +294,45 @@ def _prompt(
                 "\nUse evidence_bundle.candidate_context.capabilities and "
                 "evidence_bundle.candidate_context.assumptions with the accepted "
                 "candidate component responsibilities in evidence_bundle.candidate_components. "
-                "Resolved maturity remains authoritative."
+                "Resolved maturity remains authoritative. "
+                "evidence_bundle.connection_exchanges, when present, is server-derived "
+                "pairing of model-authored connection contracts: request_record_index "
+                "is the forward contract (which may be a request, event, or write) and "
+                "response_record_index is its explicit paired reply. Pairing does not "
+                "prove the forward contract's semantic role or that the declared behavior runs. "
+                "An unclassified record has unknown role; assess its contract and source "
+                "responsibility without assuming it is a request or rejecting it for "
+                "missing pairing metadata. "
+                "A paired reply or incidental reachability cannot invoke a separate action. "
+                "For each required action, check its actual trigger or change input. "
+                "A proposal service's declared metric pull with reply is a valid normal "
+                "input; do not demand a redundant push or timer. "
+                + production_effect_input_instructions
+                + "When one component owns normal and compensation proposals, review their "
+                "initiation separately; the normal input does not initiate rollback. "
+                "Compensation needs a declared operator, incident, event, or explicit "
+                "autonomous responsibility and an original or applied operation reference "
+                "or recovery input reaching its producer, directly, by delegation, or through "
+                "declared same-owner internal behavior. Combined contracts can cover both "
+                "without duplicate services or edges. "
+                "For authorization_and_compensation, when compensation is required or "
+                "declared, a satisfied reason must identify both initiation witnesses "
+                "and the shared control path. An unsatisfied reason "
+                "must identify each missing initiation, operation-reference, or control "
+                "obligation. A declared autonomous or same-owner internal action can supply "
+                "its own initiation or recovery input without a synthetic incoming edge. "
+                "When human review or human approval is requested or declared for "
+                "compensation, follow the proposal producer's exact-action presentation "
+                "through policy to the human review surface or declared human decision "
+                "boundary before approval, via a direct or delegated contract. In that case, a returned "
+                "approval verdict alone does not establish that presentation. "
+                "For a cross-component retry, require an actual "
+                "invocation contract to the retry owner. An autonomous poller or same-owner "
+                "internal action does not require a synthetic incoming edge when the accepted "
+                "responsibility declares how it initiates the action."
             )
         )
+        + overview_instructions
         + scope_instructions
     )
 

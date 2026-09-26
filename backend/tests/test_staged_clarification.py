@@ -149,7 +149,7 @@ async def test_create_clarification_uses_one_generation_and_no_downstream_calls(
     assert requests[0]["schema"]["required"] == ["candidate", "clarification_questions"]
     prompt = requests[0]["prompt"]
     assert "business goal or actual workflow is missing" in prompt
-    assert "educational diagram with an explicit subject" in prompt
+    assert "named educational, research, or comparison subject" in prompt
     assert "reasonable stated assumptions suffice" in prompt
     assert all(boundary.await_count == 0 for boundary in downstream)
     assert result["graph_operation"] == {
@@ -328,11 +328,53 @@ async def test_explicit_educational_subject_can_proceed_without_a_business_goal(
     assert "clarification_questions" not in result
     prompt = calls[0]["prompt"]
     assert (
-        "For an educational diagram with an explicit subject, proceed with a candidate"
-        in prompt
+        "or contrasting paths without inventing an application workflow; proceed with "
+        "a candidate for that subject" in prompt
     )
     criteria = json.loads(prompt.split("\nINPUT\n", 1)[1])["acceptance_criteria"]
     assert (
-        "An explicit educational subject establishes the system to explain"
+        "A named educational, research, or comparison subject establishes diagram scope"
         in criteria["objective_fidelity"]
+    )
+
+
+@pytest.mark.parametrize(
+    "subject_request",
+    [
+        "Explain retrieval-augmented generation and draw its runtime flow.",
+        "Research current practical trade-offs between agents and fixed workflows "
+        "for production AI products.",
+        "Compare agentic and fixed workflow paths for an educational diagram.",
+    ],
+)
+def test_named_subject_prompt_preserves_confirmed_diagram_scope(subject_request):
+    prompt, _ = generation._attempt_prompt(
+        stage="components",
+        request=subject_request,
+        resolved_maturity="prototype",
+        write_set=generation.create_write_set(component_limit=4, edge_limit=6),
+        upstream_fingerprint="a" * 64,
+        attempt=0,
+        prior_prompt_fingerprint=None,
+        prior_write_set_fingerprint=None,
+        structural_findings=[],
+        gate_findings=[],
+        base=None,
+        rejected_candidate=None,
+        architecture_context="Bounded source records.",
+    )
+
+    assert "already fulfilling an admitted diagram request" in prompt
+    assert "do not ask whether a diagram is wanted" in prompt
+    assert prompt.index("A named educational, research, or comparison subject") < (
+        prompt.index("For an applied system design")
+    )
+    assert prompt.index("For an applied system design") < prompt.index(
+        "When an applied system's business goal or actual workflow is missing"
+    )
+    assert "without inventing an application workflow" in prompt
+    payload = json.loads(prompt.split("\nINPUT\n", 1)[1])
+    assert payload["request"] == subject_request
+    assert payload["acceptance_criteria"]["objective_fidelity"].startswith(
+        "Depict the requested subject"
     )

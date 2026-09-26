@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 import json
-from typing import Any
+from typing import Any, Literal
 
 from adapters.llm_adapter import stream_response, stream_response_compat
 from agent.prompt_security import protect_system_prompt
@@ -24,6 +24,9 @@ _MAXIMUM_BLOCKS = 6
 
 _PRESERVED_EDIT_COMPLETION_SENTENCE = "The requested diagram edit was not approved, so the prior approved diagram remains unchanged."
 _PRESERVED_CREATE_COMPLETION_SENTENCE = "The requested new diagram was not approved, so the prior approved diagram remains unchanged."
+_OVERVIEW_SENTENCE = (
+    "This is an overview of the core workflow, with supporting detail simplified."
+)
 
 
 async def stream_explanation_blocks(
@@ -41,6 +44,7 @@ async def stream_explanation_blocks(
     allowed_evidence_refs: set[str] | None = None,
     allow_fallback: bool = True,
     provider_attempt_limit: int | None = None,
+    accepted_graph_detail: Literal["standard", "overview"] | None = None,
 ) -> str:
     """Emit a block as soon as its compact JSON object is complete.
 
@@ -59,6 +63,13 @@ async def stream_explanation_blocks(
 
     async def emit_parsed(block: dict[str, Any]) -> None:
         nonlocal pending_block
+        if accepted_graph_detail == "overview" and emitted[0] is block:
+            remainder = block["content"].replace(_OVERVIEW_SENTENCE, "").strip()
+            block["content"] = (
+                f"{_OVERVIEW_SENTENCE}\n\n{remainder}"
+                if remainder
+                else _OVERVIEW_SENTENCE
+            )[:4000]
         if required_completion_sentence is None:
             await emit(block)
             return
@@ -130,7 +141,7 @@ async def stream_explanation_blocks(
                     "detail": "Returning a safe fallback because the model response did not meet the required block contract.",
                 }
             )
-        fallback = _fallback_block()
+        fallback = _fallback_block(accepted_graph_detail=accepted_graph_detail)
         emitted.append(fallback)
         emitted_ids.add(fallback["block_id"])
         await emit_parsed(fallback)
@@ -227,7 +238,19 @@ def _normalise_block(
     }
 
 
-def _fallback_block(_raw_output: str = "") -> dict[str, Any]:
+def _fallback_block(
+    _raw_output: str = "",
+    *,
+    accepted_graph_detail: Literal["standard", "overview"] | None = None,
+) -> dict[str, Any]:
+    if accepted_graph_detail in ("standard", "overview"):
+        return {
+            "block_id": "architecture_explanation",
+            "title": "Diagram ready",
+            "content": "The diagram is ready to inspect. I couldn't finish its explanation.",
+            "related_node_ids": [],
+            "evidence_refs": [],
+        }
     return {
         "block_id": "architecture_explanation",
         "title": "Explanation unavailable",

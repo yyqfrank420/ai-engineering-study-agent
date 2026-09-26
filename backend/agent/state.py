@@ -69,6 +69,7 @@ class GraphData(TypedDict):
     version: NotRequired[str]  # fresh identifier per generated graph revision
     design_origin: NotRequired[str]  # "applied" for user-specific generated designs
     resolved_complexity: NotRequired[str]
+    detail_level: NotRequired[Literal["standard", "overview"]]
     assumptions: NotRequired[list[str]]
     view_state: NotRequired[dict[str, Any]]
 

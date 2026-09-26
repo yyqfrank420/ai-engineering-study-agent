@@ -91,6 +91,7 @@ export interface GraphViewState {
 export interface GraphData {
   graph_type: 'architecture' | 'concept';
   title: string;
+  detail_level?: 'standard' | 'overview';
   nodes: GraphNode[];
   edges: GraphEdge[];
   sequence: GraphStep[];

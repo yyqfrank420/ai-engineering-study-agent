@@ -32,4 +32,8 @@ describe('normalizeGraphData', () => {
     expect(normalized?.nodes[0].type).toBe('decision');
     expect(normalizeGraphData(normalized)?.nodes[0].type).toBe('decision');
   });
+
+  it('preserves an accepted overview during normalization', () => {
+    expect(normalizeGraphData({ ...graph, detail_level: 'overview' })?.detail_level).toBe('overview');
+  });
 });

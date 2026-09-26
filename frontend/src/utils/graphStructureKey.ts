@@ -27,6 +27,7 @@ export function graphStructureKey(graph: GraphData | null): string {
     version: graph.version ?? null,
     title: graph.title,
     graph_type: graph.graph_type,
+    detail_level: graph.detail_level ?? 'standard',
     design_origin: graph.design_origin ?? null,
     nodes: graph.nodes.map((node) => ({
       id: node.id,

@@ -3,11 +3,12 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as d3 from 'd3';
 
 import type { GraphData, GraphEdge, GraphViewState } from '../../types';
+import { TYPE_STYLE } from '../../utils/graphColors';
 import { D3Graph } from './D3Graph';
 import tradingBotSavedGraph from './__fixtures__/tradingBotSavedGraph.json';
 import { learnerSupportGraph } from './__fixtures__/learnerSupportGraph';
 import { diagramConnections } from './diagramConnections';
-import { MIN_PUBLISHED_TITLE_PX, NODE_TITLE_PX, NODE_W } from './graphLayout';
+import { MIN_PUBLISHED_TITLE_PX, NODE_H, NODE_RX, NODE_TITLE_PX, NODE_W } from './graphLayout';
 import {
   customerSupportDenseGraph,
   growthMarketingDenseGraph,
@@ -254,6 +255,158 @@ describe('graph node activation', () => {
     expect(d3.zoomTransform(svg).x).toBe(0);
     expect(d3.zoomTransform(svg).k).toBe(1);
     expect(save).toHaveBeenCalledTimes(savedCalls);
+  });
+
+  it('minimally frames an inspected node inside the unobscured area without zooming or saving', () => {
+    const save = vi.fn();
+    const props = { graphData: cameraGraph, initialViewState: cameraViewState,
+      currentStep: -1, activeNodeIds: new Set<string>(), onNodeClick: () => undefined,
+      onViewStateChange: save, navigation: true };
+    const view = render(<D3Graph {...props} />);
+    const svg = screen.getByTestId('graph-canvas') as unknown as SVGSVGElement;
+    const baseline = d3.zoomTransform(svg);
+    const savedCalls = save.mock.calls.length;
+
+    view.rerender(<D3Graph {...props} inspectionViewport={{ nodeId: 'a', width: 400, height: 300 }} />);
+    expect(d3.zoomTransform(svg).toString()).toBe(baseline.toString());
+    view.rerender(<D3Graph {...props} inspectionViewport={{ nodeId: 'b', width: 400, height: 300 }} />);
+    const framed = d3.zoomTransform(svg);
+    expect(framed.k).toBe(baseline.k);
+    expect(framed.x + (600 - NODE_W / 2) * framed.k).toBeGreaterThanOrEqual(32);
+    expect(framed.x + (600 + NODE_W / 2) * framed.k).toBeCloseTo(400 - 32);
+    expect(framed.y + (200 - NODE_H / 2) * framed.k).toBeGreaterThanOrEqual(72);
+    expect(framed.y + (200 + NODE_H / 2) * framed.k).toBeLessThanOrEqual(300 - 32);
+    expect(save).toHaveBeenCalledTimes(savedCalls);
+
+    view.rerender(<D3Graph {...props} inspectionViewport={{ nodeId: 'b', width: 300, height: 300 }} />);
+    const narrowed = d3.zoomTransform(svg);
+    expect(narrowed.k).toBe(baseline.k);
+    expect(narrowed.x + (600 + NODE_W / 2) * narrowed.k).toBeCloseTo(300 - 32);
+    expect(save).toHaveBeenCalledTimes(savedCalls);
+    view.rerender(<D3Graph {...props} inspectionViewport={{ nodeId: 'missing', width: 200, height: 300 }} />);
+    expect(d3.zoomTransform(svg).toString()).toBe(narrowed.toString());
+    view.rerender(<D3Graph {...props} inspectionViewport={{ nodeId: 'b', width: 0, height: 300 }} />);
+    expect(d3.zoomTransform(svg).toString()).toBe(narrowed.toString());
+  });
+
+  it('stops inspection follow after manual pan and resumes only after close and reopen', async () => {
+    const save = vi.fn();
+    const props = { graphData: cameraGraph, initialViewState: cameraViewState,
+      currentStep: -1, activeNodeIds: new Set<string>(), onNodeClick: () => undefined,
+      onViewStateChange: save, navigation: true };
+    const view = render(<D3Graph {...props} inspectionViewport={{ nodeId: 'b', width: 400, height: 300 }} />);
+    const svg = screen.getByTestId('graph-canvas') as unknown as SVGSVGElement;
+    const mouse = (element: Element | Window, type: 'mouseDown' | 'mouseMove' | 'mouseUp', x: number, y: number) => {
+      const event = createEvent[type](element, { clientX: x, clientY: y, button: 0 });
+      Object.defineProperty(event, 'view', { value: document.defaultView });
+      fireEvent(element, event);
+    };
+    mouse(svg, 'mouseDown', 400, 250);
+    mouse(window, 'mouseMove', 350, 250);
+    mouse(window, 'mouseUp', 350, 250);
+    const manual = d3.zoomTransform(svg);
+    expect(save.mock.lastCall![0].viewport.x).toBe(manual.x);
+    view.rerender(<D3Graph {...props} inspectionViewport={{ nodeId: 'b', width: 250, height: 300 }} />);
+    expect(d3.zoomTransform(svg).toString()).toBe(manual.toString());
+    view.rerender(<D3Graph {...props} />);
+    expect(d3.zoomTransform(svg).toString()).toBe(manual.toString());
+    const savedCalls = save.mock.calls.length;
+    view.rerender(<D3Graph {...props} inspectionViewport={{ nodeId: 'b', width: 250, height: 300 }} />);
+    const reopened = d3.zoomTransform(svg);
+    expect(reopened.x + (600 + NODE_W / 2) * reopened.k).toBeCloseTo(250 - 32);
+    expect(reopened.k).toBe(manual.k);
+    expect(save).toHaveBeenCalledTimes(savedCalls);
+    await act(async () => { await new Promise(resolve => window.setTimeout(resolve, 0)); });
+  });
+
+  it('keeps a manually panned inspection view after the same node is saved', async () => {
+    const props = { graphData: cameraGraph, initialViewState: cameraViewState,
+      currentStep: -1, activeNodeIds: new Set<string>(), onNodeClick: () => undefined,
+      navigation: true };
+    const view = render(<D3Graph {...props} inspectionViewport={{ nodeId: 'b', width: 400, height: 300 }} />);
+    const svg = screen.getByTestId('graph-canvas') as unknown as SVGSVGElement;
+    const mouse = (element: Element | Window, type: 'mouseDown' | 'mouseMove' | 'mouseUp', x: number, y: number) => {
+      const event = createEvent[type](element, { clientX: x, clientY: y, button: 0 });
+      Object.defineProperty(event, 'view', { value: document.defaultView });
+      fireEvent(element, event);
+    };
+    mouse(svg, 'mouseDown', 400, 250);
+    mouse(window, 'mouseMove', 350, 250);
+    mouse(window, 'mouseUp', 350, 250);
+    const manual = d3.zoomTransform(svg);
+
+    const updatedGraph = { ...cameraGraph, version: '2',
+      nodes: cameraGraph.nodes.map(node => node.id === 'b' ? { ...node, label: 'Updated b' } : node) };
+    const updatedViewState = { ...cameraViewState,
+      viewport: { x: manual.x, y: manual.y, k: manual.k } };
+    view.rerender(<D3Graph {...props} graphData={updatedGraph} initialViewState={updatedViewState}
+      inspectionViewport={{ nodeId: 'b', width: 250, height: 300 }} />);
+    expect(d3.zoomTransform(svg).toString()).toBe(manual.toString());
+    view.rerender(<D3Graph {...props} graphData={updatedGraph} initialViewState={updatedViewState}
+      inspectionViewport={{ nodeId: 'b', width: 200, height: 300 }} />);
+    expect(d3.zoomTransform(svg).toString()).toBe(manual.toString());
+    await act(async () => { await new Promise(resolve => window.setTimeout(resolve, 0)); });
+  });
+
+  it('lets toolbar and node-layout actions cancel inspection follow until a different node is selected', () => {
+    const save = vi.fn();
+    const props = { graphData: cameraGraph, initialViewState: cameraViewState,
+      currentStep: -1, activeNodeIds: new Set<string>(), onNodeClick: () => undefined,
+      onViewStateChange: save, navigation: true };
+    const view = render(<D3Graph {...props} inspectionViewport={{ nodeId: 'b', width: 400, height: 300 }} />);
+    const svg = screen.getByTestId('graph-canvas') as unknown as SVGSVGElement;
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Explore b' }), { key: 'ArrowRight' });
+    const nudged = d3.zoomTransform(svg);
+    expect(save.mock.lastCall![0].nodePositions.b.x).toBe(601);
+    view.rerender(<D3Graph {...props} inspectionViewport={{ nodeId: 'b', width: 250, height: 300 }} />);
+    expect(d3.zoomTransform(svg).toString()).toBe(nudged.toString());
+
+    view.rerender(<D3Graph {...props} inspectionViewport={{ nodeId: 'c', width: 250, height: 300 }} />);
+    const switched = d3.zoomTransform(svg);
+    expect(switched.x + (1000 + NODE_W / 2) * switched.k).toBeCloseTo(250 - 32);
+    fireEvent.click(screen.getByRole('button', { name: 'Fit diagram' }));
+    const toolbar = d3.zoomTransform(svg);
+    expect(toolbar.k).toBeLessThan(switched.k);
+    view.rerender(<D3Graph {...props} inspectionViewport={{ nodeId: 'c', width: 200, height: 300 }} />);
+    expect(d3.zoomTransform(svg).toString()).toBe(toolbar.toString());
+  });
+
+  it('keeps inspection framing ahead of walkthrough follow, including after manual intervention', () => {
+    const props = { graphData: cameraGraph, initialViewState: cameraViewState,
+      onNodeClick: () => undefined, navigation: true,
+      inspectionViewport: { nodeId: 'b', width: 400, height: 300 } };
+    const view = render(<D3Graph {...props} currentStep={0} activeNodeIds={new Set(['a'])} />);
+    const svg = screen.getByTestId('graph-canvas') as unknown as SVGSVGElement;
+    const inspected = d3.zoomTransform(svg);
+    expect(inspected.x + (600 + NODE_W / 2) * inspected.k).toBeCloseTo(400 - 32);
+    view.rerender(<D3Graph {...props} currentStep={2} activeNodeIds={new Set(['c'])} />);
+    expect(d3.zoomTransform(svg).toString()).toBe(inspected.toString());
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    const manual = d3.zoomTransform(svg);
+    view.rerender(<D3Graph {...props} currentStep={1} activeNodeIds={new Set(['a'])} />);
+    expect(d3.zoomTransform(svg).toString()).toBe(manual.toString());
+    view.rerender(<D3Graph {...props} currentStep={-1} activeNodeIds={new Set<string>()} />);
+    expect(d3.zoomTransform(svg).toString()).toBe(manual.toString());
+    view.rerender(<D3Graph {...props} currentStep={-1} activeNodeIds={new Set<string>()} inspectionViewport={undefined} />);
+    expect(d3.zoomTransform(svg).toString()).toBe(manual.toString());
+  });
+
+  it('leaves a manually zoomed inspection view unchanged when playback moves or the inspector closes', async () => {
+    const props = { graphData: cameraGraph, initialViewState: cameraViewState,
+      onNodeClick: () => undefined, navigation: true };
+    const view = render(<D3Graph {...props} currentStep={2} activeNodeIds={new Set(['c'])}
+      inspectionViewport={{ nodeId: 'b', width: 400, height: 300 }} />);
+    const svg = screen.getByTestId('graph-canvas') as unknown as SVGSVGElement;
+    const inspected = d3.zoomTransform(svg);
+    fireEvent.wheel(svg, { deltaY: -100, clientX: 300, clientY: 200 });
+    await act(async () => { await new Promise(resolve => window.setTimeout(resolve, 180)); });
+    const manual = d3.zoomTransform(svg);
+    expect(manual.k).toBeGreaterThan(inspected.k);
+    view.rerender(<D3Graph {...props} currentStep={0} activeNodeIds={new Set(['a'])}
+      inspectionViewport={{ nodeId: 'b', width: 250, height: 300 }} />);
+    expect(d3.zoomTransform(svg).toString()).toBe(manual.toString());
+    view.rerender(<D3Graph {...props} currentStep={0} activeNodeIds={new Set(['a'])} />);
+    expect(d3.zoomTransform(svg).toString()).toBe(manual.toString());
   });
 
   it('fits all active bounds when a readable zoom reduction suffices', () => {
@@ -549,6 +702,57 @@ describe('graph node activation', () => {
     }
   });
 
+  it.each([
+    { label: 'Pattern router', technology: 'Decision component', titleLines: 1, subtitleLines: 1 },
+    { label: 'Production approval policy router', technology: 'Deterministic approval decision component', titleLines: 2, subtitleLines: 2 },
+  ])('keeps decision text inside the shared padded card for $label', ({ label, technology, titleLines, subtitleLines }) => {
+    const measure = vi.spyOn(SVGElement.prototype as SVGElement & { getBBox(): DOMRect }, 'getBBox')
+      .mockImplementation(function(this: SVGElement) {
+        const subtitle = this.closest('.node-technology') !== null;
+        return { x: 0, y: 0, width: (this.textContent?.length ?? 0) * (subtitle ? 5 : 8), height: subtitle ? 9.6 : 17 } as DOMRect;
+      });
+    try {
+      const onNodeClick = vi.fn();
+      const onNodeEdit = vi.fn();
+      const decisionGraph = { ...graph, nodes: [{ ...graph.nodes[0], type: 'decision' as const, label, technology }] };
+      const { container } = render(<D3Graph graphData={decisionGraph} currentStep={-1}
+        activeNodeIds={new Set<string>()} onNodeClick={onNodeClick} onNodeEdit={onNodeEdit} navigation />);
+      const node = container.querySelector<SVGGElement>('g.node')!;
+      const card = node.querySelector<SVGRectElement>('rect.node-card')!;
+      expect(node.querySelector('path.node-card')).toBeNull();
+      expect(card.getAttribute('x')).toBe(String(-NODE_W / 2));
+      expect(card.getAttribute('y')).toBe(String(-NODE_H / 2));
+      expect(card.getAttribute('width')).toBe(String(NODE_W));
+      expect(card.getAttribute('height')).toBe(String(NODE_H));
+      expect(card.getAttribute('rx')).toBe(String(NODE_RX));
+      expect(card.getAttribute('stroke')).toBe(TYPE_STYLE.decision.stroke);
+      expect(node.querySelector(`rect[x="${-NODE_W / 2}"][width="3"]`)).not.toBeNull();
+
+      const title = Array.from(node.querySelectorAll<SVGTSpanElement>('.node-title tspan'));
+      const subtitle = Array.from(node.querySelectorAll<SVGTSpanElement>('.node-technology tspan'));
+      expect(title).toHaveLength(titleLines);
+      expect(subtitle).toHaveLength(subtitleLines);
+      expect(title.map(line => line.textContent).join(' ')).toBe(label);
+      expect(subtitle.map(line => line.textContent).join(' ')).toBe(technology);
+      for (const line of [...title, ...subtitle]) {
+        const halfWidth = line.getBBox().width / 2;
+        const halfHeight = line.getBBox().height / 2;
+        expect(halfWidth).toBeLessThanOrEqual(NODE_W / 2 - 12);
+        expect(Math.abs(Number(line.getAttribute('y'))) + halfHeight).toBeLessThan(NODE_H / 2 - 1);
+      }
+      const titleBottom = Math.max(...title.map(line => Number(line.getAttribute('y')) + line.getBBox().height / 2));
+      const subtitleTop = Math.min(...subtitle.map(line => Number(line.getAttribute('y')) - line.getBBox().height / 2));
+      expect(subtitleTop - titleBottom).toBeGreaterThan(1);
+
+      fireEvent.keyDown(node, { key: 'Enter' });
+      fireEvent.keyDown(node, { key: 'F2' });
+      expect(onNodeClick).toHaveBeenCalledTimes(1);
+      expect(onNodeEdit).toHaveBeenCalledTimes(1);
+    } finally {
+      measure.mockRestore();
+    }
+  });
+
   it('renders the saved trading diagram horizontally without overlapping zone frames or overview labels', () => {
     const { container } = render(<D3Graph graphData={tradingBotSavedGraph as unknown as GraphData}
       currentStep={-1} activeNodeIds={new Set<string>()} onNodeClick={() => undefined} navigation />);
@@ -645,6 +849,90 @@ describe('graph node activation', () => {
       { source: edge.source, target: edge.target, label: edge.label },
     ]));
     expect(individualPaths.every(path => path.getAttribute('data-connection-count') === '1')).toBe(true);
+  });
+
+  it('orders the accepted marketing request and reply motif by canonical cycle breaks', () => {
+    const marketingGraph: GraphData = {
+      ...graph,
+      nodes: [
+        { ...graph.nodes[0], id: 'reviewer', label: 'Marketing reviewer', type: 'client' },
+        { ...graph.nodes[0], id: 'metrics', label: 'Metrics ingestion' },
+        { ...graph.nodes[0], id: 'snapshot', label: 'Campaign metrics store', type: 'datastore' },
+        { ...graph.nodes[0], id: 'proposal', label: 'Proposal generation' },
+        { ...graph.nodes[0], id: 'validation', label: 'Proposal validation' },
+      ],
+      edges: [
+        edge('metrics', 'snapshot', 'Store normalized snapshot'),
+        edge('snapshot', 'metrics', 'Snapshot stored'),
+        edge('proposal', 'snapshot', 'Read scoped snapshot'),
+        edge('snapshot', 'proposal', 'Return validated snapshot'),
+        edge('proposal', 'validation', 'Submit typed proposal'),
+        edge('validation', 'proposal', 'Return validation result'),
+        edge('reviewer', 'validation', 'Request proposal review'),
+        edge('validation', 'reviewer', 'Present validated proposal'),
+        edge('reviewer', 'proposal', 'Request rollback proposal'),
+        edge('proposal', 'reviewer', 'Return rollback proposal'),
+      ],
+      groups: [
+        { id: 'review', label: 'Human review', kind: 'operations', nodeIds: ['reviewer'] },
+        { id: 'services', label: 'Conversation services', kind: 'runtime', nodeIds: ['metrics', 'proposal', 'validation'] },
+        { id: 'data', label: 'Data stores', kind: 'data', nodeIds: ['snapshot'] },
+      ],
+      sequence: [
+        { step: 1, nodes: ['metrics'], description: 'Collect metrics' },
+        { step: 2, nodes: ['proposal'], description: 'Generate proposal' },
+        { step: 3, nodes: ['validation'], description: 'Validate proposal' },
+      ],
+      view_state: undefined,
+    };
+    const view = render(<D3Graph graphData={marketingGraph} currentStep={-1}
+      activeNodeIds={new Set<string>()} onNodeClick={() => undefined} navigation />);
+    const { container } = view;
+    const x = (id: string) => Number(container.querySelector(`[data-node-id="${id}"]`)!
+      .getAttribute('transform')!.match(/translate\(([^,]+),/)![1]);
+    expect(x('metrics')).toBeLessThan(x('proposal'));
+    expect(x('proposal')).toBeLessThan(x('validation'));
+    expect(container.querySelectorAll('g.node')).toHaveLength(marketingGraph.nodes.length);
+    const bundles = Array.from(container.querySelectorAll('path.edge-vis'));
+    expect(bundles).toHaveLength(5);
+    expect(bundles.every(path => path.getAttribute('data-connection-count') === '2')).toBe(true);
+    const connectionMembers = (path: Element): Array<{ source: string; target: string; label: string }> =>
+      JSON.parse(path.getAttribute('data-connection-members') ?? '[]');
+    const members = bundles.flatMap(connectionMembers);
+    expect(members.map(({ source, target, label }) => `${source}:${target}:${label}`).sort())
+      .toEqual(marketingGraph.edges.map(({ source, target, label }) => `${source}:${target}:${label}`).sort());
+    const servicePositions = ['metrics', 'proposal', 'validation'].map(x);
+    view.rerender(<D3Graph graphData={{ ...marketingGraph, edges: [...marketingGraph.edges].reverse() }}
+      currentStep={-1} activeNodeIds={new Set<string>()} onNodeClick={() => undefined} navigation />);
+    expect(['metrics', 'proposal', 'validation'].map(x)).toEqual(servicePositions);
+  });
+
+  it('keeps longest-path DAG ranks with duplicate links, a self-link, feedback, and a disconnected node', () => {
+    const dagGraph: GraphData = {
+      ...graph,
+      design_origin: undefined,
+      nodes: ['a', 'b', 'c', 'd', 'e', 'f'].map(id => ({ ...graph.nodes[0], id, label: id })),
+      edges: [
+        edge('a', 'b', 'First path'), edge('a', 'c', 'Second path'),
+        edge('b', 'd', 'First join'), edge('c', 'd', 'Second join'), edge('d', 'e', 'Finish'),
+        edge('a', 'b', 'Repeated first path'), edge('b', 'b', 'Self reference'),
+        { ...edge('e', 'a', 'Return signal'), flow: 'feedback' },
+      ],
+      view_state: undefined,
+    };
+    const props = { currentStep: -1, activeNodeIds: new Set<string>(),
+      onNodeClick: () => undefined, navigation: true };
+    const view = render(<D3Graph {...props} graphData={dagGraph} />);
+    const positions = () => Object.fromEntries(dagGraph.nodes.map(node => [node.id,
+      Number(view.container.querySelector(`[data-node-id="${node.id}"]`)!
+        .getAttribute('transform')!.match(/translate\(([^,]+),/)![1])]));
+    const initial = positions();
+    expect(initial.b).toBe(initial.c);
+    expect(initial.f).toBe(initial.a);
+    expect(initial.b - initial.a).toBe(initial.d - initial.b);
+    expect(initial.e - initial.d).toBe(initial.b - initial.a);
+    view.rerender(<D3Graph {...props} graphData={{ ...dagGraph, edges: [...dagGraph.edges].reverse() }} />);
+    expect(positions()).toEqual(initial);
   });
 
   it('keeps deep interactive graphs left to right and discloses return connections on focus', () => {

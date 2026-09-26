@@ -43,10 +43,16 @@ function resolveRouteFromHash(): AppRoute {
 }
 
 export default function App() {
+  const auth = useAuthSession();
+  const workspaceKey = auth.authSession ? `user:${auth.authSession.user.id}` : 'signed-out';
+  return <AppWorkspace key={workspaceKey} auth={auth} />;
+}
+
+function AppWorkspace({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [hasUnsavedGraphEdit, setHasUnsavedGraphEdit] = useState(false);
   const [appRoute, setAppRoute] = useState<AppRoute>(resolveRouteFromHash);
-  const { authReady, handleAuthenticated, setAuthSession, authSession } = useAuthSession();
+  const { authReady, handleAuthenticated, setAuthSession, authSession } = auth;
   const {
     selectionSuggestion,
     selectionReferenceActive,
@@ -73,7 +79,7 @@ export default function App() {
     handleNewChat,
     handleSelectThread,
     handleDeleteThread,
-    retryLatestThread,
+    retryThread,
   } = useThreadSession({
     authSession,
     backendReady: isBackendReady,
@@ -259,9 +265,9 @@ export default function App() {
     if (!graphEditBlocked) handleDeleteThread(threadId);
   }, [graphEditBlocked, handleDeleteThread]);
 
-  const retryThread = useCallback(() => {
-    if (!graphEditBlocked) retryLatestThread();
-  }, [graphEditBlocked, retryLatestThread]);
+  const handleRetryThread = useCallback(() => {
+    if (!graphEditBlocked) retryThread();
+  }, [graphEditBlocked, retryThread]);
 
   const effectiveThreadTitle = useMemo(
     () => threadTitle || 'New chat',
@@ -400,6 +406,7 @@ export default function App() {
                   <GraphCanvas
                     graphData={displayedGraphData}
                     isPreview={graphPreview !== null}
+                    isAcceptedGraph={displayedGraphData !== null && displayedGraphData === graphData}
                     animateSequence={!isGenerating && !explanationPaused && publishedGraphKey === graphStructureKey(displayedGraphData)}
                     authSession={authSession}
                     activeThreadId={activeThreadId}
@@ -423,7 +430,7 @@ export default function App() {
               right={
                 <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
                   {threadError && (
-                    <div style={{
+                    <div role="alert" style={{
                       margin: '1rem',
                       padding: '0.75rem 1rem',
                       borderRadius: '8px',
@@ -437,10 +444,10 @@ export default function App() {
                       gap: '0.75rem',
                       flexShrink: 0,
                     }}>
-                      <span>Backend unreachable: {threadError}</span>
+                      <span>{threadError}</span>
                       <button
-                        onClick={retryThread}
-                        disabled={graphEditBlocked}
+                        onClick={handleRetryThread}
+                        disabled={graphEditBlocked || loadingThread || !isBackendReady}
                         style={{
                           background: 'rgba(248,81,73,0.12)',
                           border: '1px solid rgba(248,81,73,0.3)',

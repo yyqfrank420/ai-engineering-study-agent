@@ -6,7 +6,7 @@ vi.mock('../../services/api', () => ({
 }));
 
 vi.mock('./D3Graph', () => ({
-  D3Graph: ({ graphData, onNodeClick, onNodeEdit, onEditConnection, onViewStateChange, initialViewState, onLayoutReady }: {
+  D3Graph: ({ graphData, onNodeClick, onNodeEdit, onEditConnection, onViewStateChange, initialViewState, onLayoutReady, inspectionViewport }: {
     graphData: { nodes: Array<{ id: string; label: string }> };
     onNodeClick: (node: { id: string; label: string }) => void;
     onNodeEdit?: (node: { id: string; label: string }) => void;
@@ -19,9 +19,11 @@ vi.mock('./D3Graph', () => ({
     }) => void;
     initialViewState?: { viewport: { x: number; y: number; k: number } };
     onLayoutReady?: (key: string) => void;
+    inspectionViewport?: { nodeId: string; width: number; height: number };
   }) => (
     <div data-testid="d3-graph">
       <span data-testid="initial-view">{initialViewState?.viewport.k ?? 'none'}</span>
+      <span data-testid="inspection-view">{JSON.stringify(inspectionViewport ?? null)}</span>
       <button onClick={() => onLayoutReady?.('painted-key')}>Layout ready</button>
       <button onClick={() => onNodeClick(graphData.nodes[0])}>Select rendered node</button>
       <button onClick={() => onNodeEdit?.(graphData.nodes[0])}>Edit rendered node</button>
@@ -114,6 +116,19 @@ const baseProps = {
 
 
 describe('GraphCanvas behavior', () => {
+  it('labels only an accepted overview and explains its reduced detail', () => {
+    const overview = { ...graph, detail_level: 'overview' as const };
+    const view = render(<GraphCanvas {...baseProps} graphData={graph} />);
+    expect(screen.queryByText('Overview')).toBeNull();
+
+    view.rerender(<GraphCanvas {...baseProps} graphData={overview} isPreview />);
+    expect(screen.queryByText('Overview')).toBeNull();
+
+    view.rerender(<GraphCanvas {...baseProps} graphData={overview} isPreview isAcceptedGraph />);
+    expect(screen.getByText('Overview')).toBeTruthy();
+    expect(screen.getByText('Core workflow. Supporting detail is simplified.')).toBeTruthy();
+  });
+
   it.each([false, true])('reports visible layout readiness for preview=%s', isPreview => {
     const ready = vi.fn();
     render(<GraphCanvas {...baseProps} graphData={graph} isPreview={isPreview} onGraphReady={ready} />);
@@ -129,6 +144,68 @@ describe('GraphCanvas behavior', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('passes measured unobscured space for side and bottom inspectors, then clears stale selection', async () => {
+    let notifyResize: (() => void) | undefined;
+    class TestResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        notifyResize = () => callback([], this as ResizeObserver);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', TestResizeObserver);
+    const rect = (left: number, top: number, width: number, height: number): DOMRect => ({
+      left, top, width, height, right: left + width, bottom: top + height,
+      x: left, y: top, toJSON: () => ({}),
+    });
+    const selectedNode = { node: graph.nodes[0], suggestions: [] };
+    const view = render(<GraphCanvas {...baseProps} graphData={graph} selectedNode={selectedNode} />);
+    const canvas = view.container.querySelector<HTMLElement>('.graph-canvas__surface')!;
+    const panel = view.container.querySelector<HTMLElement>('.node-inspector')!;
+    let canvasBox = rect(100, 40, 628, 500);
+    let panelBox = rect(376, 52, 340, 420);
+    vi.spyOn(canvas, 'getBoundingClientRect').mockImplementation(() => canvasBox);
+    vi.spyOn(panel, 'getBoundingClientRect').mockImplementation(() => panelBox);
+
+    act(() => notifyResize?.());
+    expect(JSON.parse(screen.getByTestId('inspection-view').textContent!)).toEqual({
+      nodeId: 'service', width: 264, height: 500,
+    });
+
+    canvasBox = rect(100, 40, 420, 500);
+    panelBox = rect(112, 290, 396, 238);
+    act(() => notifyResize?.());
+    expect(JSON.parse(screen.getByTestId('inspection-view').textContent!)).toEqual({
+      nodeId: 'service', width: 420, height: 238,
+    });
+
+    view.rerender(<GraphCanvas {...baseProps} graphData={graph}
+      selectedNode={{ node: graph.nodes[1], suggestions: [] }} />);
+    expect(JSON.parse(screen.getByTestId('inspection-view').textContent!)).toEqual({
+      nodeId: 'store', width: 420, height: 238,
+    });
+
+    panelBox = rect(80, 52, 340, 420);
+    act(() => notifyResize?.());
+    expect(JSON.parse(screen.getByTestId('inspection-view').textContent!)).toEqual({
+      nodeId: 'store', width: 0, height: 500,
+    });
+    panelBox = rect(Number.NaN, 52, 340, 420);
+    act(() => notifyResize?.());
+    expect(screen.getByTestId('inspection-view').textContent).toBe('null');
+
+    view.rerender(<GraphCanvas {...baseProps} graphData={{ ...graph, nodes: [graph.nodes[1]] }}
+      selectedNode={selectedNode} />);
+    expect(screen.getByTestId('inspection-view').textContent).toBe('null');
+
+    view.rerender(<GraphCanvas {...baseProps} graphData={graph} selectedNode={null} />);
+    expect(screen.getByTestId('inspection-view').textContent).toBe('null');
+    await act(async () => vi.advanceTimersByTime(400));
+    expect(updateThreadGraph).not.toHaveBeenCalled();
   });
 
   it('composes the reviewed graph and persists a changed view state', async () => {

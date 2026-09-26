@@ -626,12 +626,18 @@ def build_agent_workflow(
                     for node in graph.get("nodes") or []
                     if isinstance(node, dict) and node.get("label")
                 ]
+                overview = graph.get("detail_level") == "overview"
+                title = "Architecture overview" if overview else "Your architecture"
                 content = (
-                    "The staged diagram passed its component, connection, and render gates. "
+                    (
+                        "Your overview is ready, with supporting detail simplified. "
+                        if overview
+                        else "Your diagram is ready. "
+                    )
                     + (
                         "Its main components are " + ", ".join(labels[:6]) + "."
                         if labels
-                        else "The approved diagram is available on the canvas."
+                        else "You can inspect it on the canvas."
                     )
                 )
                 await state["send"](
@@ -640,14 +646,14 @@ def build_agent_workflow(
                         "phase": "explain",
                         "status": "degraded",
                         "title": "Explanation unavailable",
-                        "detail": "The approved diagram remains publishable.",
+                        "detail": "Your diagram is ready to inspect.",
                     }
                 )
                 await state["send"](
                     {
                         "type": "explanation_block",
                         "block_id": "approved_architecture",
-                        "title": "Approved architecture",
+                        "title": title,
                         "content": content,
                         "related_node_ids": [],
                         "evidence_refs": [],
@@ -656,7 +662,7 @@ def build_agent_workflow(
                 )
                 return {
                     **state,
-                    "response_text": f"## Approved architecture\n\n{content}",
+                    "response_text": f"## {title}\n\n{content}",
                 }
             if not isinstance(exc, (TimeoutError, StageAdmissionDenied)):
                 raise

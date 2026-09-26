@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -6,6 +7,7 @@ from agent.architecture_rubric import (
     RUBRIC_CRITERIA,
     STAGED_PRODUCTION_REQUIREMENTS,
     STAGED_REVIEW_STANDARD,
+    TOPOLOGY_PROOF_REQUIREMENTS,
     staged_review_requirements,
 )
 from agent.nodes import staged_graph_gate as gate
@@ -101,6 +103,14 @@ def test_generation_and_gate_receive_shared_capability_policy(maturity):
         "enum"
     ]
     assert {"domain_specificity", "succinctness", "selected_depth"}.isdisjoint(codes)
+    generated_input = json.loads(generated_prompt.split("\nINPUT\n", 1)[1])
+    if maturity == "production":
+        assert (
+            generated_input["downstream_controls"]["authorization_and_compensation"]
+            == STAGED_PRODUCTION_REQUIREMENTS["authorization_and_compensation"]
+        )
+    else:
+        assert "downstream_controls" not in generated_input
 
 
 @pytest.mark.parametrize("maturity", ["prototype", "production"])
@@ -130,6 +140,54 @@ def test_staged_presentation_policy_preserves_graph_correctness_rules(maturity):
         "edge_semantics",
         "safe_action_boundary",
         "gate_preserving_reuse",
+    } <= set(requirements)
+
+
+@pytest.mark.parametrize("maturity", ["prototype", "production"])
+def test_staged_mece_blocks_material_conflicts_without_requiring_extra_boxes(maturity):
+    requirements = staged_review_requirements("components", maturity)
+    criterion = requirements["mece_scope"]
+
+    assert "Block conflicting material ownership" in criterion
+    assert "required behavior or controls ambiguous" in criterion
+    assert "outside the requested subject scope" in criterion
+    assert (
+        "Redundant decomposition, compatible shared ownership, and naming preferences are advisory"
+        in criterion
+    )
+    assert "concrete behavior or control harm" in criterion
+    assert "brief_coverage" in requirements
+    assert "objective_fidelity" in requirements
+    assert criterion != RUBRIC_CRITERIA["mece_scope"][1]
+
+
+def test_production_branch_policy_keeps_required_outcomes_and_controls():
+    requirements = staged_review_requirements(
+        "connections", "production", tuple(TOPOLOGY_PROOF_REQUIREMENTS)
+    )
+    criterion = requirements["branch_completion"]
+
+    for obligation in (
+        "required or declared normal, denial, failure, alternate, and fallback path",
+        "typed response carrying the applicable outcomes",
+        "same executable owner handling them",
+        "without a separate component or edge",
+        "optional exception that the request and accepted design do not declare",
+        "Block a missing required path",
+        "bypasses a required control",
+    ):
+        assert obligation in criterion
+    assert "branch_completion" not in staged_review_requirements(
+        "connections", "prototype"
+    )
+    assert {
+        "runtime_completeness",
+        "edge_semantics",
+        "safe_action_boundary",
+        "gate_preserving_reuse",
+        "topology_enforced_guarantees",
+        "state_effect_reconciliation",
+        *TOPOLOGY_PROOF_REQUIREMENTS,
     } <= set(requirements)
 
 
@@ -350,6 +408,15 @@ def test_shared_compensation_contracts_preserve_the_complete_control_path():
         "Compensation must use the same policy, approval, execution, reconciliation, "
         "and audit controls"
     ) in criterion
+    for obligation in (
+        "each external effect executor, trace the exact approved action payload",
+        "stable operation identity from canonical proposal or operation ownership",
+        "an executor pull with its authoritative reply",
+        "declared same-owner state can supply them",
+        "executor may reserve the identity durably with canonical state",
+        "authorization verdict or incidental reachability alone supplies neither",
+    ):
+        assert obligation in criterion
     assert (
         "Cover compensation explicitly in the existing validation and approval "
         "invocation and response contracts"
@@ -358,6 +425,15 @@ def test_shared_compensation_contracts_preserve_the_complete_control_path():
         "Shared controls suffice when those contracts cover both normal and "
         "compensation actions; duplicate control paths are unnecessary"
     ) in criterion
+    for obligation in (
+        "Review normal and compensation behavior separately even when one component",
+        "its normal input does not establish rollback initiation",
+        "initiating operator, incident, event, or explicit autonomous responsibility",
+        "original or applied operation reference or recovery input to its proposal producer",
+        "Direct, delegated, combined, or declared same-owner internal paths are valid",
+        "do not demand duplicate services or edges or an incoming edge for an explicit autonomous action",
+    ):
+        assert obligation in criterion
     assert (
         "Identify the compensation proposal's producer and follow its direct or "
         "delegated invocation to each shared control"
@@ -366,6 +442,211 @@ def test_shared_compensation_contracts_preserve_the_complete_control_path():
         "A validator's broad responsibility or another producer's validation path "
         "does not establish that invocation"
     ) in criterion
+    reviewed_prompt = gate._prompt(
+        gate="connections",
+        user_request="Design human-approved ad changes and rollback.",
+        evidence_bundle={},
+        resolved_maturity="production",
+        candidate_records=[],
+        required_production_guarantees=("authorization_and_compensation",),
+    )
+    reviewed_criteria = json.loads(
+        reviewed_prompt.split("Acceptance criteria: ", 1)[1].split("\n", 1)[0]
+    )
+    assert reviewed_criteria["authorization_and_compensation"] == criterion
+
+
+def test_shared_owner_initiation_reaches_connection_author_and_gate():
+    context = generation.AcceptedContext(
+        assumptions=("A human operator may request rollback of an applied change.",),
+        external_effects=True,
+        retrieval_or_reuse=False,
+        learning_or_release=False,
+    )
+    request = "Draw an approval-based campaign workflow with rollback."
+    generated_prompt, _ = generation._attempt_prompt(
+        stage="connections",
+        request=request,
+        resolved_maturity="production",
+        write_set=generation.create_write_set(component_limit=4, edge_limit=8),
+        upstream_fingerprint="a" * 64,
+        attempt=0,
+        prior_prompt_fingerprint=None,
+        prior_write_set_fingerprint=None,
+        structural_findings=[],
+        gate_findings=[],
+        base=None,
+        rejected_candidate=None,
+        accepted_components=[
+            {
+                "index": 0,
+                "label": "Shared proposal service",
+                "type": 101,
+                "responsibility": "Produces normal and rollback proposals.",
+                "primary_flow_member": True,
+                "is_root": True,
+            }
+        ],
+        accepted_context=context,
+    )
+    guarantees = production_proofs_for_capabilities(
+        context.prompt_value()["capabilities"], maturity="production"
+    )
+    reviewed_prompt = gate._prompt(
+        gate="connections",
+        user_request=request,
+        evidence_bundle={"candidate_context": context.prompt_value()},
+        resolved_maturity="production",
+        candidate_records=[],
+        required_production_guarantees=guarantees,
+    )
+    generated_input = json.loads(generated_prompt.split("\nINPUT\n", 1)[1])
+    reviewed_criteria = json.loads(
+        reviewed_prompt.split("Acceptance criteria: ", 1)[1].split("\n", 1)[0]
+    )
+
+    assert "authorization_and_compensation" in guarantees
+    assert generated_input["acceptance_criteria"] == reviewed_criteria
+    assert (
+        reviewed_criteria["authorization_and_compensation"]
+        == (STAGED_PRODUCTION_REQUIREMENTS["authorization_and_compensation"])
+    )
+    assert "normal input does not initiate rollback" in generated_prompt
+    assert "normal input does not initiate rollback" in reviewed_prompt
+    assert (
+        "exact approved action payload and stable operation identity"
+        in generated_prompt
+    )
+    assert (
+        "exact approved action payload and stable operation identity" in reviewed_prompt
+    )
+    assert "declared metric pull with reply is a valid normal input" in generated_prompt
+    assert "declared metric pull with reply is a valid normal input" in reviewed_prompt
+    assert (
+        "An authorization verdict or incidental reachability alone" in generated_prompt
+    )
+    assert "An authorization verdict or incidental" in reviewed_prompt
+
+
+def test_captured_shared_producer_gap_records_engineering_review_evidence():
+    fixture = json.loads(
+        (
+            Path(__file__).parent
+            / "fixtures"
+            / "marketing_shared_proposal_rollback_gap.json"
+        ).read_text()
+    )
+    graph = fixture["graph_data"]
+    contract = fixture["graph_contract"]
+    producer = next(node for node in graph["nodes"] if node["id"] == "n4")
+    inbound = [edge for edge in graph["edges"] if edge["target"] == "n4"]
+
+    assert fixture["capture"]["source_edge_count"] == len(graph["edges"]) == 34
+    assert contract["maturity"] == "production"
+    assert contract["capabilities"]["external_effects"] is True
+    assert contract["component_gate"]["approved"] is True
+    assert contract["connection_gate"]["approved"] is True
+    assert "rollback compensation proposals" in producer["description"]
+    assert any("does not act autonomously" in row for row in graph["assumptions"])
+    assert {(edge["source"], edge["label"]) for edge in inbound} == {
+        ("n2", "Trigger proposal generation for stored snapshot version"),
+        (
+            "n3",
+            "Validated snapshot with provenance, or miss or stale artifact discarded in abstention",
+        ),
+        (
+            "n5",
+            "Valid: eligible for approval; invalid: rejected with constraint violations",
+        ),
+    }
+    assert fixture["engineering_annotation"]["finding"] == (
+        "missing_shared_owner_compensation_initiation"
+    )
+    assert fixture["engineering_annotation"]["review_origin"] == (
+        "assistant_engineering_review_not_model_gate"
+    )
+    assert fixture["engineering_annotation"]["non_findings"] == [
+        "human approval ownership",
+        "primary walkthrough order",
+    ]
+
+
+def test_captured_executor_input_gap_separates_metric_pull_from_effect_payload():
+    fixture = json.loads(
+        (
+            Path(__file__).parent / "fixtures" / "marketing_executor_input_gap.json"
+        ).read_text()
+    )
+    graph = fixture["graph_data"]
+    contract = fixture["graph_contract"]
+    edges = graph["edges"]
+    executor_inbound = [edge for edge in edges if edge["target"] == "n8"]
+    proposal_inputs = [edge for edge in edges if edge["target"] == "n4"]
+    reconciliation_outbound = [edge for edge in edges if edge["source"] == "n9"]
+
+    assert set(fixture) == {
+        "capture",
+        "graph_data",
+        "graph_contract",
+        "engineering_annotation",
+    }
+    assert fixture["capture"]["source_edge_count"] == len(edges) == 37
+    assert contract["maturity"] == "production"
+    assert contract["capabilities"]["external_effects"] is True
+    assert contract["component_gate"]["approved"] is True
+    assert contract["connection_gate"]["approved"] is True
+    assert {(edge["source"], edge["target"]) for edge in proposal_inputs} >= {
+        ("n3", "n4"),
+        ("n1", "n4"),
+    }
+    assert any(
+        edge["source"] == "n4"
+        and edge["target"] == "n3"
+        and "Read scoped snapshots" in edge["label"]
+        for edge in edges
+    )
+    assert {(edge["source"], edge["target"]) for edge in executor_inbound} == {
+        ("n6", "n8"),
+        ("n9", "n8"),
+        ("n11", "n8"),
+    }
+    assert any(
+        edge["source"] == "n6" and edge["label"].startswith("Authorized: execute")
+        for edge in executor_inbound
+    )
+    assert any(
+        edge["source"] == "n9" and "same-key retry" in edge["label"]
+        for edge in executor_inbound
+    )
+    assert any(
+        edge["source"] == "n11"
+        and edge["label"].startswith("Committed: change applied")
+        for edge in executor_inbound
+    )
+    assert any(
+        edge["source"] == "n8"
+        and edge["target"] == "n11"
+        and "approved exact" in edge["label"]
+        for edge in edges
+    )
+    assert any(
+        node["id"] == "n7" and "Authoritative owner" in node["description"]
+        for node in graph["nodes"]
+    )
+    assert any(
+        node["id"] == "n9" and "STILL_UNKNOWN triggers" in node["description"]
+        for node in graph["nodes"]
+    )
+    assert not {(edge["target"]) for edge in reconciliation_outbound} & {"n1", "n4"}
+    assert fixture["engineering_annotation"]["finding"] == (
+        "effect_executor_lacks_approved_payload_and_identity_input"
+    )
+    assert fixture["engineering_annotation"]["secondary_finding"] == (
+        "declared_still_unknown_compensation_lacks_initiation_path"
+    )
+    assert fixture["engineering_annotation"]["review_origin"] == (
+        "assistant_engineering_review_not_model_gate"
+    )
 
 
 def test_reuse_control_details_remain_in_connection_review():

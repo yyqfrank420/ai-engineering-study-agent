@@ -70,72 +70,34 @@ function parallelLaneOffset(index: number, count: number): number {
 }
 
 // ── Topological column assignment ────────────────────────────────────────────
-// Strips back-edges (cycles) via iterative DFS, then runs longest-path on the
-// remaining DAG so every node gets its maximum depth from source nodes.
+// Use longest-path ranks on directed layout edges. When a cycle has no entry,
+// break it at the earliest remaining component in the declared node order.
 // Result: a Map<nodeId, columnIndex> where col 0 = leftmost entry node.
 function assignColumns(
   nodeIds: string[],
   edges: GraphEdge[],
 ): Map<string, number> {
   // Declared feedback is a return path, not part of the primary runtime DAG.
-  // Remove it before generic cycle breaking so layout is stable when a model
-  // returns the same graph in a different array order.
-  const layoutEdges = edges.filter(edge => edge.flow !== 'feedback' && edge.type !== 'loop');
-  const adj = new Map<string, string[]>();
-  for (const id of nodeIds) adj.set(id, []);
-  for (const e of layoutEdges) adj.get(e.source)?.push(e.target);
-
-  // DFS: mark back edges (those that close a cycle)
-  const color = new Map<string, number>(nodeIds.map(id => [id, 0]));
-  const backEdgeSet = new Set<string>();
-
-  for (const start of nodeIds) {
-    if (color.get(start) !== 0) continue;
-    const stack: Array<[string, number]> = [[start, 0]];
-    color.set(start, 1);
-    while (stack.length > 0) {
-      const frame = stack[stack.length - 1];
-      const [id, ci] = frame;
-      const children = adj.get(id) ?? [];
-      if (ci >= children.length) {
-        color.set(id, 2);
-        stack.pop();
-      } else {
-        frame[1]++;
-        const next = children[ci];
-        if (color.get(next) === 1) {
-          backEdgeSet.add(`${id}→${next}`);
-        } else if (color.get(next) === 0) {
-          color.set(next, 1);
-          stack.push([next, 0]);
-        }
-      }
-    }
+  const outgoing = new Map(nodeIds.map(id => [id, new Set<string>()]));
+  const inDegree = new Map(nodeIds.map(id => [id, 0]));
+  for (const edge of edges) {
+    if (edge.flow === 'feedback' || edge.type === 'loop') continue;
+    const targets = outgoing.get(edge.source);
+    if (!targets || !inDegree.has(edge.target) || targets.has(edge.target)) continue;
+    targets.add(edge.target);
+    inDegree.set(edge.target, inDegree.get(edge.target)! + 1);
   }
 
-  // Build DAG without back edges
-  const dagAdj   = new Map<string, string[]>();
-  const dagInDeg = new Map<string, number>();
-  for (const id of nodeIds) { dagAdj.set(id, []); dagInDeg.set(id, 0); }
-  for (const e of layoutEdges) {
-    if (!backEdgeSet.has(`${e.source}→${e.target}`)) {
-      dagAdj.get(e.source)!.push(e.target);
-      dagInDeg.set(e.target, (dagInDeg.get(e.target) ?? 0) + 1);
-    }
-  }
-
-  // Longest-path via Kahn's (topological BFS)
-  const cols   = new Map<string, number>(nodeIds.map(id => [id, 0]));
-  const tmpDeg = new Map(dagInDeg);
-  const queue  = nodeIds.filter(id => (tmpDeg.get(id) ?? 0) === 0);
-  let qi = 0;
-  while (qi < queue.length) {
-    const id    = queue[qi++];
-    const myCol = cols.get(id)!;
-    for (const next of (dagAdj.get(id) ?? [])) {
-      cols.set(next, Math.max(cols.get(next)!, myCol + 1));
-      tmpDeg.set(next, tmpDeg.get(next)! - 1);
-      if (tmpDeg.get(next) === 0) queue.push(next);
+  const cols = new Map(nodeIds.map(id => [id, 0]));
+  const remaining = new Set(nodeIds);
+  while (remaining.size > 0) {
+    const id = nodeIds.find(nodeId => remaining.has(nodeId) && inDegree.get(nodeId) === 0)
+      ?? nodeIds.find(nodeId => remaining.has(nodeId))!;
+    remaining.delete(id);
+    for (const target of outgoing.get(id) ?? []) {
+      if (!remaining.has(target)) continue;
+      cols.set(target, Math.max(cols.get(target)!, cols.get(id)! + 1));
+      inDegree.set(target, inDegree.get(target)! - 1);
     }
   }
   return cols;
@@ -160,6 +122,7 @@ interface D3GraphProps {
   onLayoutReady?: (structureKey: string) => void;
   minimumTitlePx?: number;
   navigation?: boolean;
+  inspectionViewport?: { nodeId: string; width: number; height: number };
 }
 
 type RenderNode = GraphNode & {
@@ -200,8 +163,9 @@ interface GraphRenderState {
   sequenceLength: number;
   isForward: (d: RenderLink) => boolean;
   viewport: () => d3.ZoomTransform;
-  setWalkthroughViewport: (transform: d3.ZoomTransform) => void;
+  setTransientViewport: (transform: d3.ZoomTransform) => void;
   focusWalkthroughNodes: (nodeIds: Set<string>) => void;
+  focusInspectionNode: (nodeId: string, safeWidth: number, safeHeight: number) => void;
 }
 
 interface WalkthroughCamera {
@@ -237,11 +201,13 @@ export function D3Graph({
   onLayoutReady,
   minimumTitlePx = MIN_PUBLISHED_TITLE_PX,
   navigation = false,
+  inspectionViewport,
 }: D3GraphProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const navigateRef = useRef<(action: 'in' | 'out' | 'fit' | 'read') => void>(() => undefined);
   const renderStateRef = useRef<GraphRenderState | null>(null);
   const walkthroughCameraRef = useRef<WalkthroughCamera | null>(null);
+  const inspectionCameraRef = useRef<{ key: string; nodeId: string; userIntervened: boolean } | null>(null);
   const onNodeClickRef = useRef(onNodeClick);
   const onNodeEditRef = useRef(onNodeEdit);
   const onViewStateChangeRef = useRef(onViewStateChange);
@@ -258,6 +224,9 @@ export function D3Graph({
   const connectionCloseRef = useRef<HTMLButtonElement>(null);
   const [showConnections, setShowConnections] = useState(false);
   const structureKey = graphStructureKey(graphData);
+  const inspectedNodeId = inspectionViewport?.nodeId ?? null;
+  const inspectionWidth = inspectionViewport?.width ?? 0;
+  const inspectionHeight = inspectionViewport?.height ?? 0;
   const selectedConnection = selectedConnectionId
     ? diagramConnections(graphData.edges).find(connection => connection.id === selectedConnectionId)
     : undefined;
@@ -341,9 +310,10 @@ export function D3Graph({
     const trackDrag = (event: { sourceEvent: MouseEvent | TouchEvent }) => {
       if ('view' in event.sourceEvent) dragView = event.sourceEvent.view;
     };
-    const stopWalkthroughFollow = () => {
+    const stopCameraFollow = () => {
       const camera = walkthroughCameraRef.current;
-      if (camera?.active) camera.userIntervened = true;
+      if (camera && (camera.active || inspectionCameraRef.current)) camera.userIntervened = true;
+      if (inspectionCameraRef.current) inspectionCameraRef.current.userIntervened = true;
     };
     svg.attr('data-rendered-graph-version', null);
     svg.selectAll('*').remove();
@@ -436,17 +406,17 @@ export function D3Graph({
       latestViewStateRef.current = { key: structureKey, state };
       onViewStateChangeRef.current?.(state);
     };
-    let applyingWalkthroughCamera = false;
+    let applyingTransientCamera = false;
     const zoomBehavior = d3.zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.1, 3])
       .on('start', (event) => {
-        if (event.sourceEvent) stopWalkthroughFollow();
+        if (event.sourceEvent) stopCameraFollow();
       })
       .on('zoom', (event) => {
         g.attr('transform', event.transform.toString());
       })
       .on('end', (event) => {
-        if (applyingWalkthroughCamera) return;
+        if (applyingTransientCamera) return;
         const camera = walkthroughCameraRef.current;
         if (camera?.active) camera.baseline = event.transform;
         emitViewState(nodes, event.transform);
@@ -1272,7 +1242,7 @@ export function D3Graph({
             if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
             event.preventDefault();
             event.stopPropagation();
-            stopWalkthroughFollow();
+            stopCameraFollow();
             const step = event.shiftKey ? 10 : 1;
             resize(snapshot(), side, event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0,
               event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0);
@@ -1281,7 +1251,7 @@ export function D3Graph({
           .call(d3.drag<SVGRectElement, string>().container(() => g.node()!)
             .on('start', event => { trackDrag(event); activateZone(grp.id); resizeStart = snapshot(); resizePointer = { x: event.x, y: event.y }; })
             .on('drag', (event, side) => {
-              stopWalkthroughFollow();
+              stopCameraFollow();
               resize(resizeStart, side, event.x - resizePointer.x, event.y - resizePointer.y, !event.sourceEvent.altKey);
             })
             .on('end', () => { dragView = null; showGuides([]); emitViewState(nodes, d3.zoomTransform(svgRef.current!)); }));
@@ -1305,7 +1275,7 @@ export function D3Graph({
             if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
               event.preventDefault();
               event.stopPropagation();
-              stopWalkthroughFollow();
+              stopCameraFollow();
               activateZone(grp.id);
               centerMembers(grp);
               const step = event.shiftKey ? 10 : 1;
@@ -1327,7 +1297,7 @@ export function D3Graph({
               rect.style('cursor', 'grabbing');
             })
             .on('drag', event => {
-              stopWalkthroughFollow();
+              stopCameraFollow();
               let dx = event.x - movePointer.x, dy = event.y - movePointer.y;
               const constrain = event.sourceEvent.shiftKey;
               const horizontal = Math.abs(dx) >= Math.abs(dy);
@@ -1526,7 +1496,7 @@ export function D3Graph({
             nodeDragStarts.set(node.id, { x: node.x, y: node.y, targets });
           })
           .on('drag', (event, d) => {
-            stopWalkthroughFollow();
+            stopCameraFollow();
             const start = nodeDragStarts.get(d.id)!;
             const constrain = navigation && event.sourceEvent.shiftKey;
             const horizontal = Math.abs(event.x - start.x) >= Math.abs(event.y - start.y);
@@ -1585,7 +1555,7 @@ export function D3Graph({
         if (navigation && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
           event.preventDefault();
           event.stopPropagation();
-          stopWalkthroughFollow();
+          stopCameraFollow();
           const step = event.shiftKey ? 10 : 1;
           d.x += event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0;
           d.y += event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0;
@@ -1647,8 +1617,7 @@ export function D3Graph({
         : d.technology ? `${d.label} — ${d.technology}` : d.label);
 
     // Card background
-    nodeSel.filter((d: RenderNode) => d.type !== 'decision')
-      .append('rect')
+    nodeSel.append('rect')
       .attr('class', 'node-card')
       .attr('width', NODE_W).attr('height', NODE_H)
       .attr('x', -NODE_W / 2).attr('y', -NODE_H / 2)
@@ -1658,24 +1627,8 @@ export function D3Graph({
       .attr('stroke-width', 1.35)
       .attr('filter', 'url(#architecture-card-shadow)');
 
-    nodeSel.filter((d: RenderNode) => d.type === 'decision')
-      .append('path')
-      .attr('class', 'node-card')
-      .attr('d', [
-        `M 0 ${-NODE_H / 2}`,
-        `L ${NODE_W / 2} 0`,
-        `L 0 ${NODE_H / 2}`,
-        `L ${-NODE_W / 2} 0`,
-        'Z',
-      ].join(' '))
-      .attr('fill',   (d: RenderNode) => (TYPE_STYLE[d.type] ?? FALLBACK_STYLE).fill)
-      .attr('stroke', (d: RenderNode) => (TYPE_STYLE[d.type] ?? FALLBACK_STYLE).stroke)
-      .attr('stroke-width', 1.35)
-      .attr('filter', 'url(#architecture-card-shadow)');
-
     // Left accent stripe
-    nodeSel.filter((d: RenderNode) => d.type !== 'decision')
-      .append('rect')
+    nodeSel.append('rect')
       .attr('x', -NODE_W / 2).attr('y', -NODE_H / 2 + NODE_RX)
       .attr('width', 3).attr('height', NODE_H - NODE_RX * 2)
       .attr('fill', (d: RenderNode) => (TYPE_STYLE[d.type] ?? FALLBACK_STYLE).stroke);
@@ -1764,8 +1717,12 @@ export function D3Graph({
         }
       });
       const hasSubtitle = Boolean(d.technology) && d.design_origin === 'applied';
-      const lineHeight = navigation ? 20 : 13;
-      const titleCenterY = navigation && hasSubtitle ? -4 : 2;
+      const compactSubtitle = navigation && hasSubtitle && wrapNodeTechnology(d.technology || '').length === 2;
+      // Two subtitle lines need more room inside the shared 68px card.
+      const normalLineHeight = navigation ? 20 : 13;
+      const normalTitleCenterY = navigation && hasSubtitle ? -4 : 2;
+      const lineHeight = compactSubtitle ? 18 : normalLineHeight;
+      const titleCenterY = compactSubtitle ? -10 : normalTitleCenterY;
       const startY = titleCenterY - (lines.length - 1) * lineHeight / 2;
       d3.select(this).selectAll('tspan')
         .data(lines)
@@ -1787,7 +1744,8 @@ export function D3Graph({
       .style('pointer-events', 'none')
       .each(function(d: RenderNode) {
         const lines = wrapNodeTechnology(d.technology || '');
-        const startY = lines.length === 1 ? 24 : 20;
+        const multilineStartY = navigation ? 15 : 20;
+        const startY = lines.length === 1 ? 24 : multilineStartY;
         d3.select(this).selectAll('tspan')
           .data(lines)
           .enter()
@@ -2102,7 +2060,7 @@ export function D3Graph({
       Math.max(INITIAL_FIT_PADDING, (height - layoutH * readableScale) / 2),
     ).scale(readableScale);
     navigateRef.current = (action) => {
-      stopWalkthroughFollow();
+      stopCameraFollow();
       if (action === 'fit' || action === 'read') {
         const boxes = groupEls.map(({ rect }) => ({
           x: Number(rect.attr('x')), y: Number(rect.attr('y')),
@@ -2137,13 +2095,19 @@ export function D3Graph({
     if (sameDiagram && camera?.active && !camera.userIntervened) camera.baseline = initialTransform;
     svg.call(zoomBehavior.transform, initialTransform);
 
-    const setWalkthroughViewport = (transform: d3.ZoomTransform) => {
-      applyingWalkthroughCamera = true;
+    const setTransientViewport = (transform: d3.ZoomTransform) => {
+      applyingTransientCamera = true;
       try {
         svg.call(zoomBehavior.transform, transform);
       } finally {
-        applyingWalkthroughCamera = false;
+        applyingTransientCamera = false;
       }
+    };
+    const correction = (start: number, end: number, minimum: number, maximum: number) => {
+      if (end - start > maximum - minimum) return (minimum + maximum - start - end) / 2;
+      if (start < minimum) return minimum - start;
+      if (end > maximum) return maximum - end;
+      return 0;
     };
     const focusWalkthroughNodes = (nodeIds: Set<string>) => {
       const activeNodes = nodes
@@ -2177,16 +2141,36 @@ export function D3Graph({
         top: first.y - NODE_H / 2,
         bottom: first.y + NODE_H / 2,
       };
-      const correction = (start: number, end: number, minimum: number, maximum: number) => {
-        if (end - start > maximum - minimum) return (minimum + maximum - start - end) / 2;
-        if (start < minimum) return minimum - start;
-        if (end > maximum) return maximum - end;
-        return 0;
-      };
       const dx = correction(bounds.left * scale + current.x, bounds.right * scale + current.x, left, right);
       const dy = correction(bounds.top * scale + current.y, bounds.bottom * scale + current.y, top, bottom);
       if (scale === current.k && dx === 0 && dy === 0) return;
-      setWalkthroughViewport(d3.zoomIdentity.translate(current.x + dx, current.y + dy).scale(scale));
+      setTransientViewport(d3.zoomIdentity.translate(current.x + dx, current.y + dy).scale(scale));
+    };
+    const focusInspectionNode = (nodeId: string, safeWidth: number, safeHeight: number) => {
+      const node = nodeById[nodeId];
+      if (!node || !Number.isFinite(node.x) || !Number.isFinite(node.y)
+        || !Number.isFinite(safeWidth) || safeWidth <= 0
+        || !Number.isFinite(safeHeight) || safeHeight <= 0) return;
+      const visibleWidth = Math.min(width, safeWidth);
+      const visibleHeight = Math.min(height, safeHeight);
+      const toolbarHeight = svg.node()?.parentElement?.querySelector<HTMLElement>('.diagram-toolbar')?.offsetHeight ?? 0;
+      const left = Math.min(32, visibleWidth / 4);
+      const right = visibleWidth - left;
+      const top = Math.min(Math.max(72, toolbarHeight + 24), visibleHeight / 3);
+      const bottom = visibleHeight - Math.min(32, visibleHeight / 4);
+      const current = d3.zoomTransform(svg.node()!);
+      const dx = correction(
+        (node.x - NODE_W / 2) * current.k + current.x,
+        (node.x + NODE_W / 2) * current.k + current.x,
+        left, right,
+      );
+      const dy = correction(
+        (node.y - NODE_H / 2) * current.k + current.y,
+        (node.y + NODE_H / 2) * current.k + current.y,
+        top, bottom,
+      );
+      if (dx === 0 && dy === 0) return;
+      setTransientViewport(d3.zoomIdentity.translate(current.x + dx, current.y + dy).scale(current.k));
     };
 
     renderStateRef.current = {
@@ -2199,8 +2183,9 @@ export function D3Graph({
       sequenceLength: sequence.length,
       isForward,
       viewport: () => d3.zoomTransform(svg.node()!),
-      setWalkthroughViewport,
+      setTransientViewport,
       focusWalkthroughNodes,
+      focusInspectionNode,
     };
 
     let cancelled = false;
@@ -2236,6 +2221,17 @@ export function D3Graph({
   }, [minimumTitlePx, navigation, structureKey, viewportRevision]);
 
   useEffect(() => {
+    const exists = renderStateRef.current?.nodeSel.data().some(node => node.id === inspectedNodeId);
+    if (!navigation || !inspectedNodeId || !exists) return;
+    const camera = inspectionCameraRef.current;
+    if (camera?.nodeId === inspectedNodeId) {
+      camera.key = structureKey;
+      return;
+    }
+    inspectionCameraRef.current = { key: structureKey, nodeId: inspectedNodeId, userIntervened: false };
+  }, [inspectedNodeId, navigation, structureKey, viewportRevision]);
+
+  useEffect(() => {
     const renderState = renderStateRef.current;
     if (!renderState || !graphData) return;
 
@@ -2255,9 +2251,17 @@ export function D3Graph({
     const state = renderStateRef.current;
     const camera = walkthroughCameraRef.current;
     if (!navigation || !state || !camera) return;
+    if (inspectionCameraRef.current) {
+      if (currentStep < 0) {
+        camera.active = false;
+        camera.userIntervened = false;
+        camera.baseline = null;
+      }
+      return;
+    }
     if (currentStep < 0) {
       if (camera.active && !camera.userIntervened && camera.baseline) {
-        state.setWalkthroughViewport(camera.baseline);
+        state.setTransientViewport(camera.baseline);
       }
       camera.active = false;
       camera.userIntervened = false;
@@ -2269,7 +2273,19 @@ export function D3Graph({
       camera.baseline = state.viewport();
     }
     if (!camera.userIntervened) state.focusWalkthroughNodes(activeNodeIds);
-  }, [activeNodeIds, currentStep, navigation, structureKey, viewportRevision]);
+  }, [activeNodeIds, currentStep, inspectedNodeId, navigation, structureKey, viewportRevision]);
+
+  useEffect(() => {
+    const camera = inspectionCameraRef.current;
+    const state = renderStateRef.current;
+    if (!navigation || !inspectedNodeId || !state?.nodeSel.data().some(node => node.id === inspectedNodeId)) {
+      inspectionCameraRef.current = null;
+      return;
+    }
+    if (!camera || camera.userIntervened
+      || camera.key !== structureKey || camera.nodeId !== inspectedNodeId) return;
+    state.focusInspectionNode(camera.nodeId, inspectionWidth, inspectionHeight);
+  }, [inspectedNodeId, inspectionWidth, inspectionHeight, navigation, structureKey, viewportRevision]);
 
   useEffect(() => {
     const renderState = renderStateRef.current;

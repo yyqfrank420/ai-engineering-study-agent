@@ -29,6 +29,7 @@ interface GraphCanvasProps {
   onClosePopup: () => void;
   sourceTexts: string[];
   isPreview?: boolean;
+  isAcceptedGraph?: boolean;
   isBuilding?: boolean;
   workflowProgress?: WorkflowProgress[];
   graphCandidate?: GraphCandidate | null;
@@ -76,6 +77,7 @@ export function GraphCanvas({
   onClosePopup,
   sourceTexts,
   isPreview = false,
+  isAcceptedGraph = !isPreview,
   isBuilding = false,
   workflowProgress = [],
   graphCandidate = null,
@@ -104,6 +106,11 @@ export function GraphCanvas({
   const editDirtyRef = useRef(false);
   const canvasRef = useRef<HTMLDivElement>(null);
   const inspectorRef = useRef<HTMLDivElement>(null);
+  const [inspectionViewport, setInspectionViewport] = useState<{
+    nodeId: string;
+    width: number;
+    height: number;
+  }>();
   const layoutWritesRef = useRef<Promise<void>>(Promise.resolve());
   const latestViewStateRef = useRef<{
     threadId: string;
@@ -132,6 +139,10 @@ export function GraphCanvas({
   const inspectedNode = editTarget
     ? graphData?.nodes.find(node => node.id === editTarget.nodeId)
     : selectedNode && (graphData?.nodes.find(node => node.id === selectedNode.node.id) ?? selectedNode.node);
+  const inspectedNodeId = inspectedNode && graphData?.nodes.some(node => node.id === inspectedNode.id)
+    ? inspectedNode.id : null;
+  const visibleInspectionViewport = inspectionViewport?.nodeId === inspectedNodeId
+    ? inspectionViewport : undefined;
 
   const persistLayout = (session: AuthSession, threadId: string, data: GraphData, viewState: GraphViewState) => {
     const write = layoutWritesRef.current.catch(() => undefined).then(() =>
@@ -210,6 +221,48 @@ export function GraphCanvas({
     latestViewStateRef.current = null;
     setPendingPersistViewState(null);
   }, [activeThreadId, onEditDraftChange]);
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    const panel = inspectorRef.current?.querySelector<HTMLElement>('.node-inspector');
+    if (!canvas || !panel || !inspectedNodeId) {
+      setInspectionViewport(current => current === undefined ? current : undefined);
+      return;
+    }
+
+    const measure = () => {
+      const canvasBox = canvas.getBoundingClientRect();
+      const panelBox = panel.getBoundingClientRect();
+      if (![canvasBox.left, canvasBox.top, canvasBox.width, canvasBox.height,
+        panelBox.left, panelBox.top, panelBox.width, panelBox.height].every(Number.isFinite)
+        || canvasBox.width <= 0 || canvasBox.height <= 0 || panelBox.width <= 0 || panelBox.height <= 0) {
+        setInspectionViewport(current => current === undefined ? current : undefined);
+        return;
+      }
+
+      const bottomPanel = panelBox.width >= canvasBox.width - 26;
+      const next = {
+        nodeId: inspectedNodeId,
+        width: bottomPanel ? canvasBox.width
+          : Math.min(canvasBox.width, Math.max(0, panelBox.left - canvasBox.left - 12)),
+        height: bottomPanel
+          ? Math.min(canvasBox.height, Math.max(0, panelBox.top - canvasBox.top - 12))
+          : canvasBox.height,
+      };
+      setInspectionViewport(current => current?.nodeId === next.nodeId
+        && current.width === next.width && current.height === next.height ? current : next);
+    };
+
+    measure();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure);
+      return () => window.removeEventListener('resize', measure);
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(canvas);
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, [activeThreadId, graphContentKey, inspectedNodeId]);
 
   useEffect(() => {
     if (
@@ -295,6 +348,12 @@ export function GraphCanvas({
               {subtitle}
             </div>
           )}
+          {isAcceptedGraph && graphData.detail_level === 'overview' && (
+            <div style={{ display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: '0.3rem', marginTop: 3, fontSize: '0.65rem', lineHeight: 1.35 }}>
+              <span style={{ color: '#c4b5fd', fontWeight: 700 }}>Overview</span>
+              <span style={{ color: '#aeb8c8' }}>Core workflow. Supporting detail is simplified.</span>
+            </div>
+          )}
         </div>
         <span style={{
           color: '#8490a0',
@@ -334,7 +393,7 @@ export function GraphCanvas({
       </div>
 
       {/* D3 canvas */}
-      <div ref={canvasRef} style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+      <div ref={canvasRef} className="graph-canvas__surface" style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <div inert={isSavingGraphContent} aria-busy={isSavingGraphContent}
           style={{ width: '100%', height: '100%', opacity: isBuilding ? 0.56 : 1, transition: 'opacity 180ms ease' }}>
           <D3Graph
@@ -343,6 +402,7 @@ export function GraphCanvas({
             graphData={graphData}
             currentStep={currentStep}
             activeNodeIds={activeNodeIds}
+            inspectionViewport={visibleInspectionViewport}
             onNodeClick={handleNodeClick}
             onNodeEdit={canEdit ? openNodeEditor : undefined}
             onEditConnection={canEdit ? openEdgeEditor : undefined}

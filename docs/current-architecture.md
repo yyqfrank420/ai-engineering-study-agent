@@ -309,17 +309,45 @@ review owns interactions after components freeze. The remaining limitation is ex
 correction cannot redesign components. A rejected graph stays unpublished. This bounded pipeline
 still makes five calls without correction; prompt simplification does not establish lower live latency.
 
-Semantic corrections to a new design use the existing delta assembler. The server retains
-every candidate record in order and permits updates to the review's indexed records plus
-bounded additions. Cited records can be witnesses to a missing path without needing changes.
-Each semantic correction slot accepts `null` to retain the original record verbatim, or a
-complete authorized update. Explicit user edits keep their non-null field contracts.
-An indexless finding permits updates across the candidate. Capabilities
-describe the complete corrected design; other component metadata stays fixed unless the
-finding concerns it or is global. Corrections cannot omit
-records or remove a required connection. Structural failures still use the original repair
-path, and explicit user edits retain their existing removal permissions. A semantic repair
-that needs deletion can still fail review; it does not gain removal authority implicitly.
+Semantic corrections use the existing delta assembler. The server retains unaffected
+records in order and permits updates to the review's indexed records plus bounded additions.
+Cited records can be witnesses to a missing path without needing changes. Each semantic
+correction slot accepts `null` to retain the original record verbatim, or a complete
+authorized update. Explicit user edits keep their non-null field contracts.
+An indexless finding permits updates across the candidate. Capabilities describe the
+complete corrected design; other component metadata stays fixed unless the finding concerns
+it or is global.
+
+For a first creation with no saved graph, the second existing attempt uses compact recovery.
+It aims for a simpler overview of the same requested core workflow at the same maturity.
+Only explicitly cited rejected records may be removed; an indexless global finding permits
+updates but grants no removal authority. Removals are validated, and component root indexes
+are remapped by the server. A removed required behavior still fails the complete semantic review. Connection
+recovery cannot change accepted components. Structural corrections retain the same contract
+and capacity checks. No additional provider attempts, review calls or deadline allowance are
+introduced. An exhausted or unavailable review still cannot publish an invalid candidate.
+
+Accepted recovery graphs carry server-owned `detail_level: overview`. This marker is bound
+to the reviewed graph fingerprint and persists with the graph. The canvas and explanation
+identify the overview, and subsequent edits retain that disclosure. Supporting detail may be
+simplified; required outcomes, declared capabilities and controls may not be hidden. Existing
+graphs, including explicit rebuilds with a saved baseline, retain their mutation authority
+and are restored unchanged on failure. They never enter this new-create recovery path.
+
+The `staged_graph_admission` analytics event distinguishes accepted, recovered, preserved and
+withheld outcomes without storing graph text or reviewer reasons. Admission is not evidence
+of durable delivery; correlate it with the transport's persistence and publication events.
+Normal users receive concise correction activity without internal findings. Gate calibration
+still requires human review of rejected and accepted examples; an automatic pass does not
+establish a false-rejection rate or a guarantee of semantic correctness.
+
+The staged render gate treats edge clipping, initial inline edge-label visibility, repeated
+per-node group labels and zone-boundary overlap as presentation advisories. The interactive
+canvas has panning, bundled connections and named regions that its private fit render lacks.
+Capture failures, wrong node or edge counts, node overlap, clipped nodes and unreadable titles
+remain blocking. Legacy render callers keep their existing checks. These advisories do not
+consume model retries or change the semantic review.
+
 Prototype memory does not itself create an approval or version gate. Gates required by
 the request, accepted responsibilities, or production criteria remain binding.
 

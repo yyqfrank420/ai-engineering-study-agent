@@ -12,7 +12,7 @@ def test_applied_graph_prompts_define_record_scoped_repair_boundaries():
         _APPLIED_GRAPH_TOPOLOGY_SYSTEM,
     )
 
-    assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v36"
+    assert _APPLIED_GRAPH_PATCH_PROMPT_VERSION == "applied_architecture_patch_v37"
     assert _APPLIED_GRAPH_TOPOLOGY_PROMPT_VERSION == "applied_topology_v22"
     assert "request, selected depth, and server contract" in (
         _APPLIED_GRAPH_TOPOLOGY_SYSTEM
@@ -50,6 +50,37 @@ def test_applied_graph_prompts_define_record_scoped_repair_boundaries():
     assert "does not supply omitted behavior" in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "cache lookup separate from" not in _APPLIED_GRAPH_PATCH_SYSTEM
     assert "approval-only route" not in _APPLIED_GRAPH_PATCH_SYSTEM
+
+
+def test_legacy_patch_repair_receives_shared_named_subject_requirement():
+    from agent.architecture_rubric import RUBRIC_CRITERIA
+    from agent.nodes.graph_worker import _repair_review
+
+    context = _repair_review(
+        {
+            "repair_contract": {
+                "layers": {
+                    "components": {
+                        "blocking_findings": [
+                            "Repair objective fidelity in the components layer."
+                        ]
+                    }
+                }
+            }
+        }
+    )
+
+    assert context["repair_requirements"] == [
+        {
+            "criterion": "objective_fidelity",
+            "owner_layer": "components",
+            "requirement": RUBRIC_CRITERIA["objective_fidelity"][1],
+        }
+    ]
+    assert (
+        "named educational, research, or comparison subject"
+        in (context["repair_requirements"][0]["requirement"])
+    )
 
 
 def test_applied_graph_text_limits_preserve_sentence_or_word_boundaries():

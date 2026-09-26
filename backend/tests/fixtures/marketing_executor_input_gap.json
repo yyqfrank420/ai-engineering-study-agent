@@ -1,0 +1,374 @@
+{
+  "capture": {
+    "kind": "accepted_staged_graph_sanitized",
+    "graph_version": "34c0b526-59de-4abc-aa5a-7d750e83b53b",
+    "source_edge_count": 37
+  },
+  "graph_data": {
+    "title": "Retail Campaign Assistant with Human-Approved Ad Changes",
+    "assumptions": [
+      "The ad platform exposes an external API for reading campaign metrics and applying targeting and ad-copy changes.",
+      "A human marketing operator approves or denies each exact proposal before any change is applied.",
+      "Approvals carry an expiry; an approval older than its validity window is treated as stale and the change is not applied.",
+      "Writes to the ad platform can time out after commit, so every change is reconciled by authoritative read-back using a stable operation identity.",
+      "Rollback reuses the same proposal, validation, approval, execution, and audit controls as normal changes.",
+      "The assistant does not retrain models or update prompts from feedback; proposals are generated from stored metrics and rules."
+    ],
+    "nodes": [
+      {
+        "id": "n1",
+        "label": "Marketing reviewer console",
+        "type": "client",
+        "description": "Lets marketing operators review each exact proposed ad-copy or targeting change, then approve or deny it; denial records the decision and stops execution."
+      },
+      {
+        "id": "n2",
+        "label": "Metrics ingestion service",
+        "type": "service",
+        "description": "Reads campaign performance metrics from the ad platform API and stores normalized snapshots with source and collection-time provenance."
+      },
+      {
+        "id": "n3",
+        "label": "Campaign metrics store",
+        "type": "datastore",
+        "description": "Durably stores timestamped campaign metric snapshots used as the factual basis for proposals; scoped by campaign and version."
+      },
+      {
+        "id": "n4",
+        "label": "Proposal generation service",
+        "type": "service",
+        "description": "Analyzes stored campaign metrics and produces typed, exact-action proposals for ad-copy edits and audience-targeting changes, citing the metrics used."
+      },
+      {
+        "id": "n5",
+        "label": "Proposal validation service",
+        "type": "service",
+        "description": "Deterministically validates every proposal's structure, allowed actions, budget and targeting constraints, and referenced metric freshness before it can be approved or executed."
+      },
+      {
+        "id": "n6",
+        "label": "Approval and policy service",
+        "type": "service",
+        "description": "Records approval or denial of each exact validated proposal, enforces approval expiry so stale approvals cannot execute, and authorizes execution or rollback of that specific proposal."
+      },
+      {
+        "id": "n7",
+        "label": "Approval and lifecycle store",
+        "type": "datastore",
+        "description": "Authoritative owner of proposal and approval lifecycle state (proposed, approved, denied, expired, applied, rolled back) with the stable operation identity reserved before any write."
+      },
+      {
+        "id": "n8",
+        "label": "Ad platform execution service",
+        "type": "service",
+        "description": "Applies only currently approved exact changes to the ad platform under a durable operation identity; revalidates authorization and approval freshness before executing; handles both normal changes and rollbacks."
+      },
+      {
+        "id": "n9",
+        "label": "Write reconciliation service",
+        "type": "service",
+        "description": "Recovers uncertain write outcomes by authoritative read-back of the operation identity: COMMITTED records success, NOT_FOUND permits same-key retry, STILL_UNKNOWN triggers bounded escalation and compensation."
+      },
+      {
+        "id": "n10",
+        "label": "Audit and provenance log",
+        "type": "datastore",
+        "description": "Append-only correlated record of metric inputs, proposals, validation results, approvals and denials, stale-approval rejections, executions, uncertain outcomes, reconciliations, and rollbacks."
+      },
+      {
+        "id": "n11",
+        "label": "Ad platform",
+        "type": "external",
+        "description": "External advertising platform that serves campaign metrics and is the authoritative target where approved ad-copy and audience-targeting changes are applied and read back."
+      }
+    ],
+    "edges": [
+      {
+        "source": "n2",
+        "target": "n11",
+        "label": "Fetch current campaign metrics; failed fetch: bounded validated retry, then abstain and record the",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n11",
+        "target": "n2",
+        "label": "Returns raw metrics as untrusted external bytes; validates provenance and schema before use",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n2",
+        "target": "n3",
+        "label": "Store normalized timestamped metric snapshot with provenance, scoped by campaign and version",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n3",
+        "target": "n2",
+        "label": "Committed: snapshot stored durably; rejected: retryable write error surfaced to ingestion",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n2",
+        "target": "n10",
+        "label": "Append metric collection event with source, collection time, and snapshot reference",
+        "flow": "feedback",
+        "sync": "async"
+      },
+      {
+        "source": "n4",
+        "target": "n3",
+        "label": "Read scoped snapshots; failed or missing required data: abstain with clarification, no proposal",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n3",
+        "target": "n4",
+        "label": "Returns validated snapshots; checks entailment of metric claims, discards stale or rejected data",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n4",
+        "target": "n5",
+        "label": "Submit typed exact-action change or rollback proposal for deterministic validation before approval",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n5",
+        "target": "n4",
+        "label": "Valid: structure, allowed actions, constraints, and freshness pass; invalid: recorded rejection with",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n5",
+        "target": "n7",
+        "label": "Reserve stable operation identity and record proposed lifecycle state before any write",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n7",
+        "target": "n5",
+        "label": "Committed: identity reserved durably; conflict: duplicate proposal deduplicated at the store",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n5",
+        "target": "n6",
+        "label": "Forward validated exact proposal for policy enforcement and human approval handling",
+        "flow": "control",
+        "sync": "sync"
+      },
+      {
+        "source": "n6",
+        "target": "n5",
+        "label": "Accepted: proposal queued for operator review; policy violation: rejection recorded and audited",
+        "flow": "control",
+        "sync": "sync"
+      },
+      {
+        "source": "n5",
+        "target": "n10",
+        "label": "Append validation result with proposal reference, checks run, and outcome",
+        "flow": "feedback",
+        "sync": "async"
+      },
+      {
+        "source": "n1",
+        "target": "n6",
+        "label": "Request pending validated proposals for operator review",
+        "flow": "control",
+        "sync": "sync"
+      },
+      {
+        "source": "n6",
+        "target": "n1",
+        "label": "Returns validated exact proposals with cited metrics and validation proof for review",
+        "flow": "control",
+        "sync": "sync"
+      },
+      {
+        "source": "n1",
+        "target": "n6",
+        "label": "Submit approval or denial of the exact reviewed proposal; denial records decision and stops",
+        "flow": "control",
+        "sync": "sync"
+      },
+      {
+        "source": "n6",
+        "target": "n1",
+        "label": "Approved: recorded with expiry; denied: recorded, execution blocked; both outcomes audited",
+        "flow": "control",
+        "sync": "sync"
+      },
+      {
+        "source": "n1",
+        "target": "n4",
+        "label": "Initiate rollback by requesting a proposal citing the original applied operation identity",
+        "flow": "control",
+        "sync": "sync"
+      },
+      {
+        "source": "n4",
+        "target": "n1",
+        "label": "Returns typed rollback proposal routed through the same validation, approval, and audit controls",
+        "flow": "control",
+        "sync": "sync"
+      },
+      {
+        "source": "n6",
+        "target": "n7",
+        "label": "Record approval, denial, expiry, applied, or rolled-back state under the operation identity",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n7",
+        "target": "n6",
+        "label": "Committed: lifecycle state updated; conflict: superseded state rejected and audited",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n6",
+        "target": "n10",
+        "label": "Append approval, denial, expiry enforcement, and authorization decision with proposal reference",
+        "flow": "feedback",
+        "sync": "async"
+      },
+      {
+        "source": "n8",
+        "target": "n6",
+        "label": "Revalidate authorization and approval freshness before executing the exact approved change",
+        "flow": "control",
+        "sync": "sync"
+      },
+      {
+        "source": "n6",
+        "target": "n8",
+        "label": "Authorized: execute; stale approval or denial: block execution, record rejection, and audit",
+        "flow": "control",
+        "sync": "sync"
+      },
+      {
+        "source": "n8",
+        "target": "n11",
+        "label": "Apply the approved exact ad-copy or targeting change under the durable operation identity",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n11",
+        "target": "n8",
+        "label": "Committed: change applied; rejected: platform error; timeout: uncertain outcome sent to reconciliati",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n8",
+        "target": "n10",
+        "label": "Append execution attempt with operation identity, applied change, and platform outcome",
+        "flow": "feedback",
+        "sync": "async"
+      },
+      {
+        "source": "n8",
+        "target": "n9",
+        "label": "Report uncertain or timed-out write outcome for authoritative reconciliation",
+        "flow": "runtime",
+        "sync": "async"
+      },
+      {
+        "source": "n9",
+        "target": "n11",
+        "label": "Read back the operation identity outcome authoritatively from the ad platform",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n11",
+        "target": "n9",
+        "label": "COMMITTED: record success; NOT_FOUND: permit same-key retry; STILL_UNKNOWN: bounded escalation",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n9",
+        "target": "n8",
+        "label": "Invoke same-key retry under valid authorization or bounded escalation with the operation identity",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n8",
+        "target": "n9",
+        "label": "Retry outcome recorded; escalation triggers correlated compensation through the same controls",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n9",
+        "target": "n7",
+        "label": "Record reconciled terminal state: applied, retried, escalated, or rolled back",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n7",
+        "target": "n9",
+        "label": "Committed: terminal lifecycle state stored durably and available for audit correlation",
+        "flow": "runtime",
+        "sync": "sync"
+      },
+      {
+        "source": "n9",
+        "target": "n10",
+        "label": "Append reconciliation evidence: read-back result, retry, escalation, and compensation correlation",
+        "flow": "feedback",
+        "sync": "async"
+      },
+      {
+        "source": "n4",
+        "target": "n10",
+        "label": "Append generated proposal with cited metrics and proposal type for provenance",
+        "flow": "feedback",
+        "sync": "async"
+      }
+    ]
+  },
+  "graph_contract": {
+    "maturity": "production",
+    "capabilities": {
+      "external_effects": true,
+      "learning_or_release": false,
+      "retrieval_or_reuse": true
+    },
+    "component_gate": {
+      "approved": true
+    },
+    "connection_gate": {
+      "approved": true
+    }
+  },
+  "engineering_annotation": {
+    "finding": "effect_executor_lacks_approved_payload_and_identity_input",
+    "detail": "The initial execution path reaches n8 through n6's authorization verdict, but no contract supplies n8 the exact approved action payload and stable operation identity from canonical proposal or lifecycle ownership before the write.",
+    "secondary_finding": "declared_still_unknown_compensation_lacks_initiation_path",
+    "secondary_detail": "n9 declares STILL_UNKNOWN compensation, but no n9 path reaches the proposal producer or operator with the original operation reference. The separate manual n1 rollback path does not establish this declared recovery initiation.",
+    "non_findings": [
+      "n4's declared normal metric pull from n3 with reply",
+      "manual operator rollback initiation from n1 to n4",
+      "human approval ownership"
+    ],
+    "remaining_finding": "Several source labels end mid-clause at the 100-character limit; this fixture does not claim to resolve label quality.",
+    "review_origin": "assistant_engineering_review_not_model_gate"
+  }
+}

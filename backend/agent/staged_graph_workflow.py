@@ -275,6 +275,125 @@ def _decode_connections(wire: Mapping[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _connection_edge_key(edge: Mapping[str, Any]) -> tuple[Any, ...]:
+    return tuple(
+        edge[key] for key in ("source_index", "target_index", "label", "flow", "sync")
+    )
+
+
+def _validated_connection_exchanges(
+    wire: Mapping[str, Any], exchanges: Any
+) -> list[dict[str, int | None]]:
+    edges = wire.get("edges")
+    if not isinstance(edges, list) or not isinstance(exchanges, list):
+        raise GraphContractError(
+            "invalid connection exchange provenance", path="connections"
+        )
+    covered: set[int] = set()
+    pairs: list[dict[str, int | None]] = []
+    for exchange in exchanges:
+        if not isinstance(exchange, Mapping) or set(exchange) != {
+            "request_record_index",
+            "response_record_index",
+        }:
+            raise GraphContractError(
+                "invalid connection exchange provenance", path="connections"
+            )
+        request_index = exchange["request_record_index"]
+        response_index = exchange["response_record_index"]
+        if (
+            not isinstance(request_index, int)
+            or isinstance(request_index, bool)
+            or not 0 <= request_index < len(edges)
+            or request_index in covered
+            or request_index != len(covered)
+            or (
+                response_index is not None
+                and (
+                    not isinstance(response_index, int)
+                    or isinstance(response_index, bool)
+                    or response_index != request_index + 1
+                    or response_index >= len(edges)
+                    or response_index in covered
+                )
+            )
+        ):
+            raise GraphContractError(
+                "invalid connection exchange provenance", path="connections"
+            )
+        request_edge = edges[request_index]
+        if not isinstance(request_edge, Mapping):
+            raise GraphContractError(
+                "invalid connection exchange provenance", path="connections"
+            )
+        covered.add(request_index)
+        if response_index is not None:
+            response_edge = edges[response_index]
+            if not isinstance(response_edge, Mapping) or any(
+                (
+                    request_edge["source_index"] != response_edge["target_index"],
+                    request_edge["target_index"] != response_edge["source_index"],
+                    request_edge["flow"] != response_edge["flow"],
+                    request_edge["sync"] != response_edge["sync"],
+                )
+            ):
+                raise GraphContractError(
+                    "invalid connection exchange provenance", path="connections"
+                )
+            covered.add(response_index)
+        pairs.append(
+            {
+                "request_record_index": request_index,
+                "response_record_index": response_index,
+            }
+        )
+    if covered != set(range(len(edges))):
+        raise GraphContractError(
+            "invalid connection exchange provenance", path="connections"
+        )
+    return pairs
+
+
+def _retained_connection_exchanges(
+    previous_wire: Mapping[str, Any] | None,
+    previous_exchanges: list[dict[str, int | None]],
+    current_wire: Mapping[str, Any],
+) -> list[dict[str, int | None]]:
+    if previous_wire is None or not previous_exchanges:
+        return []
+    previous_edges = previous_wire["edges"]
+    current_edges = current_wire["edges"]
+    current_indexes: dict[tuple[Any, ...], list[int]] = {}
+    for index, edge in enumerate(current_edges):
+        current_indexes.setdefault(_connection_edge_key(edge), []).append(index)
+    retained = []
+    for pair in previous_exchanges:
+        request_matches = current_indexes.get(
+            _connection_edge_key(previous_edges[pair["request_record_index"]]), []
+        )
+        response_index = pair["response_record_index"]
+        response_matches = (
+            current_indexes.get(
+                _connection_edge_key(previous_edges[response_index]), []
+            )
+            if response_index is not None
+            else []
+        )
+        if len(request_matches) != 1 or (
+            response_index is not None and len(response_matches) != 1
+        ):
+            continue
+        retained.append(
+            {
+                "request_record_index": request_matches[0],
+                "response_record_index": (
+                    response_matches[0] if response_index is not None else None
+                ),
+            }
+        )
+    return retained
+
+
 def _connection_prompt_base(build: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     if not build:
         return []
@@ -749,7 +868,8 @@ async def _render(
             "graph_changed": True,
             "graph_publication": "unreviewed",
             "graph_stage_preview_count": preview_count,
-        }
+        },
+        interactive_presentation=True,
     )
 
 
@@ -777,11 +897,7 @@ async def _retain_staged_diagnostic(
         **state,
         "graph_review_diagnostics": diagnostics,
     }
-    if (
-        not emit_gate_progress
-        or not recorded
-        or not _may_emit_staged_diagnostics(state)
-    ):
+    if not emit_gate_progress or not recorded:
         return retained_state
 
     send = state.get("send")
@@ -792,9 +908,13 @@ async def _retain_staged_diagnostic(
                     "type": "workflow_progress",
                     "phase": "review",
                     "status": "retry",
-                    "title": "Correcting staged graph candidate",
-                    "detail": "The candidate failed one bounded admission check. One correction is running.",
-                    "diagnostic": copy.deepcopy(safe_diagnostic),
+                    "title": "Refining the diagram",
+                    "detail": "Checking the affected components and connections.",
+                    **(
+                        {"diagnostic": copy.deepcopy(safe_diagnostic)}
+                        if _may_emit_staged_diagnostics(state)
+                        else {}
+                    ),
                 }
             )
         except Exception as exc:
@@ -842,8 +962,12 @@ async def _failed(
             "phase": "review",
             "status": "rejected",
             "failure_code": code,
-            "title": "Staged graph candidate rejected",
-            "detail": "The candidate failed a bounded staged admission check and remains unpublished.",
+            "title": "Diagram needs another attempt",
+            "detail": (
+                "Your existing diagram is unchanged."
+                if approved_graph
+                else "I couldn't finish a reliable diagram for this request."
+            ),
         }
         if _may_emit_staged_diagnostics(state):
             progress_event["diagnostic"] = safe_diagnostic
@@ -856,6 +980,20 @@ async def _failed(
                     "Staged failure progress event was not delivered: %s",
                     type(exc).__name__,
                 )
+    enqueue_analytics_event(
+        event_name="staged_graph_admission",
+        event_category="graph",
+        user_id=state.get("user_id"),
+        session_id=state.get("session_id"),
+        thread_id=state.get("thread_id") or state.get("session_id"),
+        request_id=state.get("request_id"),
+        client_request_id=state.get("client_request_id"),
+        properties={
+            "outcome": "preserved" if approved_graph else "withheld",
+            "failure_code": code,
+            "intent": intent,
+        },
+    )
     result: AgentState = {
         **state,
         "graph_data": approved_graph,
@@ -1007,16 +1145,22 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
     write_set_fingerprint = _fingerprint(generation_write_set)
     component_build: dict[str, Any] | None = None
     component_gate: dict[str, Any] = {}
+    # Recovery edits an unpublished creation only. Existing user work keeps its
+    # original mutation permissions, even when a correction would be easier.
+    may_simplify = state.get("graph_intent") == "create" and not approved_graph
+    component_recovered = False
+    component_attempts = 0
     previous_prompt: str | None = None
     previous_component_candidate: str | None = None
     previous_component_wire: str | None = None
     rejected_component_candidate: dict[str, Any] | None = None
     reviewed_component_records: list[dict[str, Any]] = []
-    correction_findings: list[dict[str, str]] = []
+    correction_findings: list[dict[str, Any]] = []
     preview_count = int(state.get("graph_stage_preview_count", 0))
     working_state = state
 
     for attempt in range(STAGED_COMPONENT_GENERATION_CALLS):
+        recovery_mode = may_simplify and attempt > 0
         try:
             generated = await generate_component_candidate(
                 request=request,
@@ -1033,6 +1177,7 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                 base_components=base_build,
                 edit_permissions=permissions,
                 rejected_candidate=rejected_component_candidate,
+                recovery_mode=recovery_mode,
                 state=state,
                 timeout_seconds=staged_timeout_seconds(
                     {**working_state, "graph_stage_preview_count": preview_count},
@@ -1183,6 +1328,7 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                     "assumptions": assigned["assumptions"],
                     "root_index": assigned["root_index"],
                     "capabilities": assigned["capabilities"],
+                    "detail_level": "overview" if recovery_mode else "standard",
                 },
             }
             if scoped_edit:
@@ -1206,6 +1352,8 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
             )
             if component_gate["approved"]:
                 component_build = assigned
+                component_recovered = recovery_mode
+                component_attempts = attempt + 1
                 working_state = rendered
                 break
             if component_gate["terminal"]:
@@ -1301,10 +1449,14 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
     previous_connection_candidate: str | None = None
     previous_connection_wire: str | None = None
     rejected_connection_candidate: dict[str, Any] | None = None
+    reviewed_connection_wire: dict[str, Any] | None = None
+    reviewed_connection_exchanges: list[dict[str, int | None]] = []
     reviewed_connection_records: list[dict[str, Any]] = []
     correction_findings = []
     connection_gate: dict[str, Any] = {}
     for attempt in range(STAGED_CONNECTION_GENERATION_CALLS):
+        recovery_mode = may_simplify and attempt > 0
+        overview = component_recovered or recovery_mode
         try:
             generated = await generate_connection_candidate(
                 request=request,
@@ -1338,9 +1490,14 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                     write_set_fingerprint if attempt else None
                 ),
                 structural_findings=correction_findings,
-                base_connections=_connection_prompt_base(component_build),
+                base_connections=(
+                    _connection_prompt_base(component_build)
+                    if base_build is not None
+                    else None
+                ),
                 edit_permissions=permissions,
                 rejected_candidate=rejected_connection_candidate,
+                recovery_mode=recovery_mode,
                 state=state,
                 timeout_seconds=staged_timeout_seconds(
                     working_state,
@@ -1371,6 +1528,17 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                     path="connections",
                 )
             candidate_build = validate_staged_graph_build(candidate_build)
+            connection_exchanges = (
+                _validated_connection_exchanges(
+                    generated["wire"], generated["connection_exchanges"]
+                )
+                if "connection_exchanges" in generated
+                else _retained_connection_exchanges(
+                    reviewed_connection_wire,
+                    reviewed_connection_exchanges,
+                    generated["wire"],
+                )
+            )
             projected = _attach_graph_version(project_graph_data(candidate_build))
             if projected is None:
                 raise GraphContractError(
@@ -1400,6 +1568,12 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                     raise GraphContractError(
                         "edit admission returned no graph", path="graph_data"
                     )
+            if overview or (
+                base_build is not None
+                and (approved_graph or {}).get("detail_level") == "overview"
+            ):
+                # Recovery disclosure is server-owned, outside user-editable fields.
+                projected = {**projected, "detail_level": "overview"}
             rendered = await _render(
                 working_state, projected, preview_count=preview_count
             )
@@ -1421,7 +1595,10 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                 "assumptions": copy.deepcopy(candidate_build["assumptions"]),
                 "root_index": candidate_build["root_index"],
                 "capabilities": copy.deepcopy(candidate_build["capabilities"]),
+                "detail_level": projected.get("detail_level", "standard"),
             }
+            if connection_exchanges:
+                evidence["connection_exchanges"] = connection_exchanges
             if base_build is not None and permissions is not None:
                 evidence["review_scope"] = _edit_review_scope(
                     base_build,
@@ -1453,6 +1630,8 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                     rendered, phase="connections", action="review", attempt=attempt
                 ),
             )
+            reviewed_connection_wire = copy.deepcopy(generated["wire"])
+            reviewed_connection_exchanges = connection_exchanges
             if connection_gate["approved"]:
                 graph_contract = _contract(
                     candidate_build,
@@ -1473,6 +1652,24 @@ async def run_staged_graph_pipeline(state: AgentState) -> AgentState:
                     "status": "candidate",
                     "failure_code": None,
                 }
+                enqueue_analytics_event(
+                    event_name="staged_graph_admission",
+                    event_category="graph",
+                    user_id=state.get("user_id"),
+                    session_id=state.get("session_id"),
+                    thread_id=state.get("thread_id") or state.get("session_id"),
+                    request_id=state.get("request_id"),
+                    client_request_id=state.get("client_request_id"),
+                    properties={
+                        "outcome": "recovered" if overview else "accepted",
+                        "detail_level": projected.get("detail_level", "standard"),
+                        "intent": state.get("graph_intent"),
+                        "component_attempts": component_attempts,
+                        "connection_attempts": attempt + 1,
+                        "component_count": len(projected["nodes"]),
+                        "connection_count": len(projected["edges"]),
+                    },
+                )
                 return {
                     **rendered,
                     "graph_data": projected,

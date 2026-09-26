@@ -3218,7 +3218,9 @@ def _candidate_preview_deadline(state: AgentState) -> float | None:
     return float(deadline) if isinstance(deadline, (int, float)) else None
 
 
-async def graph_render_gate_node(state: AgentState) -> AgentState:
+async def graph_render_gate_node(
+    state: AgentState, *, interactive_presentation: bool = False
+) -> AgentState:
     """Render one unpublished candidate before exposing a reversible preview."""
     graph = state.get("graph_data")
     if (
@@ -3291,7 +3293,9 @@ async def graph_render_gate_node(state: AgentState) -> AgentState:
             "graph_render_admitted": False,
         }
 
-    render_review = _deterministic_render_review(graph, render_result)
+    render_review = _deterministic_render_review(
+        graph, render_result, interactive_presentation=interactive_presentation
+    )
     if not render_review.get("approved"):
         review = {
             **render_review,
@@ -3367,6 +3371,11 @@ async def graph_render_gate_node(state: AgentState) -> AgentState:
             "graph_fingerprint": _content_fingerprint(graph),
             "approved": True,
             "result": render_result,
+            **(
+                {"advisories": render_review["advisories"]}
+                if interactive_presentation
+                else {}
+            ),
         },
         "graph_render_admitted": True,
     }
@@ -3884,9 +3893,14 @@ def _deterministic_review(
 def _deterministic_render_review(
     graph: dict[str, Any],
     render_result: dict[str, Any],
+    *,
+    interactive_presentation: bool = False,
 ) -> dict[str, Any]:
     report = render_result.get("report") or {}
     missing: list[str] = []
+    advisories: list[str] = []
+    # The staged canvas has pan and region labels; its private fit render does not.
+    presentation_findings = advisories if interactive_presentation else missing
     if (
         render_result.get("capture_error")
         or report.get("capture_error")
@@ -3908,28 +3922,32 @@ def _deterministic_render_review(
     if int(report.get("clipped_nodes") or 0) > 0:
         missing.append("Fit every node fully inside the initial viewport.")
     if int(report.get("clipped_edges") or 0) > 0:
-        missing.append("Fit every edge fully inside the initial viewport.")
+        presentation_findings.append(
+            "Fit every edge fully inside the initial viewport."
+        )
     if float(report.get("minimum_text_px") or 0) < MINIMUM_DIAGRAM_NODE_TITLE_PX:
         missing.append("Increase every rendered node title to a readable size.")
     if "overview_required_edge_labels" in report:
         required_labels = int(report.get("overview_required_edge_labels") or 0)
         visible_labels = int(report.get("visible_overview_required_edge_labels") or 0)
         if visible_labels < required_labels:
-            missing.append(
+            presentation_findings.append(
                 "Show every overview-required edge label in the initial viewport."
             )
     if "grouped_nodes" in report:
         grouped_nodes = int(report.get("grouped_nodes") or 0)
         labelled_nodes = int(report.get("group_labelled_nodes") or 0)
         if labelled_nodes < grouped_nodes:
-            missing.append(
+            presentation_findings.append(
                 "Show a group label on every node assigned to a responsibility zone."
             )
     if (
         "group_boundary_overlap_count" in report
         and int(report.get("group_boundary_overlap_count") or 0) > 0
     ):
-        missing.append("Remove overlap between visible responsibility-zone boundaries.")
+        presentation_findings.append(
+            "Remove overlap between visible responsibility-zone boundaries."
+        )
     score = max(0.0, 0.95 - 0.24 * len(missing))
     return {
         "approved": not missing,
@@ -3938,6 +3956,7 @@ def _deterministic_render_review(
         if not missing
         else [],
         "missing": missing,
+        **({"advisories": advisories} if interactive_presentation else {}),
         "revision_instruction": " ".join(missing),
         # Layout geometry belongs to the deterministic renderer. Asking the
         # graph model to revise domain topology cannot reliably fix clipping,

@@ -1,4 +1,5 @@
 import asyncio
+from copy import deepcopy
 from dataclasses import replace
 import traceback
 from types import SimpleNamespace
@@ -921,20 +922,134 @@ def test_judge_evidence_keeps_retrieval_text_and_provenance_separate():
     assert "https://example.com/report" in research_sources["research-1-result-1"]
 
 
-def test_judge_schema_has_exact_dimension_keys():
-    schema = _response_schema(
-        ("turn-1-answer-1",),
-        ("correctness", "instruction_following"),
-    )
-    dimensions = schema["properties"]["dimensions"]
+def test_judge_schema_local_refs_expand_to_previous_exact_contract():
+    source_ids = ("turn-1-answer-1", "turn-1-graph-edge-77-1")
+    dimensions = tuple(load_corpus().rubrics)
+    schema = _response_schema(source_ids, dimensions)
+    dimension_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["grade", "evidence", "rationale"],
+        "properties": {
+            "grade": {"type": "string", "enum": ["pass", "borderline", "fail"]},
+            "evidence": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 3,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["source_id"],
+                    "properties": {
+                        "source_id": {"type": "string", "enum": list(source_ids)}
+                    },
+                },
+            },
+            "rationale": {"type": "string"},
+        },
+    }
+    expected = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["dimensions"],
+        "properties": {
+            "dimensions": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": list(dimensions),
+                "properties": {
+                    dimension: deepcopy(dimension_schema) for dimension in dimensions
+                },
+            }
+        },
+    }
+    expanded = deepcopy(schema)
+    assert expanded.pop("$defs") == {"dimension": dimension_schema}
+    for dimension in dimensions:
+        slot = expanded["properties"]["dimensions"]["properties"][dimension]
+        assert slot == {"$ref": "#/$defs/dimension"}
+        expanded["properties"]["dimensions"]["properties"][dimension] = deepcopy(
+            dimension_schema
+        )
+    assert expanded == expected
 
-    assert dimensions["type"] == "object"
-    assert dimensions["additionalProperties"] is False
-    assert dimensions["required"] == ["correctness", "instruction_following"]
-    assert set(dimensions["properties"]) == {"correctness", "instruction_following"}
-    assert dimensions["properties"]["correctness"]["properties"]["evidence"]["items"][
-        "properties"
-    ]["source_id"]["enum"] == ["turn-1-answer-1"]
+    anthropic_schema = _anthropic_response_schema(schema)
+    assert anthropic_schema["$defs"]["dimension"]["properties"]["evidence"] == {
+        "type": "array",
+        "items": dimension_schema["properties"]["evidence"]["items"],
+    }
+    assert anthropic_schema["properties"]["dimensions"]["required"] == list(dimensions)
+    assert anthropic_schema["properties"]["dimensions"]["additionalProperties"] is False
+
+
+@pytest.mark.parametrize(
+    ("grade", "evidence", "rationale"),
+    [
+        ("unknown", [{"source_id": "answer-1"}], "Reason."),
+        ("pass", [], "Reason."),
+        ("pass", [{"source_id": "answer-1"}] * 4, "Reason."),
+        ("pass", [{"source_id": "answer-1"}], ""),
+        ("pass", [{"source_id": "answer-1"}], "x" * 1001),
+    ],
+)
+def test_judge_response_still_rejects_bad_grades_counts_and_rationales(
+    grade, evidence, rationale
+):
+    with pytest.raises(ValueError):
+        _RawJudgment.model_validate(
+            {
+                "dimensions": {
+                    "correctness": {
+                        "grade": grade,
+                        "evidence": evidence,
+                        "rationale": rationale,
+                    }
+                }
+            }
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["missing", "extra"])
+async def test_judge_response_still_rejects_missing_or_extra_dimensions(
+    monkeypatch, change
+):
+    corpus = load_corpus()
+    case = corpus.by_id["rag-grounding"]
+    dimensions = {
+        dimension: {
+            "grade": "pass",
+            "evidence": [{"source_id": "answer-1"}],
+            "rationale": "The cited artifact satisfies the rubric.",
+        }
+        for dimension in case.rubric_dimensions
+    }
+    if change == "missing":
+        dimensions.pop(case.rubric_dimensions[0])
+    else:
+        dimensions["unexpected"] = dimensions[case.rubric_dimensions[0]]
+    response = SimpleNamespace(
+        content=[
+            SimpleNamespace(
+                type="text",
+                text=__import__("json").dumps({"dimensions": dimensions}),
+            )
+        ],
+        stop_reason="end_turn",
+        usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+    )
+    client = SimpleNamespace(
+        messages=SimpleNamespace(create=AsyncMock(return_value=response))
+    )
+    monkeypatch.setattr(
+        "eval.judge_adapter.create_anthropic_client", lambda **_: client
+    )
+    monkeypatch.setattr("eval.judge_adapter.get_posthog_client", lambda: None)
+
+    with pytest.raises(RuntimeError, match="judge dimensions must be exactly"):
+        await SemanticJudge(api_key="test-key", provider="anthropic").judge(
+            corpus, case, {"answer": "Artifact text."}
+        )
 
 
 def test_judge_evidence_rejects_an_unknown_source():
@@ -2487,7 +2602,7 @@ def test_judge_prompt_checks_payload_direction_and_component_ownership():
     corpus = load_corpus()
     system, _ = _judge_prompt(corpus, corpus.by_id["applied-domain"], {"answer-1": "Answer."})
 
-    assert JUDGE_PROMPT_RELEASE == "semantic-rubric-judge-v9"
+    assert JUDGE_PROMPT_RELEASE == "semantic-rubric-judge-v10"
     assert corpus.approval.calibration.judge_release == JUDGE_PROMPT_RELEASE
     assert f"release {JUDGE_PROMPT_RELEASE}" in system
     assert "Verify graph read requests and payload returns against authoritative component ownership" in system

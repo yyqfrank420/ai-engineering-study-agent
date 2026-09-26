@@ -171,3 +171,19 @@ Before handing off:
    active worktree.
 3. Report what changed, evidence run, residual risk, migrations/rollout needs, and any
    principle intentionally deferred.
+
+Before opening or updating a pull request, or triggering cloud CI/CD evaluations:
+
+1. Run the changed application locally using the dev/local account and current source.
+   Verify that it uses development services and storage, not production user data.
+2. Exercise the affected user journey through the real UI and backend. For generation
+   changes, submit a representative request, inspect the rendered diagram and answer,
+   and check affected editing, failure recovery, and reload/persistence behavior.
+3. Inspect browser and backend errors, fix defects locally, and repeat the affected
+   journey before pushing. Keep existing model-call and spending limits.
+4. Record the tested revision, account/environment, actions, results, and remaining
+   gaps. Mocked transports, captured fixtures, unit tests, and static screenshots
+   supplement this check; they do not replace the actual dev/local-account flow.
+5. If local verification is blocked, report the blocker and obtain an explicit
+   exception before opening or updating a pull request or starting cloud evaluation.
+   Applicable cloud checks remain required after local verification passes.
